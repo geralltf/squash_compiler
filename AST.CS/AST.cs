@@ -246,6 +246,22 @@ namespace AST.CS
                 {
 
                 }
+                else if (token_type == AST_ENUM_TOKEN.AST_MULTIPLY)
+                {
+                    working = false;
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_DIV)
+                {
+                    working = false;
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_PLUS)
+                {
+                    working = false;
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_SUBTRACT)
+                {
+                    working = false;
+                }
             }
             varName = Reverse(varName);
             return varName;
@@ -271,19 +287,19 @@ namespace AST.CS
                 }
                 else if (token_type == AST_ENUM_TOKEN.AST_MULTIPLY)
                 {
-                    
+                    working = false;
                 }
                 else if (token_type == AST_ENUM_TOKEN.AST_DIV)
                 {
-
+                    working = false;
                 }
                 else if (token_type == AST_ENUM_TOKEN.AST_PLUS)
                 {
-
+                    working = false;
                 }
                 else if (token_type == AST_ENUM_TOKEN.AST_SUBTRACT)
                 {
-
+                    working = false;
                 }
                 else if (token_type == AST_ENUM_TOKEN.AST_FOR)
                 {
@@ -617,6 +633,7 @@ namespace AST.CS
             bool multilineComment = false;
             bool singleComment = false;
             AST? parentAST = null;
+            AST rootAST = null;
 
             for (int i = 0; i < lexer.Count; i++)
             {
@@ -669,7 +686,7 @@ namespace AST.CS
                             for (int j = 0; j < subLexerExpr.Count; j++)
                             {
                                 AST_ENUM_TOKEN sub_token = subLexerExpr[i];
-                                subLexerExpr.RemoveAt(j);
+                                //subLexerExpr.RemoveAt(j);
 
                                 if (sub_token != AST_ENUM_TOKEN.AST_UNDEFINED)
                                 {
@@ -718,6 +735,7 @@ namespace AST.CS
                                     }
 
                                     parentAST = mulAST;
+                                    rootAST = mulAST;
                                 }
                                 if (sub_token == AST_ENUM_TOKEN.AST_DIV)
                                 {
@@ -744,6 +762,9 @@ namespace AST.CS
                                             parentAST.rightChild = divAST;
                                         }
                                     }
+
+                                    parentAST = divAST;
+                                    rootAST = divAST;
                                 }
                                 if (sub_token == AST_ENUM_TOKEN.AST_PLUS)
                                 {
@@ -770,6 +791,9 @@ namespace AST.CS
                                             parentAST.rightChild = addAST;
                                         }
                                     }
+
+                                    parentAST = addAST;
+                                    rootAST = addAST;
                                 }
                                 if (sub_token == AST_ENUM_TOKEN.AST_SUBTRACT)
                                 {
@@ -796,6 +820,9 @@ namespace AST.CS
                                             parentAST.rightChild = subtractAST;
                                         }
                                     }
+
+                                    parentAST = subtractAST;
+                                    rootAST = subtractAST;
                                 }
                             }
                         }
@@ -809,6 +836,11 @@ namespace AST.CS
 
                     }
                 }
+            }
+
+            if(rootAST != null)
+            {
+                results.Add(rootAST);
             }
 
             return results;
@@ -832,7 +864,7 @@ namespace AST.CS
             {
                 current_char = code[i];
 
-                if (current_char == ' ' || current_char == '\n' || current_char == '\r')
+                if (current_char == ' ' || current_char == '\n' || current_char == '\r' || current_char == '\t')
                 {
                     token_type = AST_ENUM_TOKEN.AST_WHITESPACE;
                 }
