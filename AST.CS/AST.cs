@@ -12,8 +12,10 @@ namespace AST.CS
         public string operandLeft;
         public string operandRight;
         public OperatorType operatorType;
+        public OperatorType nextOprType;
         public AST leftChild;
         public AST rightChild;
+        public int precedence;
 
         public enum OperatorType
         {
@@ -21,8 +23,17 @@ namespace AST.CS
             DIVIDE,
             ADD,
             SUBTRACT,
+            UNDEFINED
         }
-
+        public enum OperatorPrecedence
+        {
+            AST_MULTIPLY = 50,
+            AST_DIVIDE = 50,
+            AST_REMAINDER = 50,
+            AST_ADD = 45,
+            AST_SUBTRACT = 45,
+            AST_UNDEFINED = 0
+        }
         public enum AST_ENUM_TOKEN
         {
             AST_TOKEN_BEGIN = 0xF000,
@@ -144,6 +155,15 @@ namespace AST.CS
             AST_EQUALITY = 0x6A,        // ==
             AST_NOT_EQUAL_TO = 0x6B,    // !=
             AST_FULL_STOP = 0x6C,
+
+            /// <summary>
+            /// Bitwise compliment (~).
+            /// </summary>
+            AST_TILDE = 0x6D, 
+
+            AST_DECREMENT = 0x6E,
+            AST_INCREMENT = 0x6F,
+            AST_NEGATION = 0x70,
 
             //AST_TOKEN_WILDCARD = 0xBAD, // Twaoken wild card is Uno.
             AST_UNDEFINED = 0xFFFF
@@ -267,14 +287,224 @@ namespace AST.CS
             return varName;
         }
 
-        public static string FindOperandRight(int index, List<AST_ENUM_TOKEN> lexer)
+        public static OperatorType GetNextOperatorType(int index, List<AST_ENUM_TOKEN> lexer)
+        {
+            AST_ENUM_TOKEN token_type = AST_ENUM_TOKEN.AST_UNDEFINED;
+
+            for (int i = index + 1; i < lexer.Count; i++)
+            {
+                token_type = lexer[i];
+                if (token_type == AST_ENUM_TOKEN.AST_SEMI_COLON)
+                {
+                    continue;
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_MULTIPLY)
+                {
+                    return OperatorType.MULTIPLY;
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_DIV)
+                {
+                    return OperatorType.DIVIDE;
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_PLUS)
+                {
+                    return OperatorType.ADD;
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_SUBTRACT)
+                {
+                    return OperatorType.SUBTRACT;
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_FOR)
+                {
+                    continue;
+                }
+                else
+                {
+                    continue;
+                }
+            }
+
+            return OperatorType.UNDEFINED;
+        }
+
+
+        public static int GetCurrPrecedence(int defaultPrecedence, int index, AST_ENUM_TOKEN token, List<AST_ENUM_TOKEN> lexer)
+        {
+            int precedence = defaultPrecedence;
+            AST_ENUM_TOKEN tok;
+            for(int j = index; j< lexer.Count;j++)
+            {
+                tok = lexer[j];
+
+                if (tok == AST_ENUM_TOKEN.AST_MULTIPLY)
+                {
+                    return (int)OperatorPrecedence.AST_MULTIPLY;
+                }
+                else if (tok == AST_ENUM_TOKEN.AST_DIV)
+                {
+                    return (int)OperatorPrecedence.AST_DIVIDE;
+                }
+                else if (tok == AST_ENUM_TOKEN.AST_PLUS)
+                {
+                    return (int)OperatorPrecedence.AST_ADD;
+                }
+                else if (tok == AST_ENUM_TOKEN.AST_SUBTRACT)
+                {
+                    return (int)OperatorPrecedence.AST_SUBTRACT;
+                }
+            }
+
+            return (int)OperatorPrecedence.AST_UNDEFINED;
+        }
+        //TODO: parse tenery operator. parse unary operator.
+        public static AST? ParseBinaryOperator(ref int index, List<AST_ENUM_TOKEN> lexer, ref AST parentAST, ref AST rootAST)
+        {
+            AST ast = new AST();
+            AST_ENUM_TOKEN tok = lexer[index];
+            int i = index + 1;
+
+            ast.operatorType = GetNextOperatorType(index - 1, lexer);
+            ast.nextOprType = GetNextOperatorType(index, lexer);
+            ast.precedence = GetCurrPrecedence(0, index, tok, lexer);
+            ast.operandLeft = FindOperandLeft(index, lexer);
+            ast.operandRight = FindOperandRight(index, lexer, ref i);
+            index = i;
+
+            if (rootAST == null)
+            {
+                rootAST = ast;
+            }
+            if (parentAST == null)
+            {
+                parentAST = ast;
+            }
+            else
+            {
+                if (ast != null)
+                {
+                    ast.leftChild = parentAST;
+                }
+
+                if (parentAST.leftChild == null)
+                {
+                    parentAST.leftChild = ast;
+                }
+                else if (parentAST.rightChild == null)
+                {
+                    parentAST.rightChild = ast;
+                }
+
+                if (ast.nextOprType != OperatorType.UNDEFINED)
+                {
+                    AST astPrior = new AST();
+
+                    astPrior.operatorType = ast.nextOprType;
+                    astPrior.leftChild = parentAST;
+                    astPrior.rightChild = ast;
+
+                    return astPrior;
+                }
+                else
+                {
+                    parentAST = ast;
+
+                    return ast;
+                }
+            }
+            return ast;
+        }
+
+        public static string FindOperandRightLookAhead(int index, List<AST_ENUM_TOKEN> lexer)
         {
             string varValue = string.Empty;
             AST_ENUM_TOKEN token_type = AST_ENUM_TOKEN.AST_UNDEFINED;
             bool isForLoop = false;
             bool working = true;
+            bool first = false;
+            //bool second = false;
 
             for (int i = index + 1; i < lexer.Count && working; i++)
+            {
+                token_type = lexer[i];
+                if (token_type == AST_ENUM_TOKEN.AST_SEMI_COLON)
+                {
+                    if (isForLoop == false)
+                    {
+                        working = false;
+                    }
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_MULTIPLY)
+                {
+                    //working = false;
+                    if(!first)
+                    {
+                        first = true;
+                    }
+                    else
+                    {
+                        working = false;
+                    }
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_DIV)
+                {
+                    //working = false;
+                    if (!first)
+                    {
+                        first = true;
+                    }
+                    else
+                    {
+                        working = false;
+                    }
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_PLUS)
+                {
+                    //working = false;
+                    if (!first)
+                    {
+                        first = true;
+                    }
+                    else
+                    {
+                        working = false;
+                    }
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_SUBTRACT)
+                {
+                    //working = false;
+                    if (!first)
+                    {
+                        first = true;
+                    }
+                    else
+                    {
+                        working = false;
+                    }
+                }
+                else if (token_type == AST_ENUM_TOKEN.AST_FOR)
+                {
+                    isForLoop = true;
+                }
+                else
+                {
+                    if(first)
+                    {
+                        varValue += ParseString(token_type);
+                    }
+                }
+            }
+
+            return varValue;
+        }
+        public static string FindOperandRight(int index, List<AST_ENUM_TOKEN> lexer, ref int outIndex)
+        {
+            string varValue = string.Empty;
+            AST_ENUM_TOKEN token_type = AST_ENUM_TOKEN.AST_UNDEFINED;
+            bool isForLoop = false;
+            bool working = true;
+            int i;
+
+            for (i = index + 1; i < lexer.Count && working; i++)
             {
                 token_type = lexer[i];
 
@@ -310,6 +540,8 @@ namespace AST.CS
                     varValue += ParseString(token_type);
                 }
             }
+
+            outIndex = i;
 
             return varValue;
         }
@@ -685,7 +917,7 @@ namespace AST.CS
                             // Has underlying expression to parse.
                             for (int j = 0; j < subLexerExpr.Count; j++)
                             {
-                                AST_ENUM_TOKEN sub_token = subLexerExpr[i];
+                                AST_ENUM_TOKEN sub_token = subLexerExpr[j];
                                 //subLexerExpr.RemoveAt(j);
 
                                 if (sub_token != AST_ENUM_TOKEN.AST_UNDEFINED)
@@ -710,119 +942,31 @@ namespace AST.CS
                                 }
                                 if (sub_token == AST_ENUM_TOKEN.AST_MULTIPLY)
                                 {
-                                    string leftOperand  = FindOperandLeft(j, subLexerExpr);
-                                    string rightOperand = FindOperandRight(j, subLexerExpr);
-
                                     AST mulAST = new AST();
-                                    mulAST.operatorType = OperatorType.MULTIPLY;
-                                    mulAST.operandLeft = leftOperand;
-                                    mulAST.operandRight = rightOperand;
 
-                                    if (parentAST == null)
-                                    {
-                                        parentAST = mulAST;
-                                    }
-                                    else
-                                    {
-                                        if (parentAST.leftChild == null)
-                                        {
-                                            parentAST.leftChild = mulAST;
-                                        }
-                                        else if (parentAST.rightChild == null)
-                                        {
-                                            parentAST.rightChild = mulAST;
-                                        }
-                                    }
-
-                                    parentAST = mulAST;
-                                    rootAST = mulAST;
+                                    // PARSE BINARY OPERATOR
+                                    mulAST = ParseBinaryOperator(ref j, subLexerExpr, ref parentAST, ref rootAST);
                                 }
                                 if (sub_token == AST_ENUM_TOKEN.AST_DIV)
-                                {
-                                    string leftOperand = FindOperandLeft(j, subLexerExpr);
-                                    string rightOperand = FindOperandRight(j, subLexerExpr);
+                                {                                    
+                                    AST divAST;
 
-                                    AST divAST = new AST();
-                                    divAST.operatorType = OperatorType.DIVIDE;
-                                    divAST.operandLeft = leftOperand;
-                                    divAST.operandRight = rightOperand;
-
-                                    if (parentAST == null)
-                                    {
-                                        parentAST = divAST;
-                                    }
-                                    else
-                                    {
-                                        if (parentAST.leftChild == null)
-                                        {
-                                            parentAST.leftChild = divAST;
-                                        }
-                                        if (parentAST.rightChild == null)
-                                        {
-                                            parentAST.rightChild = divAST;
-                                        }
-                                    }
-
-                                    parentAST = divAST;
-                                    rootAST = divAST;
+                                    // PARSE BINARY OPERATOR
+                                    divAST = ParseBinaryOperator(ref j, subLexerExpr, ref parentAST, ref rootAST);
                                 }
                                 if (sub_token == AST_ENUM_TOKEN.AST_PLUS)
                                 {
-                                    string leftOperand = FindOperandLeft(j, subLexerExpr);
-                                    string rightOperand = FindOperandRight(j, subLexerExpr);
+                                    AST addAST;
 
-                                    AST addAST = new AST();
-                                    addAST.operatorType = OperatorType.DIVIDE;
-                                    addAST.operandLeft = leftOperand;
-                                    addAST.operandRight = rightOperand;
-
-                                    if (parentAST == null)
-                                    {
-                                        parentAST = addAST;
-                                    }
-                                    else
-                                    {
-                                        if (parentAST.leftChild == null)
-                                        {
-                                            parentAST.leftChild = addAST;
-                                        }
-                                        if (parentAST.rightChild == null)
-                                        {
-                                            parentAST.rightChild = addAST;
-                                        }
-                                    }
-
-                                    parentAST = addAST;
-                                    rootAST = addAST;
+                                    // PARSE BINARY OPERATOR
+                                    addAST = ParseBinaryOperator(ref j, subLexerExpr, ref parentAST, ref rootAST);
                                 }
                                 if (sub_token == AST_ENUM_TOKEN.AST_SUBTRACT)
                                 {
-                                    string leftOperand = FindOperandLeft(j, subLexerExpr);
-                                    string rightOperand = FindOperandRight(j, subLexerExpr);
+                                    AST subtractAST;
 
-                                    AST subtractAST = new AST();
-                                    subtractAST.operatorType = OperatorType.DIVIDE;
-                                    subtractAST.operandLeft = leftOperand;
-                                    subtractAST.operandRight = rightOperand;
-
-                                    if (parentAST == null)
-                                    {
-                                        parentAST = subtractAST;
-                                    }
-                                    else
-                                    {
-                                        if (parentAST.leftChild == null)
-                                        {
-                                            parentAST.leftChild = subtractAST;
-                                        }
-                                        if (parentAST.rightChild == null)
-                                        {
-                                            parentAST.rightChild = subtractAST;
-                                        }
-                                    }
-
-                                    parentAST = subtractAST;
-                                    rootAST = subtractAST;
+                                    // PARSE BINARY OPERATOR
+                                    subtractAST = ParseBinaryOperator(ref j, subLexerExpr, ref parentAST, ref rootAST);
                                 }
                             }
                         }
@@ -1162,6 +1306,16 @@ namespace AST.CS
                     token_type = AST_ENUM_TOKEN.AST_ASSIGN;
                 }
 
+                if (current_char == '~')
+                {
+                    token_type = AST_ENUM_TOKEN.AST_TILDE;
+                }
+
+                if (current_char == '-')
+                {
+                    token_type = AST_ENUM_TOKEN.AST_NEGATION;
+                }
+
                 if (i + 1 < code.Length)
                 {
                     current_char1 = code[i + 1];
@@ -1172,6 +1326,16 @@ namespace AST.CS
                         i++;
                     }
 
+                    if (current_char == '-' && current_char1 == '-')
+                    {
+                        token_type = AST_ENUM_TOKEN.AST_DECREMENT;
+                        i++;
+                    }
+                    if (current_char == '+' && current_char1 == '+')
+                    {
+                        token_type = AST_ENUM_TOKEN.AST_INCREMENT;
+                        i++;
+                    }
                     if (current_char == '=' && current_char1 == '=')
                     {
                         token_type = AST_ENUM_TOKEN.AST_EQUALITY;

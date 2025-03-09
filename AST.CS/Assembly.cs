@@ -41,6 +41,10 @@ namespace AST.CS
         {
             return true;
         }
+        public static bool ILCodeGenerator(ref Assembly assembly, string outProgramBuildFilenameIL)
+        {
+            return true;
+        }
         public static bool AssembleBinaryExecutable(Assembly inAssembly, string objDir, string inProgramBuildFilenameASM, string outProgramBuildFilenameBIN)
         {
             return true;
