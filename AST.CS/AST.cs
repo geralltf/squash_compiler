@@ -16,6 +16,13 @@ namespace AST.CS
         public AST leftChild;
         public AST rightChild;
         public int precedence;
+        public uint ID;
+        public static uint prevID;
+
+        public AST()
+        {
+            ID = ++prevID;
+        }
 
         public enum OperatorType
         {
@@ -382,120 +389,51 @@ namespace AST.CS
             {
                 if (ast != null)
                 {
-                    ast.leftChild = parentAST;
-                }
+                    if (ast.leftChild == null)
+                    {
+                        ast.leftChild = parentAST;
+                    }
+                    else if (ast.rightChild == null)
+                    {
+                        ast.rightChild = parentAST;
+                    }
 
-                if (parentAST.leftChild == null)
-                {
-                    parentAST.leftChild = ast;
-                }
-                else if (parentAST.rightChild == null)
-                {
-                    parentAST.rightChild = ast;
-                }
 
-                if (ast.nextOprType != OperatorType.UNDEFINED)
-                {
-                    AST astPrior = new AST();
+                    if (parentAST.leftChild == null)
+                    {
+                        parentAST.leftChild = ast;
+                    }
+                    else if (parentAST.rightChild == null)
+                    {
+                        parentAST.rightChild = ast;
+                    }
 
-                    astPrior.operatorType = ast.nextOprType;
-                    astPrior.leftChild = parentAST;
-                    astPrior.rightChild = ast;
+                    if (ast.nextOprType != OperatorType.UNDEFINED)
+                    {
+                        AST astPrior = new AST();
 
-                    return astPrior;
-                }
-                else
-                {
-                    parentAST = ast;
+                        astPrior.operatorType = ast.nextOprType;
+                        astPrior.leftChild = parentAST;
+                        astPrior.rightChild = ast;
 
-                    return ast;
+                        parentAST = ast;
+
+                        return astPrior;
+                    }
+                    else
+                    {
+                        parentAST = ast;
+
+                        return ast;
+                    }
                 }
             }
+            
+            parentAST = ast;
+
             return ast;
         }
 
-        public static string FindOperandRightLookAhead(int index, List<AST_ENUM_TOKEN> lexer)
-        {
-            string varValue = string.Empty;
-            AST_ENUM_TOKEN token_type = AST_ENUM_TOKEN.AST_UNDEFINED;
-            bool isForLoop = false;
-            bool working = true;
-            bool first = false;
-            //bool second = false;
-
-            for (int i = index + 1; i < lexer.Count && working; i++)
-            {
-                token_type = lexer[i];
-                if (token_type == AST_ENUM_TOKEN.AST_SEMI_COLON)
-                {
-                    if (isForLoop == false)
-                    {
-                        working = false;
-                    }
-                }
-                else if (token_type == AST_ENUM_TOKEN.AST_MULTIPLY)
-                {
-                    //working = false;
-                    if(!first)
-                    {
-                        first = true;
-                    }
-                    else
-                    {
-                        working = false;
-                    }
-                }
-                else if (token_type == AST_ENUM_TOKEN.AST_DIV)
-                {
-                    //working = false;
-                    if (!first)
-                    {
-                        first = true;
-                    }
-                    else
-                    {
-                        working = false;
-                    }
-                }
-                else if (token_type == AST_ENUM_TOKEN.AST_PLUS)
-                {
-                    //working = false;
-                    if (!first)
-                    {
-                        first = true;
-                    }
-                    else
-                    {
-                        working = false;
-                    }
-                }
-                else if (token_type == AST_ENUM_TOKEN.AST_SUBTRACT)
-                {
-                    //working = false;
-                    if (!first)
-                    {
-                        first = true;
-                    }
-                    else
-                    {
-                        working = false;
-                    }
-                }
-                else if (token_type == AST_ENUM_TOKEN.AST_FOR)
-                {
-                    isForLoop = true;
-                }
-                else
-                {
-                    if(first)
-                    {
-                        varValue += ParseString(token_type);
-                    }
-                }
-            }
-
-            return varValue;
-        }
         public static string FindOperandRight(int index, List<AST_ENUM_TOKEN> lexer, ref int outIndex)
         {
             string varValue = string.Empty;
@@ -940,6 +878,7 @@ namespace AST.CS
                                 {
 
                                 }
+                                // int a = 2 / 8 * (90 + 20) + 3+1 - 4*8 +7*3 + 12;
                                 if (sub_token == AST_ENUM_TOKEN.AST_MULTIPLY)
                                 {
                                     AST mulAST = new AST();
@@ -1311,10 +1250,10 @@ namespace AST.CS
                     token_type = AST_ENUM_TOKEN.AST_TILDE;
                 }
 
-                if (current_char == '-')
-                {
-                    token_type = AST_ENUM_TOKEN.AST_NEGATION;
-                }
+                //if (current_char == '-')
+                //{
+                //    token_type = AST_ENUM_TOKEN.AST_NEGATION;
+                //}
 
                 if (i + 1 < code.Length)
                 {

@@ -12,7 +12,11 @@
 
             if(Assembly.Preprocessor("test.c", "includes", "src", "obj"))
             {
-                List<AST> computeResult = Assembly.Expr("int a = 2 / 8 * (90 + 20) + 3+1;");
+                List<AST> computeResult = Assembly.Expr("int a = 2 / 8 * (90 + 20) + 3+1 - 4*8 +7*3 + 12;");
+                foreach (AST item in computeResult)
+                {
+                    ASTDebug.PrintAST(item);
+                }
                 List<Assembly.ASMTree> outASMComputeResult;
 
                 if(Assembly.Compile(computeResult, out outASMComputeResult))
