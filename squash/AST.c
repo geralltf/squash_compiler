@@ -1,5 +1,39 @@
 ﻿#include "AST.h" 
 
+void idlst_init(id_list_t* item, int id)
+{
+    item->next = NULL;
+    item->id = id;
+}
+
+void idlst_add(id_list_t* parent, int id)
+{
+    if (parent != NULL)
+    {
+        id_list_t* child = (id_list_t*)malloc(sizeof(id_list_t));
+        if (child != NULL)
+        {
+            child->next = NULL;
+            child->id = id;
+            parent->next = child;
+        }
+    }
+}
+
+bool idlst_exists(id_list_t* front, int id)
+{
+    id_list_t* start = front;
+    while (start != NULL)
+    {
+        if (start->id == id)
+        {
+            return true;
+        }
+        start = start->next;
+    }
+    return false;
+}
+
 void ast_init(AST** ast)
 {
     (*ast)->ID = ++(*ast)->prevID;
@@ -83,7 +117,7 @@ char* FindVarName(int startingIndex, token_list_t* lexer)
     char* result = (char*)malloc(sizeof(char) * lst_size + 1);
     result[lst_size] = 0x00;
 
-    char_list_t* lst_next;
+    //char_list_t* lst_next;
     
     lst = lst_first;
     lst_next = lst->next;
@@ -112,7 +146,7 @@ char* FindOperandLeft(int startingIndex, token_list_t* lexer)
     enum AST_ENUM_TOKEN token_type = AST_UNDEFINED;
     token_list_t* next = NULL;
     bool working = true;
-    int lst_size = 0;
+    //int lst_size = 0;
     char* result = NULL;
     char_list_t* lst_first = lst;
     int i = 0;
@@ -174,10 +208,10 @@ char* FindOperandLeft(int startingIndex, token_list_t* lexer)
     //result = (char*)malloc(sizeof(char) * lst_size + 1);
     //result[lst_size] = 0x00;
 
-    char* result = (char*)malloc(sizeof(char) * lst_size + 1);
+    result = (char*)malloc(sizeof(char) * lst_size + 1);
     result[lst_size] = 0x00;
 
-    char_list_t* lst_next;
+    //char_list_t* lst_next;
 
     lst = lst_first;
     lst_next = lst->next;
@@ -269,7 +303,7 @@ char* FindOperandRight(int index, token_list_t* lexer, int* outIndex)
     char* result = (char*)malloc(sizeof(char) * lst_size + 1);
     result[lst_size] = 0x00;
 
-    char_list_t* lst_next;
+    //char_list_t* lst_next;
 
     lst = lst_first;
     lst_next = lst->next;
@@ -372,6 +406,8 @@ int GetCurrPrecedence(int defaultPrecedence, int index, enum AST_ENUM_TOKEN toke
 AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST* parentAST, AST* rootAST)
 {
     AST* ast = (AST*)malloc(sizeof(AST));
+    ast_init(ast);
+
     enum AST_ENUM_TOKEN tok = lexer->token;
     int i = index + 1;
 
@@ -417,6 +453,8 @@ AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST* parentAST, AST* r
             {
                 AST* astPrior = (AST*)malloc(sizeof(AST));
 
+                ast_init(astPrior);
+
                 astPrior->operatorType = ast->nextOprType;
                 astPrior->leftChild = parentAST;
                 astPrior->rightChild = ast;
@@ -452,7 +490,7 @@ token_list_t* FindVarValue(int index, token_list_t* lexer)
 
     token_list_t* new_beginning = lexer;
     int i = 0;
-    bool working = true;
+    //bool working = true;
 
     // Search to find beginning marked by specified index. 
     while (new_beginning != NULL)
@@ -549,7 +587,7 @@ AST* Expr(char* expr)
 
 char* ParseString(enum AST_ENUM_TOKEN token)
 {
-    char* result;
+    char* result = NULL;
 
     int tokenInt = (int)token;
 
@@ -762,7 +800,7 @@ char* ParseString(enum AST_ENUM_TOKEN token)
     return result;
 }
 
-char* ParseString(token_list_t* lexer, int index)
+char* ParseStringFromToken(token_list_t* lexer, int index)
 {
     char* result;
     token_list_t* lst_first = lexer;
@@ -1438,4 +1476,103 @@ token_list_t* Lexer(char* code)
     }
 
     return lexer;
+}
+
+char* OperatorTypeToString(enum OperatorType operatorType)
+{
+    if (operatorType == OT_MULTIPLY)
+    {
+        return "OT_MULTIPLY";
+    }
+    else if (operatorType == OT_DIVIDE)
+    {
+        return "OT_DIVIDE";
+    }
+    else if (operatorType == OT_ADD)
+    {
+        return "OT_ADD";
+    }
+    else if (operatorType == OT_SUBTRACT)
+    {
+        return "OT_SUBTRACT";
+    }
+    else
+    {
+        return "Undefined Operator Type";
+    }
+}
+
+
+
+id_list_t* front_of_list = NULL;
+id_list_t* lst_front = NULL;
+void PrintAST(AST* ast, int currentDepth)
+{
+    if (front_of_list == NULL)
+    {
+        front_of_list = (id_list_t*)malloc(sizeof(id_list_t));
+        idlst_init(front_of_list, ast->ID);
+
+        lst_front = front_of_list;
+    }
+    else 
+    {
+        if (!idlst_exists(lst_front, ast->ID))
+        {
+            id_list_t* child = (id_list_t*)malloc(sizeof(id_list_t));
+            idlst_init(child, ast->ID);
+
+            front_of_list->next = child;
+            front_of_list = child;
+        }
+        else 
+        {
+            return;
+        }
+    }
+    //if (debugIDs.Exists(ID = > ID == ast.ID))
+    //{
+    //    return;
+    //}
+
+    //debugIDs.Add(ast.ID);
+
+   
+    char* indentation = "";
+    for (int d = 0; d < currentDepth; d++)
+    {
+        indentation = strcat(indentation, '\t');
+    }
+
+    char* title = strcat(indentation, "--AST--");
+    printf("%s",title);
+    char* opt = strcat(strcat(indentation, "op: "), OperatorTypeToString(ast->operatorType));
+    printf("%s", opt);
+
+    char* opt2 = strcat(strcat(indentation, "next: "), OperatorTypeToString(ast->nextOprType));
+    printf("%s", opt2);
+
+    printf("%s", strcat(", left: ", ast->operandLeft));
+    printf("%s", strcat(", right: ", ast->operandRight));
+    printf("%d", strcat(", precedence: ", ast->precedence));
+
+    if (ast->leftChild != NULL)
+    {
+        //if (!debugIDs.Exists(ID = > ID == ast->leftChild->ID))
+        if(!idlst_exists(lst_front, ast->leftChild->ID))
+        {
+            printf("%s", strcat(indentation, "child left:"));
+
+            PrintAST(ast->leftChild, currentDepth + 1);
+        }
+    }
+    if (ast->rightChild != NULL)
+    {
+        //if (!debugIDs.Exists(ID = > ID == ast.rightChild.ID))
+        if (!idlst_exists(lst_front, ast->rightChild->ID))
+        {
+            printf("%s", strcat(indentation, "child right:"));
+            PrintAST(ast->rightChild, currentDepth + 1);
+        }
+    }
 }

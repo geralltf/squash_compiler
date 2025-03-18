@@ -4,7 +4,7 @@ bool Preprocessor(char* inSourceFile, char* includesDir, char* srcDir, char* obj
 {
     return true;
 }
-AST* Expr(char* inProgramExpression)
+AST* ExprLexeme(char* inProgramExpression)
 {
     return Expr(inProgramExpression);
 }

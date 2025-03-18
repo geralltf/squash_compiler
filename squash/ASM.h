@@ -1,10 +1,10 @@
 #ifndef ASM_H
 #define ASM_H
 
-struct ASMTree_s {
+#include "AST.h"
 
-};
-
-typedef struct ASMTree_s ASMTree;
+typedef struct ASMTree_s {
+	AST* ast;
+} ASMTree;
 
 #endif

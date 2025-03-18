@@ -169,45 +169,44 @@ enum AST_ENUM_TOKEN
 
 enum AST_ENUM_TYPE
 {
-    AST_STRING = 0x00,
-    AST_BYTE = 0x01,
-    AST_INT = 0x02,
-    AST_UINT = 0x03,
-    AST_SHORT = 0x04,
-    AST_USHORT = 0x05,
-    AST_ULONG = 0x06,
-    AST_LONG = 0x07,
-    AST_FLOAT = 0x08,
-    AST_DOUBLE = 0x09,
-    AST_VAR = 0x0A,
-    AST_MAT3x3 = 0x0B,
-    AST_MAT4x4 = 0x0C,
-    AST_MAT8x8 = 0x0D,
-    AST_MAT10x10 = 0x0E,
-    AST_MAT12x12 = 0x0F,
-    AST_MAT13x13 = 0x10,
-    AST_MAT16x16 = 0x11,
-    AST_MAT20x20 = 0x12,
-    AST_MATNxN = 0x13,
-    AST_MATNxM = 0x14,
-    AST_BOOLEAN = 0x15,
-    AST_MULTI_STRING = 0xFF,
+    AST_TYPE_STRING = 0x00,
+    AST_TYPE_BYTE = 0x01,
+    AST_TYPE_INT = 0x02,
+    AST_TYPE_UINT = 0x03,
+    AST_TYPE_SHORT = 0x04,
+    AST_TYPE_USHORT = 0x05,
+    AST_TYPE_ULONG = 0x06,
+    AST_TYPE_LONG = 0x07,
+    AST_TYPE_FLOAT = 0x08,
+    AST_TYPE_DOUBLE = 0x09,
+    AST_TYPE_VAR = 0x0A,
+    AST_TYPE_MAT3x3 = 0x0B,
+    AST_TYPE_MAT4x4 = 0x0C,
+    AST_TYPE_MAT8x8 = 0x0D,
+    AST_TYPE_MAT10x10 = 0x0E,
+    AST_TYPE_MAT12x12 = 0x0F,
+    AST_TYPE_MAT13x13 = 0x10,
+    AST_TYPE_MAT16x16 = 0x11,
+    AST_TYPE_MAT20x20 = 0x12,
+    AST_TYPE_MATNxN = 0x13,
+    AST_TYPE_MATNxM = 0x14,
+    AST_TYPE_BOOLEAN = 0x15,
+    AST_TYPE_MULTI_STRING = 0xFF,
     AST_TYPE_UNDEFINED = 0xFFF
 };
 
-struct AST_s {
+typedef struct _AST_s {
     char* varName;
     char* operandLeft;
     char* operandRight;
     enum OperatorType operatorType;
     enum OperatorType nextOprType;
-    AST* leftChild;
-    AST* rightChild;
+    struct _AST_s* leftChild;
+    struct _AST_s* rightChild;
     int precedence;
     int ID;
     int prevID;
-};
-typedef struct AST_s AST;
+} AST;
 
 typedef struct token_list {
     enum AST_ENUM_TOKEN token;
@@ -219,12 +218,30 @@ typedef struct char_list {
     struct char_list* next;
 } char_list_t;
 
+typedef struct id_list {
+    int id;
+    struct id_list* next;
+} id_list_t;
+
+void idlst_init(id_list_t* item, int id);
+void idlst_add(id_list_t* parent, int id);
+bool idlst_exists(id_list_t* front, int id);
 void ast_init(AST** ast);
 char* reverse(char* source);
 char* FindVarName(int startingIndex, token_list_t* lexer);
 char* FindOperandLeft(int startingIndex, token_list_t* lexer);
 enum OperatorType GetNextOperatorType(int index, token_list_t* lexer);
 int GetCurrPrecedence(int defaultPrecedence, int index, enum AST_ENUM_TOKEN token, token_list_t* lexer);
-AST* ParseBinaryOperator(int** index, token_list_t* lexer, AST** parentAST, AST** rootAST);
+AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST* parentAST, AST* rootAST);
+token_list_t* FindVarValue(int index, token_list_t* lexer);
+bool isAlphaNumeric(enum AST_ENUM_TOKEN token);
+bool isNumeric(enum AST_ENUM_TOKEN token);
+bool isWhiteSpace(enum AST_ENUM_TOKEN token);
+AST* Expr(char* expr);
+char* ParseString(enum AST_ENUM_TOKEN token);
+char* ParseStringFromToken(token_list_t* lexer, int index);
+AST* Parser(token_list_t* lexer);
+token_list_t* Lexer(char* code);
+char* OperatorTypeToString(enum OperatorType operatorType);
 
 #endif

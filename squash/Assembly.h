@@ -6,10 +6,15 @@
 #include "AST.h"
 #include "ASM.h"
 
-struct Assembly_s {
-
-};
-typedef struct Assembly_s Assembly;
+typedef struct Assembly_s 
+{
+	char* operandLeft;
+	char* operandRight;
+	enum OperatorType operatorType;
+	AST* ast;
+	struct Assembly_s* leftChild;
+	struct Assembly_s* rightChild;
+} Assembly;
 
 bool Preprocessor(char* inSourceFile, char* includesDir, char* srcDir, char* objDir);
 AST* Expr(char* inProgramExpression);
