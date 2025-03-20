@@ -7,4 +7,4 @@ OBJ = EntryPoint.o Assembly.o AST.o
 	$(CC) -c -o $@ $< $(CFLAGS)
 
 all: $(OBJ)
-	$(CC) -o $@ $^ $(CFLAGS)
+	$(CC) -o squash $^ $(CFLAGS)
