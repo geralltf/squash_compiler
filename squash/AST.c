@@ -1,5 +1,13 @@
 ﻿#include "AST.h" 
 
+void tokenlst_init(token_list_t** tlst)
+{
+    (*tlst) = (token_list_t*)malloc(sizeof(token_list_t));
+    (*tlst)->next = NULL;
+    (*tlst)->prev = NULL;
+    (*tlst)->token = AST_UNDEFINED;
+}
+
 void idlst_init(id_list_t* item, int id)
 {
     item->next = NULL;
@@ -36,7 +44,8 @@ bool idlst_exists(id_list_t* front, int id)
 
 void ast_init(AST** ast)
 {
-    (*ast)->ID = ++(*ast)->prevID;
+    (*ast) = (AST*)malloc(sizeof(AST));
+    (*ast)->ID = ++((*ast)->prevID);
 }
 
 char* reverse(char* source)
@@ -205,26 +214,28 @@ char* FindOperandLeft(int startingIndex, token_list_t* lexer)
         next = next->next;
     }
     
-    //result = (char*)malloc(sizeof(char) * lst_size + 1);
-    //result[lst_size] = 0x00;
-
-    result = (char*)malloc(sizeof(char) * lst_size + 1);
-    result[lst_size] = 0x00;
-
-    //char_list_t* lst_next;
-
-    lst = lst_first;
-    lst_next = lst->next;
-    i = 0;
-
-    while (lst_next != NULL)
+    if (lst_size > 0)
     {
-        result[i] = lst_next->chr;
+        //result = (char*)malloc(sizeof(char) * lst_size + 1);
+        //result[lst_size] = 0x00;
 
-        i++;
-        lst_next = lst_next->next;
+        result = (char*)malloc(sizeof(char) * lst_size + 1);
+        result[lst_size] = 0x00;
+
+        //char_list_t* lst_next;
+
+        lst = lst_first;
+        lst_next = lst->next;
+        i = 0;
+
+        while (lst_next != NULL)
+        {
+            result[i] = lst_next->chr;
+
+            i++;
+            lst_next = lst_next->next;
+        }
     }
-
     return result;
 
     //varName = Reverse(varName);
@@ -300,23 +311,26 @@ char* FindOperandRight(int index, token_list_t* lexer, int* outIndex)
 
     outIndex = i;
 
-    char* result = (char*)malloc(sizeof(char) * lst_size + 1);
-    result[lst_size] = 0x00;
-
-    //char_list_t* lst_next;
-
-    lst = lst_first;
-    lst_next = lst->next;
-    i = 0;
-
-    while (lst_next != NULL)
+    char* result = NULL;
+    if (lst_size > 0)
     {
-        result[i] = lst_next->chr;
+        result = (char*)malloc(sizeof(char) * lst_size + 1);
+        result[lst_size] = 0x00;
 
-        i++;
-        lst_next = lst_next->next;
+        //char_list_t* lst_next;
+
+        lst = lst_first;
+        lst_next = lst->next;
+        i = 0;
+
+        while (lst_next != NULL)
+        {
+            result[i] = lst_next->chr;
+
+            i++;
+            lst_next = lst_next->next;
+        }
     }
-
     return result;
 }
 
@@ -405,8 +419,8 @@ int GetCurrPrecedence(int defaultPrecedence, int index, enum AST_ENUM_TOKEN toke
 //TODO: parse tenery operator. parse unary operator.
 AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST* parentAST, AST* rootAST)
 {
-    AST* ast = (AST*)malloc(sizeof(AST));
-    ast_init(ast);
+    AST* ast;
+    ast_init(&ast);
 
     enum AST_ENUM_TOKEN tok = lexer->token;
     int i = index + 1;
@@ -489,6 +503,7 @@ token_list_t* FindVarValue(int index, token_list_t* lexer)
     bool working = true;
 
     token_list_t* new_beginning = lexer;
+    token_list_t* prev = lexer;
     int i = 0;
     //bool working = true;
 
@@ -500,8 +515,10 @@ token_list_t* FindVarValue(int index, token_list_t* lexer)
             break;
         }
         i++;
+        prev = new_beginning;
         new_beginning = new_beginning->next;
     }
+    sub_lexer = prev;
 
     //for (int i = index + 1; i < lexerCount && working; i++)
     while(sub_lexer != NULL)
@@ -528,6 +545,10 @@ token_list_t* FindVarValue(int index, token_list_t* lexer)
             if (sub_lexer->next != NULL)
             {
                 lst_first->next = (token_list_t*)malloc(sizeof(token_list_t));
+            }
+            else 
+            {
+                lst_first->next = NULL;
             }
             lst_first = lst_first->next;
         }
@@ -865,6 +886,7 @@ AST* Parser(token_list_t* lexer)
     AST* parentAST = NULL;
     AST* rootAST = NULL;
     token_list_t* lexeme_front = lexer;
+    token_list_t* subLexerExprPrev = NULL;
     int i = 0;
 
     //for (int i = 0; i < lexer.Count; i++)
@@ -920,9 +942,13 @@ AST* Parser(token_list_t* lexer)
                     // Has underlying expression to parse.
                     //for (int j = 0; j < subLexerExpr.Count; j++)
                     int j = 0;
-                    while(subLexerExpr_main != NULL)
+                    while(subLexerExpr != NULL)
                     {
-                        enum AST_ENUM_TOKEN sub_token = subLexerExpr_main->token;
+                        if (subLexerExpr == 0xcdcdcdcdcdcdcdcd)
+                        {
+                            break;
+                        }
+                        enum AST_ENUM_TOKEN sub_token = subLexerExpr->token;
                         //subLexerExpr.RemoveAt(j);
 
                         if (sub_token != AST_UNDEFINED)
@@ -976,7 +1002,8 @@ AST* Parser(token_list_t* lexer)
                         }
 
                         j++;
-                        subLexerExpr_main = subLexerExpr_main->next;
+                        subLexerExprPrev = subLexerExpr;
+                        subLexerExpr = subLexerExpr->next;
                     }
                 }
 
@@ -1005,8 +1032,12 @@ AST* Parser(token_list_t* lexer)
 token_list_t* Lexer(char* code)
 {
     int code_len = strlen(code);
-    token_list_t* lexer = (token_list_t*)malloc(sizeof(token_list_t));
+    
+    token_list_t* lexer; //token_list_t* lexer = (token_list_t*)malloc(sizeof(token_list_t));
     token_list_t* lexer_node = NULL;
+
+    tokenlst_init(&lexer);
+    token_list_t* lexer_front = lexer;
 
     enum AST_ENUM_TOKEN token_type = AST_UNDEFINED;
     enum AST_ENUM_TYPE data_type = AST_TYPE_UNDEFINED;
@@ -1448,11 +1479,13 @@ token_list_t* Lexer(char* code)
 
             if (i + 1 < code_len)
             {
-                lexer_node = (token_list_t*)malloc(sizeof(token_list_t));
-                lexer_node->next = NULL;
+                tokenlst_init(&lexer_node);
+
+                //lexer_node = (token_list_t*)malloc(sizeof(token_list_t));
+                //lexer_node->next = NULL;
 
                 lexer->next = lexer_node;
-                lexer = lexer_node;
+                lexer = lexer->next;
             }
 
             //lexer.Add(token_type);
@@ -1462,12 +1495,13 @@ token_list_t* Lexer(char* code)
         {
             if (i + 1 < code_len)
             {
-                lexer_node = (token_list_t*)malloc(sizeof(token_list_t));
-                lexer_node->next = NULL;
+                tokenlst_init(&lexer_node);
+                //lexer_node = (token_list_t*)malloc(sizeof(token_list_t));
+                //lexer_node->next = NULL;
                 lexer_node->token = AST_COMMENT_END;
 
                 lexer->next = lexer_node;
-                lexer = lexer_node;
+                lexer = lexer->next;
             }
 
             //lexer.Add(AST_COMMENT_END);
@@ -1475,31 +1509,92 @@ token_list_t* Lexer(char* code)
         }
     }
 
-    return lexer;
+    return lexer_front;
 }
 
 char* OperatorTypeToString(enum OperatorType operatorType)
 {
+    char* result = NULL;
     if (operatorType == OT_MULTIPLY)
     {
-        return "OT_MULTIPLY";
+        result = (char*)malloc(sizeof(char) * 12);
+        result[0] = 'O';
+        result[1] = 'T';
+        result[2] = '_';
+        result[3] = 'M';
+        result[4] = 'U';
+        result[5] = 'L';
+        result[6] = 'T';
+        result[7] = 'I';
+        result[8] = 'P';
+        result[9] = 'L';
+        result[10] = 'Y';
+        result[11] = 0x00;
+        //return "OT_MULTIPLY";
     }
     else if (operatorType == OT_DIVIDE)
     {
-        return "OT_DIVIDE";
+        result = (char*)malloc(sizeof(char) * 10);
+        result[0] = 'O';
+        result[1] = 'T';
+        result[2] = '_';
+        result[3] = 'D';
+        result[4] = 'I';
+        result[5] = 'V';
+        result[6] = 'I';
+        result[7] = 'D';
+        result[8] = 'E';
+        result[9] = 0x00;
+        //return "OT_DIVIDE";
     }
     else if (operatorType == OT_ADD)
     {
-        return "OT_ADD";
+        result = (char*)malloc(sizeof(char) * 7);
+        result[0] = 'O';
+        result[1] = 'T';
+        result[2] = '_';
+        result[3] = 'A';
+        result[4] = 'D';
+        result[5] = 'D';
+        result[6] = 0x00;
+        //return "OT_ADD";
     }
     else if (operatorType == OT_SUBTRACT)
     {
-        return "OT_SUBTRACT";
+        result = (char*)malloc(sizeof(char) * 12);
+        result[0] = 'O';
+        result[1] = 'T';
+        result[2] = '_';
+        result[3] = 'S';
+        result[4] = 'U';
+        result[5] = 'B';
+        result[6] = 'T';
+        result[7] = 'R';
+        result[8] = 'A';
+        result[9] = 'C';
+        result[10] = 'T';
+        result[11] = 0x00;
+        //return "OT_SUBTRACT";
     }
     else
     {
-        return "Undefined Operator Type";
+        result = (char*)malloc(sizeof(char) * 13);
+        result[0] = 'O';
+        result[1] = 'T';
+        result[2] = '_';
+        result[3] = 'U';
+        result[4] = 'N';
+        result[5] = 'D';
+        result[6] = 'E';
+        result[7] = 'F';
+        result[8] = 'I';
+        result[9] = 'N';
+        result[10] = 'E';
+        result[11] = 'D';
+        result[12] = 0x00;
+        //return "Undefined Operator Type";
     }
+    return result;
 }
 
 
@@ -1508,6 +1603,11 @@ id_list_t* front_of_list = NULL;
 id_list_t* lst_front = NULL;
 void PrintAST(AST* ast, int currentDepth)
 {
+    if (ast == 0xcdcdcdcdcdcdcdcd || ast == NULL)
+    {
+        return;
+    }
+
     if (front_of_list == NULL)
     {
         front_of_list = (id_list_t*)malloc(sizeof(id_list_t));
@@ -1537,31 +1637,44 @@ void PrintAST(AST* ast, int currentDepth)
 
     //debugIDs.Add(ast.ID);
 
-   
-    char* indentation = "";
-    for (int d = 0; d < currentDepth; d++)
-    {
-        indentation = strcat(indentation, '\t');
-    }
+    int d = 0;
+    char* indentation = (char*)malloc(sizeof(char) * 1);
+    indentation[0] = '\t';
+    //for (int i = 0;i < 28;i++)
+    //{
+    //    indentation[i] = 0x00;
+    //}
+    //for (d = 0; d < currentDepth; d++)
+    //{
+    //    indentation = strcat(indentation, '\t');
+    //}
+    //indentation[d] = 0x00;
 
     char* title = strcat(indentation, "--AST--");
-    printf("%s",title);
-    char* opt = strcat(strcat(indentation, "op: "), OperatorTypeToString(ast->operatorType));
-    printf("%s", opt);
+    //printf("%s",title);
+    printf("%s", "--AST--");
 
-    char* opt2 = strcat(strcat(indentation, "next: "), OperatorTypeToString(ast->nextOprType));
-    printf("%s", opt2);
+    printf("%s", "op: ");
+    printf("%s", OperatorTypeToString(ast->operatorType));
 
-    printf("%s", strcat(", left: ", ast->operandLeft));
-    printf("%s", strcat(", right: ", ast->operandRight));
-    printf("%d", strcat(", precedence: ", ast->precedence));
+    printf("%s", "next: ");
+    printf("%s", OperatorTypeToString(ast->nextOprType));
+
+    printf("%s", "left: ");
+    printf("%s", ast->operandLeft);
+
+    printf("%s", "right: ");
+    printf("%s", ast->operandRight);
+
+    printf("%s", "precedence: ");
+    printf("%d", ast->precedence);
 
     if (ast->leftChild != NULL)
     {
         //if (!debugIDs.Exists(ID = > ID == ast->leftChild->ID))
         if(!idlst_exists(lst_front, ast->leftChild->ID))
         {
-            printf("%s", strcat(indentation, "child left:"));
+            printf("%s", "child left:");
 
             PrintAST(ast->leftChild, currentDepth + 1);
         }
@@ -1571,7 +1684,8 @@ void PrintAST(AST* ast, int currentDepth)
         //if (!debugIDs.Exists(ID = > ID == ast.rightChild.ID))
         if (!idlst_exists(lst_front, ast->rightChild->ID))
         {
-            printf("%s", strcat(indentation, "child right:"));
+            printf("%s", "child right:");
+
             PrintAST(ast->rightChild, currentDepth + 1);
         }
     }

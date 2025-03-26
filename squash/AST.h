@@ -211,6 +211,7 @@ typedef struct _AST_s {
 typedef struct token_list {
     enum AST_ENUM_TOKEN token;
     struct token_list* next;
+    struct token_list* prev;
 } token_list_t;
 
 typedef struct char_list {
@@ -223,6 +224,7 @@ typedef struct id_list {
     struct id_list* next;
 } id_list_t;
 
+void tokenlst_init(token_list_t* tlst);
 void idlst_init(id_list_t* item, int id);
 void idlst_add(id_list_t* parent, int id);
 bool idlst_exists(id_list_t* front, int id);
