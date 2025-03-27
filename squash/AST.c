@@ -1,11 +1,17 @@
 ﻿#include "AST.h" 
 
+int _ast_prevID = 0;
+
 void tokenlst_init(token_list_t** tlst)
 {
-    (*tlst) = (token_list_t*)malloc(sizeof(token_list_t));
-    (*tlst)->next = NULL;
-    (*tlst)->prev = NULL;
-    (*tlst)->token = AST_UNDEFINED;
+    token_list_t* t;
+
+    t = (token_list_t*)malloc(sizeof(token_list_t));
+    t->next = NULL;
+    t->prev = NULL;
+    t->token = AST_UNDEFINED;
+
+    (*tlst) = t;
 }
 
 void idlst_init(id_list_t* item, int id)
@@ -44,8 +50,24 @@ bool idlst_exists(id_list_t* front, int id)
 
 void ast_init(AST** ast)
 {
-    (*ast) = (AST*)malloc(sizeof(AST));
-    (*ast)->ID = ++((*ast)->prevID);
+    AST* new_ast;
+
+    new_ast = (AST*)malloc(sizeof(AST));
+
+    _ast_prevID = _ast_prevID + 1;
+
+    new_ast->ID = _ast_prevID;
+
+    new_ast->operandLeft = NULL;
+    new_ast->operandRight = NULL;
+    new_ast->leftChild = NULL;
+    new_ast->rightChild = NULL;
+    new_ast->precedence = 0;
+    new_ast->varName = NULL;
+    new_ast->operatorType = OT_UNDEFINED;
+    new_ast->nextOprType = OT_UNDEFINED;
+
+    (*ast) = new_ast;
 }
 
 char* reverse(char* source)
@@ -97,7 +119,7 @@ char* FindVarName(int startingIndex, token_list_t* lexer)
             {
                 //varName += ParseString(token_type);
 
-                char chr = ParseString(token_type);
+                char* chr = ParseString(token_type);
 
                 lst->chr = chr;
                 lst_next = NULL;
@@ -106,6 +128,7 @@ char* FindVarName(int startingIndex, token_list_t* lexer)
                 {
                     lst_next = (char_list_t*)malloc(sizeof(char_list_t));
                     lst_next->next = NULL;
+                    lst_next->chr = NULL;
                 }
 
                 lst->next = lst_next;
@@ -129,12 +152,16 @@ char* FindVarName(int startingIndex, token_list_t* lexer)
     //char_list_t* lst_next;
     
     lst = lst_first;
+    //lst_next = lst;
     lst_next = lst->next;
     i = 0;
 
     while (lst_next != NULL)
     {
-        result[i] = lst_next->chr;
+        if (lst_next->chr != NULL)
+        {
+            result[i] = *lst_next->chr;
+        }
 
         i++;
         lst_next = lst_next->next;
@@ -160,10 +187,13 @@ char* FindOperandLeft(int startingIndex, token_list_t* lexer)
     char_list_t* lst_first = lst;
     int i = 0;
 
+    next = lexer->prev;
+
+    i = startingIndex - 1;
     //for (int i = startingIndex - 1; (i >= 0) && working; i--)
     while(next != NULL && working)
     {
-        if (i >= startingIndex - 1)
+        if (i >= 0)
         {
             //token_type = lexer[i];
             token_type = next->token;
@@ -179,7 +209,7 @@ char* FindOperandLeft(int startingIndex, token_list_t* lexer)
 
                 //varName += ParseString(token_type);
 
-                char chr = ParseString(token_type);
+                char* chr = ParseString(token_type);
                 lst_next = (char_list_t*)malloc(sizeof(char_list_t));
                 lst_next->next = NULL;
                 lst_next->chr = chr;
@@ -210,8 +240,8 @@ char* FindOperandLeft(int startingIndex, token_list_t* lexer)
                 working = false;
             }
         }
-        i++;
-        next = next->next;
+        i--;
+        next = next->prev;
     }
     
     if (lst_size > 0)
@@ -230,7 +260,7 @@ char* FindOperandLeft(int startingIndex, token_list_t* lexer)
 
         while (lst_next != NULL)
         {
-            result[i] = lst_next->chr;
+            result[i] = *lst_next->chr;
 
             i++;
             lst_next = lst_next->next;
@@ -247,13 +277,15 @@ char* FindOperandRight(int index, token_list_t* lexer, int* outIndex)
     int lst_size = 0;
     char_list_t* lst_next = NULL;
     char_list_t* lst = (char_list_t*)malloc(sizeof(char_list_t));
+    lst->chr = NULL;
+    lst->next = NULL;
 
     //char* varValue = (char*)malloc(sizeof(char) * 1024);
     enum AST_ENUM_TOKEN token_type = AST_UNDEFINED;
     bool isForLoop = false;
     bool working = true;
     int i;
-    token_list_t* next = lexer;
+    token_list_t* next = lexer->next;
     char_list_t* lst_first = lst;
     i = 0;
 
@@ -291,25 +323,28 @@ char* FindOperandRight(int index, token_list_t* lexer, int* outIndex)
         {
             isForLoop = true;
         }
-        else
+        else if (isAlphaNumeric(token_type))
         {
             //varValue += ParseString(token_type);
-            char chr = ParseString(token_type);
+            char* chr = ParseString(token_type);
             lst_next = (char_list_t*)malloc(sizeof(char_list_t));
             lst_next->next = NULL;
             lst_next->chr = chr;
 
             lst->next = lst_next;
             lst = lst_next;
-
             lst_size++;
+        }
+        else
+        {
+
         }
 
         next = next->next;
         i++;
     }
 
-    outIndex = i;
+    *outIndex = i;
 
     char* result = NULL;
     if (lst_size > 0)
@@ -325,7 +360,10 @@ char* FindOperandRight(int index, token_list_t* lexer, int* outIndex)
 
         while (lst_next != NULL)
         {
-            result[i] = lst_next->chr;
+            if (lst_next->chr != NULL)
+            {
+                result[i] = *lst_next->chr;
+            }
 
             i++;
             lst_next = lst_next->next;
@@ -417,28 +455,28 @@ int GetCurrPrecedence(int defaultPrecedence, int index, enum AST_ENUM_TOKEN toke
     return (int)OP_AST_UNDEFINED;
 }
 //TODO: parse tenery operator. parse unary operator.
-AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST* parentAST, AST* rootAST)
+AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST** parentAST, AST** rootAST)
 {
     AST* ast;
     ast_init(&ast);
 
     enum AST_ENUM_TOKEN tok = lexer->token;
-    int i = index + 1;
+    int i = (*index) + 1;
 
-    ast->operatorType = GetNextOperatorType(index - 1, lexer);
-    ast->nextOprType = GetNextOperatorType(index, lexer);
-    ast->precedence = GetCurrPrecedence(0, index, tok, lexer);
-    ast->operandLeft = FindOperandLeft(index, lexer);
-    ast->operandRight = FindOperandRight(index, lexer, &i);
+    ast->operatorType = GetNextOperatorType((*index) - 1, lexer);
+    ast->nextOprType = GetNextOperatorType((*index), lexer);
+    ast->precedence = GetCurrPrecedence(0, (*index), tok, lexer);
+    ast->operandLeft = FindOperandLeft((*index), lexer);
+    ast->operandRight = FindOperandRight((*index), lexer, &i);
     index = i;
 
     if (rootAST == NULL)
     {
-        rootAST = ast;
+        (*rootAST) = ast;
     }
     if (parentAST == NULL)
     {
-        parentAST = ast;
+        (*parentAST) = ast;
     }
     else
     {
@@ -454,13 +492,13 @@ AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST* parentAST, AST* r
             }
 
 
-            if ((parentAST)->leftChild == NULL)
+            if ((*parentAST)->leftChild == NULL)
             {
-                (parentAST)->leftChild = ast;
+                (*parentAST)->leftChild = ast;
             }
-            else if ((parentAST)->rightChild == NULL)
+            else if ((*parentAST)->rightChild == NULL)
             {
-                (parentAST)->rightChild = ast;
+                (*parentAST)->rightChild = ast;
             }
 
             if (ast->nextOprType != OT_UNDEFINED)
@@ -473,20 +511,20 @@ AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST* parentAST, AST* r
                 astPrior->leftChild = parentAST;
                 astPrior->rightChild = ast;
 
-                (parentAST) = ast;
+                (*parentAST) = ast;
 
                 return astPrior;
             }
             else
             {
-                (parentAST) = ast;
+                (*parentAST) = ast;
 
                 return ast;
             }
         }
     }
     
-    (parentAST) = ast;
+    (*parentAST) = ast;
 
     return ast;
 }
@@ -504,6 +542,8 @@ token_list_t* FindVarValue(int index, token_list_t* lexer)
 
     token_list_t* new_beginning = lexer;
     token_list_t* prev = lexer;
+    token_list_t* pre = NULL;
+
     int i = 0;
     //bool working = true;
 
@@ -517,6 +557,7 @@ token_list_t* FindVarValue(int index, token_list_t* lexer)
         i++;
         prev = new_beginning;
         new_beginning = new_beginning->next;
+        new_beginning->prev = prev;
     }
     sub_lexer = prev;
 
@@ -542,6 +583,8 @@ token_list_t* FindVarValue(int index, token_list_t* lexer)
             //valueTokens.Add(token_type);
 
             lst_first->token = token_type;
+            pre = lst_first;
+
             if (sub_lexer->next != NULL)
             {
                 lst_first->next = (token_list_t*)malloc(sizeof(token_list_t));
@@ -551,11 +594,13 @@ token_list_t* FindVarValue(int index, token_list_t* lexer)
                 lst_first->next = NULL;
             }
             lst_first = lst_first->next;
+            lst_first->prev = pre;
         }
         sub_lexer = sub_lexer->next;
     }
 
     //return valueTokens;
+    lst_main->prev = NULL;
 
     return lst_main;
 }
@@ -617,82 +662,134 @@ char* ParseString(enum AST_ENUM_TOKEN token)
         switch (tokenInt)
         {
             case 0x26:
-                result = 'A';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'A';
+                result[1] = 0x00;
                 break;
             case 0x27:
-                result = 'B';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'B';
+                result[1] = 0x00;
                 break;
             case 0x28:
-                result = 'C';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'C';
+                result[1] = 0x00;
                 break;
             case 0x29:
-                result = 'D';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'D';
+                result[1] = 0x00;
                 break;
             case 0x2A:
-                result = 'E';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'E';
+                result[1] = 0x00;
                 break;
             case 0x2B:
-                result = 'F';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'F';
+                result[1] = 0x00;
                 break;
             case 0x2C:
-                result = 'G';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'G';
+                result[1] = 0x00;
                 break;
             case 0x2D:
-                result = 'H';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'H';
+                result[1] = 0x00;
                 break;
             case 0x2E:
-                result = 'I';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'I';
+                result[1] = 0x00;
                 break;
             case 0x2F:
-                result = 'J';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'J';
+                result[1] = 0x00;
                 break;
             case 0x30:
-                result = 'K';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'K';
+                result[1] = 0x00;
                 break;
             case 0x31:
-                result = 'L';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'L';
+                result[1] = 0x00;
                 break;
             case 0x32:
-                result = 'M';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'M';
+                result[1] = 0x00;
                 break;
             case 0x33:
-                result = 'N';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'N';
+                result[1] = 0x00;
                 break;
             case 0x34:
-                result = 'O';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'O';
+                result[1] = 0x00;
                 break;
             case 0x35:
-                result = 'P';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'P';
+                result[1] = 0x00;
                 break;
             case 0x36:
-                result = 'Q';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'Q';
+                result[1] = 0x00;
                 break;
             case 0x37:
-                result = 'R';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'R';
+                result[1] = 0x00;
                 break;
             case 0x38:
-                result = 'S';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'S';
+                result[1] = 0x00;
                 break;
             case 0x39:
-                result = 'T';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'T';
+                result[1] = 0x00;
                 break;
             case 0x3A:
-                result = 'U';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'U';
+                result[1] = 0x00;
                 break;
             case 0x3B:
-                result = 'V';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'V';
+                result[1] = 0x00;
                 break;
             case 0x3C:
-                result = 'W';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'W';
+                result[1] = 0x00;
                 break;
             case 0x3D:
-                result = 'X';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'X';
+                result[1] = 0x00;
                 break;
             case 0x3E:
-                result = 'Y';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'Y';
+                result[1] = 0x00;
                 break;
             case 0x3F:
-                result = 'Z';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'Z';
+                result[1] = 0x00;
                 break;
         }
     }
@@ -702,82 +799,134 @@ char* ParseString(enum AST_ENUM_TOKEN token)
         switch (tokenInt)
         {
             case 0x40:
-                result = 'a';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'a';
+                result[1] = 0x00;
                 break;
             case 0x41:
-                result = 'b';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'b';
+                result[1] = 0x00;
                 break;
             case 0x42:
-                result = 'c';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'c';
+                result[1] = 0x00;
                 break;
             case 0x43:
-                result = 'd';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'd';
+                result[1] = 0x00;
                 break;
             case 0x44:
-                result = 'e';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'e';
+                result[1] = 0x00;
                 break;
             case 0x45:
-                result = 'f';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'f';
+                result[1] = 0x00;
                 break;
             case 0x46:
-                result = 'g';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'g';
+                result[1] = 0x00;
                 break;
             case 0x47:
-                result = 'h';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'h';
+                result[1] = 0x00;
                 break;
             case 0x48:
-                result = 'i';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'i';
+                result[1] = 0x00;
                 break;
             case 0x49:
-                result = 'j';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'j';
+                result[1] = 0x00;
                 break;
             case 0x4A:
-                result = 'k';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'k';
+                result[1] = 0x00;
                 break;
             case 0x4B:
-                result = 'l';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'l';
+                result[1] = 0x00;
                 break;
             case 0x4C:
-                result = 'm';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'm';
+                result[1] = 0x00;
                 break;
             case 0x4D:
-                result = 'n';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'n';
+                result[1] = 0x00;
                 break;
             case 0x4E:
-                result = 'o';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'o';
+                result[1] = 0x00;
                 break;
             case 0x4F:
-                result = 'p';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'p';
+                result[1] = 0x00;
                 break;
             case 0x50:
-                result = 'q';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'q';
+                result[1] = 0x00;
                 break;
             case 0x51:
-                result = 'r';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'r';
+                result[1] = 0x00;
                 break;
             case 0x52:
-                result = 's';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 's';
+                result[1] = 0x00;
                 break;
             case 0x53:
-                result = 't';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 't';
+                result[1] = 0x00;
                 break;
             case 0x54:
-                result = 'u';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'u';
+                result[1] = 0x00;
                 break;
             case 0x55:
-                result = 'v';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'v';
+                result[1] = 0x00;
                 break;
             case 0x56:
-                result = 'w';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'w';
+                result[1] = 0x00;
                 break;
             case 0x57:
-                result = 'x';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'x';
+                result[1] = 0x00;
                 break;
             case 0x58:
-                result = 'y';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'y';
+                result[1] = 0x00;
                 break;
             case 0x59:
-                result = 'z';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = 'z';
+                result[1] = 0x00;
                 break;
         }
     }
@@ -786,34 +935,54 @@ char* ParseString(enum AST_ENUM_TOKEN token)
         switch (tokenInt)
         {
             case 0x5A:
-                result = '0';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = '0';
+                result[1] = 0x00;
                 break;
             case 0x5B:
-                result = '1';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = '1';
+                result[1] = 0x00;
                 break;
             case 0x5C:
-                result = '2';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = '2';
+                result[1] = 0x00;
                 break;
             case 0x5D:
-                result = '3';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = '3';
+                result[1] = 0x00;
                 break;
             case 0x5E:
-                result = '4';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = '4';
+                result[1] = 0x00;
                 break;
             case 0x5F:
-                result = '5';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = '5';
+                result[1] = 0x00;
                 break;
             case 0x60:
-                result = '6';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = '6';
+                result[1] = 0x00;
                 break;
             case 0x61:
-                result = '7';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = '7';
+                result[1] = 0x00;
                 break;
             case 0x62:
-                result = '8';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = '8';
+                result[1] = 0x00;
                 break;
             case 0x63:
-                result = '9';
+                result = (char*)malloc(sizeof(char) * 2);
+                result[0] = '9';
+                result[1] = 0x00;
                 break;
         }
     }
@@ -1035,6 +1204,7 @@ token_list_t* Lexer(char* code)
     
     token_list_t* lexer; //token_list_t* lexer = (token_list_t*)malloc(sizeof(token_list_t));
     token_list_t* lexer_node = NULL;
+    token_list_t* lexer_prev = NULL;
 
     tokenlst_init(&lexer);
     token_list_t* lexer_front = lexer;
@@ -1475,6 +1645,7 @@ token_list_t* Lexer(char* code)
             lexer_node = NULL;
             
             lexer->next = NULL;
+            lexer->prev = NULL;
             lexer->token = token_type;
 
             if (i + 1 < code_len)
@@ -1484,8 +1655,10 @@ token_list_t* Lexer(char* code)
                 //lexer_node = (token_list_t*)malloc(sizeof(token_list_t));
                 //lexer_node->next = NULL;
 
+                lexer_prev = lexer;
                 lexer->next = lexer_node;
                 lexer = lexer->next;
+                lexer->prev = lexer_prev;
             }
 
             //lexer.Add(token_type);
@@ -1499,9 +1672,11 @@ token_list_t* Lexer(char* code)
                 //lexer_node = (token_list_t*)malloc(sizeof(token_list_t));
                 //lexer_node->next = NULL;
                 lexer_node->token = AST_COMMENT_END;
-
+                
+                lexer_prev = lexer;
                 lexer->next = lexer_node;
                 lexer = lexer->next;
+                lexer->prev = lexer_prev;
             }
 
             //lexer.Add(AST_COMMENT_END);
@@ -1654,37 +1829,37 @@ void PrintAST(AST* ast, int currentDepth)
     //printf("%s",title);
     printf("%s", "--AST--");
 
-    printf("%s", "op: ");
+    printf("%s", "\n  op: ");
     printf("%s", OperatorTypeToString(ast->operatorType));
 
-    printf("%s", "next: ");
+    printf("%s", "\n  next: ");
     printf("%s", OperatorTypeToString(ast->nextOprType));
 
-    printf("%s", "left: ");
+    printf("%s", "\n  left: ");
     printf("%s", ast->operandLeft);
 
-    printf("%s", "right: ");
+    printf("%s", "\n  right: ");
     printf("%s", ast->operandRight);
 
-    printf("%s", "precedence: ");
+    printf("%s", "\n  precedence: ");
     printf("%d", ast->precedence);
 
-    if (ast->leftChild != NULL)
+    if (ast->leftChild != NULL && ast->leftChild != 0xcdcdcdcdcdcdcdcd)
     {
         //if (!debugIDs.Exists(ID = > ID == ast->leftChild->ID))
         if(!idlst_exists(lst_front, ast->leftChild->ID))
         {
-            printf("%s", "child left:");
+            printf("%s", "child left:\n");
 
             PrintAST(ast->leftChild, currentDepth + 1);
         }
     }
-    if (ast->rightChild != NULL)
+    if (ast->rightChild != NULL && ast->rightChild != 0xcdcdcdcdcdcdcdcd)
     {
         //if (!debugIDs.Exists(ID = > ID == ast.rightChild.ID))
         if (!idlst_exists(lst_front, ast->rightChild->ID))
         {
-            printf("%s", "child right:");
+            printf("%s", "child right:\n");
 
             PrintAST(ast->rightChild, currentDepth + 1);
         }

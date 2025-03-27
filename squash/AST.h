@@ -205,8 +205,9 @@ typedef struct _AST_s {
     struct _AST_s* rightChild;
     int precedence;
     int ID;
-    int prevID;
 } AST;
+
+extern int _ast_prevID;
 
 typedef struct token_list {
     enum AST_ENUM_TOKEN token;
@@ -224,7 +225,7 @@ typedef struct id_list {
     struct id_list* next;
 } id_list_t;
 
-void tokenlst_init(token_list_t* tlst);
+void tokenlst_init(token_list_t** tlst);
 void idlst_init(id_list_t* item, int id);
 void idlst_add(id_list_t* parent, int id);
 bool idlst_exists(id_list_t* front, int id);
@@ -232,9 +233,10 @@ void ast_init(AST** ast);
 char* reverse(char* source);
 char* FindVarName(int startingIndex, token_list_t* lexer);
 char* FindOperandLeft(int startingIndex, token_list_t* lexer);
+char* FindOperandRight(int index, token_list_t* lexer, int* outIndex);
 enum OperatorType GetNextOperatorType(int index, token_list_t* lexer);
 int GetCurrPrecedence(int defaultPrecedence, int index, enum AST_ENUM_TOKEN token, token_list_t* lexer);
-AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST* parentAST, AST* rootAST);
+AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST** parentAST, AST** rootAST);
 token_list_t* FindVarValue(int index, token_list_t* lexer);
 bool isAlphaNumeric(enum AST_ENUM_TOKEN token);
 bool isNumeric(enum AST_ENUM_TOKEN token);

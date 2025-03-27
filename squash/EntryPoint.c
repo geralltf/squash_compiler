@@ -4,7 +4,7 @@
 
 int main(void)
 {
-    printf("Wello, Horld!");
+    printf("Wello, Horld!\n");
 
     //List<AST> computeResult = AST.Expr("int a = 2 / 8 * (9 + 2) + 3+1;");
     // 1 + (2*3)
@@ -14,6 +14,8 @@ int main(void)
     {
         AST* computeResult = Expr("int a = 2 / 8 * (90 + 20) + 3+1 - 4*8 +7*3 + 12;");
         PrintAST(computeResult);
+
+        free(computeResult);
 
         /*
         List<ASMTree> outASMComputeResult;
