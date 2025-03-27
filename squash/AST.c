@@ -470,11 +470,11 @@ AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST** parentAST, AST**
     ast->operandRight = FindOperandRight((*index), lexer, &i);
     index = i;
 
-    if (rootAST == NULL)
+    if (*rootAST == NULL)
     {
         (*rootAST) = ast;
     }
-    if (parentAST == NULL)
+    if (*parentAST == NULL)
     {
         (*parentAST) = ast;
     }
@@ -533,6 +533,9 @@ token_list_t* FindVarValue(int index, token_list_t* lexer)
 {
     token_list_t* sub_lexer = lexer;
     token_list_t* valueTokens = (token_list_t*)malloc(sizeof(token_list_t));
+    valueTokens->next = NULL;
+    valueTokens->prev = NULL;
+    valueTokens->token = AST_UNDEFINED;
     token_list_t* lst_first = valueTokens;
     token_list_t* lst_main = valueTokens;
 
@@ -588,6 +591,9 @@ token_list_t* FindVarValue(int index, token_list_t* lexer)
             if (sub_lexer->next != NULL)
             {
                 lst_first->next = (token_list_t*)malloc(sizeof(token_list_t));
+                lst_first->next->next = NULL;
+                lst_first->next->prev = NULL;
+                lst_first->next->token = AST_UNDEFINED;
             }
             else 
             {
