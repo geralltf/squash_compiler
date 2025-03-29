@@ -363,6 +363,7 @@ char* FindOperandRight(int index, token_list_t* lexer, int* outIndex)
             if (lst_next->chr != NULL)
             {
                 result[i] = *lst_next->chr;
+                //*(result + i) = *lst_next->chr;
             }
 
             i++;
@@ -468,7 +469,7 @@ AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST** parentAST, AST**
     ast->precedence = GetCurrPrecedence(0, (*index), tok, lexer);
     ast->operandLeft = FindOperandLeft((*index), lexer);
     ast->operandRight = FindOperandRight((*index), lexer, &i);
-    index = i;
+    (*index) = i;
 
     if (*rootAST == NULL)
     {
@@ -503,9 +504,9 @@ AST* ParseBinaryOperator(int* index, token_list_t* lexer, AST** parentAST, AST**
 
             if (ast->nextOprType != OT_UNDEFINED)
             {
-                AST* astPrior = (AST*)malloc(sizeof(AST));
+                AST* astPrior;// = (AST*)malloc(sizeof(AST));
 
-                ast_init(astPrior);
+                ast_init(&astPrior);
 
                 astPrior->operatorType = ast->nextOprType;
                 astPrior->leftChild = parentAST;
@@ -1180,6 +1181,7 @@ AST* Parser(token_list_t* lexer)
                         subLexerExprPrev = subLexerExpr;
                         subLexerExpr = subLexerExpr->next;
                     }
+                    //free(j);
                 }
 
             }
@@ -1842,10 +1844,17 @@ void PrintAST(AST* ast, int currentDepth)
     printf("%s", OperatorTypeToString(ast->nextOprType));
 
     printf("%s", "\n  left: ");
-    printf("%s", ast->operandLeft);
+    if (ast->operandLeft != NULL && ast->operandLeft != "")
+    {
+        printf("%s", ast->operandLeft);
+    }
 
     printf("%s", "\n  right: ");
-    printf("%s", ast->operandRight);
+    if (ast->operandRight != NULL && ast->operandRight != "")
+    {
+        printf("%s", ast->operandRight);
+    }
+    
 
     printf("%s", "\n  precedence: ");
     printf("%d", ast->precedence);
@@ -1855,7 +1864,7 @@ void PrintAST(AST* ast, int currentDepth)
         //if (!debugIDs.Exists(ID = > ID == ast->leftChild->ID))
         if(!idlst_exists(lst_front, ast->leftChild->ID))
         {
-            printf("%s", "child left:\n");
+            printf("%s", "\nchild left:\n");
 
             PrintAST(ast->leftChild, currentDepth + 1);
         }
@@ -1865,7 +1874,7 @@ void PrintAST(AST* ast, int currentDepth)
         //if (!debugIDs.Exists(ID = > ID == ast.rightChild.ID))
         if (!idlst_exists(lst_front, ast->rightChild->ID))
         {
-            printf("%s", "child right:\n");
+            printf("%s", "\nchild right:\n");
 
             PrintAST(ast->rightChild, currentDepth + 1);
         }
