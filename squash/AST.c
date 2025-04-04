@@ -363,6 +363,10 @@ char* FindOperandRight(int index, token_list_t* lexer, int* outIndex)
             if (lst_next->chr != NULL)
             {
                 result[i] = *lst_next->chr;
+                //char c = *lst_next->chr;
+                //result[i] = (char*)malloc(sizeof(char));
+                //result[i] = c;
+
                 //*(result + i) = *lst_next->chr;
             }
 
@@ -1181,7 +1185,6 @@ AST* Parser(token_list_t* lexer)
                         subLexerExprPrev = subLexerExpr;
                         subLexerExpr = subLexerExpr->next;
                     }
-                    //free(j);
                 }
 
             }
