@@ -52,7 +52,7 @@ namespace Squash.Compiler
         /// </exception>
         public string Assemble(ASTNode node)
         {
-            Console.WriteLine("AST: \n" + node.ToString());
+            //Console.WriteLine("AST: " + node.ToString());
 
             StringBuilder sb = new StringBuilder();
 

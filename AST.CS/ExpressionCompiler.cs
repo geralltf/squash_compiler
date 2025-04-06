@@ -58,11 +58,13 @@ namespace Squash.Compiler
     {
         public TokenType Type { get; set; }
         public string Value { get; set; }
+        public int Position { get; set; }
 
-        public Token(TokenType type, string value)
+        public Token(TokenType type, string value, int position)
         {
             Type = type;
             Value = value;
+            Position = position;
         }
     }
 
@@ -182,14 +184,14 @@ namespace Squash.Compiler
 
                 if (currentPos >= input.Length)
                 {
-                    Token token = new Token(TokenType.EOF, string.Empty);
+                    Token token = new Token(TokenType.EOF, string.Empty, currentPos);
 
                     return token;
                 }
                 if (currentChar == 'v' && currentChar1 == 'a' && currentChar2 == 'r')
                 {
                     Token token = new Token(TokenType.VarKeyword,
-                        currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString()
+                        currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString(), currentPos
                     );
                     Advance();
                     Advance();
@@ -199,7 +201,7 @@ namespace Squash.Compiler
                 if (currentChar == 'i' && currentChar1 == 'n' && currentChar2 == 't')
                 {
                     Token token = new Token(TokenType.IntKeyword,
-                        currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString()
+                        currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString(), currentPos
                     );
                     Advance();
                     Advance();
@@ -210,7 +212,7 @@ namespace Squash.Compiler
                 {
                     Token token = new Token(TokenType.StringKeyword,
                         currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString()
-                        + currentChar3.ToString() + currentChar4.ToString() + currentChar5.ToString()
+                        + currentChar3.ToString() + currentChar4.ToString() + currentChar5.ToString(), currentPos
                     );
                     Advance();
                     Advance();
@@ -224,7 +226,7 @@ namespace Squash.Compiler
                 {
                     Token token = new Token(TokenType.DoubleKeyword,
                         currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString()
-                        + currentChar3.ToString() + currentChar4.ToString() + currentChar5.ToString()
+                        + currentChar3.ToString() + currentChar4.ToString() + currentChar5.ToString(), currentPos
                     );
                     Advance();
                     Advance();
@@ -236,49 +238,49 @@ namespace Squash.Compiler
                 }
                 else if (char.IsDigit(currentChar))
                 {
-                    Token token = new Token(TokenType.Number, ParseNumber());
+                    Token token = new Token(TokenType.Number, ParseNumber(), currentPos);
                     //Advance();
                     return token;
                 }
                 else if (char.IsLetter(currentChar))
                 {
-                    Token token = new Token(TokenType.Identifier, ParseIdentifier());
+                    Token token = new Token(TokenType.Identifier, ParseIdentifier(), currentPos);
                     //Advance();
                     return token;
                 }
                 else if (currentChar == '+' || currentChar == '-' || currentChar == '*' || currentChar == '/')
                 {
-                    Token token = new Token(TokenType.Operator, currentChar.ToString());
+                    Token token = new Token(TokenType.Operator, currentChar.ToString(), currentPos);
                     Advance();
                     return token;
                 }
                 else if (currentChar == '(' || currentChar == ')') // Handle parentheses
                 {
-                    Token token = new Token(TokenType.Parenthesis, currentChar.ToString());
+                    Token token = new Token(TokenType.Parenthesis, currentChar.ToString(), currentPos);
                     Advance();
                     return token;
                 }
                 else if (currentChar == '=')
                 {
-                    Token token = new Token(TokenType.Assignment, currentChar.ToString());
+                    Token token = new Token(TokenType.Assignment, currentChar.ToString(), currentPos);
                     Advance();
                     return token;
                 }
                 else if (currentChar == '.')
                 {
-                    Token token = new Token(TokenType.Peroid, currentChar.ToString());
+                    Token token = new Token(TokenType.Peroid, currentChar.ToString(), currentPos);
                     Advance();
                     return token;
                 }
                 else if (currentChar == ';')
                 {
-                    Token token = new Token(TokenType.SemiColon, currentChar.ToString());
+                    Token token = new Token(TokenType.SemiColon, currentChar.ToString(), currentPos);
                     Advance();
                     return token;
                 }
                 else if (char.IsWhiteSpace(currentChar))
                 {
-                    Token token = new Token(TokenType.Whitespace, currentChar.ToString());
+                    Token token = new Token(TokenType.Whitespace, currentChar.ToString(), currentPos);
                     Advance();
                     return token;
                 }
@@ -440,6 +442,12 @@ namespace Squash.Compiler
             FunctionArguments = null;
             VarSymbol = variableSymbol;
             IsVariable = true;
+        }
+
+        public override string ToString()
+        {
+            return "Type: " + Type.ToString() + ", Value: " + Value + ", IsVariable: " + IsVariable.ToString()
+                + " IsFunctionCall: " + IsFunctionCall.ToString() + "";
         }
     }
 
@@ -633,21 +641,33 @@ namespace Squash.Compiler
             if (currentToken.Type == TokenType.VarKeyword)
             {
                 ASTNode varDefineNode = ParseVariableDefine(VarType.VarAutomatic);
+                ASTNode right = ParseExpression(0, rootAST);
+                varDefineNode.Right = right;
+                currentToken = lexer.GetNextToken();
                 return varDefineNode;
             }
             else if (currentToken.Type == TokenType.DoubleKeyword)
             {
                 ASTNode varDefineNode = ParseVariableDefine(VarType.Double);
+                ASTNode right = ParseExpression(0, rootAST);
+                varDefineNode.Right = right;
+                currentToken = lexer.GetNextToken();
                 return varDefineNode;
             }
             else if (currentToken.Type == TokenType.IntKeyword)
             {
                 ASTNode varDefineNode = ParseVariableDefine(VarType.Int);
+                ASTNode right = ParseExpression(0, rootAST);
+                varDefineNode.Right = right;
+                currentToken = lexer.GetNextToken();
                 return varDefineNode;
             }
             else if (currentToken.Type == TokenType.StringKeyword)
             {
                 ASTNode varDefineNode = ParseVariableDefine(VarType.String);
+                ASTNode right = ParseExpression(0, rootAST);
+                varDefineNode.Right = right;
+                currentToken = lexer.GetNextToken();
                 return varDefineNode;
             }
             else if (currentToken.Type == TokenType.Number)
@@ -796,7 +816,7 @@ namespace Squash.Compiler
 
         private bool IsUnaryOperator()
         {
-            return currentToken.Type == TokenType.Operator && (currentToken.Value == "-" || currentToken.Value == "+");
+            return currentToken != null && currentToken.Type == TokenType.Operator && (currentToken.Value == "-" || currentToken.Value == "+");
         }
 
     }
