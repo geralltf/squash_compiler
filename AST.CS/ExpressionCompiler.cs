@@ -237,13 +237,13 @@ namespace Squash.Compiler
                 else if (char.IsDigit(currentChar))
                 {
                     Token token = new Token(TokenType.Number, ParseNumber());
-                    Advance();
+                    //Advance();
                     return token;
                 }
                 else if (char.IsLetter(currentChar))
                 {
                     Token token = new Token(TokenType.Identifier, ParseIdentifier());
-                    Advance();
+                    //Advance();
                     return token;
                 }
                 else if (currentChar == '+' || currentChar == '-' || currentChar == '*' || currentChar == '/')
@@ -685,7 +685,7 @@ namespace Squash.Compiler
             {
                 currentToken = lexer.GetNextToken(); // Move past "("
                 ASTNode node = ParseExpression(0, rootAST);
-                if (currentToken.Value == ")")
+                if (currentToken != null && currentToken.Value == ")")
                 {
                     currentToken = lexer.GetNextToken(); // Move past ")"
                 }
@@ -762,7 +762,7 @@ namespace Squash.Compiler
                 // Handle parentheses
                 if (currentToken != null && currentToken.Type == TokenType.Parenthesis && currentToken.Value == ")")
                 {
-                    currentToken = lexer.GetNextToken(); // Move to the next token
+                    //currentToken = lexer.GetNextToken(); // Move to the next token
                 }
 
                 if (op.Value == "-" && IsUnaryOperator())

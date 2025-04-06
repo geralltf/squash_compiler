@@ -11,7 +11,9 @@ namespace AST.CS
             //string code = "var x = sin(y) + 2 * z + (2 * 8) + (5*5)";
             //string code = "double x = 4.3;";
             //string code = "double a;\nx = 6.3;\ndouble y = x * 2";
-            string code = "(2+1)-(3+2)";
+            //string code = "(2+1)-(3+2)";
+            string code = "(2*1)";
+            //string code = "2*1";
 
             ExpressionCompiler compiler = new ExpressionCompiler(code);
             compiler.CompileExpression();
