@@ -248,7 +248,7 @@ namespace Squash.Compiler
                     //Advance();
                     return token;
                 }
-                else if (currentChar == '+' || currentChar == '-' || currentChar == '*' || currentChar == '/')
+                else if (currentChar == '+' || currentChar == '-' || currentChar == '*' || currentChar == '/' || currentChar == ',')
                 {
                     Token token = new Token(TokenType.Operator, currentChar.ToString(), currentPos);
                     Advance();
