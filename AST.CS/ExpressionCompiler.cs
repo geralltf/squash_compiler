@@ -387,6 +387,7 @@ namespace Squash.Compiler
         UNARY_OP,
         Number,
         VariableDefine,
+        VariableAssignment,
         Variable,
         FunctionCall
     }
@@ -490,6 +491,9 @@ namespace Squash.Compiler
             this.symbolTable = new SymbolTable();
             this.rootAST = new AbstractSyntaxTree();
             this.asm = new Assembler(rootAST);
+
+            this.symbolTable.DefineFunction("sin", null);
+            this.symbolTable.DefineVariable(VarType.Int, "a", 0);
         }
 
 
@@ -641,32 +645,32 @@ namespace Squash.Compiler
             if (currentToken.Type == TokenType.VarKeyword)
             {
                 ASTNode varDefineNode = ParseVariableDefine(VarType.VarAutomatic);
-                ASTNode right = ParseExpression(0, rootAST);
-                varDefineNode.Right = right;
+                ASTNode left = ParseExpression(0, rootAST);
+                varDefineNode.Left = left;
                 currentToken = lexer.GetNextToken();
                 return varDefineNode;
             }
             else if (currentToken.Type == TokenType.DoubleKeyword)
             {
                 ASTNode varDefineNode = ParseVariableDefine(VarType.Double);
-                ASTNode right = ParseExpression(0, rootAST);
-                varDefineNode.Right = right;
+                ASTNode left = ParseExpression(0, rootAST);
+                varDefineNode.Left = left;
                 currentToken = lexer.GetNextToken();
                 return varDefineNode;
             }
             else if (currentToken.Type == TokenType.IntKeyword)
             {
                 ASTNode varDefineNode = ParseVariableDefine(VarType.Int);
-                ASTNode right = ParseExpression(0, rootAST);
-                varDefineNode.Right = right;
+                ASTNode left = ParseExpression(0, rootAST);
+                varDefineNode.Left = left;
                 currentToken = lexer.GetNextToken();
                 return varDefineNode;
             }
             else if (currentToken.Type == TokenType.StringKeyword)
             {
                 ASTNode varDefineNode = ParseVariableDefine(VarType.String);
-                ASTNode right = ParseExpression(0, rootAST);
-                varDefineNode.Right = right;
+                ASTNode left = ParseExpression(0, rootAST);
+                varDefineNode.Left = left;
                 currentToken = lexer.GetNextToken();
                 return varDefineNode;
             }
@@ -698,7 +702,19 @@ namespace Squash.Compiler
                 {
                     // Handle variable
                     VariableSymbol variableSymbol = symbolTable.LookupVariable(identifierName);
-                    return new ASTNode(ASTNodeType.Variable, identifierName, variableSymbol);
+                    ASTNode varNode = new ASTNode(ASTNodeType.Variable, identifierName, variableSymbol);
+
+                    Token before = currentToken;
+                    //currentToken = lexer.GetNextToken(); // Skip past identifier token.
+                    if (currentToken.Type == TokenType.Assignment && currentToken.Value == "=")
+                    {
+                        currentToken = lexer.GetNextToken();
+
+                        ASTNode left = ParseExpression(0, rootAST);
+                        ASTNode right = new ASTNode(ASTNodeType.VariableAssignment, before.Value, left, varNode);
+
+                        return right;
+                    }
                 }
             }
             else if (currentToken.Type == TokenType.Parenthesis && currentToken.Value == "(")
@@ -727,7 +743,14 @@ namespace Squash.Compiler
             {
                 currentToken = lexer.GetNextToken(); // Move past whitespace character.
             }
-            throw new Exception("Invalid primary expression.");
+            if (currentToken != null)
+            {
+                throw new Exception("Invalid primary expression. Position: " + currentToken.Position.ToString());
+            }
+            else
+            {
+                throw new Exception("Invalid primary expression.");
+            }
         }
 
         private List<ASTNode> ParseFunctionArguments()

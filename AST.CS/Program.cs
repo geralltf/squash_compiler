@@ -8,10 +8,11 @@ namespace AST.CS
         {
             Console.WriteLine("Wello, Horld!");
 
-            string code = "var x=sin(2)+3*9+(2*8)+(5*6)";
+            //string code = "var x=sin(1)+3*9+(2*8)+(5*6)";
+            string code = "a=sin(1)+3*9+(2*8)+(5*6)";
             //string code = "double x = 4.3;";
             //string code = "double a;\nx = 6.3;\ndouble y = x * 2";
-            //string code = "(2+1)-(3+2)*(5+8)*(6*9)+14";
+            //string code = "(2+1)-(3+2)*(5+8)*((6*9)+14)+7";
             //string code = "(2*1)";
             //string code = "2*1";
             //string code = "1+(13*2)";

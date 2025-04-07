@@ -60,7 +60,17 @@ namespace Squash.Compiler
             {
                 if(node.Type == ASTNodeType.VariableDefine)
                 {
+                    // This assignment must occur last so it must be at the end of the expression evaluation
+                    // to store the result of the expression in an assigned variable.
                     Console.WriteLine("VariableDefine assembler not yet implemented.");
+                    Console.WriteLine($"var {node.VarSymbol.Name}"); //TODO: Assembly equivalent
+                    //Console.WriteLine($"mov rax, [{node.VarSymbol.Name},{node.VarSymbol.Value}] ;{node.VarSymbol.VariableType.ToString()}");
+                }
+                else if (node.Type == ASTNodeType.VariableAssignment)
+                {
+                    Console.WriteLine(node.Value + "=");
+                    Assemble(node.Left);
+                    Assemble(node.Right);
                 }
                 else if (node.Type == ASTNodeType.Number)
                 {
