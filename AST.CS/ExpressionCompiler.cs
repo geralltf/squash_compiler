@@ -638,6 +638,18 @@ namespace Squash.Compiler
             return null;
         }
 
+        private void parseEndStatement(ref ASTNode varDefineNode)
+        {
+            if (currentToken != null && currentToken.Type == TokenType.SemiColon)
+            {
+                currentToken = lexer.GetNextToken();
+                if (currentToken != null)
+                {
+                    ASTNode rhs = ParseExpression(0, rootAST);
+                    varDefineNode.Right = rhs;
+                }
+            }
+        }
         private ASTNode ParsePrimaryExpression()
         {
             Token token = currentToken;
@@ -647,7 +659,7 @@ namespace Squash.Compiler
                 ASTNode varDefineNode = ParseVariableDefine(VarType.VarAutomatic);
                 ASTNode left = ParseExpression(0, rootAST);
                 varDefineNode.Left = left;
-                currentToken = lexer.GetNextToken();
+                parseEndStatement(ref varDefineNode);
                 return varDefineNode;
             }
             else if (currentToken.Type == TokenType.DoubleKeyword)
@@ -655,15 +667,7 @@ namespace Squash.Compiler
                 ASTNode varDefineNode = ParseVariableDefine(VarType.Double);
                 ASTNode left = ParseExpression(0, rootAST);
                 varDefineNode.Left = left;
-                if(currentToken != null && currentToken.Type == TokenType.SemiColon)
-                {
-                    currentToken = lexer.GetNextToken();
-                    if (currentToken != null)
-                    {
-                        ASTNode rhs = ParseExpression(0, rootAST);
-                        varDefineNode.Right = rhs;
-                    }
-                }
+                parseEndStatement(ref varDefineNode);
                 return varDefineNode;
             }
             else if (currentToken.Type == TokenType.IntKeyword)
@@ -671,7 +675,7 @@ namespace Squash.Compiler
                 ASTNode varDefineNode = ParseVariableDefine(VarType.Int);
                 ASTNode left = ParseExpression(0, rootAST);
                 varDefineNode.Left = left;
-                currentToken = lexer.GetNextToken();
+                parseEndStatement(ref varDefineNode);
                 return varDefineNode;
             }
             else if (currentToken.Type == TokenType.StringKeyword)
@@ -679,7 +683,7 @@ namespace Squash.Compiler
                 ASTNode varDefineNode = ParseVariableDefine(VarType.String);
                 ASTNode left = ParseExpression(0, rootAST);
                 varDefineNode.Left = left;
-                currentToken = lexer.GetNextToken();
+                parseEndStatement(ref varDefineNode);
                 return varDefineNode;
             }
             else if (currentToken.Type == TokenType.Number)
@@ -722,6 +726,10 @@ namespace Squash.Compiler
                         ASTNode right = new ASTNode(ASTNodeType.VariableAssignment, before.Value, left, varNode);
 
                         return right;
+                    }
+                    else if(currentToken.Type == TokenType.Operator)
+                    {
+                        return varNode;
                     }
                 }
             }

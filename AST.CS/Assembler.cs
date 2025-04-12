@@ -74,9 +74,11 @@ namespace Squash.Compiler
                 }
                 else if (node.Type == ASTNodeType.VariableAssignment)
                 {
-                    Console.WriteLine(node.Right.Value + node.Value +  " " + node.Left.Value);
+                    Console.WriteLine(node.Right.Value + node.Value +  " " + node.Left.Left.Value 
+                        + " " + node.Left.Value + " " + node.Left.Right.Value);
                     Assemble(node.Left);
                     Assemble(node.Right);
+                    Console.WriteLine("EO Var assignment");
                 }
                 else if (node.Type == ASTNodeType.Number)
                 {
@@ -87,8 +89,8 @@ namespace Squash.Compiler
                 else if (node.Type == ASTNodeType.Variable)
                 {
                     // Load the variable value into a register
-                    Console.WriteLine($"mov rax, [{node.VarSymbol.Name}]");
-
+                    //Console.WriteLine($"mov rax, [{node.VarSymbol.Name}]");
+                    Console.WriteLine($"mov [{node.VarSymbol.Name}], rax");
                 }
                 else if (node.Type == ASTNodeType.FunctionCall && node.FunctionArguments != null)
                 {
