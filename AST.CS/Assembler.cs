@@ -62,13 +62,19 @@ namespace Squash.Compiler
                 {
                     // This assignment must occur last so it must be at the end of the expression evaluation
                     // to store the result of the expression in an assigned variable.
-                    Console.WriteLine("VariableDefine assembler not yet implemented.");
+                    //Console.WriteLine("VariableDefine assembler not yet implemented.");
                     Console.WriteLine($"var {node.VarSymbol.Name}"); //TODO: Assembly equivalent
                     //Console.WriteLine($"mov rax, [{node.VarSymbol.Name},{node.VarSymbol.Value}] ;{node.VarSymbol.VariableType.ToString()}");
+                    Assemble(node.Left);
+                    Console.WriteLine($"mov rax, [{node.VarSymbol.Name}]");
+                    Assemble(node.Right);
+                    Console.WriteLine($"{node.VarSymbol.Name}=(LEFT,RIGHT)");
+                    //Console.WriteLine($"mov rax, [{node.VarSymbol.Name}]");
+                    //Console.WriteLine("pop rbx");
                 }
                 else if (node.Type == ASTNodeType.VariableAssignment)
                 {
-                    Console.WriteLine(node.Value + "=");
+                    Console.WriteLine(node.Right.Value + node.Value +  " " + node.Left.Value);
                     Assemble(node.Left);
                     Assemble(node.Right);
                 }
@@ -102,7 +108,7 @@ namespace Squash.Compiler
                     Assemble(node.Left);
                     Console.WriteLine("push rax"); // Save value on the stack
                     Assemble(node.Right);
-
+                    
                     // Perform the operation (addition or subtraction in this example)
                     Console.WriteLine("pop rbx"); // Retrieve left operand from the stack
                     if (node.Value == "+")
@@ -119,6 +125,7 @@ namespace Squash.Compiler
                     }
                     else if (node.Value == "/")
                     {
+                        //TODO: idiv for signed division
                         Console.WriteLine("div rax, rbx"); // TODO: confirm if this is the correct divide operator
                     }
                 }
