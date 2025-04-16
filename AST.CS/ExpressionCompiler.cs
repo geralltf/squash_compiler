@@ -16,12 +16,14 @@ namespace Squash.Compiler
         Assignment,
         Comma,
         Peroid,
+        ReturnKeyword,
         VarKeyword,
         IntKeyword,
         DoubleKeyword,
         StringKeyword,
         StringLiteral,
         IntLiteral,
+        CurleyBrace,
         SemiColon,
         Whitespace,
         EOF
@@ -178,6 +180,11 @@ namespace Squash.Compiler
         }
         public Token GetNextToken() // Lexer.
         {
+            if (currentPos < input.Length)
+            {
+                currentChar = input[currentPos];
+            }
+
             while (currentChar != '\0')
             {
                 predictiveLookaheads();
@@ -236,6 +243,20 @@ namespace Squash.Compiler
                     Advance();
                     return token;
                 }
+                if (currentChar == 'r' && currentChar1 == 'e' && currentChar2 == 't' && currentChar3 == 'u' && currentChar4 == 'r' && currentChar5 == 'n')
+                {
+                    Token token = new Token(TokenType.ReturnKeyword,
+                        currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString()
+                        + currentChar3.ToString() + currentChar4.ToString() + currentChar5.ToString(), currentPos
+                    );
+                    Advance();
+                    Advance();
+                    Advance();
+                    Advance();
+                    Advance();
+                    Advance();
+                    return token;
+                }
                 else if (char.IsDigit(currentChar))
                 {
                     Token token = new Token(TokenType.Number, ParseNumber(), currentPos);
@@ -275,6 +296,18 @@ namespace Squash.Compiler
                 else if (currentChar == ';')
                 {
                     Token token = new Token(TokenType.SemiColon, currentChar.ToString(), currentPos);
+                    Advance();
+                    return token;
+                }
+                else if (currentChar == '{')
+                {
+                    Token token = new Token(TokenType.CurleyBrace, currentChar.ToString(), currentPos);
+                    Advance();
+                    return token;
+                }
+                else if (currentChar == '}')
+                {
+                    Token token = new Token(TokenType.CurleyBrace, currentChar.ToString(), currentPos);
                     Advance();
                     return token;
                 }
@@ -342,7 +375,7 @@ namespace Squash.Compiler
 
         public VariableSymbol(VarType type, string name, int value)
         {
-            VariableType = type; 
+            VariableType = type;
             Name = name;
             Value = value;
         }
@@ -360,10 +393,10 @@ namespace Squash.Compiler
         }
         public int ParseInt()
         {
-            if(Value != null && (VariableType == VarType.Int || VariableType == VarType.Int32))
+            if (Value != null && (VariableType == VarType.Int || VariableType == VarType.Int32))
             {
                 string val = Value.ToString();
-                if(!string.IsNullOrEmpty(val))
+                if (!string.IsNullOrEmpty(val))
                 {
                     return int.Parse(val);
                 }
@@ -389,7 +422,9 @@ namespace Squash.Compiler
         VariableDefine,
         VariableAssignment,
         Variable,
-        FunctionCall
+        FunctionCall,
+        FunctionDefinition,
+        FunctionReturn
     }
 
     public class ASTNode
@@ -406,6 +441,10 @@ namespace Squash.Compiler
         public bool IsVariable { get; set; }
         public VariableSymbol? VarSymbol { get; set; }
 
+        public bool IsFunctionDefinition { get; set; }
+        public string? FunctionName { get; set; }
+        public List<ASTNode>? FunctionBody { get; set; }
+        public VarType? FunctionReturnType { get; set; }
 
         public ASTNode(ASTNodeType type, string value, ASTNode? left, ASTNode? right)
         {
@@ -418,6 +457,7 @@ namespace Squash.Compiler
             VarSymbol = null;
             IsFunctionCall = false;
             IsVariable = false;
+            IsFunctionDefinition = false;
         }
 
         public ASTNode(ASTNodeType type, string value, FunctionSymbol functionSymbol, List<ASTNode> arguments)
@@ -431,6 +471,7 @@ namespace Squash.Compiler
             VarSymbol = null;
             IsFunctionCall = true;
             IsVariable = false;
+            IsFunctionDefinition = false;
         }
 
         public ASTNode(ASTNodeType type, string value, VariableSymbol variableSymbol)
@@ -443,12 +484,14 @@ namespace Squash.Compiler
             FunctionArguments = null;
             VarSymbol = variableSymbol;
             IsVariable = true;
+            IsFunctionDefinition = false;
         }
 
         public override string ToString()
         {
             return "Type: " + Type.ToString() + ", Value: " + Value + ", IsVariable: " + IsVariable.ToString()
-                + " IsFunctionCall: " + IsFunctionCall.ToString() + "";
+                + " IsFunctionCall: " + IsFunctionCall.ToString()
+                + " IsFunctionDefinition: " + IsFunctionDefinition.ToString();
         }
     }
 
@@ -493,13 +536,17 @@ namespace Squash.Compiler
             this.asm = new Assembler(rootAST);
 
             this.symbolTable.DefineFunction("sin", null);
-            this.symbolTable.DefineVariable(VarType.Int, "a", 0);
+            //this.symbolTable.DefineVariable(VarType.Int, "a", 0);
         }
 
 
         public void CompileExpression()
         {
-            ASTNode expression = ParseExpression(0, rootAST);
+            //ASTNode expression = ParseExpression(0, rootAST);
+            //List<ASTNode> statements = new List<ASTNode>();
+            ASTNode expression = ParseStatements();
+            //expression.FunctionBody = statements;
+
             rootAST.Root = expression;
 
             if (currentToken != null && currentToken.Type != TokenType.EOF)
@@ -507,7 +554,32 @@ namespace Squash.Compiler
                 throw new Exception("Unexpected token found. Position:" + lexer.GetPosition().ToString());
             }
 
-            asm.GenerateCode();
+            asm.GenerateCode(expression);
+        }
+
+        private ASTNode ParseStatements()
+        {
+            ASTNode expression = ParseExpression(0, rootAST);
+            if (expression != null)
+            {
+                if (expression.FunctionBody == null)
+                {
+                    expression.FunctionBody = new List<ASTNode>();
+                }
+                //expression.FunctionBody.Add(expression);
+            }
+
+            if (currentToken != null && currentToken.Type == TokenType.SemiColon)
+            {
+                currentToken = lexer.GetNextToken();
+
+                ASTNode expressionChild = ParseStatements();
+
+                expression.FunctionBody.Add(expressionChild);
+            }
+
+
+            return expression;
         }
 
         private ASTNode ParseVariableDefine(VarType varType)
@@ -629,7 +701,7 @@ namespace Squash.Compiler
                     //lexer.Advance();
                     currentToken = lexer.GetNextToken();
 
-                    if(currentToken.Type == TokenType.SemiColon && currentToken.Type != TokenType.EOF)
+                    if (currentToken.Type == TokenType.SemiColon && currentToken.Type != TokenType.EOF)
                     {
                         return parseAssignmentOperator(varType);
                     }
@@ -654,7 +726,15 @@ namespace Squash.Compiler
         {
             Token token = currentToken;
 
-            if (currentToken.Type == TokenType.VarKeyword)
+            if (currentToken.Type == TokenType.ReturnKeyword)
+            {
+                currentToken = lexer.GetNextToken(); // Skip past return keyword.
+                ASTNode left = ParseExpression(0, rootAST);
+
+                ASTNode returnNode = new ASTNode(ASTNodeType.FunctionReturn, "", left, null); ;
+                return returnNode;
+            }
+            else if (currentToken.Type == TokenType.VarKeyword)
             {
                 ASTNode varDefineNode = ParseVariableDefine(VarType.VarAutomatic);
                 ASTNode left = ParseExpression(0, rootAST);
@@ -672,11 +752,103 @@ namespace Squash.Compiler
             }
             else if (currentToken.Type == TokenType.IntKeyword)
             {
-                ASTNode varDefineNode = ParseVariableDefine(VarType.Int);
-                ASTNode left = ParseExpression(0, rootAST);
-                varDefineNode.Left = left;
-                parseEndStatement(ref varDefineNode);
-                return varDefineNode;
+                bool rememberLocation = false;
+                int pos = lexer.GetPosition();
+                Token token1 = lexer.GetNextToken();
+                if (token1 != null && token1.Type == TokenType.Whitespace)
+                {
+                    token1 = lexer.GetNextToken();
+                    if (token1 != null && token1.Type == TokenType.Identifier)
+                    {
+                        string functIdentifierName = token1.Value;
+                        if (functIdentifierName == "main")
+                        {
+                            token1 = lexer.GetNextToken();
+                            if (token1.Type == TokenType.Parenthesis && token1.Value == "(")
+                            {
+                                token1 = lexer.GetNextToken();
+                                if (token1.Type == TokenType.Identifier && token1.Value == "void")
+                                {
+                                    token1 = lexer.GetNextToken();
+                                    if (token1.Type == TokenType.Parenthesis && token1.Value == ")")
+                                    {
+                                        token1 = lexer.GetNextToken();
+                                        if (token1.Type == TokenType.CurleyBrace && token1.Value == "{")
+                                        {
+                                            rememberLocation = true;
+
+                                            token1 = lexer.GetNextToken();
+                                            // Is Main entry point function.
+
+                                            ASTNode left = ParseStatements();
+
+                                            ASTNode entryPointNode = new ASTNode(ASTNodeType.FunctionDefinition, functIdentifierName, left, null);
+                                            entryPointNode.IsFunctionDefinition = true;
+
+
+                                            if (token1.Type == TokenType.CurleyBrace && token1.Value == "}")
+                                            {
+                                                //return left;
+                                            }
+                                            else
+                                            {
+                                                //return left;
+                                                //throw new Exception("Missing matching '}' curley brace for function definition.");
+                                            }
+
+                                            return entryPointNode;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else if (token1 != null && token1.Type == TokenType.Number)
+                    {
+                        ASTNode left = null;
+                        ASTNode right = null;
+                        ASTNode numASTNode = new ASTNode(ASTNodeType.Number, token1.Value, left, right);
+
+                        currentToken = lexer.GetNextToken();
+
+                        if (currentToken.Type == TokenType.SemiColon)
+                        {
+                            currentToken = lexer.GetNextToken();
+
+                            if (currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
+                            {
+                                currentToken = lexer.GetNextToken();
+                            }
+                        }
+
+                        return numASTNode;
+                    }
+                    else
+                    {
+                        if (!rememberLocation)
+                        {
+                            //lexer.SetPosition(pos);
+                            var tok = currentToken;
+
+                            ASTNode varDefineNode = ParseVariableDefine(VarType.Int);
+                            ASTNode left = ParseExpression(0, rootAST);
+                            varDefineNode.Left = left;
+                            parseEndStatement(ref varDefineNode);
+                            return varDefineNode;
+                        }
+                    }
+                }
+                //if(!rememberLocation)
+                //{
+                //    //lexer.SetPosition(pos);
+                //    var tok = currentToken;
+
+                //    ASTNode varDefineNode = ParseVariableDefine(VarType.Int);
+                //    ASTNode left = ParseExpression(0, rootAST);
+                //    varDefineNode.Left = left;
+                //    parseEndStatement(ref varDefineNode);
+                //    return varDefineNode;
+                //}
             }
             else if (currentToken.Type == TokenType.StringKeyword)
             {
@@ -727,7 +899,7 @@ namespace Squash.Compiler
 
                         return right;
                     }
-                    else if(currentToken.Type == TokenType.Operator)
+                    else if (currentToken.Type == TokenType.Operator)
                     {
                         return varNode;
                     }
@@ -759,13 +931,18 @@ namespace Squash.Compiler
             {
                 currentToken = lexer.GetNextToken(); // Move past whitespace character.
             }
+            else if (currentToken.Type == TokenType.SemiColon)
+            {
+                currentToken = lexer.GetNextToken(); // Move past semicolon character.
+            }
             if (currentToken != null)
             {
                 throw new Exception("Invalid primary expression. Position: " + currentToken.Position.ToString());
             }
             else
             {
-                throw new Exception("Invalid primary expression.");
+                //throw new Exception("Invalid primary expression.");
+                return null;
             }
         }
 
@@ -922,12 +1099,12 @@ namespace Squash.Compiler
 
         public int GetInt(string name)
         {
-            if(variables.ContainsKey(name))
+            if (variables.ContainsKey(name))
             {
                 object objValue = variables[name].Value;
                 string strValue = objValue.ToString();
                 int intValue;
-                if(int.TryParse(strValue, out intValue))
+                if (int.TryParse(strValue, out intValue))
                 {
                     return intValue;
                 }

@@ -24,16 +24,16 @@ namespace Squash.Compiler
         /// <exception cref="Exception">
         /// Underlying Assemble() method can throw exceptions as well as this method.
         /// </exception>
-        public void GenerateCode()
+        public void GenerateCode(ASTNode astNode)
         {
-            if (AST != null && AST.Root != null)
+            if (astNode != null)
             {
-                string outputAssembly = Assemble(AST.Root);
+                string outputAssembly = Assemble(astNode);
                 Console.WriteLine(outputAssembly);
             }
             else
             {
-                throw new Exception("Root node must not be null for assembler to continue.");
+                throw new Exception("astNode must not be null for assembler to continue.");
             }
         }
 
@@ -58,7 +58,12 @@ namespace Squash.Compiler
 
             if(node != null)
             {
-                if(node.Type == ASTNodeType.VariableDefine)
+                if (node.Type == ASTNodeType.FunctionReturn)
+                {
+                    Assemble(node.Left);
+                    Console.WriteLine("ret");
+                }
+                else if (node.Type == ASTNodeType.VariableDefine)
                 {
                     // This assignment must occur last so it must be at the end of the expression evaluation
                     // to store the result of the expression in an assigned variable.
@@ -71,6 +76,14 @@ namespace Squash.Compiler
                     Console.WriteLine($"{node.VarSymbol.Name}=(LEFT,RIGHT)");
                     //Console.WriteLine($"mov rax, [{node.VarSymbol.Name}]");
                     //Console.WriteLine("pop rbx");
+
+                    if(node.FunctionBody != null)
+                    {
+                        foreach (ASTNode nodeFunctionBodyChild in node.FunctionBody)
+                        {
+                            Assemble(nodeFunctionBodyChild);
+                        }
+                    }
                 }
                 else if (node.Type == ASTNodeType.VariableAssignment)
                 {
@@ -134,6 +147,24 @@ namespace Squash.Compiler
                 else if (node.Type == ASTNodeType.UNARY_OP)
                 {
                     Console.WriteLine("UNARY_OP assembler not yet implemented.");
+                }
+                else if (node.Type == ASTNodeType.FunctionDefinition)
+                {
+                    // Function definition has node.IsFunctionDefinition set to true
+                    // and has node.FunctionBody set to a list of ASTNode typed statements.
+                    if(node.IsFunctionDefinition == true 
+                        && (node.FunctionBody != null && node.FunctionBody.Count > 0))
+                    {
+                        Console.WriteLine("function definition: " + node.Value + "()");
+                    }
+                    else
+                    {
+                        Console.WriteLine("No function definition to enumerate maybe just a standard function return.");
+                    }
+                }
+                else if (node.Type == ASTNodeType.FunctionReturn)
+                {
+                    throw new Exception("Unhandled ast node type function returning return keyword.");
                 }
                 else
                 {
