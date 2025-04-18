@@ -573,9 +573,17 @@ namespace Squash.Compiler
             {
                 currentToken = lexer.GetNextToken();
 
-                ASTNode expressionChild = ParseStatements();
+                if (currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
+                {
+                    currentToken = lexer.GetNextToken();
+                }
 
-                expression.FunctionBody.Add(expressionChild);
+                if(currentToken!= null)
+                {
+                    ASTNode expressionChild = ParseStatements();
+
+                    expression.FunctionBody.Add(expressionChild);
+                }
             }
 
 
@@ -729,6 +737,8 @@ namespace Squash.Compiler
             if (currentToken.Type == TokenType.ReturnKeyword)
             {
                 currentToken = lexer.GetNextToken(); // Skip past return keyword.
+                currentToken = lexer.GetNextToken(); // Skip past whitespace.
+
                 ASTNode left = ParseExpression(0, rootAST);
 
                 ASTNode returnNode = new ASTNode(ASTNodeType.FunctionReturn, "", left, null); ;
@@ -780,11 +790,23 @@ namespace Squash.Compiler
                                             token1 = lexer.GetNextToken();
                                             // Is Main entry point function.
 
+                                            if (token1.Type == TokenType.ReturnKeyword)
+                                            {
+                                                currentToken = token1;
+                                            }
+
                                             ASTNode left = ParseStatements();
 
                                             ASTNode entryPointNode = new ASTNode(ASTNodeType.FunctionDefinition, functIdentifierName, left, null);
                                             entryPointNode.IsFunctionDefinition = true;
-
+                                            if(entryPointNode.FunctionBody == null)
+                                            {
+                                                entryPointNode.FunctionBody = new List<ASTNode>();
+                                            }
+                                            if(left != null)
+                                            {
+                                                entryPointNode.FunctionBody.Add(left);
+                                            }
 
                                             if (token1.Type == TokenType.CurleyBrace && token1.Value == "}")
                                             {
