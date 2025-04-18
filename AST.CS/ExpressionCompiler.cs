@@ -554,6 +554,8 @@ namespace Squash.Compiler
                 throw new Exception("Unexpected token found. Position:" + lexer.GetPosition().ToString());
             }
 
+            //asm.Is_macOS = true;
+            asm.Is_Linux = true;
             asm.GenerateCode(expression);
         }
 
@@ -583,6 +585,7 @@ namespace Squash.Compiler
                     ASTNode expressionChild = ParseStatements();
 
                     expression.FunctionBody.Add(expressionChild);
+                    expression.IsFunctionDefinition = true;
                 }
             }
 
@@ -794,7 +797,11 @@ namespace Squash.Compiler
                                             {
                                                 currentToken = token1;
                                             }
-
+                                            else
+                                            {
+                                                // if double etc.
+                                                currentToken = token1;
+                                            }
                                             ASTNode left = ParseStatements();
 
                                             ASTNode entryPointNode = new ASTNode(ASTNodeType.FunctionDefinition, functIdentifierName, left, null);
@@ -822,6 +829,20 @@ namespace Squash.Compiler
                                         }
                                     }
                                 }
+                            }
+                        }
+                        else
+                        {
+                            if (!rememberLocation)
+                            {
+                                //lexer.SetPosition(pos);
+                                var tok = currentToken;
+
+                                ASTNode varDefineNode = ParseVariableDefine(VarType.Int);
+                                ASTNode left = ParseExpression(0, rootAST);
+                                varDefineNode.Left = left;
+                                parseEndStatement(ref varDefineNode);
+                                return varDefineNode;
                             }
                         }
                     }
@@ -963,8 +984,8 @@ namespace Squash.Compiler
             }
             else
             {
-                //throw new Exception("Invalid primary expression.");
-                return null;
+                throw new Exception("Invalid primary expression.");
+                //return null;
             }
         }
 

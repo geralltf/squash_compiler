@@ -14,8 +14,8 @@ namespace AST.CS
             //string code = "double a;\na=6.3;a=4*2";
             //string code = "double a;a=6.3*5;double b=1;b=a*3;double c=a*5;double e=b*c+1;";
             string code = "int main(void){"
-                            //+ "double a;a=6.3*5;double b=1;b=a*3;double c=a*5;double e=b*c+1;"
-                            + "return 0;"
+                            + "double a;a=6.3*5;double b=1;b=a*3;double c=a*5;double e=b*c+1;"
+                            + "return 0+1+2;"
                             + "}";
             //+ "while(true){break;}";
             //string code = "(2+1)-(3+2)*(5+8)*((6*9)+14)+7";

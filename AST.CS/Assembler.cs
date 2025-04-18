@@ -13,6 +13,9 @@ namespace Squash.Compiler
         /// </summary>
         public AbstractSyntaxTree AST { get; set; }
 
+        public bool Is_macOS { get; set; }
+        public bool Is_Linux { get; set; }
+
         public Assembler(AbstractSyntaxTree expressionTree)
         {
             AST = expressionTree;
@@ -30,6 +33,11 @@ namespace Squash.Compiler
             {
                 string outputAssembly = Assemble(astNode);
                 Console.WriteLine(outputAssembly);
+
+                if (Is_Linux)
+                {
+                    Console.WriteLine(".section .note.GNU-stack,\"\",@progbits");
+                }
             }
             else
             {
@@ -114,8 +122,14 @@ namespace Squash.Compiler
                     }
 
                     // Call the function
-                    Console.WriteLine($"call {node.FunctSymbol.Name}");
-
+                    if (Is_macOS)
+                    {
+                        Console.WriteLine($"call _{node.FunctSymbol.Name}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"call {node.FunctSymbol.Name}");
+                    }
                 }
                 else if (node.Type == ASTNodeType.BIN_OP)
                 {
@@ -156,6 +170,17 @@ namespace Squash.Compiler
                         && (node.FunctionBody != null && node.FunctionBody.Count > 0))
                     {
                         Console.WriteLine("function definition: " + node.Value + "()");
+
+                        foreach (ASTNode bodyNode in node.FunctionBody)
+                        {                         
+                            if(bodyNode.Type == ASTNodeType.FunctionReturn)
+                            {
+                                //Console.WriteLine("return");
+                            }
+                            Console.WriteLine(bodyNode.ToString());
+                            Assemble(bodyNode);
+                        }
+                        //Console.WriteLine("ret back");
                     }
                     else
                     {
