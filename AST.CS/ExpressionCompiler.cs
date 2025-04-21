@@ -66,7 +66,7 @@ namespace Squash.Compiler
         {
             Type = type;
             Value = value;
-            Position = position;
+            Position = position + 1;
         }
     }
 
@@ -542,10 +542,7 @@ namespace Squash.Compiler
 
         public void CompileExpression()
         {
-            //ASTNode expression = ParseExpression(0, rootAST);
-            //List<ASTNode> statements = new List<ASTNode>();
             ASTNode expression = ParseStatements();
-            //expression.FunctionBody = statements;
 
             rootAST.Root = expression;
 
@@ -579,16 +576,26 @@ namespace Squash.Compiler
                 {
                     currentToken = lexer.GetNextToken();
                 }
+            }
+            else if (currentToken != null && currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
+            {
+                currentToken = lexer.GetNextToken();
+            }
+            else
+            {
+                //return null;
+            }
 
-                if(currentToken!= null)
+            if (currentToken != null)
+            {
+                ASTNode expressionChild = ParseStatements();
+
+                if (expressionChild != null)
                 {
-                    ASTNode expressionChild = ParseStatements();
-
                     expression.FunctionBody.Add(expressionChild);
                     expression.IsFunctionDefinition = true;
                 }
             }
-
 
             return expression;
         }
@@ -596,15 +603,15 @@ namespace Squash.Compiler
         private ASTNode ParseVariableDefine(VarType varType)
         {
             bool varAssignment = true;
+
             while (varAssignment)
             {
-                if (currentToken.Type == TokenType.EOF || currentToken.Type == TokenType.Identifier)
+                if (currentToken == null || currentToken.Type == TokenType.EOF || currentToken.Type == TokenType.Identifier)
                 {
                     varAssignment = false;
                 }
                 else
                 {
-                    //lexer.Advance();
                     currentToken = lexer.GetNextToken();
                 }
             }
@@ -614,7 +621,7 @@ namespace Squash.Compiler
 
         private ASTNode parseAssignmentOperator(VarType varType)
         {
-            if (currentToken.Type == TokenType.Identifier)
+            if (currentToken != null && currentToken.Type == TokenType.Identifier)
             {
                 string identifierName = currentToken.Value;
                 double varValue = 0;
@@ -708,14 +715,29 @@ namespace Squash.Compiler
                 }
                 else
                 {
-                    lexer.SetPosition(savedPosition);
+                    //lexer.SetPosition(savedPosition);
                     //lexer.Advance();
+                    //currentToken = lexer.GetNextToken();
+
+                    if(!symbolTable.VariableHasKey(identifierName))
+                    {
+                        symbolTable.DefineVariable(VarType.VarAutomatic, identifierName, 0);
+                    }
+
+                    VariableSymbol symbol = symbolTable.LookupVariable(identifierName);
+
+                    ASTNode variableNode = new ASTNode(ASTNodeType.Variable, identifierName, symbol);
+
                     currentToken = lexer.GetNextToken();
 
-                    if (currentToken.Type == TokenType.SemiColon && currentToken.Type != TokenType.EOF)
+                    if (currentToken != null && currentToken.Type == TokenType.SemiColon && currentToken.Type != TokenType.EOF)
                     {
-                        return parseAssignmentOperator(varType);
+                        ASTNode rhs = parseAssignmentOperator(varType);
+
+                        variableNode.Right = rhs;
                     }
+
+                    return variableNode;
                 }
             }
             return null;
@@ -736,6 +758,11 @@ namespace Squash.Compiler
         private ASTNode ParsePrimaryExpression()
         {
             Token token = currentToken;
+
+            if(currentToken == null)
+            {
+                return null;
+            }
 
             if (currentToken.Type == TokenType.ReturnKeyword)
             {
@@ -839,10 +866,14 @@ namespace Squash.Compiler
                                 var tok = currentToken;
 
                                 ASTNode varDefineNode = ParseVariableDefine(VarType.Int);
-                                ASTNode left = ParseExpression(0, rootAST);
-                                varDefineNode.Left = left;
-                                parseEndStatement(ref varDefineNode);
-                                return varDefineNode;
+                                if(varDefineNode != null)
+                                {
+                                    ASTNode left = ParseExpression(0, rootAST);
+                                    varDefineNode.Left = left;
+                                    parseEndStatement(ref varDefineNode);
+                                    return varDefineNode;
+                                }
+                                //return null;
                             }
                         }
                     }
@@ -880,6 +911,10 @@ namespace Squash.Compiler
                             return varDefineNode;
                         }
                     }
+                }
+                else
+                {
+
                 }
                 //if(!rememberLocation)
                 //{
@@ -928,6 +963,10 @@ namespace Squash.Compiler
                 else
                 {
                     // Handle variable
+                    if (!symbolTable.VariableHasKey(identifierName))
+                    {
+                        symbolTable.DefineVariable(VarType.VarAutomatic, identifierName, 0);
+                    }
                     VariableSymbol variableSymbol = symbolTable.LookupVariable(identifierName);
                     ASTNode varNode = new ASTNode(ASTNodeType.Variable, identifierName, variableSymbol);
 
@@ -943,6 +982,10 @@ namespace Squash.Compiler
                         return right;
                     }
                     else if (currentToken.Type == TokenType.Operator)
+                    {
+                        return varNode;
+                    }
+                    else
                     {
                         return varNode;
                     }
@@ -977,6 +1020,15 @@ namespace Squash.Compiler
             else if (currentToken.Type == TokenType.SemiColon)
             {
                 currentToken = lexer.GetNextToken(); // Move past semicolon character.
+            }
+            if(currentToken == null)
+            {
+                return null;
+            }
+            if (currentToken.Type == TokenType.SemiColon)
+            {
+                currentToken = lexer.GetNextToken(); // Move past semicolon character.
+                return null;
             }
             if (currentToken != null)
             {
@@ -1054,6 +1106,16 @@ namespace Squash.Compiler
                 }
             }
 
+            //if (currentToken != null && currentToken.Type == TokenType.SemiColon)
+            //{
+            //    currentToken = lexer.GetNextToken();
+            //}
+
+            //if (currentToken != null && currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
+            //{
+            //    currentToken = lexer.GetNextToken();
+            //}
+
             return leftNode;
         }
 
@@ -1121,7 +1183,14 @@ namespace Squash.Compiler
             FunctionSymbol function = new FunctionSymbol(name, parameters);
             functions[name] = function;
         }
-
+        public bool VariableHasKey(string name)
+        {
+            if (variables.ContainsKey(name))
+            {
+                return true;
+            }
+            return false;
+        }
         public VariableSymbol LookupVariable(string name)
         {
             if (variables.ContainsKey(name))
