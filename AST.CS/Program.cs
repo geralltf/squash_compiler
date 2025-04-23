@@ -1,4 +1,4 @@
-﻿using Squash.Compiler;
+﻿using SquashC.Compiler;
 
 namespace AST.CS
 {

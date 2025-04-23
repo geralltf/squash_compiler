@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Squash.Compiler
+namespace SquashC.Compiler
 {
     public class Assembler
     {
