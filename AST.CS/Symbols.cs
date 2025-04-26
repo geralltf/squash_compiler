@@ -66,4 +66,159 @@ namespace SquashC.Compiler
             return string.Empty;
         }
     }
+
+    public class SymbolTable
+    {
+        private Dictionary<string, TokenType> keywordDict;
+        private Dictionary<string, VariableSymbol> variables;
+        private Dictionary<string, FunctionSymbol> functions;
+
+        public SymbolTable()
+        {
+            this.keywordDict = new Dictionary<string, TokenType>
+        {
+            { "sin", TokenType.Function },
+            { "cos", TokenType.Function },
+            { "tan", TokenType.Function }
+        };
+            variables = new Dictionary<string, VariableSymbol>();
+            functions = new Dictionary<string, FunctionSymbol>();
+        }
+
+        public VariableSymbol DefineVariable(VarType type, string name, int value)
+        {
+            VariableSymbol variable = new VariableSymbol(type, name, value);
+            variables[name] = variable;
+            return variable;
+        }
+        public VariableSymbol DefineVariable(VarType type, string name, double value)
+        {
+            VariableSymbol variable = new VariableSymbol(type, name, value);
+            variables[name] = variable;
+            return variable;
+        }
+        public VariableSymbol DefineVariable(VarType type, string name, string value)
+        {
+            VariableSymbol variable = new VariableSymbol(type, name, value);
+            variables[name] = variable;
+            return variable;
+        }
+        public void DefineFunction(string name, List<string> parameters)
+        {
+            FunctionSymbol function = new FunctionSymbol(name, parameters);
+            functions[name] = function;
+        }
+        public bool VariableHasKey(string name)
+        {
+            if (variables.ContainsKey(name))
+            {
+                return true;
+            }
+            return false;
+        }
+        public VariableSymbol LookupVariable(string name)
+        {
+            if (variables.ContainsKey(name))
+            {
+                return variables[name];
+            }
+            throw new Exception($"Variable '{name}' not found in symbol table.");
+        }
+
+        public FunctionSymbol LookupFunction(string name)
+        {
+            if (functions.ContainsKey(name))
+            {
+                return functions[name];
+            }
+            throw new Exception($"Function '{name}' not found in symbol table.");
+        }
+
+        public int GetInt(string name)
+        {
+            if (variables.ContainsKey(name))
+            {
+                object objValue = variables[name].Value;
+                string strValue = objValue.ToString();
+                int intValue;
+                if (int.TryParse(strValue, out intValue))
+                {
+                    return intValue;
+                }
+                else
+                {
+                    throw new Exception("int can not be parsed from '" + objValue + "' value.");
+                }
+            }
+            return 0;
+        }
+
+        public long GetLong(string name)
+        {
+            if (variables.ContainsKey(name))
+            {
+                object objValue = variables[name].Value;
+                string strValue = objValue.ToString();
+                long longValue;
+                if (long.TryParse(strValue, out longValue))
+                {
+                    return longValue;
+                }
+                else
+                {
+                    throw new Exception("long can not be parsed from '" + strValue + "' value.");
+                }
+            }
+            return 0;
+        }
+
+        public string GetString(string name)
+        {
+            if (variables.ContainsKey(name))
+            {
+                object objValue = variables[name].Value;
+                string strValue = objValue.ToString();
+                return strValue;
+            }
+            return string.Empty;
+        }
+
+        public float GetFloat(string name)
+        {
+            if (variables.ContainsKey(name))
+            {
+                object objValue = variables[name].Value;
+                string strValue = objValue.ToString();
+                float floatValue;
+                if (float.TryParse(strValue, out floatValue))
+                {
+                    return floatValue;
+                }
+                else
+                {
+                    throw new Exception("float can not be parsed from '" + strValue + "' value.");
+                }
+            }
+            return 0.0f;
+        }
+
+        public double GetDouble(string name)
+        {
+            if (variables.ContainsKey(name))
+            {
+                object objValue = variables[name].Value;
+                string strValue = objValue.ToString();
+                double doubleValue;
+                if (double.TryParse(strValue, out doubleValue))
+                {
+                    return doubleValue;
+                }
+                else
+                {
+                    throw new Exception("double can not be parsed from '" + strValue + "' value.");
+                }
+            }
+            return 0.0f;
+        }
+    }
 }
