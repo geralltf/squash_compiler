@@ -171,7 +171,14 @@ namespace SquashC.Compiler
                 else if (node.Type == ASTNodeType.FunctionDefinition)
                 {
                     Console.WriteLine("function definition: " + node.Value + "()");
-                    Console.WriteLine(node.Value + ": ");
+                    if(Is_macOS)
+                    {
+                        Console.WriteLine("_" + node.Value + ": ");
+                    }
+                    else
+                    {
+                        Console.WriteLine(node.Value + ": ");
+                    }
 
                     if (node.FunctionArguments != null)
                     {
