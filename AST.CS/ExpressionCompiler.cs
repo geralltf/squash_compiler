@@ -50,6 +50,7 @@ namespace SquashC.Compiler
             char currentChar7 = '\0';
             char currentChar8 = '\0';
             char currentChar9 = '\0';
+            bool isSinglelineComment = false;
 
             for (currentPos = 0; currentPos < input.Length;)
             {
@@ -128,82 +129,94 @@ namespace SquashC.Compiler
                 }
 
                 //TODO: Strip out any single line comments and strip out any multiline comments.
-                //if(currentChar == '\\' && currentChar1 == '\\')
-                //{
-
-                //}
-                if (char.IsWhiteSpace(currentChar) || currentChar == ' ' || currentChar == '\t' || currentChar == '\n' || currentChar == '\r')
+                if (currentChar == '/' && currentChar1 == '/')
                 {
-                    // Strip any whitespace except when it is neded to delimit a keyword.
-                    currentPos++;
+                    isSinglelineComment = true;
+                    currentPos += 2;
                 }
-                else if (currentChar == 'v' && currentChar1 == 'a' && currentChar2 == 'r')
+                else if (currentChar == '\n' || currentChar == '\r')
                 {
-                    result += currentChar;
-                    result += currentChar1;
-                    result += currentChar2;
-                    currentPos += 3;
-
-                    result += ' ';
-                    currentPos++;
-
+                    isSinglelineComment = false;
                 }
-                else if (currentChar == 'i' && currentChar1 == 'n' && currentChar2 == 't')
+                if (!isSinglelineComment)
                 {
-                    result += currentChar;
-                    result += currentChar1;
-                    result += currentChar2;
-                    currentPos += 3;
+                    if (char.IsWhiteSpace(currentChar) || currentChar == ' ' || currentChar == '\t' || currentChar == '\n' || currentChar == '\r')
+                    {
+                        // Strip any whitespace except when it is neded to delimit a keyword.
+                        currentPos++;
+                    }
+                    else if (currentChar == 'v' && currentChar1 == 'a' && currentChar2 == 'r')
+                    {
+                        result += currentChar;
+                        result += currentChar1;
+                        result += currentChar2;
+                        currentPos += 3;
 
-                    result += ' ';
-                    currentPos++;
+                        result += ' ';
+                        currentPos++;
 
-                }
-                else if (currentChar == 'd' && currentChar1 == 'o' && currentChar2 == 'u' && currentChar3 == 'b' && currentChar4 == 'l' && currentChar5 == 'e')
-                {
-                    result += currentChar;
-                    result += currentChar1;
-                    result += currentChar2;
-                    result += currentChar3;
-                    result += currentChar4;
-                    result += currentChar5;
-                    currentPos += 6;
+                    }
+                    else if (currentChar == 'i' && currentChar1 == 'n' && currentChar2 == 't')
+                    {
+                        result += currentChar;
+                        result += currentChar1;
+                        result += currentChar2;
+                        currentPos += 3;
 
-                    result += ' ';
-                    currentPos++;
+                        result += ' ';
+                        currentPos++;
 
-                }
-                else if (currentChar == 's' && currentChar1 == 't' && currentChar2 == 'r' && currentChar3 == 'i' && currentChar4 == 'n' && currentChar5 == 'g')
-                {
-                    result += currentChar;
-                    result += currentChar1;
-                    result += currentChar2;
-                    result += currentChar3;
-                    result += currentChar4;
-                    result += currentChar5;
-                    currentPos += 6;
+                    }
+                    else if (currentChar == 'd' && currentChar1 == 'o' && currentChar2 == 'u' && currentChar3 == 'b' && currentChar4 == 'l' && currentChar5 == 'e')
+                    {
+                        result += currentChar;
+                        result += currentChar1;
+                        result += currentChar2;
+                        result += currentChar3;
+                        result += currentChar4;
+                        result += currentChar5;
+                        currentPos += 6;
 
-                    result += ' ';
-                    currentPos++;
+                        result += ' ';
+                        currentPos++;
 
-                }
-                else if (currentChar == 'r' && currentChar1 == 'e' && currentChar2 == 't' && currentChar3 == 'u' && currentChar4 == 'r' && currentChar5 == 'n')
-                {
-                    result += currentChar;
-                    result += currentChar1;
-                    result += currentChar2;
-                    result += currentChar3;
-                    result += currentChar4;
-                    result += currentChar5;
-                    currentPos += 6;
+                    }
+                    else if (currentChar == 's' && currentChar1 == 't' && currentChar2 == 'r' && currentChar3 == 'i' && currentChar4 == 'n' && currentChar5 == 'g')
+                    {
+                        result += currentChar;
+                        result += currentChar1;
+                        result += currentChar2;
+                        result += currentChar3;
+                        result += currentChar4;
+                        result += currentChar5;
+                        currentPos += 6;
 
-                    result += ' ';
-                    currentPos++;
+                        result += ' ';
+                        currentPos++;
 
+                    }
+                    else if (currentChar == 'r' && currentChar1 == 'e' && currentChar2 == 't' && currentChar3 == 'u' && currentChar4 == 'r' && currentChar5 == 'n')
+                    {
+                        result += currentChar;
+                        result += currentChar1;
+                        result += currentChar2;
+                        result += currentChar3;
+                        result += currentChar4;
+                        result += currentChar5;
+                        currentPos += 6;
+
+                        result += ' ';
+                        currentPos++;
+
+                    }
+                    else
+                    {
+                        result += currentChar;
+                        currentPos++;
+                    }
                 }
                 else
                 {
-                    result += currentChar;
                     currentPos++;
                 }
             }
