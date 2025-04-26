@@ -933,7 +933,7 @@ namespace SquashC.Compiler
         {
             List<ASTNode> arguments = new List<ASTNode>();
 
-            while (currentToken.Type != TokenType.Parenthesis || currentToken.Value != ")")
+            while (currentToken != null && (currentToken.Type != TokenType.Parenthesis || currentToken.Value != ")"))
             {
                 ASTNode expr = ParseExpression(0, rootAST);
                 if(expr != null)
@@ -942,23 +942,31 @@ namespace SquashC.Compiler
                 }
                 
 
-                if (currentToken.Type == TokenType.Operator && currentToken.Value == ",")
+                if (currentToken != null && currentToken.Type == TokenType.Operator && currentToken.Value == ",")
                 {
                     currentToken = lexer.GetNextToken(); // Move past ","
                 }
-                else if (currentToken.Type != TokenType.Parenthesis || currentToken.Value != ")")
+                if (currentToken != null && currentToken.Type == TokenType.SemiColon)
+                {
+                    currentToken = lexer.GetNextToken(); // Move past ";"
+                }
+                if (currentToken != null && (currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}"))
+                {
+                    currentToken = lexer.GetNextToken(); // Move past "}"
+                }
+                if (currentToken != null && (currentToken.Type != TokenType.Parenthesis || currentToken.Value != ")"))
                 {
                     throw new Exception("Invalid function argument list.");
                 }
             }
 
-            if (currentToken.Value == ")")
+            if (currentToken != null && currentToken.Value == ")")
             {
                 currentToken = lexer.GetNextToken(); // Move past ")"
             }
             else
             {
-                throw new Exception("Missing closing parenthesis in function call arguments.");
+                //throw new Exception("Missing closing parenthesis in function call arguments.");
             }
 
             return arguments;
@@ -973,7 +981,7 @@ namespace SquashC.Compiler
                 Token op = currentToken;
                 currentToken = lexer.GetNextToken();
 
-                int nextPrecedence = GetPrecedence(op.Value);
+                int nextPrecedence = GetPrecedence(currentToken.Value);
 
                 ASTNode rightNode = ParseExpression(nextPrecedence, ast); // Parse the right operand with correct precedence
 
@@ -986,28 +994,19 @@ namespace SquashC.Compiler
                 // Handle parentheses
                 if (currentToken != null && currentToken.Type == TokenType.Parenthesis && currentToken.Value == ")")
                 {
-                    //currentToken = lexer.GetNextToken(); // Move to the next token
+                    currentToken = lexer.GetNextToken(); // Move to the next token
                 }
 
-                if (op.Value == "-" && IsUnaryOperator())
+                if (op.Value == "--" && IsUnaryOperator())
                 {
-                    ast.AddUnaryOperator(op.Value, rightNode);
+                    //ast.AddUnaryOperator(op.Value, rightNode);
+                    leftNode = new ASTNode(ASTNodeType.UNARY_OP, op.Value, null, rightNode);
                 }
                 else
                 {
                     leftNode = new ASTNode(ASTNodeType.BIN_OP, op.Value, leftNode, rightNode);
                 }
             }
-
-            //if (currentToken != null && currentToken.Type == TokenType.SemiColon)
-            //{
-            //    currentToken = lexer.GetNextToken();
-            //}
-
-            //if (currentToken != null && currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
-            //{
-            //    currentToken = lexer.GetNextToken();
-            //}
 
             return leftNode;
         }

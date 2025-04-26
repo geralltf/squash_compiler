@@ -12,9 +12,10 @@ int sin(int val,int y){
 int main(void)
 {
 	int f = (2+1)-(3+2)*(5+8)*((6*9)+14)+7;
-	//int h = ((2*3)*4); // <-- Bug parsing here
-	//int h = (2 * 3); // <-- Bug parsing here too
-	f = 2*1;
+	int h = ((2*3)*4);
+	//int h = (2 * 3);
+	//int h=(2*1);
+	//int h = (23 * 13);
 	f = 1+(13*2);
 	int b = 1;
 	int g = 10 + (b * 5);
