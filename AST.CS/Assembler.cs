@@ -173,11 +173,11 @@ namespace SquashC.Compiler
                     Console.WriteLine("function definition: " + node.Value + "()");
                     if(Is_macOS)
                     {
-                        Console.WriteLine("_" + node.Value + ": ");
+                        Console.Write("_" + node.Value + ": ");
                     }
                     else
                     {
-                        Console.WriteLine(node.Value + ": ");
+                        Console.Write(node.Value + ": ");
                     }
 
                     if (node.FunctionArguments != null)
