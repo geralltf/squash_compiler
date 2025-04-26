@@ -13,6 +13,7 @@ namespace SquashC.Compiler
         Number,
         VariableDefine,
         VariableAssignment,
+        VariableDeclaration,
         Variable,
         FunctionCall,
         FunctionDefinition,
@@ -31,6 +32,7 @@ namespace SquashC.Compiler
         public List<ASTNode>? FunctionArguments { get; set; }
 
         public bool IsVariable { get; set; }
+        public VarType? VariableType { get; set; }
         public VariableSymbol? VarSymbol { get; set; }
 
         public bool IsFunctionDefinition { get; set; }

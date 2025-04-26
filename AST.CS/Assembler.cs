@@ -170,13 +170,22 @@ namespace SquashC.Compiler
                 }
                 else if (node.Type == ASTNodeType.FunctionDefinition)
                 {
+                    Console.WriteLine("function definition: " + node.Value + "()");
+                    Console.WriteLine(node.Value + ": ");
+
+                    if (node.FunctionArguments != null)
+                    {
+                        foreach (ASTNode arg in node.FunctionArguments)
+                        {
+                            Assemble(arg);
+                        }
+                    }
+
                     // Function definition has node.IsFunctionDefinition set to true
                     // and has node.FunctionBody set to a list of ASTNode typed statements.
                     if(node.IsFunctionDefinition == true 
                         && (node.FunctionBody != null && node.FunctionBody.Count > 0))
                     {
-                        Console.WriteLine("function definition: " + node.Value + "()");
-
                         foreach (ASTNode bodyNode in node.FunctionBody)
                         {                         
                             if(bodyNode.Type == ASTNodeType.FunctionReturn)

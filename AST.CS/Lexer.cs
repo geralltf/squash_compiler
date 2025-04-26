@@ -247,10 +247,10 @@ namespace SquashC.Compiler
                     Advance();
                     return token;
                 }
-                else if (char.IsWhiteSpace(currentChar))
+                else if (char.IsWhiteSpace(currentChar) || currentChar == ' ' || currentChar == '\t' || currentChar == '\n' || currentChar == '\r')
                 {
-                    Token token = new Token(TokenType.Whitespace, currentChar.ToString(), currentPos);
-                    Advance();
+                    Token token = new Token(TokenType.Whitespace, ParseWhitespace(), currentPos);
+                    //Advance();
                     return token;
                 }
                 else
@@ -286,6 +286,19 @@ namespace SquashC.Compiler
             }
 
             return identifier.ToString();
+        }
+
+        private string ParseWhitespace()
+        {
+            StringBuilder number = new StringBuilder();
+
+            while (currentChar != '\0' && (char.IsWhiteSpace(currentChar) || currentChar == ' ' || currentChar == '\t' || currentChar == '\n' || currentChar == '\r'))
+            {
+                number.Append(currentChar);
+                Advance();
+            }
+
+            return number.ToString();
         }
     }
 }
