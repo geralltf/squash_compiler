@@ -166,7 +166,7 @@ namespace SquashC.Compiler
                 {
                     //Console.WriteLine("UNARY_OP assembler not yet implemented.");
                     Assemble(node.Left);
-                    //Assemble(node.Right);
+                    Assemble(node.Right);
                 }
                 else if (node.Type == ASTNodeType.FunctionDefinition)
                 {
