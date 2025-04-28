@@ -51,6 +51,7 @@ namespace SquashC.Compiler
             char currentChar8 = '\0';
             char currentChar9 = '\0';
             bool isSinglelineComment = false;
+            bool isMultilineComment = false;
 
             for (currentPos = 0; currentPos < input.Length;)
             {
@@ -128,7 +129,7 @@ namespace SquashC.Compiler
                     currentChar9 = '\0';
                 }
 
-                //TODO: Strip out any single line comments and strip out any multiline comments.
+                // Strip out any single line comments and strip out any multiline comments.
                 if (currentChar == '/' && currentChar1 == '/')
                 {
                     isSinglelineComment = true;
@@ -136,13 +137,27 @@ namespace SquashC.Compiler
                 }
                 else if (currentChar == '\n' || currentChar == '\r')
                 {
+                    //if (currentChar1 == '\n' || currentChar1 == '\r')
+                    //{
+                    //    currentPos += 2;
+                    //}
                     isSinglelineComment = false;
                 }
-                if (!isSinglelineComment)
+                if(currentChar == '/' && currentChar1 == '*')
+                {
+                    isMultilineComment = true;
+                    currentPos += 2;
+                }
+                else if(isMultilineComment && (currentChar == '*' && currentChar1 == '/'))
+                {
+                    isMultilineComment = false;
+                    currentPos += 2;
+                }
+                if (!isSinglelineComment && !isMultilineComment)// || !isMultilineComment)
                 {
                     if (char.IsWhiteSpace(currentChar) || currentChar == ' ' || currentChar == '\t' || currentChar == '\n' || currentChar == '\r')
                     {
-                        // Strip any whitespace except when it is neded to delimit a keyword.
+                        // Strip any whitespace except when it is needed to delimit a keyword.
                         currentPos++;
                     }
                     else if (currentChar == 'v' && currentChar1 == 'a' && currentChar2 == 'r')
@@ -211,7 +226,20 @@ namespace SquashC.Compiler
                     }
                     else
                     {
-                        result += currentChar;
+                        if(!isSinglelineComment || !isMultilineComment)
+                        {
+                            currentChar = input[currentPos];
+                            if(!char.IsWhiteSpace(currentChar) 
+                                && currentChar != ' ' 
+                                && currentChar != '\t' 
+                                && currentChar != '\n' 
+                                && currentChar != '\r')
+                            {
+                                result += currentChar;
+                            }
+                            
+                        }
+                        
                         currentPos++;
                     }
                 }
