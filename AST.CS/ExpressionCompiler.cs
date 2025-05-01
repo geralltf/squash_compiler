@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.Diagnostics.Metrics;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 
 namespace SquashC.Compiler
 {
@@ -16,15 +18,14 @@ namespace SquashC.Compiler
 
         public ExpressionCompiler(string input)
         {
+            Logger.Log.LogInformation("ExpressionCompiler(): ctor");
+
             input = Minifier.MinifyCode(input);
             this.lexer = new Lexer(input);
             this.currentToken = lexer.GetNextToken();
             this.symbolTable = new SymbolTable();
             this.rootAST = new AbstractSyntaxTree();
             this.asm = new Assembler(rootAST);
-
-            this.symbolTable.DefineFunction("sin", null);
-            //this.symbolTable.DefineVariable(VarType.Int, "a", 0);
         }
 
         public void CompileExpression()
@@ -143,6 +144,8 @@ namespace SquashC.Compiler
                 {
                     VariableSymbol varDefine;
 
+                    Logger.Log.LogInformation("parseAssignmentOperator(): parsing assignment");
+
                     if (varType != VarType.VarAutomatic)
                     {
                         switch (varType)
@@ -257,6 +260,7 @@ namespace SquashC.Compiler
         {
             if (currentToken != null && currentToken.Type == TokenType.SemiColon)
             {
+                Logger.Log.LogInformation("parseEndStatement(): parsing end statement");
                 currentToken = lexer.GetNextToken();
                 if (currentToken != null)
                 {
@@ -271,8 +275,11 @@ namespace SquashC.Compiler
 
             if(currentToken == null)
             {
+                Logger.Log.LogError("ParsePrimaryExpression(): currentToken is null");
                 return null;
             }
+
+            Logger.Log.LogInformation("ParsePrimaryExpression(): handle token types prior to handling");
 
             if (currentToken.Type == TokenType.ReturnKeyword)
             {
@@ -281,11 +288,16 @@ namespace SquashC.Compiler
 
                 ASTNode left = ParseExpression(0, rootAST);
 
+                Logger.Log.LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST");
+
                 ASTNode returnNode = new ASTNode(ASTNodeType.FunctionReturn, "", left, null);
+
+                //TODO: Check for curley brace to find out the end of a function definition
                 return returnNode;
             }
             else if (currentToken.Type == TokenType.VarKeyword)
             {
+                Logger.Log.LogInformation("ParsePrimaryExpression(): made a var variable of some inferred type AST");
                 ASTNode varDefineNode = ParseVariableDefine(VarType.VarAutomatic);
                 ASTNode left = ParseExpression(0, rootAST);
                 varDefineNode.Left = left;
@@ -294,6 +306,7 @@ namespace SquashC.Compiler
             }
             else if (currentToken.Type == TokenType.DoubleKeyword)
             {
+                Logger.Log.LogInformation("ParsePrimaryExpression(): double keyword");
                 int pos = lexer.GetPosition();
                 Token token1 = lexer.GetNextToken();
                 if (token1 != null && token1.Type == TokenType.Whitespace)
@@ -303,6 +316,8 @@ namespace SquashC.Compiler
                     {
                         int pos2 = lexer.GetPosition();
                         string functIdentifierName = token1.Value;
+
+                        Logger.Log.LogInformation("ParsePrimaryExpression(): double keyword parse function definition");
 
                         ASTNode? functDefNode = ParseFunctionDefinition(VarType.Double, functIdentifierName);
 
@@ -537,6 +552,10 @@ namespace SquashC.Compiler
                     List<ASTNode> arguments = ParseFunctionArguments();
 
                     // Lookup function in symbol table and generate corresponding ASTNode
+                    if(!symbolTable.FunctionHasKey(identifierName))
+                    {
+                        symbolTable.DefineFunction(identifierName, null);
+                    }
                     FunctionSymbol functionSymbol = symbolTable.LookupFunction(identifierName);
                     return new ASTNode(ASTNodeType.FunctionCall, identifierName, functionSymbol, arguments);
                 }
@@ -625,20 +644,6 @@ namespace SquashC.Compiler
         {
             Token token1;
 
-            //token1 = lexer.GetNextToken();
-            //if (token1.Type == TokenType.Parenthesis && token1.Value == "(")
-            //{
-            //    token1 = lexer.GetNextToken();
-            //    if (token1.Type == TokenType.Identifier && token1.Value == "void")
-            //    {
-            //        token1 = lexer.GetNextToken();
-            //        if (token1.Type == TokenType.Parenthesis && token1.Value == ")")
-            //        {
-
-            //        }
-            //    }
-            //}
-
             List<ASTNode> args = ParseFunctionDefArguments(retVarType);
 
             token1 = lexer.GetNextToken();
@@ -681,6 +686,11 @@ namespace SquashC.Compiler
                 {
                     //return left;
                     //throw new Exception("Missing matching '}' curley brace for function definition.");
+                }
+
+                if(!symbolTable.FunctionHasKey(functIdentifierName))
+                {
+                    symbolTable.DefineFunction(functIdentifierName, null);
                 }
 
                 return entryPointNode;

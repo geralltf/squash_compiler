@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Microsoft.Extensions.Logging;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -255,6 +256,8 @@ namespace SquashC.Compiler
                 }
                 else
                 {
+                    Logger.Log.LogError("Invalid character found in input. Current position: " + GetPosition().ToString());
+
                     throw new Exception("Invalid character found in input. Current position: " + GetPosition().ToString());
                 }
             }

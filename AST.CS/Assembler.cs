@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Microsoft.Extensions.Logging;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -68,12 +69,16 @@ namespace SquashC.Compiler
             {
                 if (node.Type == ASTNodeType.FunctionReturn)
                 {
+                    Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionReturn");
+
                     Assemble(node.Left);
                     Assemble(node.Right);
                     Console.WriteLine("ret");
                 }
                 else if (node.Type == ASTNodeType.VariableDefine)
                 {
+                    Logger.Log.LogInformation("Assemble(): ASTNodeType.VariableDefine");
+
                     // This assignment must occur last so it must be at the end of the expression evaluation
                     // to store the result of the expression in an assigned variable.
                     //Console.WriteLine("VariableDefine assembler not yet implemented.");
@@ -96,6 +101,8 @@ namespace SquashC.Compiler
                 }
                 else if (node.Type == ASTNodeType.VariableAssignment)
                 {
+                    Logger.Log.LogInformation("Assemble(): ASTNodeType.VariableAssignment");
+
                     //Console.WriteLine(node.Right.Value + node.Value +  " " + node.Left.Left.Value 
                     //    + " " + node.Left.Value + " " + node.Left.Right.Value);
                     Assemble(node.Left);
@@ -104,12 +111,16 @@ namespace SquashC.Compiler
                 }
                 else if (node.Type == ASTNodeType.Number)
                 {
+                    Logger.Log.LogInformation("Assemble(): ASTNodeType.Number");
+
                     // Load the number value into a register
                     Console.WriteLine($"mov rax, {node.Value}");
 
                 }
                 else if (node.Type == ASTNodeType.Variable)
                 {
+                    Logger.Log.LogInformation("Assemble(): ASTNodeType.Variable");
+
                     // Load the variable value into a register
                     Console.WriteLine($"mov rax, [{node.VarSymbol.Name}]");
                     //Console.WriteLine($"mov [{node.VarSymbol.Name}], rax");
@@ -119,6 +130,8 @@ namespace SquashC.Compiler
                 }
                 else if (node.Type == ASTNodeType.FunctionCall && node.FunctionArguments != null)
                 {
+                    Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionCall");
+
                     // Generate code for function call arguments
                     foreach (ASTNode arg in node.FunctionArguments)
                     {
@@ -137,6 +150,8 @@ namespace SquashC.Compiler
                 }
                 else if (node.Type == ASTNodeType.BIN_OP)
                 {
+                    Logger.Log.LogInformation("Assemble(): ASTNodeType.BIN_OP");
+
                     // Generate code for left and right operands
                     Assemble(node.Left);
                     Console.WriteLine("push rax"); // Save value on the stack
@@ -164,12 +179,16 @@ namespace SquashC.Compiler
                 }
                 else if (node.Type == ASTNodeType.UNARY_OP)
                 {
+                    Logger.Log.LogInformation("Assemble(): ASTNodeType.UNARY_OP");
+
                     //Console.WriteLine("UNARY_OP assembler not yet implemented.");
                     Assemble(node.Left);
                     Assemble(node.Right);
                 }
                 else if (node.Type == ASTNodeType.FunctionDefinition)
                 {
+                    Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionDefinition");
+
                     Console.WriteLine("function definition: " + node.Value + "()");
                     if(Is_macOS)
                     {
@@ -209,12 +228,10 @@ namespace SquashC.Compiler
                         Console.WriteLine("No function definition to enumerate maybe just a standard function return.");
                     }
                 }
-                else if (node.Type == ASTNodeType.FunctionReturn)
-                {
-                    throw new Exception("Unhandled ast node type function returning return keyword.");
-                }
                 else
                 {
+                    Logger.Log.LogError("Invalid ASTNode type sent to assembler.");
+
                     throw new Exception("Invalid ASTNode type sent to assembler.");
                 }
             }

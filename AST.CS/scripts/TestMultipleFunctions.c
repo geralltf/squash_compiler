@@ -1,7 +1,30 @@
+double tan(double input){
+	return 0.7 * input;
+}
+double cos(double val2){
+	return 0.2 * val2;
+}
 int sin(int val,int y){
 	int A=2;
 	return 1+3+val*y*A;
 }
+//int trx(int x)
+//{
+//	if (x > 200)
+//	{
+//		return x;
+//	}
+//	return x + 1;
+//}
+//int wrx(int y) {
+//	while (true) {
+//		y++;
+//		if (y > 10) {
+//			break;
+//		}
+//		continue;
+//	}
+//}
 int main(void)
 {
 	/*+ TEST COMMENT -*/ 

@@ -6,6 +6,8 @@ namespace AST.CS
     {
         public static void Main(string[] args)
         {
+            Logger.InitLogging();
+
             Console.WriteLine("Wello, Horld!");
 
             //string code = "var x=sin(1)+3*9+(2*8)+(5*6)";

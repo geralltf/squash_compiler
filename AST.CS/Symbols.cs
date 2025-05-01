@@ -108,6 +108,15 @@ namespace SquashC.Compiler
             FunctionSymbol function = new FunctionSymbol(name, parameters);
             functions[name] = function;
         }
+
+        public bool FunctionHasKey(string name)
+        {
+            if (functions.ContainsKey(name))
+            {
+                return true;
+            }
+            return false;
+        }
         public bool VariableHasKey(string name)
         {
             if (variables.ContainsKey(name))
