@@ -53,7 +53,7 @@ namespace SquashC.Compiler
 
         public void PrintEndStatistics()
         {
-            Logger.Log.LogInformation("CRITICALS COUNT: " + CriticalsCount.ToString() + ", ERRORS: COUNT " + ErrorsCount.ToString() + ", WARNINGS: COUNT " + WarningsCount.ToString());
+            Logger.Log.LogInformation("************* CRITICALS COUNT: " + CriticalsCount.ToString() + ", ERRORS: COUNT " + ErrorsCount.ToString() + ", WARNINGS: COUNT " + WarningsCount.ToString() + " *************");
         }
     }
 }

@@ -29,11 +29,13 @@ namespace SquashC.Compiler
         /// Underlying Assemble() method can throw exceptions as well as this method.
         /// </exception>
         public void GenerateCode(ASTNode astNode)
-        {
-            Logger._log.PrintEndStatistics();
-            Logger.Log.LogInformation("************* Generating Code for specified Abstract Syntax Tree. '" + astNode.ToString() + "'");
+        {           
             if (astNode != null)
             {
+                Logger._log.PrintEndStatistics();
+
+                Logger.Log.LogInformation("************* Generating Code for specified Abstract Syntax Tree. '" + astNode.ToString() + "'");
+
                 string outputAssembly = Assemble(astNode);
 
                 Logger._log.PrintEndStatistics();
@@ -50,7 +52,10 @@ namespace SquashC.Compiler
             }
             else
             {
-                Logger.Log.LogError("astNode must not be null for assembler to continue.");
+                Logger.Log.LogCritical("astNode must not be null for assembler to continue.");
+
+                Logger._log.PrintEndStatistics();
+
             }
         }
 
