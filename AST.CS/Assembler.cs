@@ -30,20 +30,27 @@ namespace SquashC.Compiler
         /// </exception>
         public void GenerateCode(ASTNode astNode)
         {
+            Logger._log.PrintEndStatistics();
             Logger.Log.LogInformation("************* Generating Code for specified Abstract Syntax Tree. '" + astNode.ToString() + "'");
             if (astNode != null)
             {
                 string outputAssembly = Assemble(astNode);
-                //Console.WriteLine(outputAssembly);
 
+                Logger._log.PrintEndStatistics();
+                Logger.Log.LogInformation("************* Compiled Assembler Codegen Full Program Dump");
+                
                 if (Is_Linux)
                 {
-                    Console.WriteLine(".section .note.GNU-stack,\"\",@progbits");
+                    outputAssembly += ".section .note.GNU-stack,\"\",@progbits\n";
+
+                    //Console.WriteLine(".section .note.GNU-stack,\"\",@progbits");
                 }
+
+                Console.Write(outputAssembly);
             }
             else
             {
-                throw new Exception("astNode must not be null for assembler to continue.");
+                Logger.Log.LogError("astNode must not be null for assembler to continue.");
             }
         }
 
@@ -72,8 +79,10 @@ namespace SquashC.Compiler
                 {
                     Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionReturn");
 
-                    Assemble(node.Left);
-                    Assemble(node.Right);
+                    sb.Append(Assemble(node.Left));
+                    sb.Append(Assemble(node.Right));
+
+                    sb.AppendLine("ret");
                     Console.WriteLine("ret");
                 }
                 else if (node.Type == ASTNodeType.VariableDefine)
@@ -85,9 +94,12 @@ namespace SquashC.Compiler
                     //Console.WriteLine("VariableDefine assembler not yet implemented.");
                     //Console.WriteLine($"var {node.VarSymbol.Name}"); //TODO: Assembly equivalent
                     //Console.WriteLine($"mov rax, [{node.VarSymbol.Name},{node.VarSymbol.Value}] ;{node.VarSymbol.VariableType.ToString()}");
-                    Assemble(node.Left);
+                    sb.Append(Assemble(node.Left));
+
+                    sb.AppendLine($"mov rax, [{node.VarSymbol.Name}]");
                     Console.WriteLine($"mov rax, [{node.VarSymbol.Name}]");
-                    Assemble(node.Right);
+
+                    sb.Append(Assemble(node.Right));
                     //Console.WriteLine($"{node.VarSymbol.Name}=(LEFT,RIGHT)");
                     //Console.WriteLine($"mov rax, [{node.VarSymbol.Name}]");
                     //Console.WriteLine("pop rbx");
@@ -96,7 +108,7 @@ namespace SquashC.Compiler
                     {
                         foreach (ASTNode nodeFunctionBodyChild in node.FunctionBody)
                         {
-                            Assemble(nodeFunctionBodyChild);
+                            sb.Append(Assemble(nodeFunctionBodyChild));
                         }
                     }
                 }
@@ -106,8 +118,8 @@ namespace SquashC.Compiler
 
                     //Console.WriteLine(node.Right.Value + node.Value +  " " + node.Left.Left.Value 
                     //    + " " + node.Left.Value + " " + node.Left.Right.Value);
-                    Assemble(node.Left);
-                    Assemble(node.Right);
+                    sb.Append(Assemble(node.Left));
+                    sb.Append(Assemble(node.Right));
                     //Console.WriteLine("EO Var assignment");
                 }
                 else if (node.Type == ASTNodeType.Number)
@@ -115,19 +127,20 @@ namespace SquashC.Compiler
                     Logger.Log.LogInformation("Assemble(): ASTNodeType.Number");
 
                     // Load the number value into a register
+                    sb.AppendLine($"mov rax, {node.Value}");
                     Console.WriteLine($"mov rax, {node.Value}");
-
                 }
                 else if (node.Type == ASTNodeType.Variable)
                 {
                     Logger.Log.LogInformation("Assemble(): ASTNodeType.Variable");
 
                     // Load the variable value into a register
+                    sb.AppendLine($"mov rax, [{node.VarSymbol.Name}]");
                     Console.WriteLine($"mov rax, [{node.VarSymbol.Name}]");
                     //Console.WriteLine($"mov [{node.VarSymbol.Name}], rax");
 
-                    Assemble(node.Left);
-                    Assemble(node.Right);
+                    sb.Append(Assemble(node.Left));
+                    sb.Append(Assemble(node.Right));
                 }
                 else if (node.Type == ASTNodeType.FunctionCall && node.FunctionArguments != null)
                 {
@@ -136,16 +149,18 @@ namespace SquashC.Compiler
                     // Generate code for function call arguments
                     foreach (ASTNode arg in node.FunctionArguments)
                     {
-                        Assemble(arg);
+                        sb.Append(Assemble(arg));
                     }
 
                     // Call the function
                     if (Is_macOS)
                     {
+                        sb.AppendLine($"call _{node.FunctSymbol.Name}");
                         Console.WriteLine($"call _{node.FunctSymbol.Name}");
                     }
                     else
                     {
+                        sb.AppendLine($"call {node.FunctSymbol.Name}");
                         Console.WriteLine($"call {node.FunctSymbol.Name}");
                     }
                 }
@@ -154,26 +169,34 @@ namespace SquashC.Compiler
                     Logger.Log.LogInformation("Assemble(): ASTNodeType.BIN_OP");
 
                     // Generate code for left and right operands
-                    Assemble(node.Left);
+                    sb.Append(Assemble(node.Left));
+
+                    sb.AppendLine("push rax");
                     Console.WriteLine("push rax"); // Save value on the stack
-                    Assemble(node.Right);
-                    
+
+                    sb.Append(Assemble(node.Right));
+
                     // Perform the operation (addition or subtraction in this example)
+                    sb.AppendLine("pop rbx");
                     Console.WriteLine("pop rbx"); // Retrieve left operand from the stack
                     if (node.Value == "+")
                     {
+                        sb.AppendLine("add rax, rbx");
                         Console.WriteLine("add rax, rbx");
                     }
                     else if (node.Value == "-")
                     {
+                        sb.AppendLine("sub rax, rbx");
                         Console.WriteLine("sub rax, rbx");
                     }
                     else if (node.Value == "*")
                     {
+                        sb.AppendLine("mul rax, rbx");
                         Console.WriteLine("mul rax, rbx");
                     }
                     else if (node.Value == "/")
                     {
+                        sb.AppendLine("div rax, rbx");
                         //TODO: idiv for signed division
                         Console.WriteLine("div rax, rbx"); // TODO: confirm if this is the correct divide operator
                     }
@@ -183,8 +206,8 @@ namespace SquashC.Compiler
                     Logger.Log.LogInformation("Assemble(): ASTNodeType.UNARY_OP");
 
                     //Console.WriteLine("UNARY_OP assembler not yet implemented.");
-                    Assemble(node.Left);
-                    Assemble(node.Right);
+                    sb.Append(Assemble(node.Left));
+                    sb.Append(Assemble(node.Right));
                 }
                 else if (node.Type == ASTNodeType.FunctionDefinition)
                 {
@@ -193,10 +216,12 @@ namespace SquashC.Compiler
                     Console.WriteLine("function definition: " + node.Value + "()");
                     if(Is_macOS)
                     {
+                        sb.Append("_" + node.Value + ": ");
                         Console.Write("_" + node.Value + ": ");
                     }
                     else
                     {
+                        sb.Append(node.Value + ": ");
                         Console.Write(node.Value + ": ");
                     }
 
@@ -204,7 +229,7 @@ namespace SquashC.Compiler
                     {
                         foreach (ASTNode arg in node.FunctionArguments)
                         {
-                            Assemble(arg);
+                            sb.Append(Assemble(arg));
                         }
                     }
 
@@ -219,14 +244,14 @@ namespace SquashC.Compiler
                             {
                                 //Console.WriteLine("return");
                             }
-                            Console.WriteLine(bodyNode.ToString());
-                            Assemble(bodyNode);
+                            Logger.Log.LogInformation("Assemble(): -* function body node: " + bodyNode.ToString());
+                            sb.Append(Assemble(bodyNode));
                         }
                         //Console.WriteLine("ret back");
                     }
                     else
                     {
-                        Console.WriteLine("No function definition to enumerate maybe just a standard function return.");
+                        Logger.Log.LogWarning("No function definition to enumerate maybe just a standard function return.");
                     }
                 }
                 else
