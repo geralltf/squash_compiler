@@ -100,7 +100,7 @@ namespace SquashC.Compiler
         private ASTNode? ParseVariableDeclaration(VarType varType)
         {
             currentToken = lexer.GetNextToken();
-            if(currentToken != null && currentToken.Type == TokenType.Whitespace)
+            if (currentToken != null && currentToken.Type == TokenType.Whitespace)
             {
                 currentToken = lexer.GetNextToken();
                 if (currentToken != null && currentToken.Type == TokenType.Identifier)
@@ -242,7 +242,7 @@ namespace SquashC.Compiler
                     //lexer.Advance();
                     //currentToken = lexer.GetNextToken();
 
-                    if(!symbolTable.VariableHasKey(identifierName))
+                    if (!symbolTable.VariableHasKey(identifierName))
                     {
                         symbolTable.DefineVariable(VarType.VarAutomatic, identifierName, 0);
                     }
@@ -281,10 +281,10 @@ namespace SquashC.Compiler
             }
         }
         private ASTNode ParsePrimaryExpression()
-        {           
+        {
             Token token = currentToken;
 
-            if(currentToken == null)
+            if (currentToken == null)
             {
                 Logger.Log.LogError("ParsePrimaryExpression(): currentToken is null");
                 return null;
@@ -421,16 +421,7 @@ namespace SquashC.Compiler
                         ASTNode numASTNode = new ASTNode(ASTNodeType.Number, token1.Value, left, right);
 
                         currentToken = lexer.GetNextToken();
-
-                        if (currentToken.Type == TokenType.SemiColon)
-                        {
-                            currentToken = lexer.GetNextToken();
-
-                            if (currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
-                            {
-                                currentToken = lexer.GetNextToken();
-                            }
-                        }
+                        ParseEndOfFunction();
 
                         return numASTNode;
                     }
@@ -459,7 +450,7 @@ namespace SquashC.Compiler
                     var tok = currentToken;
 
                     ASTNode varDefineNode = ParseVariableDefine(VarType.Int);
-                    if(varDefineNode != null)
+                    if (varDefineNode != null)
                     {
                         ASTNode left = ParseExpression(0, rootAST);
                         if (left != null)
@@ -494,7 +485,7 @@ namespace SquashC.Compiler
                     }
                 }
                 lexer.SetPosition(pos);
-                
+
                 ASTNode varDefineNode = ParseVariableDefine(VarType.String);
                 ASTNode left = ParseExpression(0, rootAST);
                 varDefineNode.Left = left;
@@ -534,7 +525,7 @@ namespace SquashC.Compiler
                     }
 
                     // Lookup function in symbol table and generate corresponding ASTNode
-                    if(!symbolTable.FunctionHasKey(identifierName))
+                    if (!symbolTable.FunctionHasKey(identifierName))
                     {
                         symbolTable.DefineFunction(identifierName, null);
                     }
@@ -544,7 +535,7 @@ namespace SquashC.Compiler
                 else
                 {
                     Logger.Log.LogInformation("ParsePrimaryExpression(): Parsing variable given identifier: '" + identifierName + "'");
-                    
+
                     // Handle variable
                     if (!symbolTable.VariableHasKey(identifierName))
                     {
@@ -562,7 +553,7 @@ namespace SquashC.Compiler
                         ASTNode left = ParseExpression(0, rootAST);
                         ASTNode right = new ASTNode(ASTNodeType.VariableAssignment, before.Value, left, varNode);
 
-                        Logger.Log.LogInformation("ParsePrimaryExpression(): variable assignment lhs: '"+ left.ToString() + "' rhs: '"+right.ToString()+"'");
+                        Logger.Log.LogInformation("ParsePrimaryExpression(): variable assignment lhs: '" + left.ToString() + "' rhs: '" + right.ToString() + "'");
 
                         return right;
                     }
@@ -609,7 +600,7 @@ namespace SquashC.Compiler
             {
                 currentToken = lexer.GetNextToken(); // Move past semicolon character.
             }
-            if(currentToken == null)
+            if (currentToken == null)
             {
                 return null;
             }
@@ -628,6 +619,19 @@ namespace SquashC.Compiler
                 Logger.Log.LogError("Invalid primary expression.");
                 throw new Exception("Invalid primary expression.");
                 //return null;
+            }
+        }
+
+        private void ParseEndOfFunction()
+        {
+            if (currentToken.Type == TokenType.SemiColon)
+            {
+                currentToken = lexer.GetNextToken();
+
+                if (currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
+                {
+                    currentToken = lexer.GetNextToken();
+                }
             }
         }
 
@@ -748,7 +752,7 @@ namespace SquashC.Compiler
                     //throw new Exception("Missing matching '}' curley brace for function definition.");
                 }
 
-                if(!symbolTable.FunctionHasKey(functIdentifierName))
+                if (!symbolTable.FunctionHasKey(functIdentifierName))
                 {
                     symbolTable.DefineFunction(functIdentifierName, null);
                 }
@@ -758,7 +762,7 @@ namespace SquashC.Compiler
 
             return null;
         }
-        
+
         private List<ASTNode> ParseFunctionDefArguments(VarType retVarType)
         {
             List<ASTNode> arguments = new List<ASTNode>();
@@ -772,7 +776,7 @@ namespace SquashC.Compiler
                 }
 
 
-                if (currentToken != null && ((currentToken.Type == TokenType.SemiColon) 
+                if (currentToken != null && ((currentToken.Type == TokenType.SemiColon)
                     || (currentToken.Type == TokenType.Operator && currentToken.Value == ",")))
                 {
                     currentToken = lexer.GetNextToken(); // Move past "," or ";"
@@ -787,7 +791,7 @@ namespace SquashC.Compiler
                 }
             }
 
-            if(currentToken != null)
+            if (currentToken != null)
             {
                 if (currentToken.Value == ")")
                 {
@@ -809,11 +813,11 @@ namespace SquashC.Compiler
             while (currentToken != null && (currentToken.Type != TokenType.Parenthesis || currentToken.Value != ")"))
             {
                 ASTNode expr = ParseExpression(0, rootAST);
-                if(expr != null)
+                if (expr != null)
                 {
                     arguments.Add(expr);
                 }
-                
+
 
                 if (currentToken != null && currentToken.Type == TokenType.Operator && currentToken.Value == ",")
                 {
@@ -847,7 +851,18 @@ namespace SquashC.Compiler
 
         private ASTNode ParseExpression(int precedence, AbstractSyntaxTree ast)
         {
+            Logger.Log.LogInformation("ParseExpression(): precedence: '" + precedence.ToString() + "'");
+
             ASTNode leftNode = ParsePrimaryExpression(); // Parse the left operand
+
+            if (leftNode != null)
+            {
+                Logger.Log.LogInformation("ParseExpression(): precedence: " + precedence.ToString() + " leftNode: " + leftNode.ToString());
+            }
+            else
+            {
+                Logger.Log.LogInformation("ParseExpression(): precedence: " + precedence.ToString() + " leftNode: == null");
+            }
 
             while (currentToken != null && currentToken.Type == TokenType.Operator && (GetPrecedence(currentToken.Value) >= precedence))
             {
@@ -874,10 +889,14 @@ namespace SquashC.Compiler
                 {
                     //ast.AddUnaryOperator(op.Value, rightNode);
                     leftNode = new ASTNode(ASTNodeType.UNARY_OP, op.Value, null, rightNode);
+
+                    Logger.Log.LogInformation("ParseExpression(): precedence: '" + precedence.ToString() + "' Is Unary Operator " + leftNode.ToString());
                 }
                 else
                 {
                     leftNode = new ASTNode(ASTNodeType.BIN_OP, op.Value, leftNode, rightNode);
+
+                    Logger.Log.LogInformation("ParseExpression(): precedence: '" + precedence.ToString() + "' Is Binary Operator " + leftNode.ToString());
                 }
             }
 
@@ -902,8 +921,12 @@ namespace SquashC.Compiler
 
         private bool IsUnaryOperator()
         {
-            return currentToken != null && currentToken.Type == TokenType.Operator && (currentToken.Value == "-" || currentToken.Value == "+");
+            return currentToken != null && currentToken.Type == TokenType.Operator && (currentToken.Value == "--" || currentToken.Value == "++");
         }
 
+        private bool IsBinaryOperator()
+        {
+            return currentToken != null && currentToken.Type == TokenType.Operator && (currentToken.Value == "-" || currentToken.Value == "+" || currentToken.Value == "*" || currentToken.Value == "/");
+        }
     }
 }
