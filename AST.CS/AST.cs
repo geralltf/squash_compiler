@@ -83,9 +83,10 @@ namespace SquashC.Compiler
 
         public override string ToString()
         {
-            return "Type: " + Type.ToString() + ", Value: " + Value + ", IsVariable: " + IsVariable.ToString()
+            return "Type: " + Type.ToString() + ", Value: '" + Value + "', IsVariable: " + IsVariable.ToString()
                 + " IsFunctionCall: " + IsFunctionCall.ToString()
-                + " IsFunctionDefinition: " + IsFunctionDefinition.ToString();
+                + " IsFunctionDefinition: " + IsFunctionDefinition.ToString()
+                + " Function Args: " + ((FunctionArguments != null && FunctionArguments.Count > 0) ? " Has them." : "Doesn't have them.");
         }
     }
 
