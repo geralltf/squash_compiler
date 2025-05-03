@@ -543,7 +543,7 @@ namespace SquashC.Compiler
                 }
                 else
                 {
-                    Logger.Log.LogInformation("ParsePrimaryExpression(): Parsing variable given identifier: '" + identifierName + "'")
+                    Logger.Log.LogInformation("ParsePrimaryExpression(): Parsing variable given identifier: '" + identifierName + "'");
                     
                     // Handle variable
                     if (!symbolTable.VariableHasKey(identifierName))
@@ -677,12 +677,17 @@ namespace SquashC.Compiler
                                 entryPointNode.FunctionBody.Add(left);
                             }
 
+                            Logger.Log.LogInformation("ParseEntryPoint(): entry point node parsed '" + entryPointNode.ToString() + "'");
+
                             if (token1.Type == TokenType.CurleyBrace && token1.Value == "}")
                             {
+                                Logger.Log.LogInformation("ParseEntryPoint(): entry point end closing curley brace found");
+
                                 //return left;
                             }
                             else
                             {
+                                Logger.Log.LogWarning("ParseEntryPoint(): Missing matching '}' curley brace for function definition. Might have already parsed it.");
                                 //return left;
                                 //throw new Exception("Missing matching '}' curley brace for function definition.");
                             }
