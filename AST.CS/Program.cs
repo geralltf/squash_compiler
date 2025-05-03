@@ -24,7 +24,7 @@ namespace AST.CS
             // int main(void){int a;a=6*5;int b=1;b=a*3;int c=a*5;int e=b*c+1;return 0+1+2+3+e;}
             //+ "while(true){break;}";
 
-            ExpressionCompiler compiler = new ExpressionCompiler(code);
+            SquashCompiler compiler = new SquashCompiler(code);
             compiler.CompileExpression();
         }
     }

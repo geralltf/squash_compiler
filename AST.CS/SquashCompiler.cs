@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace SquashC.Compiler
 {
-    public class ExpressionCompiler
+    public class SquashCompiler
     {
         private Lexer lexer;
         private Token currentToken;
@@ -15,7 +15,7 @@ namespace SquashC.Compiler
         private Assembler asm;
 
 
-        public ExpressionCompiler(string input)
+        public SquashCompiler(string input)
         {
             Logger.Log.LogInformation("ExpressionCompiler(): ctor");
 
