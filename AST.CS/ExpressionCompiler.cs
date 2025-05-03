@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics.Metrics;
 using System.Text;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Console;
 
 namespace SquashC.Compiler
 {
@@ -198,7 +197,8 @@ namespace SquashC.Compiler
                                 if (currentToken == null)
                                 {
                                     lexer.SetPosition(savedPosition2);
-                                    throw new Exception("Unhandled token type. Can not parse '" + lexer.GetNextToken().Value + "'");
+                                    Logger.Log.LogError("Unhandled token type. Can not parse null token");
+                                    varDefine = null;
                                 }
                                 else
                                 {
@@ -266,11 +266,12 @@ namespace SquashC.Compiler
                 {
                     ASTNode rhs = ParseExpression(0, rootAST);
                     varDefineNode.Right = rhs;
+                    Logger.Log.LogInformation("parseEndStatement(): rhs: " + rhs.ToString());
                 }
             }
         }
         private ASTNode ParsePrimaryExpression()
-        {
+        {           
             Token token = currentToken;
 
             if(currentToken == null)
@@ -329,8 +330,11 @@ namespace SquashC.Compiler
                 }
                 lexer.SetPosition(pos);
 
+                Logger.Log.LogInformation("");
+
                 ASTNode varDefineNode = ParseVariableDefine(VarType.Double);
                 ASTNode left = ParseExpression(0, rootAST);
+                Logger.Log.LogInformation("ParsePrimaryExpression(): var define node: " + varDefineNode.ToString() + "left expr: " + left.ToString());
                 varDefineNode.Left = left;
                 parseEndStatement(ref varDefineNode);
                 return varDefineNode;
@@ -349,60 +353,8 @@ namespace SquashC.Compiler
                         string functIdentifierName = token1.Value;
                         if (functIdentifierName == "main")
                         {
-                            token1 = lexer.GetNextToken();
-                            if (token1.Type == TokenType.Parenthesis && token1.Value == "(")
-                            {
-                                token1 = lexer.GetNextToken();
-                                if (token1.Type == TokenType.Identifier && token1.Value == "void")
-                                {
-                                    token1 = lexer.GetNextToken();
-                                    if (token1.Type == TokenType.Parenthesis && token1.Value == ")")
-                                    {
-                                        token1 = lexer.GetNextToken();
-                                        if (token1.Type == TokenType.CurleyBrace && token1.Value == "{")
-                                        {
-                                            rememberLocation = true;
-
-                                            token1 = lexer.GetNextToken();
-                                            // Is Main entry point function.
-
-                                            if (token1.Type == TokenType.ReturnKeyword)
-                                            {
-                                                currentToken = token1;
-                                            }
-                                            else
-                                            {
-                                                // if double etc.
-                                                currentToken = token1;
-                                            }
-                                            ASTNode left = ParseStatements();
-
-                                            ASTNode entryPointNode = new ASTNode(ASTNodeType.FunctionDefinition, functIdentifierName, left, null);
-                                            entryPointNode.IsFunctionDefinition = true;
-                                            if(entryPointNode.FunctionBody == null)
-                                            {
-                                                entryPointNode.FunctionBody = new List<ASTNode>();
-                                            }
-                                            if(left != null)
-                                            {
-                                                entryPointNode.FunctionBody.Add(left);
-                                            }
-
-                                            if (token1.Type == TokenType.CurleyBrace && token1.Value == "}")
-                                            {
-                                                //return left;
-                                            }
-                                            else
-                                            {
-                                                //return left;
-                                                //throw new Exception("Missing matching '}' curley brace for function definition.");
-                                            }
-
-                                            return entryPointNode;
-                                        }
-                                    }
-                                }
-                            }
+                            // Parse entry point main() function.
+                            return ParseEntryPoint(functIdentifierName);
                         }
                         else
                         {
@@ -412,6 +364,9 @@ namespace SquashC.Compiler
                             if (token1.Type == TokenType.Parenthesis && token1.Value == "(")
                             {
                                 currentToken = token1;
+
+                                Logger.Log.LogInformation("ParsePrimaryExpression(): ParseFunctionDefinition int keyword function is: " + functIdentifierName);
+
                                 //lexer.SetPosition(pos2);
                                 ASTNode? functDefNode = ParseFunctionDefinition(VarType.Int, functIdentifierName);
                                 if (functDefNode != null)
@@ -638,6 +593,70 @@ namespace SquashC.Compiler
                 throw new Exception("Invalid primary expression.");
                 //return null;
             }
+        }
+
+        private ASTNode ParseEntryPoint(string functIdentifierName)
+        {
+            Token token1;
+            bool rememberLocation = false;
+
+            Logger.Log.LogInformation("ParsePrimaryExpression(): parsing entry point main() function");
+
+            token1 = lexer.GetNextToken();
+            if (token1.Type == TokenType.Parenthesis && token1.Value == "(")
+            {
+                token1 = lexer.GetNextToken();
+                if (token1.Type == TokenType.Identifier && token1.Value == "void")
+                {
+                    token1 = lexer.GetNextToken();
+                    if (token1.Type == TokenType.Parenthesis && token1.Value == ")")
+                    {
+                        token1 = lexer.GetNextToken();
+                        if (token1.Type == TokenType.CurleyBrace && token1.Value == "{")
+                        {
+                            rememberLocation = true;
+
+                            token1 = lexer.GetNextToken();
+                            // Is Main entry point function.
+
+                            if (token1.Type == TokenType.ReturnKeyword)
+                            {
+                                currentToken = token1;
+                            }
+                            else
+                            {
+                                // if double etc.
+                                currentToken = token1;
+                            }
+                            ASTNode left = ParseStatements();
+
+                            ASTNode entryPointNode = new ASTNode(ASTNodeType.FunctionDefinition, functIdentifierName, left, null);
+                            entryPointNode.IsFunctionDefinition = true;
+                            if (entryPointNode.FunctionBody == null)
+                            {
+                                entryPointNode.FunctionBody = new List<ASTNode>();
+                            }
+                            if (left != null)
+                            {
+                                entryPointNode.FunctionBody.Add(left);
+                            }
+
+                            if (token1.Type == TokenType.CurleyBrace && token1.Value == "}")
+                            {
+                                //return left;
+                            }
+                            else
+                            {
+                                //return left;
+                                //throw new Exception("Missing matching '}' curley brace for function definition.");
+                            }
+
+                            return entryPointNode;
+                        }
+                    }
+                }
+            }
+            return null;
         }
 
         private ASTNode? ParseFunctionDefinition(VarType retVarType, string functIdentifierName)

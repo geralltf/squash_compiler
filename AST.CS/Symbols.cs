@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace SquashC.Compiler
 {
@@ -87,24 +88,28 @@ namespace SquashC.Compiler
 
         public VariableSymbol DefineVariable(VarType type, string name, int value)
         {
+            Logger.Log.LogInformation("SymbolTable.DefineVariable(): "+ name + ",type: " + type.ToString()+",value: " + value.ToString());
             VariableSymbol variable = new VariableSymbol(type, name, value);
             variables[name] = variable;
             return variable;
         }
         public VariableSymbol DefineVariable(VarType type, string name, double value)
         {
+            Logger.Log.LogInformation("SymbolTable.DefineVariable(): " + name + ",type: " + type.ToString() + ",value: " + value.ToString());
             VariableSymbol variable = new VariableSymbol(type, name, value);
             variables[name] = variable;
             return variable;
         }
         public VariableSymbol DefineVariable(VarType type, string name, string value)
         {
+            Logger.Log.LogInformation("SymbolTable.DefineVariable(): " + name + ",type: " + type.ToString() + ",value: " + value.ToString());
             VariableSymbol variable = new VariableSymbol(type, name, value);
             variables[name] = variable;
             return variable;
         }
         public void DefineFunction(string name, List<string> parameters)
         {
+            Logger.Log.LogInformation("SymbolTable.DefineFunction(): " + name);
             FunctionSymbol function = new FunctionSymbol(name, parameters);
             functions[name] = function;
         }
@@ -131,7 +136,9 @@ namespace SquashC.Compiler
             {
                 return variables[name];
             }
-            throw new Exception($"Variable '{name}' not found in symbol table.");
+            Logger.Log.LogError($"Variable '{name}' not found in symbol table.");
+            //throw new Exception($"Variable '{name}' not found in symbol table.");
+            return null;
         }
 
         public FunctionSymbol LookupFunction(string name)
@@ -140,7 +147,9 @@ namespace SquashC.Compiler
             {
                 return functions[name];
             }
-            throw new Exception($"Function '{name}' not found in symbol table.");
+            Logger.Log.LogError($"Function '{name}' not found in symbol table.");
+            //throw new Exception($"Function '{name}' not found in symbol table.");
+            return null;
         }
 
         public int GetInt(string name)
@@ -156,7 +165,8 @@ namespace SquashC.Compiler
                 }
                 else
                 {
-                    throw new Exception("int can not be parsed from '" + objValue + "' value.");
+                    Logger.Log.LogError("int can not be parsed from '" + objValue + "' value.");
+                    return 0;
                 }
             }
             return 0;
@@ -175,7 +185,8 @@ namespace SquashC.Compiler
                 }
                 else
                 {
-                    throw new Exception("long can not be parsed from '" + strValue + "' value.");
+                    Logger.Log.LogError("long can not be parsed from '" + strValue + "' value.");
+                    return 0;
                 }
             }
             return 0;
@@ -205,7 +216,8 @@ namespace SquashC.Compiler
                 }
                 else
                 {
-                    throw new Exception("float can not be parsed from '" + strValue + "' value.");
+                    Logger.Log.LogError("float can not be parsed from '" + strValue + "' value.");
+                    return 0.0f;
                 }
             }
             return 0.0f;
@@ -224,7 +236,8 @@ namespace SquashC.Compiler
                 }
                 else
                 {
-                    throw new Exception("double can not be parsed from '" + strValue + "' value.");
+                    Logger.Log.LogError("double can not be parsed from '" + strValue + "' value.");
+                    return 0.0;
                 }
             }
             return 0.0f;

@@ -30,10 +30,11 @@ namespace SquashC.Compiler
         /// </exception>
         public void GenerateCode(ASTNode astNode)
         {
+            Logger.Log.LogInformation("Generating Code for specified Abstract Syntax Tree. '" + astNode.ToString() + "'");
             if (astNode != null)
             {
                 string outputAssembly = Assemble(astNode);
-                Console.WriteLine(outputAssembly);
+                //Console.WriteLine(outputAssembly);
 
                 if (Is_Linux)
                 {

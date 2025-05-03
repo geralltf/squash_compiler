@@ -82,37 +82,73 @@ namespace SquashC.Compiler
             {
                 currentChar1 = input[currentPos + 1];
             }
+            else
+            {
+                currentChar1 = '\0';
+            }
             if (currentPos + 2 < input.Length)
             {
                 currentChar2 = input[currentPos + 2];
+            }
+            else
+            {
+                currentChar2 = '\0';
             }
             if (currentPos + 3 < input.Length)
             {
                 currentChar3 = input[currentPos + 3];
             }
+            else
+            {
+                currentChar3 = '\0';
+            }
             if (currentPos + 4 < input.Length)
             {
                 currentChar4 = input[currentPos + 4];
+            }
+            else
+            {
+                currentChar4 = '\0';
             }
             if (currentPos + 5 < input.Length)
             {
                 currentChar5 = input[currentPos + 5];
             }
+            else
+            {
+                currentChar5 = '\0';
+            }
             if (currentPos + 6 < input.Length)
             {
                 currentChar6 = input[currentPos + 6];
+            }
+            else
+            {
+                currentChar6 = '\0';
             }
             if (currentPos + 7 < input.Length)
             {
                 currentChar7 = input[currentPos + 7];
             }
+            else
+            {
+                currentChar7 = '\0';
+            }
             if (currentPos + 8 < input.Length)
             {
                 currentChar8 = input[currentPos + 8];
             }
+            else
+            {
+                currentChar8 = '\0';
+            }
             if (currentPos + 9 < input.Length)
             {
                 currentChar9 = input[currentPos + 9];
+            }
+            else
+            {
+                currentChar9 = '\0';
             }
         }
         public Token GetNextToken() // Lexer.
@@ -121,7 +157,10 @@ namespace SquashC.Compiler
             {
                 currentChar = input[currentPos];
             }
-
+            else
+            {
+                currentChar = '\0';
+            }
             while (currentChar != '\0')
             {
                 predictiveLookaheads();
@@ -197,13 +236,11 @@ namespace SquashC.Compiler
                 else if (char.IsDigit(currentChar))
                 {
                     Token token = new Token(TokenType.Number, ParseNumber(), currentPos);
-                    //Advance();
                     return token;
                 }
                 else if (char.IsLetter(currentChar))
                 {
                     Token token = new Token(TokenType.Identifier, ParseIdentifier(), currentPos);
-                    //Advance();
                     return token;
                 }
                 else if (currentChar == '+' || currentChar == '-' || currentChar == '*' || currentChar == '/' || currentChar == ',')
@@ -251,7 +288,6 @@ namespace SquashC.Compiler
                 else if (char.IsWhiteSpace(currentChar) || currentChar == ' ' || currentChar == '\t' || currentChar == '\n' || currentChar == '\r')
                 {
                     Token token = new Token(TokenType.Whitespace, ParseWhitespace(), currentPos);
-                    //Advance();
                     return token;
                 }
                 else
