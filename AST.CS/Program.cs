@@ -8,7 +8,7 @@ namespace AST.CS
         {
             Logger.InitLogging();
 
-            Console.WriteLine("Wello, Horld!");
+            Console.WriteLine("*-*-*-*-*-*-* SquashC Compiler *-*-*-*-*-*-*");
 
             //string code = "var x=sin(1)+3*9+(2*8)+(5*6)";
             //string code = "a=sin(92,910,99)+3*9+(4*8)+(5*6)";
