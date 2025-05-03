@@ -45,6 +45,8 @@ namespace SquashC.Compiler
 
         private ASTNode ParseStatements()
         {
+            Logger.Log.LogInformation("ParseStatements(): Parsing individual statements that may be outside a function definition or inside a function definition.");
+
             ASTNode expression = ParseExpression(0, rootAST);
             if (expression != null)
             {
@@ -59,14 +61,20 @@ namespace SquashC.Compiler
             {
                 currentToken = lexer.GetNextToken();
 
+                Logger.Log.LogInformation("ParseStatements(): end of statement semi colon found.");
+
                 if (currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
                 {
                     currentToken = lexer.GetNextToken();
+
+                    Logger.Log.LogInformation("ParseStatements(): end of function curley brace found.");
                 }
             }
             else if (currentToken != null && currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
             {
                 currentToken = lexer.GetNextToken();
+
+                Logger.Log.LogInformation("ParseStatements(): end of function curley brace found.");
             }
             else
             {
@@ -81,6 +89,8 @@ namespace SquashC.Compiler
                 {
                     expression.FunctionBody.Add(expressionChild);
                     expression.IsFunctionDefinition = true;
+
+                    Logger.Log.LogInformation("ParseStatements(): added statement to function body which is function definition.");
                 }
             }
 
@@ -354,7 +364,12 @@ namespace SquashC.Compiler
                         if (functIdentifierName == "main")
                         {
                             // Parse entry point main() function.
-                            return ParseEntryPoint(functIdentifierName);
+                            ASTNode mainFunct = ParseEntryPoint(functIdentifierName);
+
+                            if (mainFunct != null)
+                            {
+                                return mainFunct;
+                            }
                         }
                         else
                         {
@@ -492,19 +507,31 @@ namespace SquashC.Compiler
                 ASTNode? right = null;
                 ASTNode numNode = new ASTNode(ASTNodeType.Number, token.Value, left, right);
 
+                Logger.Log.LogInformation("ParsePrimaryExpression(): AST Number node created. " + numNode.ToString());
+
                 currentToken = lexer.GetNextToken();
                 return numNode;
             }
             else if (currentToken.Type == TokenType.Identifier)
             {
                 string identifierName = token.Value;
+
+                Logger.Log.LogInformation("ParsePrimaryExpression(): Identifier found '" + identifierName + "'");
+
                 currentToken = lexer.GetNextToken();
 
                 if (currentToken.Type == TokenType.Parenthesis && currentToken.Value == "(")
                 {
+                    Logger.Log.LogInformation("ParsePrimaryExpression(): Parsing function call for identifier '" + identifierName + "'");
+
                     // Handle function call
                     currentToken = lexer.GetNextToken(); // Move past "("
                     List<ASTNode> arguments = ParseFunctionArguments();
+
+                    foreach (ASTNode arg in arguments)
+                    {
+                        Logger.Log.LogInformation("ParsePrimaryExpression(): function argument for function call: " + arg.ToString());
+                    }
 
                     // Lookup function in symbol table and generate corresponding ASTNode
                     if(!symbolTable.FunctionHasKey(identifierName))
@@ -516,6 +543,8 @@ namespace SquashC.Compiler
                 }
                 else
                 {
+                    Logger.Log.LogInformation("ParsePrimaryExpression(): Parsing variable given identifier: '" + identifierName + "'")
+                    
                     // Handle variable
                     if (!symbolTable.VariableHasKey(identifierName))
                     {
@@ -533,20 +562,25 @@ namespace SquashC.Compiler
                         ASTNode left = ParseExpression(0, rootAST);
                         ASTNode right = new ASTNode(ASTNodeType.VariableAssignment, before.Value, left, varNode);
 
+                        Logger.Log.LogInformation("ParsePrimaryExpression(): variable assignment lhs: '"+ left.ToString() + "' rhs: '"+right.ToString()+"'");
+
                         return right;
                     }
                     else if (currentToken.Type == TokenType.Operator)
                     {
+                        Logger.Log.LogInformation("ParsePrimaryExpression(): variable usage in expression or statement #1.");
                         return varNode;
                     }
                     else
                     {
+                        Logger.Log.LogInformation("ParsePrimaryExpression(): variable usage in expression or statement #2.");
                         return varNode;
                     }
                 }
             }
             else if (currentToken.Type == TokenType.Parenthesis && currentToken.Value == "(")
             {
+                Logger.Log.LogInformation("ParsePrimaryExpression(): Handling parenthesis");
                 currentToken = lexer.GetNextToken(); // Move past "("
                 ASTNode node = ParseExpression(0, rootAST);
                 if (currentToken != null && currentToken.Value == ")")
@@ -586,10 +620,12 @@ namespace SquashC.Compiler
             }
             if (currentToken != null)
             {
+                Logger.Log.LogError("Invalid primary expression. Position: " + currentToken.Position.ToString());
                 throw new Exception("Invalid primary expression. Position: " + currentToken.Position.ToString());
             }
             else
             {
+                Logger.Log.LogError("Invalid primary expression.");
                 throw new Exception("Invalid primary expression.");
                 //return null;
             }
