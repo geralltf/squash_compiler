@@ -1,6 +1,12 @@
-int sin(int val,int y){
-	int A=2;
-	return 1+3+val*y*A;
+double tan(double input) {
+	return 0.7 * input;
+}
+double cos(double val2) {
+	return 0.2 * val2;
+}
+int sin(int val, int y) {
+	int A = 2;
+	return 1 + 3 + val * y * A;
 }
 int main(void)
 {
