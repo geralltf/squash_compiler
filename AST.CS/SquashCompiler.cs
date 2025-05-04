@@ -790,7 +790,7 @@ namespace SquashC.Compiler
             if (currentToken.Type == TokenType.Parenthesis && currentToken.Value == "(")
             {
                 currentToken = lexer.GetNextToken();
-                if (currentToken.Type == TokenType.Identifier && currentToken.Value == "void")
+                if (currentToken.Type == TokenType.VoidKeyword && currentToken.Value == "void")
                 {
                     currentToken = lexer.GetNextToken();
                     if (currentToken.Type == TokenType.Parenthesis && currentToken.Value == ")")
