@@ -18,6 +18,7 @@ namespace SquashC.Compiler
         Comma,
         Peroid,
         ReturnKeyword,
+        VoidKeyword,
         VarKeyword,
         IntKeyword,
         DoubleKeyword,
@@ -33,6 +34,7 @@ namespace SquashC.Compiler
     public enum VarType //TODO: Array types and object types
     {
         VarAutomatic,
+        Void,
         NullLiteral,
         Object,
         FunctionPointer,
@@ -62,12 +64,14 @@ namespace SquashC.Compiler
         public TokenType Type { get; set; }
         public string Value { get; set; }
         public int Position { get; set; }
+        public PreToken PreToken { get; set; }
 
-        public Token(TokenType type, string value, int position)
+        public Token(TokenType type, string value, int position, PreToken preToken)
         {
             Type = type;
             Value = value;
             Position = position + 1;
+            PreToken = preToken;
         }
     }
 }

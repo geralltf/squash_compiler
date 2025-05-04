@@ -8,8 +8,14 @@ int sin(int val, int y) {
 	int A = 2;
 	return 1 + 3 + val * y * A;
 }
+void simple_hello()
+{
+	//printf("%s", "Wello Horld!");
+	return;
+}
 int main(void)
 {
+	simple_hello();
 	/*+ TEST COMMENT -*/ 
 	int f = (2+1)-(3+2)*(5+8)*((6*9)+14)+7;
 	//int h = ((2*3)*4); 

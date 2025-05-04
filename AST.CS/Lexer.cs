@@ -10,7 +10,10 @@ namespace SquashC.Compiler
     public class Lexer
     {
         private string input;
+        private List<PreToken> preLexer;
+
         private int currentPos;
+        private PreToken preToken;
         private char currentChar = '\0';
         private char currentChar1 = '\0';
         private char currentChar2 = '\0';
@@ -22,9 +25,10 @@ namespace SquashC.Compiler
         private char currentChar8 = '\0';
         private char currentChar9 = '\0';
 
-        public Lexer(string input)
+        public Lexer(string input, ref List<PreToken> preTokens)
         {
             this.input = input;
+            this.preLexer = preTokens;
             this.currentPos = 0;
             if (input.Length > 0)
             {
@@ -38,10 +42,12 @@ namespace SquashC.Compiler
             if (currentPos < input.Length)
             {
                 currentChar = input[currentPos];
+                preToken = preLexer[currentPos%preLexer.Count];
             }
             else
             {
                 currentChar = '\0';
+                preToken = null;
             }
         }
         public int GetPosition()
@@ -156,26 +162,44 @@ namespace SquashC.Compiler
             if (currentPos < input.Length)
             {
                 currentChar = input[currentPos];
+                preToken = preLexer[currentPos%preLexer.Count];
             }
             else
             {
                 currentChar = '\0';
+                preToken = null;
             }
+
             while (currentChar != '\0')
             {
                 predictiveLookaheads();
 
                 if (currentPos >= input.Length)
                 {
-                    Token token = new Token(TokenType.EOF, string.Empty, currentPos);
+                    Token token = new Token(TokenType.EOF, string.Empty, currentPos, preToken);
 
                     return token;
                 }
                 if (currentChar == 'v' && currentChar1 == 'a' && currentChar2 == 'r')
                 {
                     Token token = new Token(TokenType.VarKeyword,
-                        currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString(), currentPos
+                        currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString(), 
+                        currentPos, preToken
                     );
+                    Advance();
+                    Advance();
+                    Advance();
+                    return token;
+                }
+                if (currentChar == 'v' && currentChar1 == 'o' && currentChar2 == 'i' && currentChar3 == 'd')
+                {
+                    Token token = new Token(TokenType.VoidKeyword,
+                        currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString() 
+                        + currentChar3.ToString(), 
+                        currentPos, 
+                        preToken
+                    );
+                    Advance();
                     Advance();
                     Advance();
                     Advance();
@@ -184,7 +208,9 @@ namespace SquashC.Compiler
                 if (currentChar == 'i' && currentChar1 == 'n' && currentChar2 == 't')
                 {
                     Token token = new Token(TokenType.IntKeyword,
-                        currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString(), currentPos
+                        currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString(), 
+                        currentPos, 
+                        preToken
                     );
                     Advance();
                     Advance();
@@ -195,7 +221,9 @@ namespace SquashC.Compiler
                 {
                     Token token = new Token(TokenType.StringKeyword,
                         currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString()
-                        + currentChar3.ToString() + currentChar4.ToString() + currentChar5.ToString(), currentPos
+                        + currentChar3.ToString() + currentChar4.ToString() + currentChar5.ToString(), 
+                        currentPos, 
+                        preToken
                     );
                     Advance();
                     Advance();
@@ -209,7 +237,9 @@ namespace SquashC.Compiler
                 {
                     Token token = new Token(TokenType.DoubleKeyword,
                         currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString()
-                        + currentChar3.ToString() + currentChar4.ToString() + currentChar5.ToString(), currentPos
+                        + currentChar3.ToString() + currentChar4.ToString() + currentChar5.ToString(), 
+                        currentPos, 
+                        preToken
                     );
                     Advance();
                     Advance();
@@ -223,7 +253,9 @@ namespace SquashC.Compiler
                 {
                     Token token = new Token(TokenType.ReturnKeyword,
                         currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString()
-                        + currentChar3.ToString() + currentChar4.ToString() + currentChar5.ToString(), currentPos
+                        + currentChar3.ToString() + currentChar4.ToString() + currentChar5.ToString(), 
+                        currentPos, 
+                        preToken
                     );
                     Advance();
                     Advance();
@@ -235,66 +267,72 @@ namespace SquashC.Compiler
                 }
                 else if (char.IsDigit(currentChar))
                 {
-                    Token token = new Token(TokenType.Number, ParseNumber(), currentPos);
+                    Token token = new Token(TokenType.Number, ParseNumber(), currentPos, preToken);
                     return token;
                 }
                 else if (char.IsLetter(currentChar))
                 {
-                    Token token = new Token(TokenType.Identifier, ParseIdentifier(), currentPos);
+                    Token token = new Token(TokenType.Identifier, ParseIdentifier(), currentPos, preToken);
                     return token;
                 }
                 else if (currentChar == '+' || currentChar == '-' || currentChar == '*' || currentChar == '/' || currentChar == ',')
                 {
-                    Token token = new Token(TokenType.Operator, currentChar.ToString(), currentPos);
+                    Token token = new Token(TokenType.Operator, currentChar.ToString(), currentPos, preToken);
                     Advance();
                     return token;
                 }
                 else if (currentChar == '(' || currentChar == ')') // Handle parentheses
                 {
-                    Token token = new Token(TokenType.Parenthesis, currentChar.ToString(), currentPos);
+                    Token token = new Token(TokenType.Parenthesis, currentChar.ToString(), currentPos, preToken);
                     Advance();
                     return token;
                 }
                 else if (currentChar == '=')
                 {
-                    Token token = new Token(TokenType.Assignment, currentChar.ToString(), currentPos);
+                    Token token = new Token(TokenType.Assignment, currentChar.ToString(), currentPos, preToken);
                     Advance();
                     return token;
                 }
                 else if (currentChar == '.')
                 {
-                    Token token = new Token(TokenType.Peroid, currentChar.ToString(), currentPos);
+                    Token token = new Token(TokenType.Peroid, currentChar.ToString(), currentPos, preToken);
                     Advance();
                     return token;
                 }
                 else if (currentChar == ';')
                 {
-                    Token token = new Token(TokenType.SemiColon, currentChar.ToString(), currentPos);
+                    Token token = new Token(TokenType.SemiColon, currentChar.ToString(), currentPos, preToken);
                     Advance();
                     return token;
                 }
                 else if (currentChar == '{')
                 {
-                    Token token = new Token(TokenType.CurleyBrace, currentChar.ToString(), currentPos);
+                    Token token = new Token(TokenType.CurleyBrace, currentChar.ToString(), currentPos, preToken);
                     Advance();
                     return token;
                 }
                 else if (currentChar == '}')
                 {
-                    Token token = new Token(TokenType.CurleyBrace, currentChar.ToString(), currentPos);
+                    Token token = new Token(TokenType.CurleyBrace, currentChar.ToString(), currentPos, preToken);
                     Advance();
                     return token;
                 }
                 else if (char.IsWhiteSpace(currentChar) || currentChar == ' ' || currentChar == '\t' || currentChar == '\n' || currentChar == '\r')
                 {
-                    Token token = new Token(TokenType.Whitespace, ParseWhitespace(), currentPos);
+                    Token token = new Token(TokenType.Whitespace, ParseWhitespace(), currentPos, preToken);
                     return token;
                 }
                 else
                 {
-                    Logger.Log.LogError("Invalid character found in input. Current position: " + GetPosition().ToString());
+                    Logger.Log.LogError("Invalid character found in input. Current position: " + GetPosition().ToString() 
+                        + " offsetX: " + ((preToken != null) ? preToken.OffsetX.ToString() : "is null") 
+                        + " offsetY: " + ((preToken != null) ? preToken.OffsetY.ToString() : "is null")
+                    );
 
-                    throw new Exception("Invalid character found in input. Current position: " + GetPosition().ToString());
+                    throw new Exception("Invalid character found in input. Current position: " + GetPosition().ToString()
+                        + " offsetX: " + ((preToken != null) ? preToken.OffsetX.ToString() : "is null")
+                        + " offsetY: " + ((preToken != null) ? preToken.OffsetY.ToString() : "is null")
+                    );
                 }
             }
 

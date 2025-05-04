@@ -17,10 +17,13 @@ namespace SquashC.Compiler
 
         public SquashCompiler(string input)
         {
-            Logger.Log.LogInformation("ExpressionCompiler(): ctor");
+            Logger.Log.LogInformation("SquashCompiler(): ctor");
 
-            input = Minifier.MinifyCode(input);
-            this.lexer = new Lexer(input);
+            List<PreToken> preTokens = new List<PreToken>();
+            input = Minifier.MinifyCode(input, ref preTokens);
+            Logger.Log.LogInformation("SOURCE:\n" + input);
+
+            this.lexer = new Lexer(input, ref preTokens);
             this.currentToken = lexer.GetNextToken();
             this.symbolTable = new SymbolTable();
             this.rootAST = new AbstractSyntaxTree();
@@ -181,8 +184,12 @@ namespace SquashC.Compiler
                                 currentToken = lexer.SkipToToken(TokenType.StringLiteral);
                                 varDefine = symbolTable.DefineVariable(VarType.Double, identifierName, currentToken.Value);
                                 break;
+                            case VarType.Void:
+                                varDefine = null;
+                                break;
                             default:
                                 varDefine = null;
+                                Logger.Log.LogError("Unhandled variable type which is not implemented type specified: '" + varType.ToString() + "'");
                                 throw new Exception("Unhandled variable type which is not implemented type specified: '" + varType.ToString() + "'");
                         }
                     }
@@ -319,48 +326,66 @@ namespace SquashC.Compiler
             {
                 Logger.Log.LogInformation("ParsePrimaryExpression(): double keyword");
                 int pos = lexer.GetPosition();
-                Token token1 = lexer.GetNextToken();
-                if (token1 != null && token1.Type == TokenType.Whitespace)
+                currentToken = lexer.GetNextToken();
+                if (currentToken != null && currentToken.Type == TokenType.Whitespace)
                 {
-                    token1 = lexer.GetNextToken();
-                    if (token1 != null && token1.Type == TokenType.Identifier)
+                    currentToken = lexer.GetNextToken();
+                    if (currentToken != null && currentToken.Type == TokenType.Identifier)
                     {
                         int pos2 = lexer.GetPosition();
-                        string functIdentifierName = token1.Value;
+                        string functIdentifierName = currentToken.Value;
 
-                        Logger.Log.LogInformation("ParsePrimaryExpression(): double keyword parse function definition");
-
-                        ASTNode? functDefNode = ParseFunctionDefinition(VarType.Double, functIdentifierName);
-
-                        if (functDefNode != null)
+                        currentToken = lexer.GetNextToken();
+                        if(currentToken != null && currentToken.Type == TokenType.Parenthesis && currentToken.Value == "(")
                         {
-                            return functDefNode;
+                            Logger.Log.LogInformation("ParsePrimaryExpression(): double keyword parse function definition '" + functIdentifierName + "'");
+
+                            ASTNode? functDefNode = ParseFunctionDefinition(VarType.Double, functIdentifierName);
+
+                            if (functDefNode != null)
+                            {
+                                return functDefNode;
+                            }
                         }
                     }
                 }
                 lexer.SetPosition(pos);
 
-                Logger.Log.LogInformation("");
-
                 ASTNode varDefineNode = ParseVariableDefine(VarType.Double);
-                ASTNode left = ParseExpression(0, rootAST);
-                Logger.Log.LogInformation("ParsePrimaryExpression(): var define node: " + varDefineNode.ToString() + "left expr: " + left.ToString());
-                varDefineNode.Left = left;
-                parseEndStatement(ref varDefineNode);
-                return varDefineNode;
+                if(varDefineNode!= null)
+                {
+                    ASTNode left = ParseExpression(0, rootAST);
+                    Logger.Log.LogInformation("ParsePrimaryExpression(): var define node: " + varDefineNode.ToString() + "left expr: " + left.ToString());
+                    varDefineNode.Left = left;
+                    parseEndStatement(ref varDefineNode);
+                    return varDefineNode;
+                }
+                else
+                {
+                    lexer.SetPosition(pos);
+
+                    ASTNode varDecla = ParseVariableDeclaration(VarType.Double);
+
+                    if(varDecla != null)
+                    {
+                        return varDecla;
+                    }
+                }
             }
             else if (currentToken.Type == TokenType.IntKeyword)
             {
                 bool rememberLocation = false;
                 int pos = lexer.GetPosition();
-                Token token1 = lexer.GetNextToken();
-                if (token1 != null && token1.Type == TokenType.Whitespace)
+                //Token token1 = lexer.GetNextToken();
+                currentToken = lexer.GetNextToken();
+
+                if (currentToken != null && currentToken.Type == TokenType.Whitespace)
                 {
-                    token1 = lexer.GetNextToken();
-                    if (token1 != null && token1.Type == TokenType.Identifier)
+                    currentToken = lexer.GetNextToken();
+                    if (currentToken != null && currentToken.Type == TokenType.Identifier)
                     {
                         int pos2 = lexer.GetPosition();
-                        string functIdentifierName = token1.Value;
+                        string functIdentifierName = currentToken.Value;
                         if (functIdentifierName == "main")
                         {
                             // Parse entry point main() function.
@@ -374,11 +399,11 @@ namespace SquashC.Compiler
                         else
                         {
                             int pos3 = lexer.GetPosition();
-                            token1 = lexer.GetNextToken();
+                            currentToken = lexer.GetNextToken();
 
-                            if (token1.Type == TokenType.Parenthesis && token1.Value == "(")
+                            if (currentToken.Type == TokenType.Parenthesis && currentToken.Value == "(")
                             {
-                                currentToken = token1;
+                                //currentToken = token1;
 
                                 Logger.Log.LogInformation("ParsePrimaryExpression(): ParseFunctionDefinition int keyword function is: " + functIdentifierName);
 
@@ -409,16 +434,27 @@ namespace SquashC.Compiler
                                     parseEndStatement(ref varDefineNode);
                                     return varDefineNode;
                                 }
+                                else
+                                {
+                                    lexer.SetPosition(pos);
+
+                                    ASTNode varDecla = ParseVariableDeclaration(VarType.Int);
+
+                                    if (varDecla != null)
+                                    {
+                                        return varDecla;
+                                    }
+                                }
                                 //return null;
                             }
                             // functIdentifierName
                         }
                     }
-                    else if (token1 != null && token1.Type == TokenType.Number)
+                    else if (currentToken != null && currentToken.Type == TokenType.Number)
                     {
                         ASTNode left = null;
                         ASTNode right = null;
-                        ASTNode numASTNode = new ASTNode(ASTNodeType.Number, token1.Value, left, right);
+                        ASTNode numASTNode = new ASTNode(ASTNodeType.Number, currentToken.Value, left, right);
 
                         currentToken = lexer.GetNextToken();
                         ParseEndOfFunction();
@@ -433,10 +469,24 @@ namespace SquashC.Compiler
                             var tok = currentToken;
 
                             ASTNode varDefineNode = ParseVariableDefine(VarType.Int);
-                            ASTNode left = ParseExpression(0, rootAST);
-                            varDefineNode.Left = left;
-                            parseEndStatement(ref varDefineNode);
-                            return varDefineNode;
+                            if (varDefineNode != null)
+                            {
+                                ASTNode left = ParseExpression(0, rootAST);
+                                varDefineNode.Left = left;
+                                parseEndStatement(ref varDefineNode);
+                                return varDefineNode;
+                            }
+                            else
+                            {
+                                lexer.SetPosition(pos);
+
+                                ASTNode varDecla = ParseVariableDeclaration(VarType.Int);
+
+                                if (varDecla != null)
+                                {
+                                    return varDecla;
+                                }
+                            }
                         }
                     }
                 }
@@ -460,6 +510,17 @@ namespace SquashC.Compiler
 
                         parseEndStatement(ref varDefineNode);
                         return varDefineNode;
+                    }
+                    else
+                    {
+                        //lexer.SetPosition(pos);
+
+                        ASTNode varDecla = ParseVariableDeclaration(VarType.Int);
+
+                        if (varDecla != null)
+                        {
+                            return varDecla;
+                        }
                     }
                     return null;
                 }
@@ -487,10 +548,66 @@ namespace SquashC.Compiler
                 lexer.SetPosition(pos);
 
                 ASTNode varDefineNode = ParseVariableDefine(VarType.String);
-                ASTNode left = ParseExpression(0, rootAST);
-                varDefineNode.Left = left;
-                parseEndStatement(ref varDefineNode);
-                return varDefineNode;
+                if (varDefineNode != null)
+                {
+                    ASTNode left = ParseExpression(0, rootAST);
+                    varDefineNode.Left = left;
+                    parseEndStatement(ref varDefineNode);
+                    return varDefineNode;
+                }
+                else
+                {
+                    lexer.SetPosition(pos);
+
+                    ASTNode varDecla = ParseVariableDeclaration(VarType.String);
+
+                    if (varDecla != null)
+                    {
+                        return varDecla;
+                    }
+                }
+            }
+            else if (currentToken.Type == TokenType.VoidKeyword)
+            {
+                int pos = lexer.GetPosition();
+                currentToken = lexer.GetNextToken();
+                if (currentToken != null && currentToken.Type == TokenType.Whitespace)
+                {
+                    currentToken = lexer.GetNextToken();
+                    if (currentToken != null && currentToken.Type == TokenType.Identifier)
+                    {
+                        int pos2 = lexer.GetPosition();
+                        string functIdentifierName = currentToken.Value;
+
+                        ASTNode? functDefNode = ParseFunctionDefinition(VarType.Void, functIdentifierName);
+
+                        if (functDefNode != null)
+                        {
+                            return functDefNode;
+                        }
+                    }
+                }
+                lexer.SetPosition(pos);
+
+                ASTNode varDefineNode = ParseVariableDefine(VarType.Void);
+                if (varDefineNode != null)
+                {
+                    ASTNode left = ParseExpression(0, rootAST);
+                    varDefineNode.Left = left;
+                    parseEndStatement(ref varDefineNode);
+                    return varDefineNode;
+                }
+                else
+                {
+                    lexer.SetPosition(pos);
+
+                    ASTNode varDecla = ParseVariableDeclaration(VarType.Void);
+
+                    if (varDecla != null)
+                    {
+                        return varDecla;
+                    }
+                }
             }
             else if (currentToken.Type == TokenType.Number)
             {
@@ -609,6 +726,33 @@ namespace SquashC.Compiler
                 currentToken = lexer.GetNextToken(); // Move past semicolon character.
                 return null;
             }
+
+            if (currentToken != null && currentToken.Value == ")")
+            {
+                currentToken = lexer.GetNextToken(); // Move past ")"
+            }
+            if (currentToken != null && currentToken.Value == "{")
+            {
+                currentToken = lexer.GetNextToken(); // Move past "{"
+            }
+            if (currentToken != null && currentToken.Type == TokenType.ReturnKeyword)
+            {
+                return ParseExpression(0, rootAST);
+            }
+            if (currentToken != null && currentToken.Value == "}")
+            {
+                currentToken = lexer.GetNextToken(); // Move past "}"
+            }
+            if (currentToken != null && 
+                (currentToken.Type == TokenType.IntKeyword 
+                || currentToken.Type == TokenType.StringKeyword 
+                || currentToken.Type == TokenType.VarKeyword 
+                || currentToken.Type == TokenType.VoidKeyword 
+                || currentToken.Type == TokenType.DoubleKeyword) )
+            {
+                return ParseExpression(0, rootAST);
+            }
+
             if (currentToken != null)
             {
                 Logger.Log.LogError("Invalid primary expression. Position: " + currentToken.Position.ToString());
@@ -637,36 +781,36 @@ namespace SquashC.Compiler
 
         private ASTNode ParseEntryPoint(string functIdentifierName)
         {
-            Token token1;
+            //Token token1;
             bool rememberLocation = false;
 
             Logger.Log.LogInformation("ParsePrimaryExpression(): parsing entry point main() function");
 
-            token1 = lexer.GetNextToken();
-            if (token1.Type == TokenType.Parenthesis && token1.Value == "(")
+            currentToken = lexer.GetNextToken();
+            if (currentToken.Type == TokenType.Parenthesis && currentToken.Value == "(")
             {
-                token1 = lexer.GetNextToken();
-                if (token1.Type == TokenType.Identifier && token1.Value == "void")
+                currentToken = lexer.GetNextToken();
+                if (currentToken.Type == TokenType.Identifier && currentToken.Value == "void")
                 {
-                    token1 = lexer.GetNextToken();
-                    if (token1.Type == TokenType.Parenthesis && token1.Value == ")")
+                    currentToken = lexer.GetNextToken();
+                    if (currentToken.Type == TokenType.Parenthesis && currentToken.Value == ")")
                     {
-                        token1 = lexer.GetNextToken();
-                        if (token1.Type == TokenType.CurleyBrace && token1.Value == "{")
+                        currentToken = lexer.GetNextToken();
+                        if (currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "{")
                         {
                             rememberLocation = true;
 
-                            token1 = lexer.GetNextToken();
+                            currentToken = lexer.GetNextToken();
                             // Is Main entry point function.
 
-                            if (token1.Type == TokenType.ReturnKeyword)
+                            if (currentToken.Type == TokenType.ReturnKeyword)
                             {
-                                currentToken = token1;
+                                //urrentToken = token1;
                             }
                             else
                             {
                                 // if double etc.
-                                currentToken = token1;
+                                //currentToken = token1;
                             }
                             ASTNode left = ParseStatements();
 
@@ -683,7 +827,7 @@ namespace SquashC.Compiler
 
                             Logger.Log.LogInformation("ParseEntryPoint(): entry point node parsed '" + entryPointNode.ToString() + "'");
 
-                            if (token1.Type == TokenType.CurleyBrace && token1.Value == "}")
+                            if (currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
                             {
                                 Logger.Log.LogInformation("ParseEntryPoint(): entry point end closing curley brace found");
 
@@ -710,22 +854,22 @@ namespace SquashC.Compiler
 
             List<ASTNode> args = ParseFunctionDefArguments(retVarType);
 
-            token1 = lexer.GetNextToken();
-            if (token1 == null || (token1 != null && token1.Type == TokenType.CurleyBrace && token1.Value == "{"))
+            currentToken = lexer.GetNextToken();
+            if (currentToken == null || (currentToken != null && currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "{"))
             {
                 //rememberLocation = true;
 
-                token1 = lexer.GetNextToken();
+                currentToken = lexer.GetNextToken();
                 // Is function with a definition.
 
-                if (token1 != null && token1.Type == TokenType.ReturnKeyword)
+                if (currentToken != null && currentToken.Type == TokenType.ReturnKeyword)
                 {
-                    currentToken = token1;
+                    //currentToken = token1;
                 }
                 else
                 {
                     // if double etc.
-                    currentToken = token1;
+                    //currentToken = token1;
                 }
                 ASTNode left = ParseStatements();
 
@@ -742,7 +886,7 @@ namespace SquashC.Compiler
                     entryPointNode.FunctionBody.Add(left);
                 }
 
-                if (token1 != null && token1.Type == TokenType.CurleyBrace && token1.Value == "}")
+                if (currentToken != null && currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
                 {
                     //return left;
                 }
@@ -787,7 +931,8 @@ namespace SquashC.Compiler
                 }
                 else if (currentToken != null && (currentToken.Type != TokenType.Parenthesis || currentToken.Value != ")"))
                 {
-                    throw new Exception("Invalid function argument list.");
+                    Logger.Log.LogError("Invalid function argument list.");
+                    //throw new Exception("Invalid function argument list.");
                 }
             }
 
@@ -799,7 +944,8 @@ namespace SquashC.Compiler
                 }
                 else
                 {
-                    throw new Exception("Missing closing parenthesis in function call arguments.");
+                    Logger.Log.LogError("Missing closing parenthesis in function call arguments.");
+                    //throw new Exception("Missing closing parenthesis in function call arguments.");
                 }
             }
 
@@ -818,7 +964,6 @@ namespace SquashC.Compiler
                     arguments.Add(expr);
                 }
 
-
                 if (currentToken != null && currentToken.Type == TokenType.Operator && currentToken.Value == ",")
                 {
                     currentToken = lexer.GetNextToken(); // Move past ","
@@ -830,6 +975,10 @@ namespace SquashC.Compiler
                 if (currentToken != null && (currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}"))
                 {
                     currentToken = lexer.GetNextToken(); // Move past "}"
+                }
+                if(currentToken != null && currentToken.Type == TokenType.Identifier)
+                {
+                    return arguments;
                 }
                 if (currentToken != null && (currentToken.Type != TokenType.Parenthesis || currentToken.Value != ")"))
                 {
@@ -876,6 +1025,7 @@ namespace SquashC.Compiler
                 // Handle associativity for right-associative operators
                 while (currentToken != null && currentToken.Type == TokenType.Operator && GetPrecedence(currentToken.Value) == nextPrecedence)
                 {
+                    Logger.Log.LogInformation("ParseExpression(): precedence: " + GetPrecedence(currentToken.Value).ToString() + " token: " + currentToken.Value + "");
                     rightNode = ParseExpression(nextPrecedence, ast);
                 }
 
@@ -885,7 +1035,7 @@ namespace SquashC.Compiler
                     currentToken = lexer.GetNextToken(); // Move to the next token
                 }
 
-                if (op.Value == "--" && IsUnaryOperator())
+                if ((op.Value == "--" || op.Value == "++") && IsUnaryOperator())
                 {
                     //ast.AddUnaryOperator(op.Value, rightNode);
                     leftNode = new ASTNode(ASTNodeType.UNARY_OP, op.Value, null, rightNode);
