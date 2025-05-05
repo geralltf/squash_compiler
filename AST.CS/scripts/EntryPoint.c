@@ -1,17 +1,23 @@
-double tan(double input) {
-	return 0.7 * input;
+double tan() {
+	return 0.7 * 9;
 }
-double cos(double val2) {
-	return 0.2 * val2;
+double cos() {
+	//return 0.2 * 3;
+	return 12*8.2;
 }
-int sin(int val, int y) {
-	int A = 2;
-	return 1 + 3 + val * y * A;
+int sin() {
+	//int A = 2;
+	//return 1 + 3 + 4 * 6 * A;
+	return 2+3;
 }
 void simple_hello()
 {
 	//printf("%s", "Wello Horld!");
-	return;
+	return 2*(12+15);
+}
+void simple_hi() {
+	// a hi greeting.
+	return 3-(16 * 14);
 }
 //void test_loop_if_statement()
 //{
