@@ -296,6 +296,34 @@ namespace SquashC.Compiler
                     Advance();
                     return token;
                 }
+                else if (currentChar == '>' || currentChar == '<' || currentChar1 == '=')
+                {
+                    string operators = string.Empty;
+                    if ((currentChar == '>' || currentChar == '<') && currentChar1 != '=')
+                    {
+                        operators = currentChar.ToString();
+                        Advance();
+                    }
+                    else if (currentChar == '>' && currentChar1 == '=')
+                    {
+                        operators = currentChar.ToString() + currentChar1.ToString();
+                        Advance();
+                        Advance();
+                    }
+                    else if (currentChar == '<' && currentChar1 == '=')
+                    {
+                        operators = currentChar.ToString() + currentChar1.ToString();
+                        Advance();
+                        Advance();
+                    }
+                    else
+                    {
+                        operators = currentChar.ToString();
+                        Advance();
+                    }
+                    Token token = new Token(TokenType.Operator, operators, currentPos, preToken);
+                    return token;
+                }
                 else if (currentChar == '(' || currentChar == ')') // Handle parentheses
                 {
                     Token token = new Token(TokenType.Parenthesis, currentChar.ToString(), currentPos, preToken);
