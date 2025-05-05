@@ -18,6 +18,7 @@ namespace SquashC.Compiler
         Comma,
         Peroid,
         ReturnKeyword,
+        WhileKeyword,
         VoidKeyword,
         VarKeyword,
         IntKeyword,

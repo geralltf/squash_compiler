@@ -249,6 +249,21 @@ namespace SquashC.Compiler
                     Advance();
                     return token;
                 }
+                if (currentChar == 'w' && currentChar1 == 'h' && currentChar2 == 'i' && currentChar3 == 'l' && currentChar4 == 'e')
+                {
+                    Token token = new Token(TokenType.WhileKeyword,
+                        currentChar.ToString() + currentChar1.ToString() + currentChar2.ToString()
+                        + currentChar3.ToString() + currentChar4.ToString(),
+                        currentPos,
+                        preToken
+                    );
+                    Advance();
+                    Advance();
+                    Advance();
+                    Advance();
+                    Advance();
+                    return token;
+                }
                 if (currentChar == 'r' && currentChar1 == 'e' && currentChar2 == 't' && currentChar3 == 'u' && currentChar4 == 'r' && currentChar5 == 'n')
                 {
                     Token token = new Token(TokenType.ReturnKeyword,
@@ -324,12 +339,12 @@ namespace SquashC.Compiler
                 }
                 else
                 {
-                    Logger.Log.LogError("Invalid character found in input. Current position: " + GetPosition().ToString() 
+                    Logger.Log.LogError("Invalid character found in input '" + currentChar.ToString() + "' Current position: " + GetPosition().ToString() 
                         + " offsetX: " + ((preToken != null) ? preToken.OffsetX.ToString() : "is null") 
                         + " offsetY: " + ((preToken != null) ? preToken.OffsetY.ToString() : "is null")
                     );
 
-                    throw new Exception("Invalid character found in input. Current position: " + GetPosition().ToString()
+                    throw new Exception("Invalid character found in input. '" + currentChar.ToString() + "' Current position: " + GetPosition().ToString()
                         + " offsetX: " + ((preToken != null) ? preToken.OffsetX.ToString() : "is null")
                         + " offsetY: " + ((preToken != null) ? preToken.OffsetY.ToString() : "is null")
                     );
