@@ -190,8 +190,11 @@ namespace SquashC.Compiler
                         result += currentChar3;
                         currentPos += 4;
 
-                        result += ' ';
-                        currentPos++;
+                        if(currentChar4 == ' ')
+                        {
+                            result += ' ';
+                            currentPos++;
+                        }
                     }
                     else if (currentChar == 'i' && currentChar1 == 'n' && currentChar2 == 't')
                     {
@@ -278,33 +281,46 @@ namespace SquashC.Compiler
                         currentPos++;
 
                     }
+                    else if (currentChar == '(' || currentChar == ')')
+                    {
+                        PreToken tok = new PreToken(
+                            currentChar.ToString(),
+                            currentPos,
+                            offsetX,
+                            offsetY
+                        );
+                        tokens.Add(tok);
+
+                        result += currentChar;
+                        currentPos++;
+                    }
                     //TODO: Parse identifiers to shorten them without breaking ABIs perhaps don't change function calls.
                     //if (char.IsDigit(currentChar))
                     //{
                     //    string number = ParseNumber(ref input);
 
-                    //    result += number;
-                    //}
-                    //else if (char.IsLetter(currentChar))
-                    //{
-                    //    string identifier = ParseIdentifier(ref input);
-                    //    string identifierChanged;
+                        //    result += number;
+                        //}
+                        //else if (char.IsLetter(currentChar))
+                        //{
+                        //    string identifier = ParseIdentifier(ref input);
+                        //    string identifierChanged;
 
-                    //    if (!mapIdentifiers.ContainsKey(identifier))
-                    //    {
-                    //        identifierChanged = newIdentifier();
+                        //    if (!mapIdentifiers.ContainsKey(identifier))
+                        //    {
+                        //        identifierChanged = newIdentifier();
 
-                    //        mapIdentifiers.Add(identifier, identifierChanged);
-                    //    }
-                    //    else
-                    //    {
-                    //        string mappedIdentifier;
-                    //        mapIdentifiers.TryGetValue(identifier, out mappedIdentifier);
+                        //        mapIdentifiers.Add(identifier, identifierChanged);
+                        //    }
+                        //    else
+                        //    {
+                        //        string mappedIdentifier;
+                        //        mapIdentifiers.TryGetValue(identifier, out mappedIdentifier);
 
-                    //        identifierChanged = mappedIdentifier;
-                    //    }
-                    //    result += identifierChanged;
-                    //}
+                        //        identifierChanged = mappedIdentifier;
+                        //    }
+                        //    result += identifierChanged;
+                        //}
                     else
                     {
                         if (!isSinglelineComment || !isMultilineComment)
