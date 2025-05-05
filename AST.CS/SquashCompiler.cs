@@ -42,7 +42,8 @@ namespace SquashC.Compiler
             }
 
             //asm.Is_macOS = true;
-            asm.Is_Linux = true;
+            //asm.Is_Linux = true;
+            asm.Is_Windows = true;
             asm.GenerateCode(expression);
         }
 

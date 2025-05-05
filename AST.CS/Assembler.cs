@@ -16,6 +16,7 @@ namespace SquashC.Compiler
 
         public bool Is_macOS { get; set; }
         public bool Is_Linux { get; set; }
+        public bool Is_Windows { get; set; }
 
         public Assembler(AbstractSyntaxTree expressionTree)
         {
@@ -36,7 +37,14 @@ namespace SquashC.Compiler
 
                 Logger.Log.LogInformation("************* Generating Code for specified Abstract Syntax Tree. '" + astNode.ToString() + "'");
 
-                string outputAssembly = Assemble(astNode);
+                string outputAssembly = string.Empty;
+
+                if (Is_Linux || Is_Windows || Is_macOS)
+                {
+                    outputAssembly += "section .text\r\n    global  main\n";
+                }   
+
+                outputAssembly += Assemble(astNode);
 
                 Logger._log.PrintEndStatistics();
                 Logger.Log.LogInformation("************* Compiled Assembler Codegen Full Program Dump");
@@ -46,6 +54,11 @@ namespace SquashC.Compiler
                     outputAssembly += ".section .note.GNU-stack,\"\",@progbits\n";
 
                     //Console.WriteLine(".section .note.GNU-stack,\"\",@progbits");
+                }
+
+                if (Is_Windows)
+                {
+
                 }
 
                 Console.Write(outputAssembly);
