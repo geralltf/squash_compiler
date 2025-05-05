@@ -41,7 +41,14 @@ namespace SquashC.Compiler
 
                 if (Is_Linux || Is_Windows || Is_macOS)
                 {
-                    outputAssembly += "section .text\r\n    global  main\n";
+                    if(Is_macOS)
+                    {
+                        outputAssembly += "section .text\r\n    global  _main\n";
+                    }
+                    else
+                    {
+                        outputAssembly += "section .text\r\n    global  main\n";
+                    }
                 }   
 
                 outputAssembly += Assemble(astNode);
@@ -114,8 +121,8 @@ namespace SquashC.Compiler
                     //Console.WriteLine($"mov rax, [{node.VarSymbol.Name},{node.VarSymbol.Value}] ;{node.VarSymbol.VariableType.ToString()}");
                     sb.Append(Assemble(node.Left));
 
-                    sb.AppendLine($"mov rax, [{node.VarSymbol.Name}]");
-                    Console.WriteLine($"mov rax, [{node.VarSymbol.Name}]");
+                    sb.AppendLine($"mov\trax, \t[{node.VarSymbol.Name}]");
+                    Console.WriteLine($"mov\trax, \t[{node.VarSymbol.Name}]");
 
                     sb.Append(Assemble(node.Right));
                     //Console.WriteLine($"{node.VarSymbol.Name}=(LEFT,RIGHT)");
@@ -145,16 +152,16 @@ namespace SquashC.Compiler
                     Logger.Log.LogInformation("Assemble(): ASTNodeType.Number");
 
                     // Load the number value into a register
-                    sb.AppendLine($"mov rax, {node.Value}");
-                    Console.WriteLine($"mov rax, {node.Value}");
+                    sb.AppendLine($"mov\trax,\t{node.Value}");
+                    Console.WriteLine($"mov\trax,\t{node.Value}");
                 }
                 else if (node.Type == ASTNodeType.Variable)
                 {
                     Logger.Log.LogInformation("Assemble(): ASTNodeType.Variable");
 
                     // Load the variable value into a register
-                    sb.AppendLine($"mov rax, [{node.VarSymbol.Name}]");
-                    Console.WriteLine($"mov rax, [{node.VarSymbol.Name}]");
+                    sb.AppendLine($"mov\trax,\t[{node.VarSymbol.Name}]");
+                    Console.WriteLine($"mov\trax,\t[{node.VarSymbol.Name}]");
                     //Console.WriteLine($"mov [{node.VarSymbol.Name}], rax");
 
                     sb.Append(Assemble(node.Left));
@@ -173,13 +180,13 @@ namespace SquashC.Compiler
                     // Call the function
                     if (Is_macOS)
                     {
-                        sb.AppendLine($"call _{node.FunctSymbol.Name}");
-                        Console.WriteLine($"call _{node.FunctSymbol.Name}");
+                        sb.AppendLine($"call\t_{node.FunctSymbol.Name}");
+                        Console.WriteLine($"call\t_{node.FunctSymbol.Name}");
                     }
                     else
                     {
-                        sb.AppendLine($"call {node.FunctSymbol.Name}");
-                        Console.WriteLine($"call {node.FunctSymbol.Name}");
+                        sb.AppendLine($"call\t{node.FunctSymbol.Name}");
+                        Console.WriteLine($"call\t{node.FunctSymbol.Name}");
                     }
                 }
                 else if (node.Type == ASTNodeType.BIN_OP)
@@ -189,34 +196,34 @@ namespace SquashC.Compiler
                     // Generate code for left and right operands
                     sb.Append(Assemble(node.Left));
 
-                    sb.AppendLine("push rax");
-                    Console.WriteLine("push rax"); // Save value on the stack
+                    sb.AppendLine("push\trax");
+                    Console.WriteLine("push\trax"); // Save value on the stack
 
                     sb.Append(Assemble(node.Right));
 
                     // Perform the operation (addition or subtraction in this example)
-                    sb.AppendLine("pop rbx");
-                    Console.WriteLine("pop rbx"); // Retrieve left operand from the stack
+                    sb.AppendLine("pop\trbx");
+                    Console.WriteLine("pop\trbx"); // Retrieve left operand from the stack
                     if (node.Value == "+")
                     {
-                        sb.AppendLine("add rax, rbx");
-                        Console.WriteLine("add rax, rbx");
+                        sb.AppendLine("add\trax,\trbx");
+                        Console.WriteLine("add\trax,\trbx");
                     }
                     else if (node.Value == "-")
                     {
-                        sb.AppendLine("sub rax, rbx");
-                        Console.WriteLine("sub rax, rbx");
+                        sb.AppendLine("sub\trax,\trbx");
+                        Console.WriteLine("sub\trax,\trbx");
                     }
                     else if (node.Value == "*")
                     {
-                        sb.AppendLine("mul rax, rbx");
-                        Console.WriteLine("mul rax, rbx");
+                        sb.AppendLine("mul\trax,\trbx");
+                        Console.WriteLine("mul\trax,\trbx");
                     }
                     else if (node.Value == "/")
                     {
-                        sb.AppendLine("div rax, rbx");
+                        sb.AppendLine("div\trax,\trbx");
                         //TODO: idiv for signed division
-                        Console.WriteLine("div rax, rbx"); // TODO: confirm if this is the correct divide operator
+                        Console.WriteLine("div\trax,\trbx"); // TODO: confirm if this is the correct divide operator
                     }
                 }
                 else if (node.Type == ASTNodeType.UNARY_OP)
@@ -234,13 +241,13 @@ namespace SquashC.Compiler
                     Console.WriteLine("function definition: " + node.Value + "()");
                     if(Is_macOS)
                     {
-                        sb.Append("_" + node.Value + ": ");
-                        Console.Write("_" + node.Value + ": ");
+                        sb.Append("_" + node.Value + ": \n");
+                        Console.Write("_" + node.Value + ": \n");
                     }
                     else
                     {
-                        sb.Append(node.Value + ": ");
-                        Console.Write(node.Value + ": ");
+                        sb.Append(node.Value + ": \n");
+                        Console.Write(node.Value + ": \n");
                     }
 
                     if (node.FunctionArguments != null)
