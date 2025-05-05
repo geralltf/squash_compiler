@@ -1033,6 +1033,8 @@ namespace SquashC.Compiler
                 {
                     Logger.Log.LogInformation("ParseExpression(): precedence: " + GetPrecedence(currentToken.Value).ToString() + " token: " + currentToken.Value + "");
                     rightNode = ParseExpression(nextPrecedence, ast);
+                    
+                    Logger.Log.LogInformation("ParseExpression(): precedence climbing to next rhs: " + rightNode.ToString());
                 }
 
                 // Handle parentheses
