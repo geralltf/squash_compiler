@@ -793,55 +793,60 @@ namespace SquashC.Compiler
                 currentToken = lexer.GetNextToken();
                 if (currentToken.Type == TokenType.VoidKeyword && currentToken.Value == "void")
                 {
-                    currentToken = lexer.GetNextToken();
-                    if (currentToken.Type == TokenType.Parenthesis && currentToken.Value == ")")
+                    //currentToken = lexer.GetNextToken();
+                    
+                    //if(currentToken.Type == TokenType.Whitespace)
                     {
                         currentToken = lexer.GetNextToken();
-                        if (currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "{")
+                        if (currentToken.Type == TokenType.Parenthesis && currentToken.Value == ")")
                         {
-                            rememberLocation = true;
-
                             currentToken = lexer.GetNextToken();
-                            // Is Main entry point function.
-
-                            if (currentToken.Type == TokenType.ReturnKeyword)
+                            if (currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "{")
                             {
-                                //urrentToken = token1;
-                            }
-                            else
-                            {
-                                // if double etc.
-                                //currentToken = token1;
-                            }
-                            ASTNode left = ParseStatements();
+                                rememberLocation = true;
 
-                            ASTNode entryPointNode = new ASTNode(ASTNodeType.FunctionDefinition, functIdentifierName, left, null);
-                            entryPointNode.IsFunctionDefinition = true;
-                            if (entryPointNode.FunctionBody == null)
-                            {
-                                entryPointNode.FunctionBody = new List<ASTNode>();
-                            }
-                            if (left != null)
-                            {
-                                entryPointNode.FunctionBody.Add(left);
-                            }
+                                currentToken = lexer.GetNextToken();
+                                // Is Main entry point function.
 
-                            Logger.Log.LogInformation("ParseEntryPoint(): entry point node parsed '" + entryPointNode.ToString() + "'");
+                                if (currentToken.Type == TokenType.ReturnKeyword)
+                                {
+                                    //urrentToken = token1;
+                                }
+                                else
+                                {
+                                    // if double etc.
+                                    //currentToken = token1;
+                                }
+                                ASTNode left = ParseStatements();
 
-                            if (currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
-                            {
-                                Logger.Log.LogInformation("ParseEntryPoint(): entry point end closing curley brace found");
+                                ASTNode entryPointNode = new ASTNode(ASTNodeType.FunctionDefinition, functIdentifierName, left, null);
+                                entryPointNode.IsFunctionDefinition = true;
+                                if (entryPointNode.FunctionBody == null)
+                                {
+                                    entryPointNode.FunctionBody = new List<ASTNode>();
+                                }
+                                if (left != null)
+                                {
+                                    entryPointNode.FunctionBody.Add(left);
+                                }
 
-                                //return left;
+                                Logger.Log.LogInformation("ParseEntryPoint(): entry point node parsed '" + entryPointNode.ToString() + "'");
+
+                                if (currentToken != null && currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "}")
+                                {
+                                    Logger.Log.LogInformation("ParseEntryPoint(): entry point end closing curley brace found");
+
+                                    //return left;
+                                }
+                                else
+                                {
+                                    Logger.Log.LogWarning("ParseEntryPoint(): Missing matching '}' curley brace for function definition. Might have already parsed it.");
+                                    //return left;
+                                    //throw new Exception("Missing matching '}' curley brace for function definition.");
+                                }
+
+                                return entryPointNode;
                             }
-                            else
-                            {
-                                Logger.Log.LogWarning("ParseEntryPoint(): Missing matching '}' curley brace for function definition. Might have already parsed it.");
-                                //return left;
-                                //throw new Exception("Missing matching '}' curley brace for function definition.");
-                            }
-
-                            return entryPointNode;
                         }
                     }
                 }

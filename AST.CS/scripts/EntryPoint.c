@@ -13,25 +13,25 @@ void simple_hello()
 	//printf("%s", "Wello Horld!");
 	return;
 }
-void test_loop_if_statement()
-{
-	int a = 0;
-	while (true)
-	{
-		if (a > 12)
-		{
-			break;
-		}
-		printf("%s", "Loop iteration: ");
-		printf("%d", a);
-		printf("%s", "\n");
-		a++;
-	}
-}
+//void test_loop_if_statement()
+//{
+//	int a = 0;
+//	while (true)
+//	{
+//		if (a > 12)
+//		{
+//			break;
+//		}
+//		printf("%s", "Loop iteration: ");
+//		printf("%d", a);
+//		printf("%s", "\n");
+//		a++;
+//	}
+//}
 int main(void)
 {
-	simple_hello();
-	test_loop_if_statement();
+	//simple_hello();
+	//test_loop_if_statement();
 	/*+ TEST COMMENT -*/ 
 	int f = (2+1)-(3+2)*(5+8)*((6*9)+14)+7;
 	//int h = ((2*3)*4); 
