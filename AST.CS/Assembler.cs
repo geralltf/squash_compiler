@@ -109,6 +109,31 @@ namespace SquashC.Compiler
 
                     sb.AppendLine("ret");
                     Console.WriteLine("ret");
+
+                    if (node.FunctionArguments != null)
+                    {
+                        foreach (ASTNode arg in node.FunctionArguments)
+                        {
+                            sb.Append(Assemble(arg));
+                        }
+                    }
+
+                    // Function definition has node.IsFunctionDefinition set to true
+                    // and has node.FunctionBody set to a list of ASTNode typed statements.
+                    if (node.IsFunctionDefinition == true
+                        && (node.FunctionBody != null && node.FunctionBody.Count > 0))
+                    {
+                        foreach (ASTNode bodyNode in node.FunctionBody)
+                        {
+                            if (bodyNode.Type == ASTNodeType.FunctionReturn)
+                            {
+                                //Console.WriteLine("return");
+                            }
+                            Logger.Log.LogInformation("Assemble(): -* function body node: " + bodyNode.ToString());
+                            sb.Append(Assemble(bodyNode));
+                        }
+                        //Console.WriteLine("ret back");
+                    }
                 }
                 else if (node.Type == ASTNodeType.VariableDefine)
                 {
@@ -233,6 +258,38 @@ namespace SquashC.Compiler
                     //Console.WriteLine("UNARY_OP assembler not yet implemented.");
                     sb.Append(Assemble(node.Left));
                     sb.Append(Assemble(node.Right));
+                }
+                else if (node.Type == ASTNodeType.FunctionArg)
+                {
+                    Console.WriteLine("function arg: " + node.ArgumentType + " " + node.Value);
+
+                    sb.Append(Assemble(node.Left));
+                    sb.Append(Assemble(node.Right));
+
+                    if (node.FunctionArguments != null)
+                    {
+                        foreach (ASTNode arg in node.FunctionArguments)
+                        {
+                            sb.Append(Assemble(arg));
+                        }
+                    }
+
+                    // Function definition has node.IsFunctionDefinition set to true
+                    // and has node.FunctionBody set to a list of ASTNode typed statements.
+                    if (node.IsFunctionDefinition == true
+                        && (node.FunctionBody != null && node.FunctionBody.Count > 0))
+                    {
+                        foreach (ASTNode bodyNode in node.FunctionBody)
+                        {
+                            if (bodyNode.Type == ASTNodeType.FunctionReturn)
+                            {
+                                //Console.WriteLine("return");
+                            }
+                            Logger.Log.LogInformation("Assemble(): -* function body node: " + bodyNode.ToString());
+                            sb.Append(Assemble(bodyNode));
+                        }
+                        //Console.WriteLine("ret back");
+                    }
                 }
                 else if (node.Type == ASTNodeType.FunctionDefinition)
                 {
