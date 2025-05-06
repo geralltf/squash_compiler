@@ -858,7 +858,7 @@ namespace SquashC.Compiler
         {
             Token token1;
 
-            List<ASTNode> args = ParseFunctionDefArguments(retVarType);
+            List<ASTNode> args = ParseFunctionArgs(retVarType); //ParseFunctionDefArguments(retVarType);
 
             currentToken = lexer.GetNextToken();
             if (currentToken == null || (currentToken != null && currentToken.Type == TokenType.CurleyBrace && currentToken.Value == "{"))
@@ -911,6 +911,56 @@ namespace SquashC.Compiler
             }
 
             return null;
+        }
+
+        private void ParseFunctionArg(ref List<ASTNode> args, string argType)
+        {
+            currentToken = lexer.GetNextToken();
+            if (currentToken.Type == TokenType.Whitespace)
+            {
+                currentToken = lexer.GetNextToken();
+                if (currentToken.Type == TokenType.Identifier)
+                {
+                    string identifierName = currentToken.Value;
+                    ASTNode? left = null;
+                    ASTNode? right = null;
+                    ASTNode functionArg = new ASTNode(ASTNodeType.FunctionArg, argType, identifierName, left, right);
+
+                    args.Add(functionArg);
+
+                    currentToken = lexer.GetNextToken();
+                    if (currentToken.Type == TokenType.Operator && currentToken.Value == ",")
+                    {
+
+                    }
+                }
+            }
+        }
+        private List<ASTNode> ParseFunctionArgs(VarType retVarType)
+        {
+            List<ASTNode> args = new List<ASTNode>();
+            while (currentToken != null && (currentToken.Type != TokenType.Parenthesis || currentToken.Value != ")"))
+            {
+                currentToken = lexer.GetNextToken();
+
+                if(currentToken.Type == TokenType.IntKeyword)
+                {
+                    ParseFunctionArg(ref args, "int");
+                }
+                else if (currentToken.Type == TokenType.DoubleKeyword)
+                {
+                    ParseFunctionArg(ref args, "double");
+                }
+                else if (currentToken.Type == TokenType.StringKeyword)
+                {
+                    ParseFunctionArg(ref args, "string");
+                }
+                if (currentToken != null && (currentToken.Type != TokenType.Parenthesis || currentToken.Value != ")"))
+                {
+                    Logger.Log.LogError("Invalid function argument list.");
+                }
+            }
+            return args;
         }
 
         private List<ASTNode> ParseFunctionDefArguments(VarType retVarType)

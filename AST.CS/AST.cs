@@ -17,7 +17,8 @@ namespace SquashC.Compiler
         Variable,
         FunctionCall,
         FunctionDefinition,
-        FunctionReturn
+        FunctionReturn,
+        FunctionArg
     }
 
     public class ASTNode
@@ -39,10 +40,25 @@ namespace SquashC.Compiler
         public string? FunctionName { get; set; }
         public List<ASTNode>? FunctionBody { get; set; }
         public VarType? FunctionReturnType { get; set; }
-
+        public string ArgumentType { get; set; }
         public ASTNode(ASTNodeType type, string value, ASTNode? left, ASTNode? right)
         {
             Type = type;
+            Value = value;
+            Left = left;
+            Right = right;
+            FunctSymbol = null;
+            FunctionArguments = null;
+            VarSymbol = null;
+            IsFunctionCall = false;
+            IsVariable = false;
+            IsFunctionDefinition = false;
+        }
+
+        public ASTNode(ASTNodeType type, string argumentType, string value, ASTNode? left, ASTNode? right)
+        {
+            Type = type;
+            ArgumentType = argumentType;
             Value = value;
             Left = left;
             Right = right;
