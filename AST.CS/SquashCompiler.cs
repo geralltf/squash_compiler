@@ -303,16 +303,40 @@ namespace SquashC.Compiler
             if (currentToken.Type == TokenType.ReturnKeyword)
             {
                 currentToken = lexer.GetNextToken(); // Skip past return keyword.
-                currentToken = lexer.GetNextToken(); // Skip past whitespace.
 
-                ASTNode left = ParseExpression(0, rootAST);
+                if (currentToken != null && currentToken.Type == TokenType.SemiColon)
+                {
+                    currentToken = lexer.GetNextToken(); // Skip past whitespace.
+                    //ASTNode left = ParseExpression(0, rootAST);
+                    ASTNode? left = null;
 
-                Logger.Log.LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST");
+                    Logger.Log.LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST");
 
-                ASTNode returnNode = new ASTNode(ASTNodeType.FunctionReturn, "", left, null);
+                    //ASTNode? left = null;
+                    ASTNode returnNode = new ASTNode(ASTNodeType.FunctionReturn, "", left, null);
 
-                //TODO: Check for curley brace to find out the end of a function definition
-                return returnNode;
+                    //TODO: Check for curley brace to find out the end of a function definition
+                    return returnNode;
+                }
+                else
+                {
+                    currentToken = lexer.GetNextToken(); // Skip past whitespace.
+                    ASTNode left = ParseExpression(0, rootAST);
+
+                    if (left == null)
+                    {
+                        Logger.Log.LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST with lhs=null");
+                    }
+                    else
+                    {
+                        Logger.Log.LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST");
+                    }
+
+                    ASTNode returnNode = new ASTNode(ASTNodeType.FunctionReturn, "", left, null);
+
+                    //TODO: Check for curley brace to find out the end of a function definition
+                    return returnNode;
+                }
             }
             else if (currentToken.Type == TokenType.VarKeyword)
             {
@@ -750,6 +774,16 @@ namespace SquashC.Compiler
                 || currentToken.Type == TokenType.VarKeyword 
                 || currentToken.Type == TokenType.VoidKeyword 
                 || currentToken.Type == TokenType.DoubleKeyword) )
+            {
+                return ParseExpression(0, rootAST);
+            }
+
+            if(currentToken != null && currentToken.Type == TokenType.SemiColon)
+            {
+                currentToken = lexer.GetNextToken();
+            }
+
+            if (currentToken != null && currentToken.Type == TokenType.ReturnKeyword)
             {
                 return ParseExpression(0, rootAST);
             }
