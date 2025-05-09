@@ -1,9 +1,11 @@
-double tan() {
-	return 0.7 * 9;
+void tan() {
+	//return 0.7 * 9;
+	return;
 }
 double cos() {
+	double a = tan(0.2);
 	//return 0.2 * 3;
-	return 12*8.2;
+	return 12*8.2+a;
 }
 int sin() {
 	//int A = 2;
