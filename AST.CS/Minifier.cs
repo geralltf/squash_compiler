@@ -277,9 +277,11 @@ namespace SquashC.Compiler
                         result += currentChar5;
                         currentPos += 6;
 
-                        result += ' ';
-                        currentPos++;
-
+                        if (currentChar6 == ' ')
+                        {
+                            result += ' ';
+                            currentPos++;
+                        }
                     }
                     else if (currentChar == '(' || currentChar == ')')
                     {
