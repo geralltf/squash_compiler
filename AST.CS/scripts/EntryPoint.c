@@ -9,7 +9,7 @@ double cos() {
 	//double a = tan(0.2);
 	//return 0.2 * 3;
 	//return 12*8.2+a;
-	return (12*8)+32;
+	return (12*8)+32+(3*6)+(4*8)*(2*9);
 }
 int sin() {
 	//int A = 2;
