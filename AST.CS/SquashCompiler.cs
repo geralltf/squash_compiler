@@ -41,6 +41,8 @@ namespace SquashC.Compiler
                 throw new Exception("Unexpected token found. Position:" + lexer.GetPosition().ToString());
             }
 
+            Optimiser.OptimiseNode(ref expression);
+
             //asm.Is_macOS = true;
             //asm.Is_Linux = true;
             asm.Is_Windows = true;
@@ -310,7 +312,7 @@ namespace SquashC.Compiler
                     //ASTNode left = ParseExpression(0, rootAST);
                     ASTNode? left = null;
 
-                    Logger.Log.LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST");
+                    Logger.Log.LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST with left=null");
 
                     //ASTNode? left = null;
                     ASTNode returnNode = new ASTNode(ASTNodeType.FunctionReturn, "", left, null);

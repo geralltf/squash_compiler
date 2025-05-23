@@ -1,11 +1,15 @@
-void tan() {
-	//return 0.7 * 9;
+int tan(){
+	//int i = 13 + 2;
+	//int j = 34 * 3;
+	//int k = i * j;
+	//int f = (2+1)-(3+2)*(5+8)*((6*9)+14)+7;
 	return;
 }
 double cos() {
-	double a = tan(0.2);
+	//double a = tan(0.2);
 	//return 0.2 * 3;
-	return 12*8.2+a;
+	//return 12*8.2+a;
+	return (12*8)+32;
 }
 int sin() {
 	//int A = 2;
