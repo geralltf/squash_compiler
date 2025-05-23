@@ -7,6 +7,10 @@ using System.Threading.Tasks;
 
 namespace SquashC.Compiler
 {
+    /// <summary>
+    /// Applies code optimisations to in memory expressions and statements 
+    /// by compile-time evaluation of constants in many ASTNode's applying collapsing logic to Number nodes.
+    /// </summary>
     public class Optimiser
     {
         public static void ParseNumber(string numberValue, out object val)
