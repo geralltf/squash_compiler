@@ -41,6 +41,8 @@ namespace SquashC.Compiler
                 throw new Exception("Unexpected token found. Position:" + lexer.GetPosition().ToString());
             }
 
+            //asm.GenerateCode(expression);
+
             Optimiser.OptimiseNode(ref expression);
 
             //asm.Is_macOS = true;
@@ -1095,6 +1097,7 @@ namespace SquashC.Compiler
             Logger.Log.LogInformation("ParseExpression(): precedence: '" + precedence.ToString() + "'");
 
             ASTNode leftNode = ParsePrimaryExpression(); // Parse the left operand
+            leftNode.Precedence = precedence;
 
             if (leftNode != null)
             {

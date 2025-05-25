@@ -28,6 +28,8 @@ namespace SquashC.Compiler
         public ASTNode? Left { get; set; }
         public ASTNode? Right { get; set; }
 
+        public int Precedence { get; set; }
+
         public bool IsFunctionCall { get; set; }
         public FunctionSymbol? FunctSymbol { get; set; }
         public List<ASTNode>? FunctionArguments { get; set; }
