@@ -995,7 +995,7 @@ namespace SquashC.Compiler
                 }
                 if (currentToken != null && (currentToken.Type != TokenType.Parenthesis || currentToken.Value != ")"))
                 {
-                    Logger.Log.LogError("Invalid function argument list.");
+                    Logger.Log.LogWarning("ParseFunctionArgs(): Invalid function argument list.");
                 }
             }
             return args;
