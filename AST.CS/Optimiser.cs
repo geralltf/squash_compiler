@@ -16,9 +16,6 @@ namespace SquashC.Compiler
     {
         public static void OptimiseNode(ref ASTNode node)
         {
-            ASTNode left = null;
-            ASTNode right = null;
-
             if (node == null)
             {
                 return;
@@ -30,6 +27,13 @@ namespace SquashC.Compiler
             // TODO: Run optimisers on const correct variables as well as constants
             // in compiler time to optimise all code paths.
 
+            OptimiseFunctionBody(ref node);
+
+            OptimiseBinaryOperator(ref node);
+        }
+
+        private static void OptimiseFunctionBody(ref ASTNode node)
+        {
             if (node.FunctionBody != null && node.FunctionBody.Count > 0)
             {
                 for (int i = 0; i < node.FunctionBody.Count; i++)
@@ -42,6 +46,12 @@ namespace SquashC.Compiler
                     }
                 }
             }
+        }
+
+        private static void OptimiseBinaryOperator(ref ASTNode node)
+        {
+            ASTNode left = null;
+            ASTNode right = null;
 
             string result = string.Empty;
 
@@ -73,7 +83,7 @@ namespace SquashC.Compiler
                     }
                 }
 
-                if(operandLeft != null && operandRight != null)
+                if (operandLeft != null && operandRight != null)
                 {
                     result = ApplyOperator(node, operandLeft, operandRight);
 
