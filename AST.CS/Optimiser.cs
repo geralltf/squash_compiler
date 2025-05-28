@@ -14,14 +14,14 @@ namespace SquashC.Compiler
     /// </summary>
     public class Optimiser
     {
-        public static object? OptimiseNode(ref ASTNode node)
+        public static void OptimiseNode(ref ASTNode node)
         {
             ASTNode left = null;
             ASTNode right = null;
 
             if (node == null)
             {
-                return 0;
+                return;
             }
 
             // Collapse the child nodes into one immediate number value node type
@@ -29,27 +29,6 @@ namespace SquashC.Compiler
 
             // TODO: Run optimisers on const correct variables as well as constants
             // in compiler time to optimise all code paths.
-
-            if (node.Type == ASTNodeType.Number)
-            {
-                return ParseNumber(node);
-            }
-
-            object? operandLeft = null;
-            object? operandRight = null;
-
-            left = node.Left;
-            right = node.Right;
-
-            if (left != null)
-            {
-                operandLeft = OptimiseNode(ref left);
-            }
-
-            if (right != null)
-            {
-                operandRight = OptimiseNode(ref right);
-            }
 
             if (node.FunctionBody != null && node.FunctionBody.Count > 0)
             {
@@ -66,14 +45,41 @@ namespace SquashC.Compiler
 
             string result = string.Empty;
 
-            if (node.Type == ASTNodeType.BIN_OP)
+            left = node.Left;
+            right = node.Right;
+
+            if (node.Type == ASTNodeType.BIN_OP || left != null || right != null)
             {
-                result = ApplyOperator(node, operandLeft, operandRight);
+                object? operandLeft = null;
+                object? operandRight = null;
 
-                CollapseNode(ref node, result);
+                if (left != null)
+                {
+                    OptimiseNode(ref left);
+
+                    if (left.Type == ASTNodeType.Number)
+                    {
+                        operandLeft = ParseNumber(left);
+                    }
+                }
+
+                if (right != null)
+                {
+                    OptimiseNode(ref right);
+
+                    if (right.Type == ASTNodeType.Number)
+                    {
+                        operandRight = ParseNumber(right);
+                    }
+                }
+
+                if(operandLeft != null && operandRight != null)
+                {
+                    result = ApplyOperator(node, operandLeft, operandRight);
+
+                    CollapseNode(ref node, result);
+                }
             }
-
-            return null;
         }
 
         private static void CollapseNode(ref ASTNode node, string result)
