@@ -24,7 +24,7 @@ namespace SquashC.Compiler
     {
         public VarType VariableType { get; set; }
         public string Name { get; private set; }
-        public object Value { get; private set; }
+        public object? Value { get; private set; }
         // Additional properties or methods as needed
 
         public VariableSymbol(VarType type, string name, int value)
@@ -102,7 +102,14 @@ namespace SquashC.Compiler
         }
         public VariableSymbol DefineVariable(VarType type, string name, string value)
         {
-            Logger.Log.LogInformation("SymbolTable.DefineVariable(): " + name + ",type: " + type.ToString() + ",value: " + value.ToString());
+            if(value != null)
+            {
+                Logger.Log.LogInformation("SymbolTable.DefineVariable(): " + name + ",type: " + type.ToString() + ",value: " + value.ToString());
+            }
+            else
+            {
+                Logger.Log.LogInformation("SymbolTable.DefineVariable(): " + name + ",type: " + type.ToString() + ",value: null");
+            }
             VariableSymbol variable = new VariableSymbol(type, name, value);
             variables[name] = variable;
             return variable;

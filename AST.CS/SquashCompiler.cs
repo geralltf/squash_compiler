@@ -685,7 +685,7 @@ namespace SquashC.Compiler
                     // Handle variable
                     if (!symbolTable.VariableHasKey(identifierName))
                     {
-                        symbolTable.DefineVariable(VarType.VarAutomatic, identifierName, 0);
+                        symbolTable.DefineVariable(VarType.VarAutomatic, identifierName, null);
                     }
                     VariableSymbol variableSymbol = symbolTable.LookupVariable(identifierName);
                     ASTNode varNode = new ASTNode(ASTNodeType.Variable, identifierName, variableSymbol);

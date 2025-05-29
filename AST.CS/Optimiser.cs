@@ -14,7 +14,7 @@ namespace SquashC.Compiler
     /// </summary>
     public class Optimiser
     {
-        public static void OptimiseNode(ref ASTNode node)
+        public static void OptimiseNode(ref ASTNode node, bool optimiseConstVariables = true)
         {
             if (node == null)
             {
@@ -29,7 +29,7 @@ namespace SquashC.Compiler
 
             OptimiseFunctionBody(ref node);
 
-            OptimiseBinaryOperator(ref node);
+            OptimiseBinaryOperator(ref node, optimiseConstVariables);
         }
 
         private static void OptimiseFunctionBody(ref ASTNode node)
@@ -48,15 +48,12 @@ namespace SquashC.Compiler
             }
         }
 
-        private static void OptimiseBinaryOperator(ref ASTNode node)
+        private static void OptimiseBinaryOperator(ref ASTNode node, bool optimiseConstVariables = true)
         {
-            ASTNode left = null;
-            ASTNode right = null;
+            ASTNode left = node.Left;
+            ASTNode right = node.Right;
 
             string result = string.Empty;
-
-            left = node.Left;
-            right = node.Right;
 
             if (node.Type == ASTNodeType.BIN_OP || left != null || right != null)
             {
@@ -71,6 +68,19 @@ namespace SquashC.Compiler
                     {
                         operandLeft = ParseNumber(left);
                     }
+                    if(left.Type == ASTNodeType.Variable && optimiseConstVariables)
+                    {
+                        string identifierName = left.Value;
+                        if(left.VarSymbol != null)
+                        {
+                            VariableSymbol variableSymbol = left.VarSymbol;
+
+                            if(variableSymbol.Value != null)// && (int)variableSymbol.Value != 0)
+                            {
+                                operandLeft = variableSymbol.Value;
+                            }
+                        }
+                    }
                 }
 
                 if (right != null)
@@ -80,6 +90,19 @@ namespace SquashC.Compiler
                     if (right.Type == ASTNodeType.Number)
                     {
                         operandRight = ParseNumber(right);
+                    }
+                    if (right.Type == ASTNodeType.Variable && optimiseConstVariables)
+                    {
+                        string identifierName = right.Value;
+                        if (right.VarSymbol != null)
+                        {
+                            VariableSymbol variableSymbol = right.VarSymbol;
+
+                            if (variableSymbol.Value != null)// (int)variableSymbol.Value != 0)
+                            {
+                                operandRight = variableSymbol.Value;
+                            }
+                        }
                     }
                 }
 
