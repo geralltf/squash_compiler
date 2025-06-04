@@ -127,14 +127,21 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="Assembly.c" />
     <ClCompile Include="AST.c" />
+    <ClCompile Include="Dictionary.c" />
     <ClCompile Include="EntryPoint.c" />
+    <ClCompile Include="List.c" />
+    <ClCompile Include="Symbols.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\..\..\Desktop\AST.CPP\ASM.h" />
-    <ClInclude Include="..\..\..\..\Desktop\AST.CPP\Assembly.h" />
-    <ClInclude Include="..\..\..\..\Desktop\AST.CPP\AST.h" />
+    <ClInclude Include="Assembler.h" />
+    <ClInclude Include="AST.h" />
+    <ClInclude Include="Dictionary.h" />
+    <ClInclude Include="Lexer.h" />
+    <ClInclude Include="List.h" />
+    <ClInclude Include="Minifier.h" />
+    <ClInclude Include="Symbols.h" />
+    <ClInclude Include="Token.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
