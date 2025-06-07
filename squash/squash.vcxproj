@@ -132,6 +132,7 @@
     <ClCompile Include="EntryPoint.c" />
     <ClCompile Include="Lexer.c" />
     <ClCompile Include="List.c" />
+    <ClCompile Include="Optimiser.c" />
     <ClCompile Include="Symbols.c" />
   </ItemGroup>
   <ItemGroup>
