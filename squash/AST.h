@@ -22,23 +22,20 @@ enum ASTNodeType
     AST_FunctionArg
 };
 
-//typedef struct _AST_s {
-//    char* varName;
-//    char* operandLeft;
-//    char* operandRight;
-//    enum OperatorType operatorType;
-//    enum OperatorType nextOprType;
-//    struct _AST_s* leftChild;
-//    struct _AST_s* rightChild;
-//    int precedence;
-//    int ID;
-//} AST;
-
+enum ASTNodeValueType
+{
+    AST_VALUE_INT = 4,
+    AST_VALUE_DOUBLE = 3,
+    AST_VALUE_FLOAT = 2,
+    AST_VALUE_STRING = 1,
+    AST_VALUE_UNDEFINED = 0
+};
 
 typedef struct ASTNode
 {
     enum ASTNodeType Type;
     char* Value;
+    enum ASTNodeValueType ValueType;
     struct ASTNode* Left;
     struct ASTNode* Right;
     int Precedence;
@@ -64,9 +61,9 @@ char* ast_tostring(astnode_t* node);
 
 astnode_t* ast_node_new();
 
-void ast_node_init_bt(astnode_t** node, enum ASTNodeType type, char* value, astnode_t* left, astnode_t* right);
-void ast_node_init_bt2(astnode_t** node, enum ASTNodeType type, char* argumentType, char* value, astnode_t* left, astnode_t* right);
+void ast_node_init_bt(astnode_t** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, astnode_t* left, astnode_t* right);
+void ast_node_init_bt2(astnode_t** node, enum ASTNodeType type, char* argumentType, char* value, enum ASTNodeValueType value_type, astnode_t* left, astnode_t* right);
 void ast_node_init_funct(astnode_t** node, enum ASTNodeType type, char* value, FunctionSymbol_t* functionSymbol, list_t* arguments); // List<ASTNode> arguments
-void ast_node_init_var(astnode_t** node, enum ASTNodeType type, char* value, VariableSymbol_t* variableSymbol);
+void ast_node_init_var(astnode_t** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, VariableSymbol_t* variableSymbol);
 
 #endif

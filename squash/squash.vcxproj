@@ -130,6 +130,7 @@
     <ClCompile Include="AST.c" />
     <ClCompile Include="Dictionary.c" />
     <ClCompile Include="EntryPoint.c" />
+    <ClCompile Include="Lexer.c" />
     <ClCompile Include="List.c" />
     <ClCompile Include="Symbols.c" />
   </ItemGroup>
@@ -140,6 +141,7 @@
     <ClInclude Include="Lexer.h" />
     <ClInclude Include="List.h" />
     <ClInclude Include="Minifier.h" />
+    <ClInclude Include="Optimiser.h" />
     <ClInclude Include="Symbols.h" />
     <ClInclude Include="Token.h" />
   </ItemGroup>
