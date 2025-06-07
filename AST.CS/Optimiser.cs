@@ -175,7 +175,7 @@ namespace SquashC.Compiler
             }
             else if (operandLeft is float)
             {
-                double resultLeftFloat = (float)operandLeft;
+                float resultLeftFloat = (float)operandLeft;
                 if (operandRight is int)
                 {
                     int resultRightInt = (int)operandRight;
@@ -298,6 +298,54 @@ namespace SquashC.Compiler
         }
 
         private static double ApplyOperator(ASTNode node, double operandLeft, float operandRight)
+        {
+            double result = 0;
+            switch (node.Value)
+            {
+                case "+":
+                    result = operandLeft + operandRight;
+                    break;
+                case "-":
+                    result = operandLeft - operandRight;
+                    break;
+                case "*":
+                    result = operandLeft * operandRight;
+                    break;
+                case "/":
+                    result = operandLeft / operandRight;
+                    break;
+                default:
+                    Logger.Log.LogError("Optimiser.OptimiseNode(): Invalid operator");
+                    break;
+            }
+            return result;
+        }
+
+        private static float ApplyOperator(ASTNode node, float operandLeft, int operandRight)
+        {
+            float result = 0;
+            switch (node.Value)
+            {
+                case "+":
+                    result = operandLeft + operandRight;
+                    break;
+                case "-":
+                    result = operandLeft - operandRight;
+                    break;
+                case "*":
+                    result = operandLeft * operandRight;
+                    break;
+                case "/":
+                    result = operandLeft / operandRight;
+                    break;
+                default:
+                    Logger.Log.LogError("Optimiser.OptimiseNode(): Invalid operator");
+                    break;
+            }
+            return result;
+        }
+
+        private static double ApplyOperator(ASTNode node, float operandLeft, double operandRight)
         {
             double result = 0;
             switch (node.Value)
