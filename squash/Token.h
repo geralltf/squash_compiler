@@ -26,7 +26,8 @@ enum TokenType
     AST_CurleyBrace,
     AST_SemiColon,
     AST_Whitespace,
-    AST_EOF
+    AST_EOF,
+    AST_UNDEFINED
 };
 
 enum VarType //TODO: Array types and object types
@@ -68,6 +69,10 @@ typedef struct token
 token_t* token_new()
 {
     token_t* token = (token_t*)malloc(sizeof(token_t));
+    token->Position = 0;
+    token->PreToken = NULL;
+    token->Type = AST_UNDEFINED;
+    token->Value = NULL;
     return token;
 }
 
