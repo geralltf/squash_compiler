@@ -36,6 +36,12 @@
     <ClCompile Include="Optimiser.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Assembler.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="sb.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h">
@@ -63,6 +69,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Optimiser.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="sb.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

@@ -1,4 +1,7 @@
 #include "AST.h"
+#include "sb.h"
+
+#include <stdio.h>
 
 //typedef struct Assembly_s 
 //{
@@ -13,7 +16,7 @@
 //AST* Expr(char* inProgramExpression);
 //bool Compile(AST* programAST, ASMTree** programASM);
 
-struct Assembler
+typedef struct Assembler
 {
     /// <summary>
     /// The expression tree output from a specified ExpressionCompiler.
@@ -23,7 +26,7 @@ struct Assembler
     bool Is_macOS;
     bool Is_Linux;
     bool Is_Windows;
-}
+} assembler_t;
 
 /// <summary>
 /// Generates assembly language code given specified AST.
@@ -31,52 +34,55 @@ struct Assembler
 /// <exception cref="Exception">
 /// Underlying Assemble() method can throw exceptions as well as this method.
 /// </exception>
-void GenerateCode(ASTNode* astNode)
+void GenerateCode(assembler_t* assembler, astnode_t* astNode)
 {
     if (astNode != NULL)
     {
-        Logger._log.PrintEndStatistics();
+        //Logger._log.PrintEndStatistics();
 
-        Logger.Log.LogInformation("************* Generating Code for specified Abstract Syntax Tree. '" + astNode.ToString() + "'");
+        //Logger.Log.LogInformation("************* Generating Code for specified Abstract Syntax Tree. '" + astNode.ToString() + "'");
+        StringBuilder* sb = sb_create();
 
-        string outputAssembly = string.Empty;
+        //string outputAssembly = string.Empty;
 
-        if (Is_Linux || Is_Windows || Is_macOS)
+        if (assembler->Is_Linux || assembler->Is_Windows || assembler->Is_macOS)
         {
-            if (Is_macOS)
+            if (assembler->Is_macOS)
             {
-                outputAssembly += "section .text\r\n    global  _main\n";
+                sb_append(sb, "section .text\r\n    global  _main\n");
             }
             else
             {
-                outputAssembly += "section .text\r\n    global  main\n";
+                sb_append(sb, "section .text\r\n    global  main\n");
             }
         }
 
-        outputAssembly += Assemble(astNode);
+        sb_append(sb, Assemble(assembler, astNode));
 
-        Logger._log.PrintEndStatistics();
-        Logger.Log.LogInformation("************* Compiled Assembler Codegen Full Program Dump");
+        //Logger._log.PrintEndStatistics();
+        //Logger.Log.LogInformation("************* Compiled Assembler Codegen Full Program Dump");
 
-        if (Is_Linux)
+        if (assembler->Is_Linux)
         {
-            outputAssembly += ".section .note.GNU-stack,\"\",@progbits\n";
-
+            sb_append(sb, ".section .note.GNU-stack,\"\",@progbits\n");
             //Console.WriteLine(".section .note.GNU-stack,\"\",@progbits");
         }
 
-        if (Is_Windows)
+        if (assembler->Is_Windows)
         {
 
         }
 
-        Console.Write(outputAssembly);
+        // Console.Write(outputAssembly);
+
+        char* outputAssembly = sb_concat(sb);
+        printf("%s", outputAssembly);
     }
     else
     {
-        Logger.Log.LogCritical("astNode must not be null for assembler to continue.");
+        //Logger.Log.LogCritical("astNode must not be null for assembler to continue.");
 
-        Logger._log.PrintEndStatistics();
+        //Logger._log.PrintEndStatistics();
 
     }
 }
@@ -94,257 +100,333 @@ void GenerateCode(ASTNode* astNode)
 /// <exception cref="Exception">
 /// Can throw exceptions related to invalid ASTNodeType types.
 /// </exception>
-string Assemble(ASTNode* node)
+char* Assemble(assembler_t* assembler, astnode_t* node)
 {
     //Console.WriteLine("AST: " + node.ToString());
 
-    StringBuilder sb = new StringBuilder();
+    StringBuilder* sb = sb_create();
 
     if (node != NULL)
     {
-        if (node.Type == ASTNodeType.FunctionReturn)
+        if (node->Type == AST_FunctionReturn)
         {
-            Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionReturn");
+            //Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionReturn");
 
-            sb.Append(Assemble(node.Left));
-            sb.Append(Assemble(node.Right));
+            sb_append(sb, Assemble(assembler, node->Left));
+            sb_append(sb, Assemble(assembler, node->Right));
+            sb_append(sb, "ret");
 
-            sb.AppendLine("ret");
-            Console.WriteLine("ret");
-
-            if (node.FunctionArguments != null)
+            if (node->FunctionArguments != NULL)
             {
-                foreach(ASTNode arg in node.FunctionArguments)
+                list_t* n = node->FunctionArguments;
+                astnode_t* ast_n_arg;
+                while (n != NULL)
                 {
-                    sb.Append(Assemble(arg));
+                    ast_n_arg = (astnode_t*)n->data;
+
+                    if (ast_n_arg != NULL)
+                    {
+                        sb_append(sb, Assemble(assembler, ast_n_arg));
+                    }
+
+                    n = n->next;
                 }
             }
 
             // Function definition has node.IsFunctionDefinition set to true
             // and has node.FunctionBody set to a list of ASTNode typed statements.
-            if (node.IsFunctionDefinition == true
-                && (node.FunctionBody != null && node.FunctionBody.Count > 0))
+            if (node->IsFunctionDefinition == true && (node->FunctionBody != NULL))
             {
-                foreach(ASTNode bodyNode in node.FunctionBody)
+                list_t* n = node->FunctionBody;
+                astnode_t* body_node;
+
+                while (n != NULL)
                 {
-                    if (bodyNode.Type == ASTNodeType.FunctionReturn)
+                    body_node = (astnode_t*)n->data;
+
+                    if (body_node != NULL)
                     {
-                        //Console.WriteLine("return");
+                        if (body_node->Type == AST_FunctionReturn)
+                        {
+                            //Console.WriteLine("return");
+                        }
+
+                        //Logger.Log.LogInformation("Assemble(): -* function body node: " + bodyNode.ToString());
+                        sb_append(sb, Assemble(assembler, body_node));
                     }
-                    Logger.Log.LogInformation("Assemble(): -* function body node: " + bodyNode.ToString());
-                    sb.Append(Assemble(bodyNode));
+
+                    n = n->next;
                 }
                 //Console.WriteLine("ret back");
             }
         }
-        else if (node.Type == ASTNodeType.VariableDefine)
+        else if (node->Type == AST_VariableDefine)
         {
-            Logger.Log.LogInformation("Assemble(): ASTNodeType.VariableDefine");
+            //Logger.Log.LogInformation("Assemble(): ASTNodeType.VariableDefine");
 
             // This assignment must occur last so it must be at the end of the expression evaluation
             // to store the result of the expression in an assigned variable.
             //Console.WriteLine("VariableDefine assembler not yet implemented.");
             //Console.WriteLine($"var {node.VarSymbol.Name}"); //TODO: Assembly equivalent
             //Console.WriteLine($"mov rax, [{node.VarSymbol.Name},{node.VarSymbol.Value}] ;{node.VarSymbol.VariableType.ToString()}");
-            sb.Append(Assemble(node.Left));
+            sb_append(sb, Assemble(assembler, node->Left));
+            sb_append(sb, "mov\trax, \t[");
+            sb_append(sb, node->VarSymbol->Name);
+            sb_append(sb, "]\n");
 
-            sb.AppendLine($"mov\trax, \t[{node.VarSymbol.Name}]");
-            Console.WriteLine($"mov\trax, \t[{node.VarSymbol.Name}]");
-
-            sb.Append(Assemble(node.Right));
+            //Console.WriteLine($"mov\trax, \t[{node.VarSymbol.Name}]");
+            
+            sb_append(sb, Assemble(assembler, node->Right));
             //Console.WriteLine($"{node.VarSymbol.Name}=(LEFT,RIGHT)");
             //Console.WriteLine($"mov rax, [{node.VarSymbol.Name}]");
             //Console.WriteLine("pop rbx");
 
-            if (node.FunctionBody != null)
+            if (node->FunctionBody != NULL)
             {
-                foreach(ASTNode nodeFunctionBodyChild in node.FunctionBody)
+                list_t* n = node->FunctionBody;
+                astnode_t* nodeFunctionBodyChild;
+
+                while (n != NULL)
                 {
-                    sb.Append(Assemble(nodeFunctionBodyChild));
+                    nodeFunctionBodyChild = (astnode_t*)n->data;
+                    sb_append(sb, Assemble(assembler, nodeFunctionBodyChild));
+
+                    n = n->next;
                 }
             }
         }
-        else if (node.Type == ASTNodeType.VariableAssignment)
+        else if (node->Type == AST_VariableAssignment)
         {
-            Logger.Log.LogInformation("Assemble(): ASTNodeType.VariableAssignment");
+            //Logger.Log.LogInformation("Assemble(): ASTNodeType.VariableAssignment");
 
             //Console.WriteLine(node.Right.Value + node.Value +  " " + node.Left.Left.Value 
             //    + " " + node.Left.Value + " " + node.Left.Right.Value);
-            sb.Append(Assemble(node.Left));
-            sb.Append(Assemble(node.Right));
+            sb_append(sb, Assemble(assembler, node->Left));
+            sb_append(sb, Assemble(assembler, node->Right));
             //Console.WriteLine("EO Var assignment");
         }
-        else if (node.Type == ASTNodeType.Number)
+        else if (node->Type == AST_Number)
         {
-            Logger.Log.LogInformation("Assemble(): ASTNodeType.Number");
+            //Logger.Log.LogInformation("Assemble(): ASTNodeType.Number");
 
             // Load the number value into a register
-            sb.AppendLine($"mov\trax,\t{node.Value}");
-            Console.WriteLine($"mov\trax,\t{node.Value}");
+            sb_append(sb, "mov\trax, \t");
+            sb_append(sb, node->Value);
+            sb_append(sb, "\n");
+
+            //Console.WriteLine($"mov\trax,\t{node.Value}");
         }
-        else if (node.Type == ASTNodeType.Variable)
+        else if (node->Type == AST_Variable)
         {
-            Logger.Log.LogInformation("Assemble(): ASTNodeType.Variable");
+            //Logger.Log.LogInformation("Assemble(): ASTNodeType.Variable");
 
             // Load the variable value into a register
-            sb.AppendLine($"mov\trax,\t[{node.VarSymbol.Name}]");
-            Console.WriteLine($"mov\trax,\t[{node.VarSymbol.Name}]");
+            sb_append(sb, "mov\trax, \t[");
+            sb_append(sb, node->VarSymbol->Name);
+            sb_append(sb, "]\n");
+
+            //Console.WriteLine($"mov\trax,\t[{node.VarSymbol.Name}]");
             //Console.WriteLine($"mov [{node.VarSymbol.Name}], rax");
 
-            sb.Append(Assemble(node.Left));
-            sb.Append(Assemble(node.Right));
+            sb_append(sb, Assemble(assembler, node->Left));
+            sb_append(sb, Assemble(assembler, node->Right));
         }
-        else if (node.Type == ASTNodeType.FunctionCall && node.FunctionArguments != null)
+        else if (node->Type == AST_FunctionCall && node->FunctionArguments != NULL)
         {
-            Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionCall");
+            //Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionCall");
 
             // Generate code for function call arguments
-            foreach(ASTNode arg in node.FunctionArguments)
+            list_t* n = node->FunctionArguments;
+            astnode_t* arg;
+
+            while (n != NULL)
             {
-                sb.Append(Assemble(arg));
+                arg = (astnode_t*)n->data;
+                sb_append(sb, Assemble(assembler, arg));
+
+                n = n->next;
             }
 
             // Call the function
-            if (Is_macOS)
+            if (assembler->Is_macOS)
             {
-                sb.AppendLine($"call\t_{node.FunctSymbol.Name}");
-                Console.WriteLine($"call\t_{node.FunctSymbol.Name}");
+                sb_append(sb, "call\t_");
+                sb_append(sb, node->FunctSymbol->Name);
+                sb_append(sb, "\n");
+                //Console.WriteLine($"call\t_{node.FunctSymbol.Name}");
             }
             else
             {
-                sb.AppendLine($"call\t{node.FunctSymbol.Name}");
-                Console.WriteLine($"call\t{node.FunctSymbol.Name}");
+                sb_append(sb, "call\t");
+                sb_append(sb, node->FunctSymbol->Name);
+                sb_append(sb, "\n");
+                //Console.WriteLine($"call\t{node.FunctSymbol.Name}");
             }
         }
-        else if (node.Type == ASTNodeType.BIN_OP)
+        else if (node->Type == AST_BIN_OP)
         {
-            Logger.Log.LogInformation("Assemble(): ASTNodeType.BIN_OP");
+            //Logger.Log.LogInformation("Assemble(): ASTNodeType.BIN_OP");
 
             // Generate code for left and right operands
-            sb.Append(Assemble(node.Left));
+            sb_append(sb, Assemble(assembler, node->Left));
 
-            sb.AppendLine("push\trax");
-            Console.WriteLine("push\trax"); // Save value on the stack
+            sb_append(sb, "push\trax\n");
+            //Console.WriteLine("push\trax"); // Save value on the stack
 
-            sb.Append(Assemble(node.Right));
+            sb_append(sb, Assemble(assembler, node->Right));
 
             // Perform the operation (addition or subtraction in this example)
-            sb.AppendLine("pop\trbx");
-            Console.WriteLine("pop\trbx"); // Retrieve left operand from the stack
-            if (node.Value == "+")
+            sb_append(sb, "pop\trbx\n");
+            //Console.WriteLine("pop\trbx"); // Retrieve left operand from the stack
+            if (node->Value == "+")
             {
-                sb.AppendLine("add\trax,\trbx");
-                Console.WriteLine("add\trax,\trbx");
+                sb_append(sb, "add\trax,\trbx\n");
+                //Console.WriteLine("add\trax,\trbx");
             }
-            else if (node.Value == "-")
+            else if (node->Value == "-")
             {
-                sb.AppendLine("sub\trax,\trbx");
-                Console.WriteLine("sub\trax,\trbx");
+                sb_append(sb, "sub\trax,\trbx\n");
+                //Console.WriteLine("sub\trax,\trbx");
             }
-            else if (node.Value == "*")
+            else if (node->Value == "*")
             {
-                sb.AppendLine("mul\trax,\trbx");
-                Console.WriteLine("mul\trax,\trbx");
+                sb_append(sb, "mul\trax,\trbx\n");
+                //Console.WriteLine("mul\trax,\trbx");
             }
-            else if (node.Value == "/")
+            else if (node->Value == "/")
             {
-                sb.AppendLine("div\trax,\trbx");
+                sb_append(sb, "div\trax,\trbx\n");
                 //TODO: idiv for signed division
-                Console.WriteLine("div\trax,\trbx"); // TODO: confirm if this is the correct divide operator
+                //Console.WriteLine("div\trax,\trbx"); // TODO: confirm if this is the correct divide operator
             }
         }
-        else if (node.Type == ASTNodeType.UNARY_OP)
+        else if (node->Type == AST_UNARY_OP)
         {
-            Logger.Log.LogInformation("Assemble(): ASTNodeType.UNARY_OP");
+            //Logger.Log.LogInformation("Assemble(): ASTNodeType.UNARY_OP");
 
             //Console.WriteLine("UNARY_OP assembler not yet implemented.");
-            sb.Append(Assemble(node.Left));
-            sb.Append(Assemble(node.Right));
+            sb_append(sb, Assemble(assembler, node->Left));
+            sb_append(sb, Assemble(assembler, node->Right));
         }
-        else if (node.Type == ASTNodeType.FunctionArg)
+        else if (node->Type == AST_FunctionArg)
         {
-            Console.WriteLine("function arg: " + node.ArgumentType + " " + node.Value);
+            //Console.WriteLine("function arg: " + node.ArgumentType + " " + node.Value);
+            sb_append(sb, Assemble(assembler, node->Left));
+            sb_append(sb, Assemble(assembler, node->Right));
 
-            sb.Append(Assemble(node.Left));
-            sb.Append(Assemble(node.Right));
-
-            if (node.FunctionArguments != null)
+            if (node->FunctionArguments != NULL)
             {
-                foreach(ASTNode arg in node.FunctionArguments)
+                list_t* n = node->FunctionArguments;
+                astnode_t* ast_funct_arg;
+                while (n != NULL)
                 {
-                    sb.Append(Assemble(arg));
+                    ast_funct_arg = (astnode_t*)n->data;
+
+                    if (ast_funct_arg != NULL)
+                    {
+                        sb_append(sb, Assemble(assembler, ast_funct_arg));
+                    }
+
+                    n = n->next;
                 }
             }
 
             // Function definition has node.IsFunctionDefinition set to true
             // and has node.FunctionBody set to a list of ASTNode typed statements.
-            if (node.IsFunctionDefinition == true
-                && (node.FunctionBody != null && node.FunctionBody.Count > 0))
+            if (node->IsFunctionDefinition == true && (node->FunctionBody != NULL))
             {
-                foreach(ASTNode bodyNode in node.FunctionBody)
+                list_t* n = node->FunctionBody;
+                astnode_t* body_node;
+
+                while (n != NULL)
                 {
-                    if (bodyNode.Type == ASTNodeType.FunctionReturn)
+                    body_node = (astnode_t*)n->data;
+                    if (body_node != NULL)
                     {
-                        //Console.WriteLine("return");
+                        if (body_node->Type == AST_FunctionReturn)
+                        {
+                            //Console.WriteLine("return");
+                        }
+                        //Logger.Log.LogInformation("Assemble(): -* function body node: " + bodyNode.ToString());
+                        sb_append(sb, Assemble(assembler, body_node));
                     }
-                    Logger.Log.LogInformation("Assemble(): -* function body node: " + bodyNode.ToString());
-                    sb.Append(Assemble(bodyNode));
+
+                    n = n->next;
                 }
                 //Console.WriteLine("ret back");
             }
         }
-        else if (node.Type == ASTNodeType.FunctionDefinition)
+        else if (node->Type == AST_FunctionDefinition)
         {
-            Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionDefinition");
+            //Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionDefinition");
 
-            Console.WriteLine("function definition: " + node.Value + "()");
-            if (Is_macOS)
+            //Console.WriteLine("function definition: " + node.Value + "()");
+            if (assembler->Is_macOS)
             {
-                sb.Append("_" + node.Value + ": \n");
-                Console.Write("_" + node.Value + ": \n");
+                sb_append(sb, "_");
+                sb_append(sb, node->Value);
+                sb_append(sb, "\n");
+                //Console.Write("_" + node.Value + ": \n");
             }
             else
             {
-                sb.Append(node.Value + ": \n");
-                Console.Write(node.Value + ": \n");
+                sb_append(sb, node->Value);
+                sb_append(sb, "\n");
+                //Console.Write(node.Value + ": \n");
             }
 
-            if (node.FunctionArguments != null)
+            if (node->FunctionArguments != NULL)
             {
-                foreach(ASTNode arg in node.FunctionArguments)
+                list_t* n = node->FunctionArguments;
+                astnode_t* ast_funct_arg;
+                while (n != NULL)
                 {
-                    sb.Append(Assemble(arg));
+                    ast_funct_arg = (astnode_t*)n->data;
+
+                    if (ast_funct_arg != NULL)
+                    {
+                        sb_append(sb, Assemble(assembler, ast_funct_arg));
+                    }
+
+                    n = n->next;
                 }
             }
 
             // Function definition has node.IsFunctionDefinition set to true
             // and has node.FunctionBody set to a list of ASTNode typed statements.
-            if (node.IsFunctionDefinition == true
-                && (node.FunctionBody != null && node.FunctionBody.Count > 0))
+            if (node->IsFunctionDefinition == true && (node->FunctionBody != NULL))
             {
-                foreach(ASTNode bodyNode in node.FunctionBody)
+                list_t* n = node->FunctionBody;
+                astnode_t* body_node;
+
+                while (n != NULL)
                 {
-                    if (bodyNode.Type == ASTNodeType.FunctionReturn)
+                    body_node = (astnode_t*)n->data;
+                    if (body_node != NULL)
                     {
-                        //Console.WriteLine("return");
+                        if (body_node->Type == AST_FunctionReturn)
+                        {
+                            //Console.WriteLine("return");
+                        }
+                        //Logger.Log.LogInformation("Assemble(): -* function body node: " + bodyNode.ToString());
+                        sb_append(sb, Assemble(assembler, body_node));
                     }
-                    Logger.Log.LogInformation("Assemble(): -* function body node: " + bodyNode.ToString());
-                    sb.Append(Assemble(bodyNode));
+
+                    n = n->next;
                 }
                 //Console.WriteLine("ret back");
             }
             else
             {
-                Logger.Log.LogWarning("No function definition to enumerate maybe just a standard function return.");
+                //Logger.Log.LogWarning("No function definition to enumerate maybe just a standard function return.");
             }
         }
         else
         {
-            Logger.Log.LogError("Invalid ASTNode type sent to assembler.");
+            //Logger.Log.LogError("Invalid ASTNode type sent to assembler.");
 
-            throw new Exception("Invalid ASTNode type sent to assembler.");
+            //throw new Exception("Invalid ASTNode type sent to assembler.");
         }
     }
-
-    return sb.ToString();
+    return sb_concat(sb);
 }
