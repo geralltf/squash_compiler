@@ -1,3 +1,6 @@
+#ifndef OPTIMISER_H
+#define OPTIMISER_H
+
 #include "AST.h"
 #include "Token.h"
 
@@ -22,3 +25,5 @@ double ApplyOperatorDF(astnode_t* node, double operandLeft, float operandRight);
 float ApplyOperatorFI(astnode_t* node, float operandLeft, int operandRight);
 float ApplyOperatorFD(astnode_t* node, float operandLeft, double operandRight);
 float ApplyOperatorFF(astnode_t* node, float operandLeft, float operandRight);
+
+#endif

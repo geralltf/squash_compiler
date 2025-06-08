@@ -1,3 +1,6 @@
+#ifndef ASSEMBLER_H
+#define ASSEMBLER_H
+
 #include "AST.h"
 #include "sb.h"
 
@@ -50,3 +53,5 @@ void GenerateCode(assembler_t* assembler, astnode_t* astNode);
 /// Can throw exceptions related to invalid ASTNodeType types.
 /// </exception>
 char* Assemble(assembler_t* assembler, astnode_t* node);
+
+#endif

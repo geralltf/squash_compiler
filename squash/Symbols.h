@@ -1,3 +1,6 @@
+#ifndef SYMBOLS_H
+#define SYMBOLS_H
+
 #include "List.h"
 #include "Dictionary.h"
 #include "Token.h"
@@ -66,3 +69,5 @@ long SymbolTable_GetLong(SymbolTable_t* symbolTable, char* name);
 char* SymbolTable_GetString(SymbolTable_t* symbolTable, char* name);
 float SymbolTable_GetFloat(SymbolTable_t* symbolTable, char* name);
 double SymbolTable_GetDouble(SymbolTable_t* symbolTable, char* name);
+
+#endif

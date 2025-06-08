@@ -1,3 +1,6 @@
+#ifndef LEXER_H
+#define LEXER_H
+
 #include "List.h"
 #include "Token.h"
 #include "Minifier.h"
@@ -37,3 +40,5 @@ token_t* GetNextToken(lexer_t* lexer);
 char* ParseNumber(lexer_t* lexer);
 char* ParseIdentifier(lexer_t* lexer);
 char* ParseWhitespace(lexer_t* lexer);
+
+#endif
