@@ -104,6 +104,8 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -131,6 +133,7 @@
     <ClCompile Include="AST.c" />
     <ClCompile Include="Dictionary.c" />
     <ClCompile Include="EntryPoint.c" />
+    <ClCompile Include="FileIO.c" />
     <ClCompile Include="Lexer.c" />
     <ClCompile Include="List.c" />
     <ClCompile Include="Minifier.c" />
@@ -138,11 +141,13 @@
     <ClCompile Include="sb.c" />
     <ClCompile Include="SquashCompiler.c" />
     <ClCompile Include="Symbols.c" />
+    <ClCompile Include="Token.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h" />
     <ClInclude Include="AST.h" />
     <ClInclude Include="Dictionary.h" />
+    <ClInclude Include="FileIO.h" />
     <ClInclude Include="Lexer.h" />
     <ClInclude Include="List.h" />
     <ClInclude Include="Minifier.h" />
