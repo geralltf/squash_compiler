@@ -31,6 +31,8 @@ typedef struct Assembler
     bool Is_Windows;
 } assembler_t;
 
+assembler_t* assembler_new();
+
 /// <summary>
 /// Generates assembly language code given specified AST.
 /// </summary>
