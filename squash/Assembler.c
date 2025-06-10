@@ -5,6 +5,12 @@
 
 #include <stdio.h>
 
+assembler_t* assembler_new()
+{
+    assembler_t* assembler = (assembler_t*)malloc(sizeof(assembler_t));
+    return assembler;
+}
+
 /// <summary>
 /// Generates assembly language code given specified AST.
 /// </summary>
