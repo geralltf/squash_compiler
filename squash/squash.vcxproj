@@ -133,8 +133,10 @@
     <ClCompile Include="EntryPoint.c" />
     <ClCompile Include="Lexer.c" />
     <ClCompile Include="List.c" />
+    <ClCompile Include="Minifier.c" />
     <ClCompile Include="Optimiser.c" />
     <ClCompile Include="sb.c" />
+    <ClCompile Include="SquashCompiler.c" />
     <ClCompile Include="Symbols.c" />
   </ItemGroup>
   <ItemGroup>
@@ -146,6 +148,7 @@
     <ClInclude Include="Minifier.h" />
     <ClInclude Include="Optimiser.h" />
     <ClInclude Include="sb.h" />
+    <ClInclude Include="SquashCompiler.h" />
     <ClInclude Include="Symbols.h" />
     <ClInclude Include="Token.h" />
   </ItemGroup>

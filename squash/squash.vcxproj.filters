@@ -42,6 +42,12 @@
     <ClCompile Include="sb.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="SquashCompiler.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Minifier.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h">
@@ -72,6 +78,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="sb.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SquashCompiler.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
