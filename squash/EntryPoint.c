@@ -1,18 +1,24 @@
 ﻿#include "Assembler.h"
 #include "SquashCompiler.h"
+#include "FileIO.h"
 
 #include <stdio.h>
 
 int main(void)
 {
+    void* buffer;
+    size_t length;
+    squash_compiler_t* squash_compiler;
+
     printf("Wello, Horld!\n");
-    
-    // "int a = 2 / 8 * (90 + 20) + 3+1 - 4*8 +7*3 + 12;"
 
-    //AST* computeResult = Expr("int a = 2 / 8 * (90 + 20) + 3+1 - 4*8 +7*3 + 12;");
-    //PrintAST(computeResult);
+    if (FileReadString("scripts\\EntryPoint.c", &buffer, &length) && buffer)
+    {
+        squash_compiler = squash_compiler_new();
+        squash_compiler_init(squash_compiler, (char*)buffer, length);
 
-    //free(computeResult);
+        CompileExpression(squash_compiler);
+    }
 
     return EXIT_SUCCESS;
 }

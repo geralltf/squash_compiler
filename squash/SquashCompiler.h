@@ -6,7 +6,10 @@
 #include "Symbols.h"
 #include "AST.h"
 #include "Assembler.h"
-#include <cerrno>
+
+#include <errno.h>
+#include <math.h>
+//#include <cerrno>
 
 typedef struct SquashCompiler
 {
