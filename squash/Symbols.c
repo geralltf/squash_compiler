@@ -158,9 +158,15 @@ int SymbolTable_Function_CompararatorFunc(DictionaryPair* left, DictionaryPair* 
     return compareResult;
 }
 
+SymbolTable_t* SymbolTable_new()
+{
+    SymbolTable_t* symbols = (SymbolTable_t*)malloc(sizeof(SymbolTable_t));
+    return symbols;
+}
+
 void SymbolTable_init(SymbolTable_t** symbols)
 {
-    SymbolTable_t* symbolTable = (SymbolTable_t*)malloc(sizeof(SymbolTable_t));
+    SymbolTable_t* symbolTable = *symbols; // SymbolTable_new();
 
     symbolTable->keywordDict = DictionaryNew(SymbolTable_RevervedKeyword_CompararatorFunc);
 
@@ -203,7 +209,7 @@ void SymbolTable_init(SymbolTable_t** symbols)
     //functions = new Dictionary<string, FunctionSymbol>();
 }
 
-VariableSymbol_t* SymbolTable_DefineVariable(SymbolTable_t* symbolTable, enum VarType type, char* name, int value)
+VariableSymbol_t* SymbolTable_DefineVariableI(SymbolTable_t* symbolTable, enum VarType type, char* name, int value)
 {
     //Logger.Log.LogInformation("SymbolTable.DefineVariable(): " + name + ",type: " + type.ToString() + ",value: " + value.ToString());
 
@@ -224,7 +230,7 @@ VariableSymbol_t* SymbolTable_DefineVariable(SymbolTable_t* symbolTable, enum Va
     return variable;
 }
 
-VariableSymbol_t* SymbolTable_DefineVariable(SymbolTable_t* symbolTable, enum VarType type, char* name, double value)
+VariableSymbol_t* SymbolTable_DefineVariableD(SymbolTable_t* symbolTable, enum VarType type, char* name, double value)
 {
     //Logger.Log.LogInformation("SymbolTable.DefineVariable(): " + name + ",type: " + type.ToString() + ",value: " + value.ToString());
 
@@ -244,7 +250,7 @@ VariableSymbol_t* SymbolTable_DefineVariable(SymbolTable_t* symbolTable, enum Va
     return variable;
 }
 
-VariableSymbol_t* SymbolTable_DefineVariable(SymbolTable_t* symbolTable, enum VarType type, char* name, long value)
+VariableSymbol_t* SymbolTable_DefineVariableL(SymbolTable_t* symbolTable, enum VarType type, char* name, long value)
 {
     //Logger.Log.LogInformation("SymbolTable.DefineVariable(): " + name + ",type: " + type.ToString() + ",value: " + value.ToString());
 
@@ -264,7 +270,7 @@ VariableSymbol_t* SymbolTable_DefineVariable(SymbolTable_t* symbolTable, enum Va
     return variable;
 }
 
-VariableSymbol_t* SymbolTable_DefineVariable(SymbolTable_t* symbolTable, enum VarType type, char* name, char* value)
+VariableSymbol_t* SymbolTable_DefineVariableC(SymbolTable_t* symbolTable, enum VarType type, char* name, char* value)
 {
     //if (value != NULL)
     //{

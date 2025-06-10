@@ -50,12 +50,13 @@ int SymbolTable_RevervedKeyword_CompararatorFunc(DictionaryPair* left, Dictionar
 int SymbolTable_Variable_CompararatorFunc(DictionaryPair* left, DictionaryPair* right);
 int SymbolTable_Function_CompararatorFunc(DictionaryPair* left, DictionaryPair* right);
 
+SymbolTable_t* SymbolTable_new();
 void SymbolTable_init(SymbolTable_t** symbols);
 
-VariableSymbol_t* SymbolTable_DefineVariable(SymbolTable_t* symbolTable, enum VarType type, char* name, int value);
-VariableSymbol_t* SymbolTable_DefineVariable(SymbolTable_t* symbolTable, enum VarType type, char* name, double value);
-VariableSymbol_t* SymbolTable_DefineVariable(SymbolTable_t* symbolTable, enum VarType type, char* name, long value);
-VariableSymbol_t* SymbolTable_DefineVariable(SymbolTable_t* symbolTable, enum VarType type, char* name, char* value);
+VariableSymbol_t* SymbolTable_DefineVariableI(SymbolTable_t* symbolTable, enum VarType type, char* name, int value);
+VariableSymbol_t* SymbolTable_DefineVariableD(SymbolTable_t* symbolTable, enum VarType type, char* name, double value);
+VariableSymbol_t* SymbolTable_DefineVariableL(SymbolTable_t* symbolTable, enum VarType type, char* name, long value);
+VariableSymbol_t* SymbolTable_DefineVariableC(SymbolTable_t* symbolTable, enum VarType type, char* name, char* value);
 FunctionSymbol_t* SymbolTable_DefineFunction(SymbolTable_t* symbolTable, char* name, list_t* parameters); // List<string>
 
 bool SymbolTable_FunctionHasKey(SymbolTable_t* symbolTable, char* name);
