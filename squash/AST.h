@@ -41,12 +41,12 @@ typedef struct ASTNode
     int Precedence;
 
     bool IsFunctionCall;
-    FunctionSymbol_t* FunctSymbol;
+    struct FunctionSymbol* FunctSymbol;
     list_t* FunctionArguments; // List<ASTNode> FunctionArguments
 
     bool IsVariable;
     enum VarType VariableType;
-    VariableSymbol_t* VarSymbol;
+    struct VariableSymbol* VarSymbol;
 
     bool IsFunctionDefinition;
     char* FunctionName;
@@ -63,7 +63,7 @@ astnode_t* ast_node_new();
 
 void ast_node_init_bt(astnode_t** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, astnode_t* left, astnode_t* right);
 void ast_node_init_bt2(astnode_t** node, enum ASTNodeType type, char* argumentType, char* value, enum ASTNodeValueType value_type, astnode_t* left, astnode_t* right);
-void ast_node_init_funct(astnode_t** node, enum ASTNodeType type, char* value, FunctionSymbol_t* functionSymbol, list_t* arguments); // List<ASTNode> arguments
-void ast_node_init_var(astnode_t** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, VariableSymbol_t* variableSymbol);
+void ast_node_init_funct(astnode_t** node, enum ASTNodeType type, char* value, struct FunctionSymbol* functionSymbol, list_t* arguments); // List<ASTNode> arguments
+void ast_node_init_var(astnode_t** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, struct VariableSymbol* variableSymbol);
 
 #endif

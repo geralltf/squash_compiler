@@ -278,7 +278,7 @@ void ast_node_init_bt2(astnode_t** node, enum ASTNodeType type, char* argumentTy
     *node = n;
 }
 
-void ast_node_init_funct(astnode_t** node, enum ASTNodeType type, char* value, FunctionSymbol_t* functionSymbol, list_t* arguments) // List<ASTNode> arguments
+void ast_node_init_funct(astnode_t** node, enum ASTNodeType type, char* value, struct FunctionSymbol* functionSymbol, list_t* arguments) // List<ASTNode> arguments
 {
     astnode_t* n = ast_node_new();
 
@@ -296,7 +296,7 @@ void ast_node_init_funct(astnode_t** node, enum ASTNodeType type, char* value, F
     *node = n;
 }
 
-void ast_node_init_var(astnode_t** node, enum ASTNodeType type, char* value, VariableSymbol_t* variableSymbol)
+void ast_node_init_var(astnode_t** node, enum ASTNodeType type, char* value, struct VariableSymbol* variableSymbol)
 {
     astnode_t* n = ast_node_new();
 
