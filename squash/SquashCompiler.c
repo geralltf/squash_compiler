@@ -9,7 +9,7 @@ squash_compiler_t* squash_compiler_new()
 void squash_compiler_init(squash_compiler_t* squash_compiler, char* input, int inputLength)
 {
     //Logger.Log.LogInformation("SquashCompiler(): ctor");
-    list_t* tokens = token_new();
+    list_t* tokens = list_new();
 
     Minifier_t* minifier = Minifier_new();
     Minifier_init(minifier);
@@ -177,7 +177,7 @@ astnode_t* parseAssignmentOperator(squash_compiler_t* squash_compiler, enum VarT
                     squash_compiler->currentToken = SkipToToken(squash_compiler->lexer, AST_Number);
                     int varValueI = atoi(squash_compiler->currentToken->Value);
                     //int varValueI = int.Parse(squash_compiler->currentToken->Value);
-                    varDefine = SymbolTable_DefineVariable(squash_compiler->symbolTable, AST_Int, identifierName, varValueI);
+                    varDefine = SymbolTable_DefineVariableI(squash_compiler->symbolTable, AST_Int, identifierName, varValueI);
                     break;
                     //case AST_Long:
                     //case AST_Int64:
@@ -189,11 +189,11 @@ astnode_t* parseAssignmentOperator(squash_compiler_t* squash_compiler, enum VarT
                 case AST_Double:
                     squash_compiler->currentToken = SkipToToken(squash_compiler->lexer, AST_Number);
                     double varValueD = atof(squash_compiler->currentToken->Value);
-                    varDefine = SymbolTable_DefineVariable(squash_compiler->symbolTable, AST_Double, identifierName, varValueD);
+                    varDefine = SymbolTable_DefineVariableD(squash_compiler->symbolTable, AST_Double, identifierName, varValueD);
                     break;
                 case AST_String:
                     squash_compiler->currentToken = SkipToToken(squash_compiler->lexer, AST_StringLiteral);
-                    varDefine = SymbolTable_DefineVariable(squash_compiler->symbolTable, AST_StringLiteral, identifierName, squash_compiler->currentToken->Value);
+                    varDefine = SymbolTable_DefineVariableC(squash_compiler->symbolTable, AST_StringLiteral, identifierName, squash_compiler->currentToken->Value);
                     break;
                 case AST_Void:
                     varDefine = NULL;
@@ -212,7 +212,7 @@ astnode_t* parseAssignmentOperator(squash_compiler_t* squash_compiler, enum VarT
 
                 if (squash_compiler->currentToken == NULL)
                 {
-                    SetPosition(squash_compiler->lexer, savedPosition2);
+                    lexer_setposition(squash_compiler->lexer, savedPosition2);
 
                     squash_compiler->currentToken = SkipToToken(squash_compiler->lexer, AST_StringLiteral);
 
