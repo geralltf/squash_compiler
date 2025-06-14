@@ -502,13 +502,13 @@ char* MinifyCode(Minifier_t* minifier, char* input, int inputLength, list_t* tok
 	return result;
 }
 
-void Advance(lexer_t* lexer, Minifier_t* minifier)
+void Advance(struct Lexer* lexer, Minifier_t* minifier)
 {
 	minifier->currentPos++;
 	UpdateChar(lexer, minifier);
 }
 
-void UpdateChar(lexer_t* lexer, Minifier_t* minifier)
+void UpdateChar(struct Lexer* lexer, Minifier_t* minifier)
 {
 	if (minifier->currentPos < lexer->inputLength)
 	{

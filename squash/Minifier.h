@@ -99,8 +99,8 @@ void Minifier_init(Minifier_t* minifier);
 /// Strips out single line comments and multi line comments.
 /// </summary>
 char* MinifyCode(Minifier_t* minifier, char* input, int inputLength, list_t* tokens, int* newInputLength); // List<PreToken>
-void Advance(lexer_t* lexer, Minifier_t* minifier);
-void UpdateChar(lexer_t* lexer, Minifier_t* minifier);
+void Advance(struct Lexer* lexer, Minifier_t* minifier);
+void UpdateChar(struct Lexer* lexer, Minifier_t* minifier);
 
 //private static string ParseNumber(ref string input)
 //{
