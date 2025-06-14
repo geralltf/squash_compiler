@@ -185,15 +185,17 @@ bool DictionaryInsertNode(struct Dictionary* dictionary,
 		newNode->pair->parentNode = newNode;
 		return true;
 	}
-	
+	struct DictionaryNode* node;
 	int compareResult = dictionary->compareFunc(newNode->pair, (*treeNode)->pair);
 	if (compareResult < 0)
 	{
-		DictionaryInsertNode(dictionary, (*treeNode)->right, newNode, nodeOut);
+		node = (*treeNode)->right;
+		DictionaryInsertNode(dictionary, &node, newNode, nodeOut);
 	}
 	else if (compareResult > 0)
 	{
-		DictionaryInsertNode(dictionary, (*treeNode)->left, newNode, nodeOut);
+		node = (*treeNode)->left;
+		DictionaryInsertNode(dictionary, &node, newNode, nodeOut);
 	}
 	else
 	{
