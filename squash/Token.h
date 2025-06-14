@@ -5,8 +5,8 @@
 
 enum TokenType
 {
-    AST_Number,
-    AST_Variable,
+    AST_NumberEntry,
+    AST_VariableEntry,
     AST_Function,
     AST_Operator,
     AST_Parenthesis,

@@ -7,7 +7,7 @@
 
 typedef struct Lexer
 {
-    Minifier_t* minifier;
+    struct Minifier* minifier;
     char* input;
     int inputLength;
 
@@ -15,7 +15,7 @@ typedef struct Lexer
     int preLexerLength;
 
     int currentPos;
-    PreToken_t* preToken;
+    struct PreToken* preToken;
     char currentChar;
     char currentChar1;
     char currentChar2;
@@ -29,14 +29,14 @@ typedef struct Lexer
 } lexer_t;
 
 
-lexer_t* lexer_new(Minifier_t* minifier);
+lexer_t* lexer_new(struct Minifier* minifier);
 void lexer_init(lexer_t* lexer, char* input, int inputLength, list_t* preTokens); // List<PreToken>
 void lexer_advance(lexer_t* lexer);
 int lexer_getposition(lexer_t* lexer);
 void lexer_setposition(lexer_t* lexer, int newPosition);
-token_t* SkipToToken(lexer_t* lexer, enum TokenType tokenType);
+struct token* SkipToToken(lexer_t* lexer, enum TokenType tokenType);
 void lexer_predictiveLookaheads(lexer_t* lexer);
-token_t* GetNextToken(lexer_t* lexer);
+struct token* GetNextToken(lexer_t* lexer);
 char* ParseNumber(lexer_t* lexer);
 char* ParseIdentifier(lexer_t* lexer);
 char* ParseWhitespace(lexer_t* lexer);

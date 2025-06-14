@@ -7,15 +7,6 @@
 #include "AST.h"
 #include <stdio.h>
 
-enum VarSymbolType {
-    VAR_Long = 5,
-    VAR_Char = 4,
-    VAR_Int = 3,
-    VAR_Double = 2,
-    VAR_Float = 1,
-    VAR_Undefined = 0
-};
-
 typedef struct FunctionSymbol
 {
     char* Name;
@@ -32,9 +23,9 @@ typedef struct VariableSymbol
 } VariableSymbol_t;
 
 FunctionSymbol_t* FunctionSymbol_init(FunctionSymbol_t** symbol, char* name, list_t* parameters);
-VariableSymbol_t* VariableSymbol_init(VariableSymbol_t** symbol, enum VarType type, char* name, int value);
-VariableSymbol_t* VariableSymbol_init(VariableSymbol_t** symbol, enum VarType type, char* name, double value);
-VariableSymbol_t* VariableSymbol_init(VariableSymbol_t** symbol, enum VarType type, char* name, char* value);
+VariableSymbol_t* VariableSymbol_initI(VariableSymbol_t** symbol, enum VarType type, char* name, int value);
+VariableSymbol_t* VariableSymbol_initD(VariableSymbol_t** symbol, enum VarType type, char* name, double value);
+VariableSymbol_t* VariableSymbol_initC(VariableSymbol_t** symbol, enum VarType type, char* name, char* value);
 int VariableSymbol_ParseInt(VariableSymbol_t* symbol);
 char* VariableSymbol_ParseString(VariableSymbol_t* symbol);
 char* VariableSymbol_to_string(VariableSymbol_t* symbol);

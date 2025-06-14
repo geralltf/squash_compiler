@@ -53,7 +53,7 @@ void lexer_setposition(lexer_t* lexer, int newPosition)
     lexer->currentPos = newPosition;
 }
 
-token_t* SkipToToken(lexer_t* lexer, enum TokenType tokenType)
+struct token* SkipToToken(lexer_t* lexer, enum TokenType tokenType)
 {
     token_t* currentToken = NULL;
     currentToken = GetNextToken(lexer);
@@ -150,7 +150,7 @@ void lexer_predictiveLookaheads(lexer_t* lexer)
         lexer->currentChar9 = '\0';
     }
 }
-token_t* GetNextToken(lexer_t* lexer) // Lexer.
+struct token* GetNextToken(lexer_t* lexer) // Lexer.
 {
     if (lexer->currentPos < lexer->inputLength)
     {

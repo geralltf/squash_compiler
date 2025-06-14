@@ -24,7 +24,7 @@ void squash_compiler_init(squash_compiler_t* squash_compiler, char* input, int i
     squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
     squash_compiler->symbolTable = SymbolTable_new();
     //squash_compiler->rootAST = new AbstractSyntaxTree();
-    squash_compiler->asm = assembler_new(); // new Assembler(rootAST)
+    squash_compiler->asm0 = assembler_new(); // new Assembler(rootAST)
 }
 
 void CompileExpression(squash_compiler_t* squash_compiler)
@@ -45,9 +45,9 @@ void CompileExpression(squash_compiler_t* squash_compiler)
 
     //squash_compiler->asm->Is_macOS = true;
     //squash_compiler->asm->Is_Linux = true;
-    squash_compiler->asm->Is_Windows = true;
+    squash_compiler->asm0->Is_Windows = true;
 
-    GenerateCode(squash_compiler->asm, expression);
+    GenerateCode(squash_compiler->asm0, expression);
 }
 
 astnode_t* ParseStatements(squash_compiler_t* squash_compiler)

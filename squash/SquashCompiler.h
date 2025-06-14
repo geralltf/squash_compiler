@@ -17,7 +17,7 @@ typedef struct SquashCompiler
     token_t* currentToken;
     SymbolTable_t* symbolTable;
     //AbstractSyntaxTree* rootAST;
-    assembler_t* asm;
+    assembler_t* asm0;
 } squash_compiler_t;
 
 squash_compiler_t* squash_compiler_new();

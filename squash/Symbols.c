@@ -11,7 +11,7 @@ FunctionSymbol_t* FunctionSymbol_init(FunctionSymbol_t** symbol, char* name, lis
     return f;
 }
 
-VariableSymbol_t* VariableSymbol_init(VariableSymbol_t** symbol, enum VarType type, char* name, int value)
+VariableSymbol_t* VariableSymbol_initI(VariableSymbol_t** symbol, enum VarType type, char* name, int value)
 {
     int* val = &value;
     void* valObj = (void*)val;
@@ -26,7 +26,7 @@ VariableSymbol_t* VariableSymbol_init(VariableSymbol_t** symbol, enum VarType ty
     return v;
 }
 
-VariableSymbol_t* VariableSymbol_init(VariableSymbol_t** symbol, enum VarType type, char* name, double value)
+VariableSymbol_t* VariableSymbol_initD(VariableSymbol_t** symbol, enum VarType type, char* name, double value)
 {
     double* val = &value;
     void* valObj = (void*)val;
@@ -42,7 +42,7 @@ VariableSymbol_t* VariableSymbol_init(VariableSymbol_t** symbol, enum VarType ty
     return v;
 }
 
-VariableSymbol_t* VariableSymbol_init(VariableSymbol_t** symbol, enum VarType type, char* name, char* value)
+VariableSymbol_t* VariableSymbol_initC(VariableSymbol_t** symbol, enum VarType type, char* name, char* value)
 {
     void* valObj = (void*)value;
 

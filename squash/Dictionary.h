@@ -17,7 +17,7 @@
 
 #include <stdbool.h>
 
-#include "Symbols.h"
+//#include "Symbols.h"
 
 typedef int (*DictionaryPairCompare)(void*, void*);
 
@@ -27,6 +27,15 @@ typedef enum NodeColor
 	COLOR_BLACK,
 	COLOR_RED,
 } NodeColor;
+
+enum VarSymbolType {
+	VAR_Long = 5,
+	VAR_Char = 4,
+	VAR_Int = 3,
+	VAR_Double = 2,
+	VAR_Float = 1,
+	VAR_Undefined = 0
+};
 
 typedef struct DictionaryPair
 {
