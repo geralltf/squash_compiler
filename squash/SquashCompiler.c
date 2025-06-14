@@ -709,7 +709,8 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
 
         char* input_str = squash_compiler->currentToken->Value;
         int num;
-        double floating_num;
+        double double_num;
+        float floating_num;
         enum ASTNodeValueType value_type = AST_VALUE_UNDEFINED;
 
         // Attempt to parse as an integer.
@@ -720,7 +721,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
         else
         {
             // Attempt to parse as a double.
-            if (sscanf(input_str, "%lf", &floating_num) == 1)
+            if (sscanf(input_str, "%lf", &double_num) == 1)
             {
                 value_type = AST_VALUE_DOUBLE;
             }
