@@ -29,16 +29,16 @@ typedef struct Lexer
 } lexer_t;
 
 
-lexer_t* lexer_new(struct Minifier* minifier);
-void lexer_init(lexer_t* lexer, char* input, int inputLength, list_t* preTokens); // List<PreToken>
-void lexer_advance(lexer_t* lexer);
-int lexer_getposition(lexer_t* lexer);
-void lexer_setposition(lexer_t* lexer, int newPosition);
-struct token* SkipToToken(lexer_t* lexer, enum TokenType tokenType);
-void lexer_predictiveLookaheads(lexer_t* lexer);
-struct token* GetNextToken(lexer_t* lexer);
-char* ParseNumber(lexer_t* lexer);
-char* ParseIdentifier(lexer_t* lexer);
-char* ParseWhitespace(lexer_t* lexer);
+struct Lexer* lexer_new(struct Minifier* minifier);
+void lexer_init(struct Lexer* lexer, char* input, int inputLength, list_t* preTokens); // List<PreToken>
+void lexer_advance(struct Lexer* lexer);
+int lexer_getposition(struct Lexer* lexer);
+void lexer_setposition(struct Lexer* lexer, int newPosition);
+struct token* SkipToToken(struct Lexer* lexer, enum TokenType tokenType);
+void lexer_predictiveLookaheads(struct Lexer* lexer);
+struct token* GetNextToken(struct Lexer* lexer);
+char* ParseNumber(struct Lexer* lexer);
+char* ParseIdentifier(struct Lexer* lexer);
+char* ParseWhitespace(struct Lexer* lexer);
 
 #endif

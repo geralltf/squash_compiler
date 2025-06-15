@@ -26,6 +26,21 @@ VariableSymbol_t* VariableSymbol_initI(VariableSymbol_t** symbol, enum VarType t
     return v;
 }
 
+VariableSymbol_t* VariableSymbol_initL(VariableSymbol_t** symbol, enum VarType type, char* name, long value)
+{
+    long* val = &value;
+    void* valObj = (void*)val;
+
+    VariableSymbol_t* v = (VariableSymbol_t*)malloc(sizeof(VariableSymbol_t));
+    v->VariableType = type;
+    v->Name = name;
+    v->Value = valObj;
+    v->ValueType = VAR_Long;
+    *symbol = v;
+
+    return v;
+}
+
 VariableSymbol_t* VariableSymbol_initD(VariableSymbol_t** symbol, enum VarType type, char* name, double value)
 {
     double* val = &value;
@@ -137,21 +152,22 @@ char* VariableSymbol_to_string(VariableSymbol_t* symbol)
     return result;
 }
 
-int SymbolTable_RevervedKeyword_CompararatorFunc(DictionaryPair* left, DictionaryPair* right)
+int SymbolTable_RevervedKeyword_CompararatorFunc(void* left, void* right)
+{
+    // DictionaryPair* left, DictionaryPair* right
+    int compareResult = 0;
+
+    return compareResult;
+}
+
+int SymbolTable_Variable_CompararatorFunc(void* left, void* right)
 {
     int compareResult = 0;
 
     return compareResult;
 }
 
-int SymbolTable_Variable_CompararatorFunc(DictionaryPair* left, DictionaryPair* right)
-{
-    int compareResult = 0;
-
-    return compareResult;
-}
-
-int SymbolTable_Function_CompararatorFunc(DictionaryPair* left, DictionaryPair* right)
+int SymbolTable_Function_CompararatorFunc(void* left, void* right)
 {
     int compareResult = 0;
 
@@ -214,7 +230,7 @@ VariableSymbol_t* SymbolTable_DefineVariableI(SymbolTable_t* symbolTable, enum V
     //Logger.Log.LogInformation("SymbolTable.DefineVariable(): " + name + ",type: " + type.ToString() + ",value: " + value.ToString());
 
     VariableSymbol_t* varSymbol = (VariableSymbol_t*)malloc(sizeof(VariableSymbol_t));
-    VariableSymbol_t* variable = VariableSymbol_init(&varSymbol, type, name, value);
+    VariableSymbol_t* variable = VariableSymbol_initI(&varSymbol, type, name, value);
 
     DictionaryPair* variable_pair_out = (DictionaryPair*)malloc(sizeof(DictionaryPair));
     DictionaryPair* variable_pair = DictionaryPairNew();
@@ -235,7 +251,7 @@ VariableSymbol_t* SymbolTable_DefineVariableD(SymbolTable_t* symbolTable, enum V
     //Logger.Log.LogInformation("SymbolTable.DefineVariable(): " + name + ",type: " + type.ToString() + ",value: " + value.ToString());
 
     VariableSymbol_t* varSymbol = (VariableSymbol_t*)malloc(sizeof(VariableSymbol_t));
-    VariableSymbol_t* variable = VariableSymbol_init(&varSymbol, type, name, value);
+    VariableSymbol_t* variable = VariableSymbol_initD(&varSymbol, type, name, value);
 
     DictionaryPair* variable_pair_out = (DictionaryPair*)malloc(sizeof(DictionaryPair));
     DictionaryPair* variable_pair = DictionaryPairNew();
@@ -255,7 +271,7 @@ VariableSymbol_t* SymbolTable_DefineVariableL(SymbolTable_t* symbolTable, enum V
     //Logger.Log.LogInformation("SymbolTable.DefineVariable(): " + name + ",type: " + type.ToString() + ",value: " + value.ToString());
 
     VariableSymbol_t* varSymbol = (VariableSymbol_t*)malloc(sizeof(VariableSymbol_t));
-    VariableSymbol_t* variable = VariableSymbol_init(&varSymbol, type, name, value);
+    VariableSymbol_t* variable = VariableSymbol_initL(&varSymbol, type, name, value);
 
     DictionaryPair* variable_pair_out = (DictionaryPair*)malloc(sizeof(DictionaryPair));
     DictionaryPair* variable_pair = DictionaryPairNew();
@@ -285,7 +301,7 @@ VariableSymbol_t* SymbolTable_DefineVariableC(SymbolTable_t* symbolTable, enum V
     //return variable;
 
     VariableSymbol_t* varSymbol = (VariableSymbol_t*)malloc(sizeof(VariableSymbol_t));
-    VariableSymbol_t* variable = VariableSymbol_init(&varSymbol, type, name, value);
+    VariableSymbol_t* variable = VariableSymbol_initC(&varSymbol, type, name, value);
 
     DictionaryPair* variable_pair_out = (DictionaryPair*)malloc(sizeof(DictionaryPair));
     DictionaryPair* variable_pair = DictionaryPairNew();

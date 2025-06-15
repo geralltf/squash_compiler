@@ -24,6 +24,7 @@ typedef struct VariableSymbol
 
 FunctionSymbol_t* FunctionSymbol_init(FunctionSymbol_t** symbol, char* name, list_t* parameters);
 VariableSymbol_t* VariableSymbol_initI(VariableSymbol_t** symbol, enum VarType type, char* name, int value);
+VariableSymbol_t* VariableSymbol_initL(VariableSymbol_t** symbol, enum VarType type, char* name, long value);
 VariableSymbol_t* VariableSymbol_initD(VariableSymbol_t** symbol, enum VarType type, char* name, double value);
 VariableSymbol_t* VariableSymbol_initC(VariableSymbol_t** symbol, enum VarType type, char* name, char* value);
 int VariableSymbol_ParseInt(VariableSymbol_t* symbol);
@@ -37,9 +38,9 @@ typedef struct SymbolTable
     Dictionary* functions; // Dictionary<string, FunctionSymbol>
 } SymbolTable_t;
 
-int SymbolTable_RevervedKeyword_CompararatorFunc(DictionaryPair* left, DictionaryPair* right);
-int SymbolTable_Variable_CompararatorFunc(DictionaryPair* left, DictionaryPair* right);
-int SymbolTable_Function_CompararatorFunc(DictionaryPair* left, DictionaryPair* right);
+int SymbolTable_RevervedKeyword_CompararatorFunc(void* left, void* right);
+int SymbolTable_Variable_CompararatorFunc(void* left, void* right);
+int SymbolTable_Function_CompararatorFunc(void* left, void* right);
 
 SymbolTable_t* SymbolTable_new();
 void SymbolTable_init(SymbolTable_t** symbols);

@@ -1,8 +1,8 @@
 #include "Lexer.h"
 
-lexer_t* lexer_new(Minifier_t* minifier)
+struct Lexer* lexer_new(Minifier_t* minifier)
 {
-    lexer_t* lex = (lexer_t*)malloc(sizeof(lexer_t));
+    struct Lexer* lex = (struct Lexer*)malloc(sizeof(struct Lexer));
     lex->minifier = minifier;
     lex->currentChar = '\0';
     lex->currentChar1 = '\0';
@@ -17,7 +17,7 @@ lexer_t* lexer_new(Minifier_t* minifier)
     return lex;
 }
 
-void lexer_init(lexer_t* lexer, char* input, int inputLength, list_t* preTokens) // List<PreToken> preTokens
+void lexer_init(struct Lexer* lexer, char* input, int inputLength, list_t* preTokens) // List<PreToken> preTokens
 {
     lexer->input = input;
     lexer->inputLength = inputLength;
@@ -29,7 +29,7 @@ void lexer_init(lexer_t* lexer, char* input, int inputLength, list_t* preTokens)
     }
 }
 
-void lexer_advance(lexer_t* lexer)
+void lexer_lexer_advance(struct Lexer* lexer)
 {
     lexer->currentPos++;
     if (lexer->currentPos < lexer->inputLength)
@@ -43,17 +43,17 @@ void lexer_advance(lexer_t* lexer)
         lexer->preToken = NULL;
     }
 }
-int lexer_getposition(lexer_t* lexer)
+int lexer_getposition(struct Lexer* lexer)
 {
     return lexer->currentPos;
 }
 
-void lexer_setposition(lexer_t* lexer, int newPosition)
+void lexer_setposition(struct Lexer* lexer, int newPosition)
 {
     lexer->currentPos = newPosition;
 }
 
-struct token* SkipToToken(lexer_t* lexer, enum TokenType tokenType)
+struct token* SkipToToken(struct Lexer* lexer, enum TokenType tokenType)
 {
     token_t* currentToken = NULL;
     currentToken = GetNextToken(lexer);
@@ -68,13 +68,13 @@ struct token* SkipToToken(lexer_t* lexer, enum TokenType tokenType)
             currentToken = NULL;
             break;
         }
-        //Advance();
+        //lexer_advance();
         currentToken = GetNextToken(lexer);
     }
     return currentToken;
 }
 
-void lexer_predictiveLookaheads(lexer_t* lexer)
+void lexer_predictiveLookaheads(struct Lexer* lexer)
 {
     // Lookaheads for predictive parsing.
     if (lexer->currentPos + 1 < lexer->inputLength)
@@ -150,7 +150,7 @@ void lexer_predictiveLookaheads(lexer_t* lexer)
         lexer->currentChar9 = '\0';
     }
 }
-struct token* GetNextToken(lexer_t* lexer) // Lexer.
+struct token* GetNextToken(struct Lexer* lexer) // Lexer.
 {
     if (lexer->currentPos < lexer->inputLength)
     {
@@ -187,9 +187,9 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_VarKeyword, tok_value, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);
+            lexer_advance(lexer);
+            lexer_advance(lexer);
             return token;
         }
         if (lexer->currentChar == 'v' && lexer->currentChar1 == 'o' && lexer->currentChar2 == 'i' && lexer->currentChar3 == 'd')
@@ -204,10 +204,10 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_VoidKeyword, tok_value, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
             return token;
         }
         if (lexer->currentChar == 'i' && lexer->currentChar1 == 'n' && lexer->currentChar2 == 't')
@@ -226,9 +226,9 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             //    currentPos,
             //    preToken
             //);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
             return token;
         }
         if (lexer->currentChar == 's' && lexer->currentChar1 == 't' && lexer->currentChar2 == 'r' && lexer->currentChar3 == 'i' && lexer->currentChar4 == 'n' && lexer->currentChar5 == 'g')
@@ -245,12 +245,12 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_StringKeyword, tok_value, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
             return token;
         }
         if (lexer->currentChar == 'd' && lexer->currentChar1 == 'o' && lexer->currentChar2 == 'u' && lexer->currentChar3 == 'b' && lexer->currentChar4 == 'l' && lexer->currentChar5 == 'e')
@@ -267,12 +267,12 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_DoubleKeyword, tok_value, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
             return token;
         }
         if (lexer->currentChar == 'w' && lexer->currentChar1 == 'h' && lexer->currentChar2 == 'i' && lexer->currentChar3 == 'l' && lexer->currentChar4 == 'e')
@@ -288,11 +288,11 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_WhileKeyword, tok_value, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
             return token;
         }
         if (lexer->currentChar == 'r' && lexer->currentChar1 == 'e' && lexer->currentChar2 == 't' && lexer->currentChar3 == 'u' && lexer->currentChar4 == 'r' && lexer->currentChar5 == 'n')
@@ -309,18 +309,18 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_ReturnKeyword, tok_value, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
+            lexer_advance(lexer);;
             return token;
         }
         else if (isdigit(lexer->currentChar))
         {
             token_t* token = token_new();
-            token_init(&token, AST_Number, ParseNumber(lexer), lexer->currentPos, NULL);
+            token_init(&token, AST_NumberEntry, ParseNumber(lexer), lexer->currentPos, NULL);
 
             return token;
         }
@@ -340,7 +340,7 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_Operator, tok_value, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
             return token;
         }
         else if (lexer->currentChar == '>' || lexer->currentChar == '<' || lexer->currentChar1 == '=')
@@ -351,7 +351,7 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
                 operators = (char*)malloc(sizeof(char));
                 operators[0] = lexer->currentChar;
 
-                Advance(lexer, lexer->minifier);
+                lexer_advance(lexer);;
             }
             else if (lexer->currentChar == '>' && lexer->currentChar1 == '=')
             {
@@ -359,8 +359,8 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
                 operators[0] = lexer->currentChar;
                 operators[1] = lexer->currentChar1;
 
-                Advance(lexer, lexer->minifier);
-                Advance(lexer, lexer->minifier);
+                lexer_advance(lexer);;
+                lexer_advance(lexer);;
             }
             else if (lexer->currentChar == '<' && lexer->currentChar1 == '=')
             {
@@ -368,15 +368,15 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
                 operators[0] = lexer->currentChar;
                 operators[1] = lexer->currentChar1;
 
-                Advance(lexer, lexer->minifier);
-                Advance(lexer, lexer->minifier);
+                lexer_advance(lexer);;
+                lexer_advance(lexer);;
             }
             else
             {
                 operators = (char*)malloc(sizeof(char));
                 operators[0] = lexer->currentChar;
 
-                Advance(lexer, lexer->minifier);
+                lexer_advance(lexer);;
             }
 
             token_t* token = token_new();
@@ -393,7 +393,7 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_Parenthesis, parenthesis, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
             return token;
         }
         else if (lexer->currentChar == '=')
@@ -405,7 +405,7 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_Assignment, assignmentOperator, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
             return token;
         }
         else if (lexer->currentChar == '.')
@@ -417,7 +417,7 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_Peroid, peroidOperator, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
             return token;
         }
         else if (lexer->currentChar == ';')
@@ -429,7 +429,7 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_SemiColon, semiColonOperator, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
             return token;
         }
         else if (lexer->currentChar == '{')
@@ -441,7 +441,7 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_CurleyBrace, curleyBraceOperator, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
             return token;
         }
         else if (lexer->currentChar == '}')
@@ -453,7 +453,7 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
             token_t* token = token_new();
             token_init(&token, AST_CurleyBrace, curleyBraceOperator, lexer->currentPos, NULL);
 
-            Advance(lexer, lexer->minifier);
+            lexer_advance(lexer);;
             return token;
         }
         else if (isspace(lexer->currentChar) || lexer->currentChar == ' ' || lexer->currentChar == '\t' || lexer->currentChar == '\n' || lexer->currentChar == '\r')
@@ -480,7 +480,7 @@ struct token* GetNextToken(lexer_t* lexer) // Lexer.
     return NULL;
 }
 
-char* ParseNumber(lexer_t* lexer)
+char* ParseNumber(struct Lexer* lexer)
 {
     list_t* lst_builder = list_new();
     list_t* n = NULL;
@@ -493,7 +493,7 @@ char* ParseNumber(lexer_t* lexer)
         char* c = &lexer->currentChar;
         list_enqueue(lst_builder, (void*)c);
 
-        Advance(lexer, lexer->minifier);
+        lexer_advance(lexer);;
     }
 
     n = lst_builder;
@@ -510,10 +510,12 @@ char* ParseNumber(lexer_t* lexer)
     buffer = (char*)malloc(sizeof(char) * (count + 1));
     index = 0;
     buffer[count] = '\0';
+    char* pC;
 
     while (n != NULL)
     {
-        buffer[index] = (char*)n->data;
+        pC = (char*)n->data;
+        buffer[index] = *pC;
         index++;
 
         n = n->next;
@@ -522,7 +524,7 @@ char* ParseNumber(lexer_t* lexer)
     return buffer;
 }
 
-char* ParseIdentifier(lexer_t* lexer)
+char* ParseIdentifier(struct Lexer* lexer)
 {
     list_t* lst_builder = list_new();
     list_t* n = NULL;
@@ -535,7 +537,7 @@ char* ParseIdentifier(lexer_t* lexer)
         char* c = &lexer->currentChar;
         list_enqueue(lst_builder, (void*)c);
 
-        Advance(lexer, lexer->minifier);
+        lexer_advance(lexer);;
     }
 
     n = lst_builder;
@@ -552,10 +554,12 @@ char* ParseIdentifier(lexer_t* lexer)
     buffer = (char*)malloc(sizeof(char) * (count + 1));
     index = 0;
     buffer[count] = '\0';
+    char* pC;
 
     while (n != NULL)
     {
-        buffer[index] = (char*)n->data;
+        pC = (char*)n->data;
+        buffer[index] = *pC;
         index++;
 
         n = n->next;
@@ -564,7 +568,7 @@ char* ParseIdentifier(lexer_t* lexer)
     return buffer;
 }
 
-char* ParseWhitespace(lexer_t* lexer)
+char* ParseWhitespace(struct Lexer* lexer)
 {
     list_t* lst_builder = list_new();
     list_t* n = NULL;
@@ -577,7 +581,7 @@ char* ParseWhitespace(lexer_t* lexer)
         char* c = &lexer->currentChar;
         list_enqueue(lst_builder, (void*)c);
 
-        Advance(lexer, lexer->minifier);
+        lexer_advance(lexer);;
     }
 
     n = lst_builder;
@@ -594,10 +598,12 @@ char* ParseWhitespace(lexer_t* lexer)
     buffer = (char*)malloc(sizeof(char) * (count + 1));
     index = 0;
     buffer[count] = '\0';
+    char* pC;
 
     while (n != NULL)
     {
-        buffer[index] = (char*)n->data;
+        pC = (char*)n->data;
+        buffer[index] = *pC;
         index++;
 
         n = n->next;

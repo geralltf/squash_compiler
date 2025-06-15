@@ -189,7 +189,7 @@ char* bool_tostring(bool input)
     }
     return s;
 }
-char* ast_tostring(astnode_t* node)
+char* ast_tostring(struct ASTNode* node)
 {
     char* astType = astnodetype_tostring(node->Type);
     char* typeStr = strcat("Type: ", astType);
@@ -232,18 +232,18 @@ char* ast_tostring(astnode_t* node)
     return statusMsg;
 }
 
-astnode_t* ast_node_new()
+struct ASTNode* ast_node_new()
 {
-    astnode_t* n;
+    struct ASTNode* n;
 
-    n = (astnode_t*)malloc(sizeof(astnode_t));
+    n = (struct ASTNode*)malloc(sizeof(struct ASTNode));
 
     return n;
 }
 
-void ast_node_init_bt(astnode_t** node, enum ASTNodeType type, char* value, astnode_t* left, astnode_t* right)
+void ast_node_init_bt(struct ASTNode** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, struct ASTNode* left, struct ASTNode* right)
 {
-    astnode_t* n = ast_node_new();
+    struct ASTNode* n = ast_node_new();
 
     n->Type = type;
     n->Value = value;
@@ -255,13 +255,14 @@ void ast_node_init_bt(astnode_t** node, enum ASTNodeType type, char* value, astn
     n->IsFunctionCall = false;
     n->IsVariable = false;
     n->IsFunctionDefinition = false;
+    n->ValueType = value_type;
 
     *node = n;
 }
 
-void ast_node_init_bt2(astnode_t** node, enum ASTNodeType type, char* argumentType, char* value, astnode_t* left, astnode_t* right)
+void ast_node_init_bt2(struct ASTNode** node, enum ASTNodeType type, char* argumentType, char* value, enum ASTNodeValueType value_type, struct ASTNode* left, struct ASTNode* right)
 {
-    astnode_t* n = ast_node_new();
+    struct ASTNode* n = ast_node_new();
 
     n->Type = type;
     n->ArgumentType = argumentType;
@@ -274,13 +275,14 @@ void ast_node_init_bt2(astnode_t** node, enum ASTNodeType type, char* argumentTy
     n->IsFunctionCall = false;
     n->IsVariable = false;
     n->IsFunctionDefinition = false;
+    n->ValueType = value_type;
 
     *node = n;
 }
 
-void ast_node_init_funct(astnode_t** node, enum ASTNodeType type, char* value, struct FunctionSymbol* functionSymbol, list_t* arguments) // List<ASTNode> arguments
+void ast_node_init_funct(struct ASTNode** node, enum ASTNodeType type, char* value, struct FunctionSymbol* functionSymbol, list_t* arguments) // List<ASTNode> arguments
 {
-    astnode_t* n = ast_node_new();
+    struct ASTNode* n = ast_node_new();
 
     n->Type = type;
     n->Value = value;
@@ -296,9 +298,9 @@ void ast_node_init_funct(astnode_t** node, enum ASTNodeType type, char* value, s
     *node = n;
 }
 
-void ast_node_init_var(astnode_t** node, enum ASTNodeType type, char* value, struct VariableSymbol* variableSymbol)
+void ast_node_init_var(struct ASTNode** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, struct VariableSymbol* variableSymbol)
 {
-    astnode_t* n = ast_node_new();
+    struct ASTNode* n = ast_node_new();
 
     n->Type = type;
     n->Value = value;
@@ -309,6 +311,7 @@ void ast_node_init_var(astnode_t** node, enum ASTNodeType type, char* value, str
     n->VarSymbol = variableSymbol;
     n->IsVariable = true;
     n->IsFunctionDefinition = false;
+    n->ValueType = value_type;
 
     *node = n;
 }

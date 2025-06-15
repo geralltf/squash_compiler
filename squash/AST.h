@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "List.h"
 #include "Symbols.h"
@@ -57,13 +58,13 @@ typedef struct ASTNode
 
 char* astnodetype_tostring(enum ASTNodeType type);
 char* bool_tostring(bool input);
-char* ast_tostring(astnode_t* node);
+char* ast_tostring(struct ASTNode* node);
 
-astnode_t* ast_node_new();
+struct ASTNode* ast_node_new();
 
-void ast_node_init_bt(astnode_t** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, astnode_t* left, astnode_t* right);
-void ast_node_init_bt2(astnode_t** node, enum ASTNodeType type, char* argumentType, char* value, enum ASTNodeValueType value_type, astnode_t* left, astnode_t* right);
-void ast_node_init_funct(astnode_t** node, enum ASTNodeType type, char* value, struct FunctionSymbol* functionSymbol, list_t* arguments); // List<ASTNode> arguments
-void ast_node_init_var(astnode_t** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, struct VariableSymbol* variableSymbol);
+void ast_node_init_bt(struct ASTNode** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, struct ASTNode* left, struct ASTNode* right);
+void ast_node_init_bt2(struct ASTNode** node, enum ASTNodeType type, char* argumentType, char* value, enum ASTNodeValueType value_type, struct ASTNode* left, struct ASTNode* right);
+void ast_node_init_funct(struct ASTNode** node, enum ASTNodeType type, char* value, struct FunctionSymbol* functionSymbol, list_t* arguments); // List<ASTNode> arguments
+void ast_node_init_var(struct ASTNode** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, struct VariableSymbol* variableSymbol);
 
 #endif

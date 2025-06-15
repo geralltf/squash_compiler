@@ -63,10 +63,10 @@ typedef struct token
     enum TokenType Type;
     char* Value;
     int Position;
-    PreToken_t* PreToken;
+    struct PreToken* PreToken;
 } token_t;
 
 token_t* token_new();
-void token_init(token_t** token, enum TokenType type, char* value, int position, PreToken_t* preToken);
+void token_init(token_t** token, enum TokenType type, char* value, int position, struct PreToken* preToken);
 
 #endif

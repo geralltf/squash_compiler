@@ -479,7 +479,7 @@ char* MinifyCode(Minifier_t* minifier, char* input, int inputLength, list_t* tok
 		n = n->next;
 	}
 
-	char* result = (char*)malloc(sizeof(char) * count);
+	result = (char*)malloc(sizeof(char) * count);
 	int index = 0;
 
 	n = tokens_result;

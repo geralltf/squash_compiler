@@ -10,7 +10,7 @@ token_t* token_new()
     return token;
 }
 
-void token_init(token_t** token, enum TokenType type, char* value, int position, PreToken_t* preToken)
+void token_init(token_t** token, enum TokenType type, char* value, int position, struct PreToken* preToken)
 {
     token_t* t = *token;
     //token_t* t = token_new();
