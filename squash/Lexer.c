@@ -29,7 +29,7 @@ void lexer_init(struct Lexer* lexer, char* input, int inputLength, list_t* preTo
     }
 }
 
-void lexer_lexer_advance(struct Lexer* lexer)
+void lexer_advance(struct Lexer* lexer)
 {
     lexer->currentPos++;
     if (lexer->currentPos < lexer->inputLength)
