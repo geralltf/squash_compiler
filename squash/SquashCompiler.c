@@ -1223,10 +1223,10 @@ astnode_t* ParseExpression(squash_compiler_t* squash_compiler, int precedence)
     //Logger.Log.LogInformation("ParseExpression(): precedence: '" + precedence.ToString() + "'");
 
     astnode_t* leftNode = ParsePrimaryExpression(squash_compiler); // Parse the left operand
-    leftNode->Precedence = precedence;
-
+    
     if (leftNode != NULL)
     {
+        leftNode->Precedence = precedence;
         //Logger.Log.LogInformation("ParseExpression(): precedence: " + precedence.ToString() + " leftNode: " + leftNode.ToString());
     }
     else
