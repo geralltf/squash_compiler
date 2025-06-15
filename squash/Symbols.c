@@ -125,7 +125,7 @@ char* VariableSymbol_to_string(VariableSymbol_t* symbol)
         int* iptr = (int*)symbol->Value;
         int i = *iptr;
 
-        itoa(i, result, 10);
+        _itoa(i, result, 10);
     }
     else if (symbol->ValueType == VAR_Double)
     {
@@ -139,7 +139,7 @@ char* VariableSymbol_to_string(VariableSymbol_t* symbol)
         float* fptr = (float*)symbol->Value;
         float f = *fptr;
 
-        gcvt(f, 6, result);
+        _gcvt(f, 6, result);
     }
     else if (symbol->ValueType == VAR_Undefined)
     {
