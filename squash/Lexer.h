@@ -1,6 +1,8 @@
 #ifndef LEXER_H
 #define LEXER_H
 
+enum TokenType;
+
 #include "List.h"
 #include "Token.h"
 #include "Minifier.h"

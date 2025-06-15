@@ -147,6 +147,8 @@ void list_push(list_t* list_front, void* data)
 /// </param>
 void list_enqueue(list_t* list_front, void* data)
 {
+	printf("DATA: %s", (char*)data);
+
 	list_t* next = (list_t*)malloc(sizeof(list_t));
 
 	if (next != NULL)

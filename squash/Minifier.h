@@ -1,6 +1,8 @@
 #ifndef MINIFIER_H
 #define MINIFIER_H
 
+struct Lexer;
+
 #include <stdlib.h>
 #include <ctype.h>
 

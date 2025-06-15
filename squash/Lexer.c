@@ -1,6 +1,6 @@
 #include "Lexer.h"
 
-struct Lexer* lexer_new(Minifier_t* minifier)
+struct Lexer* lexer_new(struct Minifier* minifier)
 {
     struct Lexer* lex = (struct Lexer*)malloc(sizeof(struct Lexer));
     lex->minifier = minifier;

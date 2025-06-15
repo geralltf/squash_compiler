@@ -470,18 +470,22 @@ char* MinifyCode(Minifier_t* minifier, char* input, int inputLength, list_t* tok
 	list_t* n = tokens_result;
 	list_t* p = NULL;
 	int count = 0;
+	char* pC;
 
 	while (n != NULL)
 	{
-		count++;
+		pC = (char*)n->data;
+		if (pC != NULL)
+		{
 
+			count++;
+		}
 		p = n;
 		n = n->next;
 	}
 
 	result = (char*)malloc(sizeof(char) * count);
 	int index = 0;
-	char* pC;
 
 	n = tokens_result;
 	p = NULL;
@@ -491,11 +495,13 @@ char* MinifyCode(Minifier_t* minifier, char* input, int inputLength, list_t* tok
 		pC = (char*)n->data;
 		if (pC != NULL)
 		{
-			char d = *pC;
-			result[index] = d;
+			char* d = pC;
+			//result[index] = d;
+			*(result + index) = *d;
+
+			index++;
 		}
 
-		index++;
 		p = n;
 		n = n->next;
 	}

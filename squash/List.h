@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 /// <summary>
 /// Doubly Linked List implementation for use as a list, stack, or queue.
