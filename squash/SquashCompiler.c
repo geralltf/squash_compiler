@@ -21,6 +21,8 @@ void squash_compiler_init(squash_compiler_t* squash_compiler, char* input, int i
     //Logger.Log.LogInformation("SOURCE:\n" + input);
 
     squash_compiler->lexer = lexer_new(minifier); // new Lexer(input, ref preTokens);
+    lexer_init(squash_compiler->lexer, input, inputLength, tokens);
+
     squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
     squash_compiler->symbolTable = SymbolTable_new();
     //squash_compiler->rootAST = new AbstractSyntaxTree();
