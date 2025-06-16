@@ -1,13 +1,16 @@
 #include "Assembler.h"
-
 #include "AST.h"
 #include "sb.h"
-
-#include <stdio.h>
 
 assembler_t* assembler_new()
 {
     assembler_t* assembler = (assembler_t*)malloc(sizeof(assembler_t));
+    if (assembler)
+    {
+        assembler->Is_Windows = true;
+        assembler->Is_macOS = false;
+        assembler->Is_Linux = false;
+    }
     return assembler;
 }
 
