@@ -12,10 +12,11 @@ bool FileReadString(char* filename, void** filebuffer, size_t* file_length)
         length = ftell(f);
         *file_length = length;
         fseek(f, 0, SEEK_SET);
-        buffer = (char*)malloc(length);
+        buffer = (char*)malloc(sizeof(char)*length+1);
         if (buffer)
         {
             fread(buffer, 1, length, f);
+            buffer[length] = '\0';
         }
         fclose(f);
 
