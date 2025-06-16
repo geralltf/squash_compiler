@@ -24,7 +24,10 @@ void squash_compiler_init(squash_compiler_t* squash_compiler, char* input, int i
     lexer_init(squash_compiler->lexer, input, inputLength, tokens);
 
     squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+
     squash_compiler->symbolTable = SymbolTable_new();
+    SymbolTable_init(&squash_compiler->symbolTable);
+
     //squash_compiler->rootAST = new AbstractSyntaxTree();
     squash_compiler->asm0 = assembler_new(); // new Assembler(rootAST)
 }
@@ -176,7 +179,7 @@ astnode_t* parseAssignmentOperator(squash_compiler_t* squash_compiler, enum VarT
                 {
                 case AST_Int:
                 case AST_Int32:
-                    squash_compiler->currentToken = SkipToToken(squash_compiler->lexer, AST_Number);
+                    squash_compiler->currentToken = SkipToToken(squash_compiler->lexer, AST_NumberEntry);
                     int varValueI = atoi(squash_compiler->currentToken->Value);
                     //int varValueI = int.Parse(squash_compiler->currentToken->Value);
                     varDefine = SymbolTable_DefineVariableI(squash_compiler->symbolTable, AST_Int, identifierName, varValueI);
@@ -189,7 +192,7 @@ astnode_t* parseAssignmentOperator(squash_compiler_t* squash_compiler, enum VarT
 
                     //    break;
                 case AST_Double:
-                    squash_compiler->currentToken = SkipToToken(squash_compiler->lexer, AST_Number);
+                    squash_compiler->currentToken = SkipToToken(squash_compiler->lexer, AST_NumberEntry);
                     double varValueD = atof(squash_compiler->currentToken->Value);
                     varDefine = SymbolTable_DefineVariableD(squash_compiler->symbolTable, AST_Double, identifierName, varValueD);
                     break;
@@ -210,7 +213,7 @@ astnode_t* parseAssignmentOperator(squash_compiler_t* squash_compiler, enum VarT
             {   // Automatic type inference required.
                 int savedPosition2 = lexer_getposition(squash_compiler->lexer);
 
-                squash_compiler->currentToken = SkipToToken(squash_compiler->lexer, AST_Number);
+                squash_compiler->currentToken = SkipToToken(squash_compiler->lexer, AST_NumberEntry);
 
                 if (squash_compiler->currentToken == NULL)
                 {
@@ -515,7 +518,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
                     // functIdentifierName
                 }
             }
-            else if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Number)
+            else if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_NumberEntry)
             {
                 astnode_t* left = NULL;
                 astnode_t* right = NULL;
@@ -704,7 +707,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
             }
         }
     }
-    else if (squash_compiler->currentToken->Type == AST_Number)
+    else if (squash_compiler->currentToken->Type == AST_NumberEntry)
     {
         astnode_t* left = NULL;
         astnode_t* right = NULL;
