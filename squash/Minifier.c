@@ -97,7 +97,7 @@ void Minifier_init(Minifier_t* minifier)
 /// </summary>
 char* MinifyCode(Minifier_t* minifier, char* input, int inputLength, list_t* tokens, int* newInputLength) // List<PreToken>
 {
-	list_t* tokens_result = list_new();
+	StringBuilder* sb = sb_create();
 	char* result = '\0';
 	long offsetX = 0;
 	long offsetY = 0;
@@ -157,242 +157,173 @@ char* MinifyCode(Minifier_t* minifier, char* input, int inputLength, list_t* tok
 			}
 			else if (minifier->currentChar == 'v' && minifier->currentChar1 == 'a' && minifier->currentChar2 == 'r')
 			{
-				char* currArray = (char*)malloc(sizeof(char) * 3);
+				char* currArray = (char*)malloc(sizeof(char) * 4);
 				currArray[0] = minifier->currentChar;
 				currArray[1] = minifier->currentChar1;
 				currArray[2] = minifier->currentChar2;
+				currArray[3] = '\0';
 
 				PreToken_t* tok = PreToken_new(currArray, minifier->currentPos, offsetX, offsetY);
 
 				list_enqueue(tokens, (void*)tok);
 
-				char* ch = &minifier->currentChar;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar1;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar2;
-				list_enqueue(tokens_result, (void*)ch);
+				sb_append(sb, currArray);
 
-				//result += minifier->currentChar;
-				//result += minifier->currentChar1;
-				//result += minifier->currentChar2;
 				minifier->currentPos += 3;
 
-				char space = ' ';
-				ch = &space;
-				list_enqueue(tokens_result, (void*)ch);
+				char* currArraySpc = (char*)malloc(sizeof(char) * 2);
+				currArraySpc[0] = ' ';
+				currArraySpc[1] = '\0';
+				sb_append(sb, currArraySpc);
 
 				//result += ' ';
 				minifier->currentPos++;
 			}
 			else if (minifier->currentChar == 'v' && minifier->currentChar1 == 'o' && minifier->currentChar2 == 'i' && minifier->currentChar3 == 'd')
 			{
-				char* currArray = (char*)malloc(sizeof(char) * 4);
+				char* currArray = (char*)malloc(sizeof(char) * 5);
 				currArray[0] = minifier->currentChar;
 				currArray[1] = minifier->currentChar1;
 				currArray[2] = minifier->currentChar2;
 				currArray[3] = minifier->currentChar3;
+				currArray[4] = '\0';
 
 				PreToken_t* tok = PreToken_new(currArray, minifier->currentPos, offsetX, offsetY);
 
 				list_enqueue(tokens, (void*)tok);
 
-				char* ch = &minifier->currentChar;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar1;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar2;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar3;
-				list_enqueue(tokens_result, (void*)ch);
+				sb_append(sb, currArray);
 
-				//result += currentChar;
-				//result += currentChar1;
-				//result += currentChar2;
-				//result += currentChar3;
 				minifier->currentPos += 4;
 
 				if (minifier->currentChar4 == ' ')
 				{
-					char space = ' ';
-					ch = &space;
-					list_enqueue(tokens_result, (void*)ch);
-					//result += ' ';
+					char* currArraySpc = (char*)malloc(sizeof(char) * 2);
+					currArraySpc[0] = ' ';
+					currArraySpc[1] = '\0';
+					sb_append(sb, currArraySpc);
 
 					minifier->currentPos++;
 				}
 			}
 			else if (minifier->currentChar == 'i' && minifier->currentChar1 == 'n' && minifier->currentChar2 == 't')
 			{
-				char* currArray = (char*)malloc(sizeof(char) * 3);
+				char* currArray = (char*)malloc(sizeof(char) * 4);
 				currArray[0] = minifier->currentChar;
 				currArray[1] = minifier->currentChar1;
 				currArray[2] = minifier->currentChar2;
+				currArray[3] = '\0';
 
 				PreToken_t* tok = PreToken_new(currArray, minifier->currentPos, offsetX, offsetY);
 
 				list_enqueue(tokens, (void*)tok);
 
-				char* ch = &minifier->currentChar;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar1;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar2;
-				list_enqueue(tokens_result, (void*)ch);
+				//printf("DATA: %s", pC);
+				sb_append(sb, currArray);
 
-				//result += currentChar;
-				//result += currentChar1;
-				//result += currentChar2;
 				minifier->currentPos += 3;
 
-				char space = ' ';
-				ch = &space;
-				list_enqueue(tokens_result, (void*)ch);
-				//result += ' ';
+				char* currArraySpc = (char*)malloc(sizeof(char) * 2);
+				currArraySpc[0] = ' ';
+				currArraySpc[1] = '\0';
+				sb_append(sb, currArraySpc);
+
 				minifier->currentPos++;
 
 			}
 			else if (minifier->currentChar == 'd' && minifier->currentChar1 == 'o' && minifier->currentChar2 == 'u' && minifier->currentChar3 == 'b' && minifier->currentChar4 == 'l' && minifier->currentChar5 == 'e')
 			{
-				char* currArray = (char*)malloc(sizeof(char) * 6);
+				char* currArray = (char*)malloc(sizeof(char) * 7);
 				currArray[0] = minifier->currentChar;
 				currArray[1] = minifier->currentChar1;
 				currArray[2] = minifier->currentChar2;
 				currArray[3] = minifier->currentChar3;
 				currArray[4] = minifier->currentChar4;
 				currArray[5] = minifier->currentChar5;
-
+				currArray[6] = '\0';
 				PreToken_t* tok = PreToken_new(currArray, minifier->currentPos, offsetX, offsetY);
 
 				list_enqueue(tokens, (void*)tok);
 
-				char* ch = &minifier->currentChar;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar1;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar2;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar3;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar4;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar5;
-				list_enqueue(tokens_result, (void*)ch);
-
-				//result += currentChar;
-				//result += currentChar1;
-				//result += currentChar2;
-				//result += currentChar3;
-				//result += currentChar4;
-				//result += currentChar5;
+				sb_append(sb, currArray);
 
 				minifier->currentPos += 6;
 
-				char space = ' ';
-				ch = &space;
-				list_enqueue(tokens_result, (void*)ch);
-				//result += ' ';
+				char* currArraySpc = (char*)malloc(sizeof(char) * 2);
+				currArraySpc[0] = ' ';
+				currArraySpc[1] = '\0';
+				sb_append(sb, currArraySpc);
+
 				minifier->currentPos++;
 
 			}
 			else if (minifier->currentChar == 's' && minifier->currentChar1 == 't' && minifier->currentChar2 == 'r' && minifier->currentChar3 == 'i' && minifier->currentChar4 == 'n' && minifier->currentChar5 == 'g')
 			{
-				char* currArray = (char*)malloc(sizeof(char) * 6);
+				char* currArray = (char*)malloc(sizeof(char) * 7);
 				currArray[0] = minifier->currentChar;
 				currArray[1] = minifier->currentChar1;
 				currArray[2] = minifier->currentChar2;
 				currArray[3] = minifier->currentChar3;
 				currArray[4] = minifier->currentChar4;
 				currArray[5] = minifier->currentChar5;
+				currArray[6] = '\0';
 
 				PreToken_t* tok = PreToken_new(currArray, minifier->currentPos, offsetX, offsetY);
 
 				list_enqueue(tokens, (void*)tok);
 
-				char* ch = &minifier->currentChar;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar1;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar2;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar3;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar4;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar5;
-				list_enqueue(tokens_result, (void*)ch);
-
-				//result += currentChar;
-				//result += currentChar1;
-				//result += currentChar2;
-				//result += currentChar3;
-				//result += currentChar4;
-				//result += currentChar5;
+				sb_append(sb, currArray);
 
 				minifier->currentPos += 6;
 
-				char space = ' ';
-				ch = &space;
-				list_enqueue(tokens_result, (void*)ch);
-				//result += ' ';
+				char* currArraySpc = (char*)malloc(sizeof(char) * 2);
+				currArraySpc[0] = ' ';
+				currArraySpc[1] = '\0';
+				sb_append(sb, currArraySpc);
+
 				minifier->currentPos++;
 
 			}
 			else if (minifier->currentChar == 'r' && minifier->currentChar1 == 'e' && minifier->currentChar2 == 't' && minifier->currentChar3 == 'u' && minifier->currentChar4 == 'r' && minifier->currentChar5 == 'n')
 			{
-				char* currArray = (char*)malloc(sizeof(char) * 6);
+				char* currArray = (char*)malloc(sizeof(char) * 7);
 				currArray[0] = minifier->currentChar;
 				currArray[1] = minifier->currentChar1;
 				currArray[2] = minifier->currentChar2;
 				currArray[3] = minifier->currentChar3;
 				currArray[4] = minifier->currentChar4;
 				currArray[5] = minifier->currentChar5;
+				currArray[6] = '\0';
 
 				PreToken_t* tok = PreToken_new(currArray, minifier->currentPos, offsetX, offsetY);
 
 				list_enqueue(tokens, (void*)tok);
 
-				char* ch = &minifier->currentChar;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar1;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar2;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar3;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar4;
-				list_enqueue(tokens_result, (void*)ch);
-				ch = &minifier->currentChar5;
-				list_enqueue(tokens_result, (void*)ch);
+				sb_append(sb, currArray);
 
-				//result += currentChar;
-				//result += currentChar1;
-				//result += currentChar2;
-				//result += currentChar3;
-				//result += currentChar4;
-				//result += currentChar5;
 				minifier->currentPos += 6;
 
 				if (minifier->currentChar6 == ' ')
 				{
-					char space = ' ';
-					ch = &space;
-					list_enqueue(tokens_result, (void*)ch);
-					//result += ' ';
+					char* currArray = (char*)malloc(sizeof(char) * 2);
+					currArray[0] = ' ';
+					currArray[1] = '\0';
+					sb_append(sb, currArray);
+
 					minifier->currentPos++;
 				}
 			}
 			else if (minifier->currentChar == '(' || minifier->currentChar == ')')
 			{
-				char* currArray = (char*)malloc(sizeof(char) * 1);
+				char* currArray = (char*)malloc(sizeof(char) * 2);
 				currArray[0] = minifier->currentChar;
+				currArray[1] = '\0';
 
 				PreToken_t* tok = PreToken_new(currArray, minifier->currentPos, offsetX, offsetY);
 
 				list_enqueue(tokens, (void*)tok);
 
-				char* ch = &minifier->currentChar;
-				list_enqueue(tokens_result, (void*)ch);
+				sb_append(sb, currArray);
 
 				//result += currentChar;
 				minifier->currentPos++;
@@ -435,13 +366,11 @@ char* MinifyCode(Minifier_t* minifier, char* input, int inputLength, list_t* tok
 						&& minifier->currentChar != '\n'
 						&& minifier->currentChar != '\r')
 					{
-
-						char* ch = &minifier->currentChar;
-						list_enqueue(tokens_result, (void*)ch);
-						//result += currentChar;
-
-						char* currArray = (char*)malloc(sizeof(char) * 1);
+						char* currArray = (char*)malloc(sizeof(char) * 2);
 						currArray[0] = minifier->currentChar;
+						currArray[1] = '\0';
+
+						sb_append(sb, currArray);
 
 						// Preserve debug information about each char before any lossy minification.
 						PreToken_t* tok = PreToken_new(currArray, minifier->currentPos, offsetX, offsetY);
@@ -467,44 +396,9 @@ char* MinifyCode(Minifier_t* minifier, char* input, int inputLength, list_t* tok
 		}
 	}
 
-	list_t* n = tokens_result;
-	list_t* p = NULL;
-	int count = 0;
-	char* pC;
-
-	while (n != NULL)
-	{
-		pC = (char*)n->data;
-		if (pC != NULL)
-		{
-
-			count++;
-		}
-		p = n;
-		n = n->next;
-	}
-
-	result = (char*)malloc(sizeof(char) * count);
-	int index = 0;
-
-	n = tokens_result;
-	p = NULL;
-
-	while (n != NULL)
-	{
-		pC = (char*)n->data;
-		if (pC != NULL)
-		{
-			char* d = pC;
-			//result[index] = d;
-			*(result + index) = *d;
-
-			index++;
-		}
-
-		p = n;
-		n = n->next;
-	}
+	char* outputSourceMinified = sb_concat(sb);
+	result = outputSourceMinified;
+	int count = strlen(outputSourceMinified);
 
 	*newInputLength = count;
 

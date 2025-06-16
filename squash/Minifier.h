@@ -6,6 +6,7 @@ struct Lexer;
 #include <stdlib.h>
 #include <ctype.h>
 
+#include "sb.h"
 #include "List.h"
 #include "Lexer.h"
 
