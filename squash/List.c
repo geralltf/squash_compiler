@@ -147,33 +147,44 @@ void list_push(list_t* list_front, void* data)
 /// </param>
 void list_enqueue(list_t* list_front, void* data)
 {
-	printf("DATA: %s", (char*)data);
+	char* pC = (char*)data;
+	//char c = *pC;
+	//printf("DATA: %s", pC);
 
-	list_t* next = (list_t*)malloc(sizeof(list_t));
-
-	if (next != NULL)
+	if (list_front->prev == NULL && list_front->data == NULL)
 	{
-		next->data = data;
-		next->next = NULL;
-		next->prev = NULL;
+		list_front->data = data;
+		list_front->next = NULL;
+		list_front->prev = NULL;
+	}
+	else
+	{
+		list_t* next = (list_t*)malloc(sizeof(list_t));
 
-		list_t* insertion_point = NULL;
-		list_t* n = list_front;
-		list_t* p = NULL;
-		while (n != NULL)
+		if (next != NULL)
 		{
-			p = n;
-			n = n->next;
-		}
+			next->data = data;
+			next->next = NULL;
+			next->prev = NULL;
 
-		if (p == NULL)
-		{
-			p = n;
-		}
+			list_t* insertion_point = NULL;
+			list_t* n = list_front;
+			list_t* p = NULL;
+			while (n != NULL)
+			{
+				p = n;
+				n = n->next;
+			}
 
-		insertion_point = p;
-		next->prev = insertion_point;
-		insertion_point->next = next;
+			if (p == NULL)
+			{
+				p = n;
+			}
+
+			insertion_point = p;
+			next->prev = insertion_point;
+			insertion_point->next = next;
+		}
 	}
 }
 
