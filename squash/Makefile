@@ -12,3 +12,4 @@ all: $(OBJ)
 	
 clean:
 	rm -rf *.o
+	rm -rf squash.exe
