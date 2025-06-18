@@ -459,7 +459,7 @@ struct token* GetNextToken(struct Lexer* lexer) // Lexer.
         else if (isspace(lexer->currentChar) || lexer->currentChar == ' ' || lexer->currentChar == '\t' || lexer->currentChar == '\n' || lexer->currentChar == '\r')
         {
             token_t* token = token_new();
-            token_init(&token, AST_CurleyBrace, ParseWhitespace(lexer), lexer->currentPos, NULL);
+            token_init(&token, AST_Whitespace, ParseWhitespace(lexer), lexer->currentPos, NULL);
 
             return token;
         }
@@ -482,132 +482,66 @@ struct token* GetNextToken(struct Lexer* lexer) // Lexer.
 
 char* ParseNumber(struct Lexer* lexer)
 {
-    list_t* lst_builder = list_new();
-    list_t* n = NULL;
-    int count = 0;
-    char* buffer = NULL;
-    int index = 0;
+    StringBuilder* sb = sb_create();
 
     while (lexer->currentChar != '\0' && (isdigit(lexer->currentChar) || lexer->currentChar == '.' || lexer->currentChar == 'f'))
     {
-        char* c = &lexer->currentChar;
-        list_enqueue(lst_builder, (void*)c);
+        char* c = (char*)malloc(sizeof(char) * 2);
+        if (c != NULL)
+        {
+            c[0] = lexer->currentChar;
+            c[1] = '\0';
+            sb_append(sb, c);
+        }
 
-        lexer_advance(lexer);;
+        lexer_advance(lexer);
     }
 
-    n = lst_builder;
-    count = 0;
+    char* result = sb_concat(sb);
 
-    while (n != NULL)
-    {
-        count++;
-
-        n = n->next;
-    }
-
-    n = lst_builder;
-    buffer = (char*)malloc(sizeof(char) * (count + 1));
-    index = 0;
-    buffer[count] = '\0';
-    char* pC;
-
-    while (n != NULL)
-    {
-        pC = (char*)n->data;
-        buffer[index] = *pC;
-        index++;
-
-        n = n->next;
-    }
-
-    return buffer;
+    return result;
 }
 
 char* ParseIdentifier(struct Lexer* lexer)
 {
-    list_t* lst_builder = list_new();
-    list_t* n = NULL;
-    int count = 0;
-    char* buffer = NULL;
-    int index = 0;
+    StringBuilder* sb = sb_create();
 
     while (lexer->currentChar != '\0' && ((isdigit(lexer->currentChar) || isalpha(lexer->currentChar)) || lexer->currentChar == '_'))
     {
-        char* c = &lexer->currentChar;
-        list_enqueue(lst_builder, (void*)c);
+        char* c = (char*)malloc(sizeof(char) * 2);
+        if (c != NULL)
+        {
+            c[0] = lexer->currentChar;
+            c[1] = '\0';
+            sb_append(sb, c);
+        }
 
-        lexer_advance(lexer);;
+        lexer_advance(lexer);
     }
 
-    n = lst_builder;
-    count = 0;
+    char* result = sb_concat(sb);
 
-    while (n != NULL)
-    {
-        count++;
-
-        n = n->next;
-    }
-
-    n = lst_builder;
-    buffer = (char*)malloc(sizeof(char) * (count + 1));
-    index = 0;
-    buffer[count] = '\0';
-    char* pC;
-
-    while (n != NULL)
-    {
-        pC = (char*)n->data;
-        buffer[index] = *pC;
-        index++;
-
-        n = n->next;
-    }
-
-    return buffer;
+    return result;
 }
 
 char* ParseWhitespace(struct Lexer* lexer)
 {
-    list_t* lst_builder = list_new();
-    list_t* n = NULL;
-    int count = 0;
-    char* buffer = NULL;
-    int index = 0;
+    StringBuilder* sb = sb_create();
 
     while (lexer->currentChar != '\0' && (isspace(lexer->currentChar) || lexer->currentChar == ' ' || lexer->currentChar == '\t' || lexer->currentChar == '\n' || lexer->currentChar == '\r'))
     {
-        char* c = &lexer->currentChar;
-        list_enqueue(lst_builder, (void*)c);
+        char* c = (char*)malloc(sizeof(char) * 2);
+        if (c != NULL)
+        {
+            c[0] = lexer->currentChar;
+            c[1] = '\0';
+            sb_append(sb, c);
+        }
 
-        lexer_advance(lexer);;
+        lexer_advance(lexer);
     }
 
-    n = lst_builder;
-    count = 0;
+    char* result = sb_concat(sb);
 
-    while (n != NULL)
-    {
-        count++;
-
-        n = n->next;
-    }
-
-    n = lst_builder;
-    buffer = (char*)malloc(sizeof(char) * (count + 1));
-    index = 0;
-    buffer[count] = '\0';
-    char* pC;
-
-    while (n != NULL)
-    {
-        pC = (char*)n->data;
-        buffer[index] = *pC;
-        index++;
-
-        n = n->next;
-    }
-
-    return buffer;
+    return result;
 }
