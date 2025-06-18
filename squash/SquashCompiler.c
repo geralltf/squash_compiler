@@ -18,6 +18,8 @@ void squash_compiler_init(squash_compiler_t* squash_compiler, char* input, int i
 
     input = MinifyCode(minifier, input, inputLength, tokens, &newInputLength); // ref preTokens
 
+    printf("SOURCE: %s\n", input);
+
     //Logger.Log.LogInformation("SOURCE:\n" + input);
 
     squash_compiler->lexer = lexer_new(minifier); // new Lexer(input, ref preTokens);
