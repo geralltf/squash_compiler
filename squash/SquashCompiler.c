@@ -8,7 +8,8 @@ squash_compiler_t* squash_compiler_new()
 
 void squash_compiler_init(squash_compiler_t* squash_compiler, char* input, int inputLength)
 {
-    //Logger.Log.LogInformation("SquashCompiler(): ctor");
+    LogInformation("SquashCompiler(): ctor");
+
     list_t* tokens = list_new();
 
     Minifier_t* minifier = Minifier_new();
@@ -18,9 +19,10 @@ void squash_compiler_init(squash_compiler_t* squash_compiler, char* input, int i
 
     input = MinifyCode(minifier, input, inputLength, tokens, &newInputLength); // ref preTokens
 
-    printf("SOURCE: %s\n", input);
-
-    //Logger.Log.LogInformation("SOURCE:\n" + input);
+    LogInformation("SOURCE:\n%s", input);
+    //LogError("SquashCompiler(): error\n");
+    //LogCritical("SquashCompiler(): critical\n");
+    //LogWarning("SquashCompiler(): warning\n");
 
     squash_compiler->lexer = lexer_new(minifier); // new Lexer(input, ref preTokens);
     lexer_init(squash_compiler->lexer, input, inputLength, tokens);
@@ -59,7 +61,7 @@ void CompileExpression(squash_compiler_t* squash_compiler)
 
 astnode_t* ParseStatements(squash_compiler_t* squash_compiler)
 {
-    //Logger.Log.LogInformation("ParseStatements(): Parsing individual statements that may be outside a function definition or inside a function definition.");
+    LogInformation("ParseStatements(): Parsing individual statements that may be outside a function definition or inside a function definition.");
 
     astnode_t* expression = ParseExpression(squash_compiler, 0);
     if (expression != NULL)
@@ -75,13 +77,13 @@ astnode_t* ParseStatements(squash_compiler_t* squash_compiler)
     {
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
 
-        //Logger.Log.LogInformation("ParseStatements(): end of statement semi colon found.");
+        LogInformation("ParseStatements(): end of statement semi colon found.");
 
         if (squash_compiler->currentToken->Type == AST_CurleyBrace && squash_compiler->currentToken->Value == "}")
         {
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
 
-            //Logger.Log.LogInformation("ParseStatements(): end of function curley brace found.");
+            LogInformation("ParseStatements(): end of function curley brace found.");
         }
     }
     else if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_CurleyBrace
@@ -89,7 +91,7 @@ astnode_t* ParseStatements(squash_compiler_t* squash_compiler)
     {
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
 
-        //Logger.Log.LogInformation("ParseStatements(): end of function curley brace found.");
+        LogInformation("ParseStatements(): end of function curley brace found.");
     }
     else
     {
@@ -106,7 +108,7 @@ astnode_t* ParseStatements(squash_compiler_t* squash_compiler)
 
             expression->IsFunctionDefinition = true;
 
-            //Logger.Log.LogInformation("ParseStatements(): added statement to function body which is function definition.");
+            LogInformation("ParseStatements(): added statement to function body which is function definition.");
         }
     }
 
@@ -173,7 +175,7 @@ astnode_t* parseAssignmentOperator(squash_compiler_t* squash_compiler, enum VarT
         {
             VariableSymbol_t* varDefine;
 
-            //Logger.Log.LogInformation("parseAssignmentOperator(): parsing assignment");
+            LogInformation("parseAssignmentOperator(): parsing assignment");
 
             if (varType != AST_VarAutomatic)
             {
@@ -295,13 +297,16 @@ void parseEndStatement(squash_compiler_t* squash_compiler, astnode_t* varDefineN
 {
     if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_SemiColon)
     {
-        //Logger.Log.LogInformation("parseEndStatement(): parsing end statement");
+        LogInformation("parseEndStatement(): parsing end statement");
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
         if (squash_compiler->currentToken != NULL)
         {
             astnode_t* rhs = ParseExpression(squash_compiler, 0);
             varDefineNode->Right = rhs;
-            //Logger.Log.LogInformation("parseEndStatement(): rhs: " + rhs.ToString());
+
+            char* ast_str = ast_tostring(rhs);
+
+            LogInformation("parseEndStatement(): rhs: %s", ast_str);
         }
     }
 }
@@ -341,7 +346,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
         return NULL;
     }
 
-    //Logger.Log.LogInformation("ParsePrimaryExpression(): handle token types prior to handling");
+    LogInformation("ParsePrimaryExpression(): handle token types prior to handling");
 
     if (squash_compiler->currentToken->Type == AST_ReturnKeyword)
     {
@@ -353,7 +358,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
             //astnode_t* left = ParseExpression(0, rootAST);
             astnode_t* left = NULL;
 
-            //Logger.Log.LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST with left=null");
+            LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST with left=null");
 
             //ASTNode? left = null;
             astnode_t* returnNode = ast_node_new();
@@ -370,11 +375,11 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
 
             if (left == NULL)
             {
-                //Logger.Log.LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST with lhs=null");
+                LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST with lhs=null");
             }
             else
             {
-                //Logger.Log.LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST");
+                LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST");
             }
 
             astnode_t* returnNode = ast_node_new();
@@ -387,7 +392,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
     }
     else if (squash_compiler->currentToken->Type == AST_VarKeyword)
     {
-        //Logger.Log.LogInformation("ParsePrimaryExpression(): made a var variable of some inferred type AST");
+        LogInformation("ParsePrimaryExpression(): made a var variable of some inferred type AST");
         astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_VarAutomatic);
         astnode_t* left = ParseExpression(squash_compiler, 0);
         varDefineNode->Left = left;
@@ -396,7 +401,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
     }
     else if (squash_compiler->currentToken->Type == AST_DoubleKeyword)
     {
-        //Logger.Log.LogInformation("ParsePrimaryExpression(): double keyword");
+        LogInformation("ParsePrimaryExpression(): double keyword");
         int pos = lexer_getposition(squash_compiler->lexer);
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
         if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Whitespace)
@@ -411,7 +416,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
                 if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Parenthesis
                     && squash_compiler->currentToken->Value == "(")
                 {
-                    //Logger.Log.LogInformation("ParsePrimaryExpression(): double keyword parse function definition '" + functIdentifierName + "'");
+                    LogInformation("ParsePrimaryExpression(): double keyword parse function definition '%s'", functIdentifierName);
 
                     astnode_t* functDefNode = ParseFunctionDefinition(squash_compiler, AST_Double, functIdentifierName);
 
@@ -428,7 +433,9 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
         if (varDefineNode != NULL)
         {
             astnode_t* left = ParseExpression(squash_compiler, 0);
-            //Logger.Log.LogInformation("ParsePrimaryExpression(): var define node: " + varDefineNode.ToString() + "left expr: " + left.ToString());
+            char* ast_str = ast_tostring(varDefineNode);
+            char* ast_strB = ast_tostring(left);
+            LogInformation("ParsePrimaryExpression(): var define node: %s, left expr: %s", ast_str, ast_strB);
             varDefineNode->Left = left;
             parseEndStatement(squash_compiler, varDefineNode);
             return varDefineNode;
@@ -477,7 +484,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
                     {
                         //currentToken = token1;
 
-                        //Logger.Log.LogInformation("ParsePrimaryExpression(): ParseFunctionDefinition int keyword function is: " + functIdentifierName);
+                        LogInformation("ParsePrimaryExpression(): ParseFunctionDefinition int keyword function is: %s", functIdentifierName);
 
                         //lexer.SetPosition(pos2);
                         astnode_t* functDefNode = ParseFunctionDefinition(squash_compiler, AST_Int, functIdentifierName);
@@ -745,8 +752,9 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
         ast_node_init_bt(&numNode, AST_Number, token->Value, value_type, left, right);
 
         //ASTNode numNode = new ASTNode(ASTNodeType.Number, token.Value, left, right);
+        char* ast_str_num = ast_tostring(numNode);
 
-        //Logger.Log.LogInformation("ParsePrimaryExpression(): AST Number node created. " + numNode.ToString());
+        LogInformation("ParsePrimaryExpression(): AST Number node created. %s", ast_str_num);
 
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
         return numNode;
@@ -755,13 +763,13 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
     {
         char* identifierName = token->Value;
 
-        //Logger.Log.LogInformation("ParsePrimaryExpression(): Identifier found '" + identifierName + "'");
+        LogInformation("ParsePrimaryExpression(): Identifier found '%s'", identifierName);
 
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
 
         if (squash_compiler->currentToken->Type == AST_Parenthesis && squash_compiler->currentToken->Value == "(")
         {
-            //Logger.Log.LogInformation("ParsePrimaryExpression(): Parsing function call for identifier '" + identifierName + "'");
+            LogInformation("ParsePrimaryExpression(): Parsing function call for identifier '%s'", identifierName);
 
             // Handle function call
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "("
@@ -788,7 +796,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
         }
         else
         {
-            //Logger.Log.LogInformation("ParsePrimaryExpression(): Parsing variable given identifier: '" + identifierName + "'");
+            LogInformation("ParsePrimaryExpression(): Parsing variable given identifier: '%s'", identifierName);
 
             // Handle variable
             if (!SymbolTable_VariableHasKey(squash_compiler->symbolTable, identifierName))
@@ -817,18 +825,21 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
 
                 //astnode_t* right = new ASTNode(ASTNodeType.VariableAssignment, before.Value, left, varNode);
 
-                //Logger.Log.LogInformation("ParsePrimaryExpression(): variable assignment lhs: '" + left.ToString() + "' rhs: '" + right.ToString() + "'");
+                char* ast_str_left = ast_tostring(left);
+                char* ast_str_right = ast_tostring(right);
+
+                LogInformation("ParsePrimaryExpression(): variable assignment lhs: '%s' rhs: '%s'", ast_str_left, ast_str_right);
 
                 return right;
             }
             else if (varNode != NULL && squash_compiler->currentToken->Type == AST_Operator)
             {
-                //Logger.Log.LogInformation("ParsePrimaryExpression(): variable usage in expression or statement #1.");
+                LogInformation("ParsePrimaryExpression(): variable usage in expression or statement #1.");
                 return varNode;
             }
             else if (varNode != NULL)
             {
-                //Logger.Log.LogInformation("ParsePrimaryExpression(): variable usage in expression or statement #2.");
+                LogInformation("ParsePrimaryExpression(): variable usage in expression or statement #2.");
                 return varNode;
             }
             else
@@ -839,7 +850,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
     }
     else if (squash_compiler->currentToken->Type == AST_Parenthesis && squash_compiler->currentToken->Value == "(")
     {
-        //Logger.Log.LogInformation("ParsePrimaryExpression(): Handling parenthesis");
+        LogInformation("ParsePrimaryExpression(): Handling parenthesis");
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "("
         astnode_t* node = ParseExpression(squash_compiler, 0);
         if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Value == ")")
@@ -946,7 +957,7 @@ astnode_t* ParseEntryPoint(squash_compiler_t* squash_compiler, char* functIdenti
     //Token token1;
     bool rememberLocation = false;
 
-    //Logger.Log.LogInformation("ParsePrimaryExpression(): parsing entry point main() function");
+    LogInformation("ParsePrimaryExpression(): parsing entry point main() function");
 
     squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
     if (squash_compiler->currentToken->Type == AST_Parenthesis && squash_compiler->currentToken->Value == "(")
@@ -993,11 +1004,12 @@ astnode_t* ParseEntryPoint(squash_compiler_t* squash_compiler, char* functIdenti
                             list_enqueue(entryPointNode->FunctionBody, (void*)left);
                         }
 
-                        //Logger.Log.LogInformation("ParseEntryPoint(): entry point node parsed '" + entryPointNode.ToString() + "'");
+                        char* ast_str = ast_tostring(entryPointNode);
+                        LogInformation("ParseEntryPoint(): entry point node parsed '%s'", ast_str);
 
                         if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_CurleyBrace && squash_compiler->currentToken->Value == "}")
                         {
-                            //Logger.Log.LogInformation("ParseEntryPoint(): entry point end closing curley brace found");
+                            LogInformation("ParseEntryPoint(): entry point end closing curley brace found");
 
                             //return left;
                         }
@@ -1227,18 +1239,20 @@ list_t* ParseFunctionArguments(squash_compiler_t* squash_compiler) // returns: L
 
 astnode_t* ParseExpression(squash_compiler_t* squash_compiler, int precedence)
 {
-    //Logger.Log.LogInformation("ParseExpression(): precedence: '" + precedence.ToString() + "'");
+    LogInformation("ParseExpression(): precedence: '%d'", precedence);
 
     astnode_t* leftNode = ParsePrimaryExpression(squash_compiler); // Parse the left operand
     
     if (leftNode != NULL)
     {
         leftNode->Precedence = precedence;
-        //Logger.Log.LogInformation("ParseExpression(): precedence: " + precedence.ToString() + " leftNode: " + leftNode.ToString());
+        char* ast_str = ast_tostring(leftNode);
+
+        LogInformation("ParseExpression(): precedence: %d, leftNode: %s", precedence, ast_str);
     }
     else
     {
-        //Logger.Log.LogInformation("ParseExpression(): precedence: " + precedence.ToString() + " leftNode: == null");
+        LogInformation("ParseExpression(): precedence: %d, leftNode: == null", precedence);
     }
 
     while (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Operator && (GetPrecedence(squash_compiler->currentToken->Value) >= precedence))
@@ -1247,16 +1261,22 @@ astnode_t* ParseExpression(squash_compiler_t* squash_compiler, int precedence)
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
 
         int nextPrecedence = GetPrecedence(squash_compiler->currentToken->Value);
+        int precd;
+        char* ast_str_left;
+        char* ast_str_right;
 
         astnode_t* rightNode = ParseExpression(squash_compiler, nextPrecedence); // Parse the right operand with correct precedence
 
         // Handle associativity for right-associative operators
         while (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Operator && GetPrecedence(squash_compiler->currentToken->Value) == nextPrecedence)
         {
-            //Logger.Log.LogInformation("ParseExpression(): precedence: " + GetPrecedence(currentToken.Value).ToString() + " token: " + currentToken.Value + "");
+            precd = GetPrecedence(squash_compiler->currentToken->Value);
+
+            LogInformation("ParseExpression(): precedence: %d, token: %s", precd, squash_compiler->currentToken->Value);
             rightNode = ParseExpression(squash_compiler, nextPrecedence);
 
-            //Logger.Log.LogInformation("ParseExpression(): precedence climbing to next rhs: " + rightNode.ToString());
+            ast_str_right = ast_tostring(rightNode);
+            LogInformation("ParseExpression(): precedence climbing to next rhs: %s", ast_str_right);
         }
 
         // Handle parentheses
@@ -1273,15 +1293,20 @@ astnode_t* ParseExpression(squash_compiler_t* squash_compiler, int precedence)
             //ast.AddUnaryOperator(op.Value, rightNode);
             //leftNode = new ASTNode(ASTNodeType.UNARY_OP, op.Value, null, rightNode);
 
-            //Logger.Log.LogInformation("ParseExpression(): precedence: '" + precedence.ToString() + "' Is Unary Operator " + leftNode.ToString());
+            ast_str_left = ast_tostring(leftNode);
+
+            LogInformation("ParseExpression(): precedence: '%d', Is Unary Operator, %s", precedence, ast_str_left);
         }
         else
         {
+            astnode_t* p = leftNode;
             leftNode = ast_node_new();
-            ast_node_init_bt(&leftNode, AST_BIN_OP, op->Value, AST_VALUE_STRING, leftNode, rightNode);
+            ast_node_init_bt(&leftNode, AST_BIN_OP, op->Value, AST_VALUE_STRING, p, rightNode);
             //leftNode = new ASTNode(ASTNodeType.BIN_OP, op.Value, leftNode, rightNode);
 
-            //Logger.Log.LogInformation("ParseExpression(): precedence: '" + precedence.ToString() + "' Is Binary Operator " + leftNode.ToString());
+            ast_str_left = ast_tostring(leftNode);
+
+            LogInformation("ParseExpression(): precedence: '%d', Is Binary Operator, %s", precedence, ast_str_left);
         }
     }
 

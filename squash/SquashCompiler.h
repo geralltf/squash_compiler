@@ -1,6 +1,7 @@
 #ifndef SQUASH_COMPILER_H
 #define SQUASH_COMPILER_H
 
+#include "Logger.h"
 #include "Lexer.h"
 #include "Token.h"
 #include "Symbols.h"
