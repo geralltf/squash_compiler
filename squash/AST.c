@@ -191,21 +191,18 @@ char* bool_tostring(bool input)
 }
 char* ast_tostring(struct ASTNode* node)
 {
+    StringBuilder* sb = sb_create();
+
     char* astType = astnodetype_tostring(node->Type);
-    char* typeStr = strcat("Type: ", astType);
-    char* valueStr = strcat(", Value: '", node->Value);
+
+    sb_append(sb, "Type: ");
+    sb_append(sb, astType);
+
+    sb_append(sb, ", Value: '");
+    sb_append(sb, node->Value);
 
     char* varState = NULL;
     char* functBodyStatus;
-
-    if (node->IsVariable)
-    {
-        varState = "true";
-    }
-    else
-    {
-        varState = "false";
-    }
 
     if (node->FunctionArguments != NULL)
     {
@@ -215,19 +212,20 @@ char* ast_tostring(struct ASTNode* node)
     {
         functBodyStatus = "Doesn't have them.";
     }
-    char* functArgsState = strcat(" Function Args: ", functBodyStatus);
 
-    char* variableStatus = strcat("', IsVariable: ", varState);
-    char* functCallStatus = strcat(" IsFunctionCall: ", bool_tostring(node->IsFunctionCall));
-    char* functDefStatus = strcat(" IsFunctionDefinition: ", bool_tostring(node->IsFunctionDefinition));
+    sb_append(sb, "' Function Args: '");
+    sb_append(sb, functBodyStatus);
 
-    char* A = strcat(functCallStatus, functDefStatus);
-    char* B = strcat(variableStatus, A);
-    char* C = strcat(valueStr, B);
-    char* D = strcat(typeStr, C);
-    char* E = strcat(D, functArgsState);
+    sb_append(sb, "', IsVariable: ");
+    sb_append(sb, (node->IsVariable ? "true" : "false"));
 
-    char* statusMsg = D;
+    sb_append(sb, " IsFunctionCall: ");
+    sb_append(sb, (node->IsFunctionCall ? "true" : "false"));
+
+    sb_append(sb, " IsFunctionDefinition: ");
+    sb_append(sb, (node->IsFunctionDefinition ? "true" : "false"));
+
+    char* statusMsg = sb_concat(sb);
 
     return statusMsg;
 }
