@@ -6,6 +6,7 @@ enum TokenType;
 #include "List.h"
 #include "Token.h"
 #include "Minifier.h"
+#include "Logger.h"
 
 typedef struct Lexer
 {

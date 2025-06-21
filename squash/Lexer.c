@@ -465,6 +465,7 @@ struct token* GetNextToken(struct Lexer* lexer) // Lexer.
         }
         else
         {
+            LogError("Invalid character found in input '%s'' Current position: %d", lexer->currentChar, lexer_getposition(lexer));
             //Logger.Log.LogError("Invalid character found in input '" + currentChar.ToString() + "' Current position: " + GetPosition().ToString()
             //    + " offsetX: " + ((preToken != null) ? preToken.OffsetX.ToString() : "is null")
             //    + " offsetY: " + ((preToken != null) ? preToken.OffsetY.ToString() : "is null")
