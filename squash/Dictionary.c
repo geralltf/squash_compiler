@@ -363,7 +363,7 @@ DictionaryPair* DictionaryGetPair(Dictionary* dictionary, void* key)
 	pair->key = key;
 	DictionaryNode* node = DictionaryNodeNew(pair);
 
-	struct DictionaryPair* root = dictionary->rootNode;
+	struct DictionaryNode* root = dictionary->rootNode;
 
 	if (root == NULL)
 	{
