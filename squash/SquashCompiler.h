@@ -10,7 +10,7 @@
 
 #include <errno.h>
 #include <math.h>
-//#include <cerrno>
+#include <string.h>
 
 typedef struct SquashCompiler
 {

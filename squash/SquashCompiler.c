@@ -79,7 +79,7 @@ astnode_t* ParseStatements(squash_compiler_t* squash_compiler)
 
         LogInformation("ParseStatements(): end of statement semi colon found.");
 
-        if (squash_compiler->currentToken->Type == AST_CurleyBrace && squash_compiler->currentToken->Value == "}")
+        if (squash_compiler->currentToken->Type == AST_CurleyBrace && strcmp(squash_compiler->currentToken->Value, "}") == 0)
         {
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
 
@@ -480,7 +480,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
                     int pos3 = lexer_getposition(squash_compiler->lexer);
                     squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
 
-                    if (squash_compiler->currentToken->Type == AST_Parenthesis && squash_compiler->currentToken->Value == "(")
+                    if (squash_compiler->currentToken->Type == AST_Parenthesis && strcmp(squash_compiler->currentToken->Value, "(") == 0)
                     {
                         //currentToken = token1;
 
@@ -767,7 +767,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
 
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
 
-        if (squash_compiler->currentToken->Type == AST_Parenthesis && squash_compiler->currentToken->Value == "(")
+        if (squash_compiler->currentToken->Type == AST_Parenthesis && strcmp(squash_compiler->currentToken->Value, "(") == 0)
         {
             LogInformation("ParsePrimaryExpression(): Parsing function call for identifier '%s'", identifierName);
 
@@ -813,7 +813,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
 
             token_t* before = squash_compiler->currentToken;
             //currentToken = lexer.GetNextToken(); // Skip past identifier token.
-            if (squash_compiler->currentToken->Type == AST_Assignment && squash_compiler->currentToken->Value == "=")
+            if (squash_compiler->currentToken->Type == AST_Assignment && strcmp(squash_compiler->currentToken->Value, "=") == 0)
             {
                 squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
 
@@ -848,7 +848,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
             }
         }
     }
-    else if (squash_compiler->currentToken->Type == AST_Parenthesis && squash_compiler->currentToken->Value == "(")
+    else if (squash_compiler->currentToken->Type == AST_Parenthesis && strcmp(squash_compiler->currentToken->Value, "(") == 0)
     {
         LogInformation("ParsePrimaryExpression(): Handling parenthesis");
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "("
@@ -889,11 +889,11 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
         return NULL;
     }
 
-    if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Value == ")")
+    if (squash_compiler->currentToken != NULL && strcmp(squash_compiler->currentToken->Value, ")") == 0)
     {
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past ")"
     }
-    if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Value == "{")
+    if (squash_compiler->currentToken != NULL && strcmp(squash_compiler->currentToken->Value, "{") == 0)
     {
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "{"
     }
@@ -901,7 +901,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
     {
         return ParseExpression(squash_compiler, 0);
     }
-    if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Value == "}")
+    if (squash_compiler->currentToken != NULL && strcmp(squash_compiler->currentToken->Value, "}") == 0)
     {
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "}"
     }
@@ -945,7 +945,7 @@ void ParseEndOfFunction(squash_compiler_t* squash_compiler)
     {
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
 
-        if (squash_compiler->currentToken->Type == AST_CurleyBrace && squash_compiler->currentToken->Value == "}")
+        if (squash_compiler->currentToken->Type == AST_CurleyBrace && strcmp(squash_compiler->currentToken->Value, "}") == 0)
         {
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
         }
@@ -960,20 +960,20 @@ astnode_t* ParseEntryPoint(squash_compiler_t* squash_compiler, char* functIdenti
     LogInformation("ParsePrimaryExpression(): parsing entry point main() function");
 
     squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-    if (squash_compiler->currentToken->Type == AST_Parenthesis && squash_compiler->currentToken->Value == "(")
+    if (squash_compiler->currentToken->Type == AST_Parenthesis && strcmp(squash_compiler->currentToken->Value, "(") == 0)
     {
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-        if (squash_compiler->currentToken->Type == AST_VoidKeyword && squash_compiler->currentToken->Value == "void")
+        if (squash_compiler->currentToken->Type == AST_VoidKeyword && strcmp(squash_compiler->currentToken->Value, "void") == 0)
         {
             //currentToken = lexer.GetNextToken();
 
             //if(currentToken.Type == TokenType.Whitespace)
             {
                 squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-                if (squash_compiler->currentToken->Type == AST_Parenthesis && squash_compiler->currentToken->Value == ")")
+                if (squash_compiler->currentToken->Type == AST_Parenthesis && strcmp(squash_compiler->currentToken->Value, ")") == 0)
                 {
                     squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-                    if (squash_compiler->currentToken->Type == AST_CurleyBrace && squash_compiler->currentToken->Value == "{")
+                    if (squash_compiler->currentToken->Type == AST_CurleyBrace && strcmp(squash_compiler->currentToken->Value, "{") == 0)
                     {
                         rememberLocation = true;
 
@@ -1007,7 +1007,7 @@ astnode_t* ParseEntryPoint(squash_compiler_t* squash_compiler, char* functIdenti
                         char* ast_str = ast_tostring(entryPointNode);
                         LogInformation("ParseEntryPoint(): entry point node parsed '%s'", ast_str);
 
-                        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_CurleyBrace && squash_compiler->currentToken->Value == "}")
+                        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_CurleyBrace && strcmp(squash_compiler->currentToken->Value, "}") == 0)
                         {
                             LogInformation("ParseEntryPoint(): entry point end closing curley brace found");
 
@@ -1036,7 +1036,7 @@ astnode_t* ParseFunctionDefinition(squash_compiler_t* squash_compiler, enum VarT
     list_t* args = ParseFunctionArgs(squash_compiler, retVarType); //List<ASTNode> args = ParseFunctionDefArguments(retVarType);
 
     squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-    if (squash_compiler->currentToken == NULL || (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_CurleyBrace && squash_compiler->currentToken->Value == "{"))
+    if (squash_compiler->currentToken == NULL || (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_CurleyBrace && strcmp(squash_compiler->currentToken->Value, "{") == 0))
     {
         //rememberLocation = true;
 
@@ -1070,7 +1070,7 @@ astnode_t* ParseFunctionDefinition(squash_compiler_t* squash_compiler, enum VarT
             list_enqueue(entryPointNode->FunctionBody, (void*)left);
         }
 
-        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_CurleyBrace && squash_compiler->currentToken->Value == "}")
+        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_CurleyBrace && strcmp(squash_compiler->currentToken->Value, "}") == 0)
         {
             //return left;
         }
@@ -1110,7 +1110,7 @@ void ParseFunctionArg(squash_compiler_t* squash_compiler, list_t* args, char* ar
             list_enqueue(args, (void*)functionArg); //args.Add(functionArg);
 
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-            if (squash_compiler->currentToken->Type == AST_Operator && squash_compiler->currentToken->Value == ",")
+            if (squash_compiler->currentToken->Type == AST_Operator && strcmp(squash_compiler->currentToken->Value, ",") == 0)
             {
 
             }
@@ -1120,7 +1120,7 @@ void ParseFunctionArg(squash_compiler_t* squash_compiler, list_t* args, char* ar
 list_t* ParseFunctionArgs(squash_compiler_t* squash_compiler, enum VarType retVarType) // returns: List<ASTNode>
 {
     list_t* args = list_new(); //List<ASTNode> args = new List<ASTNode>();
-    while (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || squash_compiler->currentToken->Value != ")"))
+    while (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || strcmp(squash_compiler->currentToken->Value, ")") != 0))
     {
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
 
@@ -1136,7 +1136,7 @@ list_t* ParseFunctionArgs(squash_compiler_t* squash_compiler, enum VarType retVa
         {
             ParseFunctionArg(squash_compiler, args, "string");
         }
-        if (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || squash_compiler->currentToken->Value != ")"))
+        if (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || strcmp(squash_compiler->currentToken->Value, ")") != 0))
         {
             //Logger.Log.LogWarning("ParseFunctionArgs(): Invalid function argument list.");
         }
@@ -1150,7 +1150,7 @@ list_t* ParseFunctionDefArguments(squash_compiler_t* squash_compiler, enum VarTy
 
 
 
-    while (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || squash_compiler->currentToken->Value != ")"))
+    while (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || strcmp(squash_compiler->currentToken->Value, ")") != 0))
     {
         astnode_t* expr = ParseExpression(squash_compiler, 0);
         if (expr != NULL)
@@ -1160,15 +1160,15 @@ list_t* ParseFunctionDefArguments(squash_compiler_t* squash_compiler, enum VarTy
 
 
         if (squash_compiler->currentToken != NULL && ((squash_compiler->currentToken->Type == AST_SemiColon)
-            || (squash_compiler->currentToken->Type == AST_Operator && squash_compiler->currentToken->Value == ",")))
+            || (squash_compiler->currentToken->Type == AST_Operator && strcmp(squash_compiler->currentToken->Value, ",") == 0)))
         {
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "," or ";"
-            if (squash_compiler->currentToken->Type == AST_CurleyBrace && squash_compiler->currentToken->Value == "}")
+            if (squash_compiler->currentToken->Type == AST_CurleyBrace && strcmp(squash_compiler->currentToken->Value, "}") == 0)
             {
                 squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "}"
             }
         }
-        else if (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || squash_compiler->currentToken->Value != ")"))
+        else if (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || strcmp(squash_compiler->currentToken->Value, ")") != 0))
         {
             //Logger.Log.LogError("Invalid function argument list.");
             //throw new Exception("Invalid function argument list.");
@@ -1195,7 +1195,7 @@ list_t* ParseFunctionArguments(squash_compiler_t* squash_compiler) // returns: L
 {
     list_t* arguments = list_new(); //List<ASTNode> arguments = new List<ASTNode>();
 
-    while (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || squash_compiler->currentToken->Value != ")"))
+    while (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || strcmp(squash_compiler->currentToken->Value, ")") != 0))
     {
         astnode_t* expr = ParseExpression(squash_compiler, 0);
         if (expr != NULL)
@@ -1203,7 +1203,7 @@ list_t* ParseFunctionArguments(squash_compiler_t* squash_compiler) // returns: L
             list_enqueue(arguments, (void*)expr);
         }
 
-        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Operator && squash_compiler->currentToken->Value == ",")
+        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Operator && strcmp(squash_compiler->currentToken->Value, ",") == 0)
         {
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past ","
         }
@@ -1211,7 +1211,7 @@ list_t* ParseFunctionArguments(squash_compiler_t* squash_compiler) // returns: L
         {
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past ";"
         }
-        if (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type == AST_CurleyBrace && squash_compiler->currentToken->Value == "}"))
+        if (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type == AST_CurleyBrace && strcmp(squash_compiler->currentToken->Value, "}") == 0))
         {
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "}"
         }
@@ -1219,13 +1219,13 @@ list_t* ParseFunctionArguments(squash_compiler_t* squash_compiler) // returns: L
         {
             return arguments;
         }
-        if (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || squash_compiler->currentToken->Value != ")"))
+        if (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || strcmp(squash_compiler->currentToken->Value, ")") == 0))
         {
             //throw new Exception("Invalid function argument list.");
         }
     }
 
-    if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Value == ")")
+    if (squash_compiler->currentToken != NULL && strcmp(squash_compiler->currentToken->Value, ")") == 0)
     {
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past ")"
     }
@@ -1333,15 +1333,15 @@ bool IsUnaryOperator(squash_compiler_t* squash_compiler)
 {
     return squash_compiler->currentToken != NULL
         && squash_compiler->currentToken->Type == AST_Operator
-        && (squash_compiler->currentToken->Value == "--" || squash_compiler->currentToken->Value == "++");
+        && (strcmp(squash_compiler->currentToken->Value, "--") == 0 || strcmp(squash_compiler->currentToken->Value, "++") == 0);
 }
 
 bool IsBinaryOperator(squash_compiler_t* squash_compiler)
 {
     return squash_compiler->currentToken != NULL
         && squash_compiler->currentToken->Type == AST_Operator
-        && (squash_compiler->currentToken->Value == "-"
-            || squash_compiler->currentToken->Value == "+"
-            || squash_compiler->currentToken->Value == "*"
-            || squash_compiler->currentToken->Value == "/");
+        && (strcmp(squash_compiler->currentToken->Value, "-") == 0
+            || strcmp(squash_compiler->currentToken->Value, "+") == 0
+            || strcmp(squash_compiler->currentToken->Value, "*") == 0
+            || strcmp(squash_compiler->currentToken->Value, "/") == 0);
 }
