@@ -236,6 +236,24 @@ struct ASTNode* ast_node_new()
 
     n = (struct ASTNode*)malloc(sizeof(struct ASTNode));
 
+    // Default initilisiers.
+    n->FunctionBody = NULL;
+    n->FunctionArguments = NULL;
+    n->FunctionName = NULL;
+    n->FunctSymbol = NULL;
+    n->Left = NULL;
+    n->Right = NULL;
+    n->VarSymbol = NULL;
+    n->ArgumentType = NULL;
+    n->FunctionReturnType = AST_VT_UNDEFINED;
+    n->IsFunctionCall = false;
+    n->IsFunctionDefinition = false;
+    n->IsVariable = false;
+    n->Precedence = 0;
+    n->Type = AST_UNDEFINED;
+    n->Value = NULL;
+    n->VariableType = AST_VT_UNDEFINED;
+    n->ValueType = AST_VALUE_UNDEFINED;
     return n;
 }
 
