@@ -48,9 +48,7 @@ void CompileExpression(squash_compiler_t* squash_compiler)
         return;
     }
 
-    //asm.GenerateCode(expression);
-
-    //Optimiser.OptimiseNode(&expression);
+    OptimiseNode(&expression, false);
 
     //squash_compiler->asm->Is_macOS = true;
     //squash_compiler->asm->Is_Linux = true;

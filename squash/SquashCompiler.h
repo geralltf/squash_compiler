@@ -7,6 +7,7 @@
 #include "Symbols.h"
 #include "AST.h"
 #include "Assembler.h"
+#include "Optimiser.h"
 
 #include <errno.h>
 #include <math.h>
