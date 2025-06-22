@@ -46,7 +46,7 @@ void GenerateCode(assembler_t* assembler, astnode_t* astNode)
         sb_append(sb, Assemble(assembler, astNode));
 
         //Logger._log.PrintEndStatistics();
-        //Logger.Log.LogInformation("************* Compiled Assembler Codegen Full Program Dump");
+        LogInformation("************* Compiled Assembler Codegen Full Program Dump");
 
         if (assembler->Is_Linux)
         {
@@ -66,7 +66,7 @@ void GenerateCode(assembler_t* assembler, astnode_t* astNode)
     }
     else
     {
-        //Logger.Log.LogCritical("astNode must not be null for assembler to continue.");
+        LogCritical("astNode must not be null for assembler to continue.");
 
         //Logger._log.PrintEndStatistics();
 
@@ -88,15 +88,13 @@ void GenerateCode(assembler_t* assembler, astnode_t* astNode)
 /// </exception>
 char* Assemble(assembler_t* assembler, astnode_t* node)
 {
-    //Console.WriteLine("AST: " + node.ToString());
-
     StringBuilder* sb = sb_create();
 
     if (node != NULL)
     {
         if (node->Type == AST_FunctionReturn)
         {
-            //Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionReturn");
+            LogInformation("Assemble(): ASTNodeType.FunctionReturn");
 
             sb_append(sb, Assemble(assembler, node->Left));
             sb_append(sb, Assemble(assembler, node->Right));
@@ -137,7 +135,9 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
                             //Console.WriteLine("return");
                         }
 
-                        //Logger.Log.LogInformation("Assemble(): -* function body node: " + bodyNode.ToString());
+                        char* body_node_str = ast_tostring(body_node);
+
+                        LogInformation("Assemble(): -* function body node: %s", body_node_str);
                         sb_append(sb, Assemble(assembler, body_node));
                     }
 
@@ -148,7 +148,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
         }
         else if (node->Type == AST_VariableDefine)
         {
-            //Logger.Log.LogInformation("Assemble(): ASTNodeType.VariableDefine");
+            LogInformation("Assemble(): ASTNodeType.VariableDefine");
 
             // This assignment must occur last so it must be at the end of the expression evaluation
             // to store the result of the expression in an assigned variable.
@@ -183,7 +183,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
         }
         else if (node->Type == AST_VariableAssignment)
         {
-            //Logger.Log.LogInformation("Assemble(): ASTNodeType.VariableAssignment");
+            LogInformation("Assemble(): ASTNodeType.VariableAssignment");
 
             //Console.WriteLine(node.Right.Value + node.Value +  " " + node.Left.Left.Value 
             //    + " " + node.Left.Value + " " + node.Left.Right.Value);
@@ -193,7 +193,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
         }
         else if (node->Type == AST_Number)
         {
-            //Logger.Log.LogInformation("Assemble(): ASTNodeType.Number");
+            LogInformation("Assemble(): ASTNodeType.Number");
 
             // Load the number value into a register
             sb_append(sb, "mov\trax, \t");
@@ -204,7 +204,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
         }
         else if (node->Type == AST_Variable)
         {
-            //Logger.Log.LogInformation("Assemble(): ASTNodeType.Variable");
+            LogInformation("Assemble(): ASTNodeType.Variable");
 
             // Load the variable value into a register
             sb_append(sb, "mov\trax, \t[");
@@ -219,7 +219,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
         }
         else if (node->Type == AST_FunctionCall && node->FunctionArguments != NULL)
         {
-            //Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionCall");
+            LogInformation("Assemble(): ASTNodeType.FunctionCall");
 
             // Generate code for function call arguments
             list_t* n = node->FunctionArguments;
@@ -251,7 +251,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
         }
         else if (node->Type == AST_BIN_OP)
         {
-            //Logger.Log.LogInformation("Assemble(): ASTNodeType.BIN_OP");
+            LogInformation("Assemble(): ASTNodeType.BIN_OP");
 
             // Generate code for left and right operands
             sb_append(sb, Assemble(assembler, node->Left));
@@ -288,7 +288,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
         }
         else if (node->Type == AST_UNARY_OP)
         {
-            //Logger.Log.LogInformation("Assemble(): ASTNodeType.UNARY_OP");
+            LogInformation("Assemble(): ASTNodeType.UNARY_OP");
 
             //Console.WriteLine("UNARY_OP assembler not yet implemented.");
             sb_append(sb, Assemble(assembler, node->Left));
@@ -333,7 +333,10 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
                         {
                             //Console.WriteLine("return");
                         }
-                        //Logger.Log.LogInformation("Assemble(): -* function body node: " + bodyNode.ToString());
+
+                        char* body_node_str = ast_tostring(body_node);
+
+                        LogInformation("Assemble(): -* function body node: %s", body_node_str);
                         sb_append(sb, Assemble(assembler, body_node));
                     }
 
@@ -394,7 +397,10 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
                         {
                             //Console.WriteLine("return");
                         }
-                        //Logger.Log.LogInformation("Assemble(): -* function body node: " + bodyNode.ToString());
+
+                        char* body_node_str = ast_tostring(body_node);
+
+                        LogInformation("Assemble(): -* function body node: ", body_node_str);
                         sb_append(sb, Assemble(assembler, body_node));
                     }
 
@@ -404,12 +410,12 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
             }
             else
             {
-                //Logger.Log.LogWarning("No function definition to enumerate maybe just a standard function return.");
+                LogWarning("No function definition to enumerate maybe just a standard function return.");
             }
         }
         else
         {
-            //Logger.Log.LogError("Invalid ASTNode type sent to assembler.");
+            LogError("Invalid ASTNode type sent to assembler.");
 
             //throw new Exception("Invalid ASTNode type sent to assembler.");
         }
