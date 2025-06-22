@@ -102,7 +102,7 @@ astnode_t* ParseStatements(squash_compiler_t* squash_compiler)
     {
         astnode_t* expressionChild = ParseStatements(squash_compiler);
 
-        if (expressionChild != NULL)
+        if (expressionChild != NULL && expression->FunctionBody != NULL)
         {
             list_enqueue(expression->FunctionBody, (void*)expressionChild);
 
