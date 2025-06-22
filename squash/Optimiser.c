@@ -22,7 +22,7 @@ void OptimiseFunctionBody(astnode_t** nde, bool optimiseConstVariables)
 {
     astnode_t* node = *nde;
     list_t* n;
-    if (node->FunctionBody != NULL)
+    if (node != NULL && node->FunctionBody != NULL)
     {
         n = node->FunctionBody;
         while (n != NULL)
@@ -38,6 +38,11 @@ void OptimiseFunctionBody(astnode_t** nde, bool optimiseConstVariables)
 void OptimiseBinaryOperator(astnode_t** nde, bool optimiseConstVariables)
 {
     astnode_t* node = *nde;
+
+    if (node == NULL)
+    {
+        return;
+    }
 
     astnode_t* left = node->Left;
     astnode_t* right = node->Right;
