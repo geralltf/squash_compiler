@@ -55,7 +55,8 @@ enum VarType //TODO: Array types and object types
     AST_Vector,
     AST_Vector2,
     AST_Vector3,
-    AST_Vector4
+    AST_Vector4,
+    AST_VT_UNDEFINED
 };
 
 typedef struct token
