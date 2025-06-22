@@ -363,5 +363,12 @@ DictionaryPair* DictionaryGetPair(Dictionary* dictionary, void* key)
 	pair->key = key;
 	DictionaryNode* node = DictionaryNodeNew(pair);
 
-	return DictionaryGetNode(dictionary, &dictionary->rootNode, node)->pair;
+	struct DictionaryPair* root = dictionary->rootNode;
+
+	if (root == NULL)
+	{
+		return NULL;
+	}
+
+	return DictionaryGetNode(dictionary, &root, node)->pair;
 }
