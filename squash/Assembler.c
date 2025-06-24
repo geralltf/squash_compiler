@@ -22,11 +22,14 @@ assembler_t* assembler_new()
 /// </exception>
 void GenerateCode(assembler_t* assembler, astnode_t* astNode)
 {
+    char* astnode_str;
     if (astNode != NULL)
     {
-        //Logger._log.PrintEndStatistics();
+        PrintEndStatistics();
 
-        //Logger.Log.LogInformation("************* Generating Code for specified Abstract Syntax Tree. '" + astNode.ToString() + "'");
+        astnode_str = ast_tostring(astNode);
+        LogInformation("************* Generating Code for specified Abstract Syntax Tree. '%s'", astnode_str);
+
         StringBuilder* sb = sb_create();
 
         //string outputAssembly = string.Empty;
@@ -354,13 +357,13 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
             {
                 sb_append(sb, "_");
                 sb_append(sb, node->Value);
-                sb_append(sb, "\n");
+                sb_append(sb, ": \n");
                 //Console.Write("_" + node.Value + ": \n");
             }
             else
             {
                 sb_append(sb, node->Value);
-                sb_append(sb, "\n");
+                sb_append(sb, ": \n");
                 //Console.Write(node.Value + ": \n");
             }
 

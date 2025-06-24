@@ -10,6 +10,8 @@ void squash_compiler_init(squash_compiler_t* squash_compiler, char* input, int i
 {
     LogInformation("SquashCompiler(): ctor");
 
+    stats_begin();
+
     list_t* tokens = list_new();
 
     Minifier_t* minifier = Minifier_new();
@@ -44,11 +46,11 @@ void CompileExpression(squash_compiler_t* squash_compiler)
 
     if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type != AST_EOF)
     {
-        //throw new Exception("Unexpected token found. Position:" + lexer_getposition(lexer).ToString());
+        //LogCritical("Unexpected token found. Position: %d", lexer_getposition(squash_compiler->lexer));
         return;
     }
 
-    OptimiseNode(&expression, false);
+    //OptimiseNode(&expression, false);
 
     //squash_compiler->asm->Is_macOS = true;
     //squash_compiler->asm->Is_Linux = true;
@@ -100,13 +102,20 @@ astnode_t* ParseStatements(squash_compiler_t* squash_compiler)
     {
         astnode_t* expressionChild = ParseStatements(squash_compiler);
 
-        if (expressionChild != NULL && expression->FunctionBody != NULL)
+        if (expressionChild != NULL)
         {
-            list_enqueue(expression->FunctionBody, (void*)expressionChild);
+            if (expression != NULL)
+            {
+                list_enqueue(expression->FunctionBody, (void*)expressionChild);
 
-            expression->IsFunctionDefinition = true;
+                expression->IsFunctionDefinition = true;
 
-            LogInformation("ParseStatements(): added statement to function body which is function definition.");
+                LogInformation("ParseStatements(): added statement to function body which is function definition.");
+            }
+            else 
+            {
+                return expressionChild;
+            }
         }
     }
 
@@ -340,7 +349,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
 
     if (squash_compiler->currentToken == NULL)
     {
-        //Logger.Log.LogError("ParsePrimaryExpression(): currentToken is null");
+        //LogError("ParsePrimaryExpression(): currentToken is null");
         return NULL;
     }
 
@@ -412,7 +421,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
 
                 squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
                 if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Parenthesis
-                    && squash_compiler->currentToken->Value == "(")
+                    && strcmp(squash_compiler->currentToken->Value, "(") == 0)
                 {
                     LogInformation("ParsePrimaryExpression(): double keyword parse function definition '%s'", functIdentifierName);
 
@@ -463,7 +472,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
             {
                 int pos2 = lexer_getposition(squash_compiler->lexer);
                 char* functIdentifierName = squash_compiler->currentToken->Value;
-                if (functIdentifierName == "main")
+                if (strcmp(functIdentifierName, "main") == 0)
                 {
                     // Parse entry point main() function.
                     astnode_t* mainFunct = ParseEntryPoint(squash_compiler, functIdentifierName);
@@ -925,7 +934,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
 
     if (squash_compiler->currentToken != NULL)
     {
-        //Logger.Log.LogError("Invalid primary expression. Position: " + currentToken.Position.ToString());
+        LogError("Invalid primary expression. Position: %d", squash_compiler->currentToken->Position);
         //throw new Exception("Invalid primary expression. Position: " + currentToken.Position.ToString());
     }
     else
@@ -1283,7 +1292,7 @@ astnode_t* ParseExpression(squash_compiler_t* squash_compiler, int precedence)
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move to the next token
         }
 
-        if ((op->Value == "--" || op->Value == "++") && IsUnaryOperator(squash_compiler))
+        if ((strcmp(op->Value, "--") == 0 || strcmp(op->Value, "++") == 0) && IsUnaryOperator(squash_compiler))
         {
             leftNode = ast_node_new();
             ast_node_init_bt(&leftNode, AST_UNARY_OP, op->Value, AST_VALUE_STRING, NULL, rightNode);
@@ -1314,17 +1323,37 @@ astnode_t* ParseExpression(squash_compiler_t* squash_compiler, int precedence)
 
 int GetPrecedence(char* op)
 {
-    switch (*op)
+    if (strcmp(op, "+") == 0) 
     {
-    case '+':
-    case '-':
         return 1;
-    case '*':
-    case '/':
+    }
+    else if (strcmp(op, "-") == 0)
+    {
+        return 1;
+    }
+    else if (strcmp(op, "*") == 0)
+    {
         return 2;
-    default:
+    }
+    else if (strcmp(op, "/") == 0)
+    {
+        return 2;
+    }
+    else 
+    {
         return 0;
     }
+    //switch (*op)
+    //{
+    //case '+':
+    //case '-':
+    //    return 1;
+    //case '*':
+    //case '/':
+    //    return 2;
+    //default:
+    //    return 0;
+    //}
 }
 
 bool IsUnaryOperator(squash_compiler_t* squash_compiler)
