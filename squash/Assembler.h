@@ -6,19 +6,6 @@
 
 #include <stdio.h>
 
-//typedef struct Assembly_s 
-//{
-//	char* operandLeft;
-//	char* operandRight;
-//	enum OperatorType operatorType;
-//	AST* ast;
-//	struct Assembly_s* leftChild;
-//	struct Assembly_s* rightChild;
-//} Assembly;
-
-//AST* Expr(char* inProgramExpression);
-//bool Compile(AST* programAST, ASMTree** programASM);
-
 typedef struct Assembler
 {
     /// <summary>
