@@ -14,7 +14,7 @@ typedef struct StatisticsLogger
     int warnings_count;
 } statistics_logger_t;
 
-struct StatisticsLogger* __stats_singleton;
+extern struct StatisticsLogger* __stats_singleton;
 
 struct StatisticsLogger* stats_new();
 void stats_init(struct StatisticsLogger** stats);

@@ -1,7 +1,7 @@
 #include "Logger.h"
 #include "sb.h"
 
-extern struct StatisticsLogger* __stats_singleton;
+struct StatisticsLogger* __stats_singleton;
 
 struct StatisticsLogger* stats_new()
 {
