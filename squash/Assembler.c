@@ -101,7 +101,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
 
             sb_append(sb, Assemble(assembler, node->Left));
             sb_append(sb, Assemble(assembler, node->Right));
-            sb_append(sb, "ret");
+            sb_append(sb, "ret\n");
 
             if (node->FunctionArguments != NULL)
             {
@@ -267,22 +267,22 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
             // Perform the operation (addition or subtraction in this example)
             sb_append(sb, "pop\trbx\n");
             //Console.WriteLine("pop\trbx"); // Retrieve left operand from the stack
-            if (node->Value == "+")
+            if (strcmp(node->Value, "+") == 0)
             {
                 sb_append(sb, "add\trax,\trbx\n");
                 //Console.WriteLine("add\trax,\trbx");
             }
-            else if (node->Value == "-")
+            else if (strcmp(node->Value, "-") == 0)
             {
                 sb_append(sb, "sub\trax,\trbx\n");
                 //Console.WriteLine("sub\trax,\trbx");
             }
-            else if (node->Value == "*")
+            else if (strcmp(node->Value, "*") == 0)
             {
                 sb_append(sb, "mul\trax,\trbx\n");
                 //Console.WriteLine("mul\trax,\trbx");
             }
-            else if (node->Value == "/")
+            else if (strcmp(node->Value, "/") == 0)
             {
                 sb_append(sb, "div\trax,\trbx\n");
                 //TODO: idiv for signed division
@@ -350,7 +350,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
         }
         else if (node->Type == AST_FunctionDefinition)
         {
-            //Logger.Log.LogInformation("Assemble(): ASTNodeType.FunctionDefinition");
+            LogInformation("Assemble(): ASTNodeType.FunctionDefinition");
 
             //Console.WriteLine("function definition: " + node.Value + "()");
             if (assembler->Is_macOS)
@@ -403,7 +403,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
 
                         char* body_node_str = ast_tostring(body_node);
 
-                        LogInformation("Assemble(): -* function body node: ", body_node_str);
+                        LogInformation("Assemble(): -* function body node: %s", body_node_str);
                         sb_append(sb, Assemble(assembler, body_node));
                     }
 
