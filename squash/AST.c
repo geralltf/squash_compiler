@@ -259,7 +259,8 @@ struct ASTNode* ast_node_new()
 
 void ast_node_init_bt(struct ASTNode** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, struct ASTNode* left, struct ASTNode* right)
 {
-    struct ASTNode* n = ast_node_new();
+    //struct ASTNode* n = ast_node_new();
+    struct ASTNode* n = *node;
 
     n->Type = type;
     n->Value = value;
@@ -278,7 +279,8 @@ void ast_node_init_bt(struct ASTNode** node, enum ASTNodeType type, char* value,
 
 void ast_node_init_bt2(struct ASTNode** node, enum ASTNodeType type, char* argumentType, char* value, enum ASTNodeValueType value_type, struct ASTNode* left, struct ASTNode* right)
 {
-    struct ASTNode* n = ast_node_new();
+    //struct ASTNode* n = ast_node_new();
+    struct ASTNode* n = *node;
 
     n->Type = type;
     n->ArgumentType = argumentType;
@@ -298,7 +300,8 @@ void ast_node_init_bt2(struct ASTNode** node, enum ASTNodeType type, char* argum
 
 void ast_node_init_funct(struct ASTNode** node, enum ASTNodeType type, char* value, struct FunctionSymbol* functionSymbol, list_t* arguments) // List<ASTNode> arguments
 {
-    struct ASTNode* n = ast_node_new();
+    //struct ASTNode* n = ast_node_new();
+    struct ASTNode* n = *node;
 
     n->Type = type;
     n->Value = value;
@@ -316,7 +319,8 @@ void ast_node_init_funct(struct ASTNode** node, enum ASTNodeType type, char* val
 
 void ast_node_init_var(struct ASTNode** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, struct VariableSymbol* variableSymbol)
 {
-    struct ASTNode* n = ast_node_new();
+    //struct ASTNode* n = ast_node_new();
+    struct ASTNode* n = *node;
 
     n->Type = type;
     n->Value = value;
