@@ -46,7 +46,7 @@ void CompileExpression(squash_compiler_t* squash_compiler)
 
     if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type != AST_EOF)
     {
-        //LogCritical("Unexpected token found. Position: %d", lexer_getposition(squash_compiler->lexer));
+        LogCritical("Unexpected token found. Position: %d", lexer_getposition(squash_compiler->lexer));
         return;
     }
 
@@ -87,7 +87,7 @@ astnode_t* ParseStatements(squash_compiler_t* squash_compiler)
         }
     }
     else if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_CurleyBrace
-        && squash_compiler->currentToken->Value == "}")
+        && strcmp(squash_compiler->currentToken->Value, "}") == 0)
     {
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
 
@@ -860,7 +860,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
         LogInformation("ParsePrimaryExpression(): Handling parenthesis");
         squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "("
         astnode_t* node = ParseExpression(squash_compiler, 0);
-        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Value == ")")
+        if (squash_compiler->currentToken != NULL && strcmp(squash_compiler->currentToken->Value, ")") == 0)
         {
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past ")"
         }
@@ -1184,7 +1184,7 @@ list_t* ParseFunctionDefArguments(squash_compiler_t* squash_compiler, enum VarTy
 
     if (squash_compiler->currentToken != NULL)
     {
-        if (squash_compiler->currentToken->Value == ")")
+        if (strcmp(squash_compiler->currentToken->Value, ")") == 0)
         {
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past ")"
         }
@@ -1287,7 +1287,7 @@ astnode_t* ParseExpression(squash_compiler_t* squash_compiler, int precedence)
         }
 
         // Handle parentheses
-        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Parenthesis && squash_compiler->currentToken->Value == ")")
+        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Parenthesis && strcmp(squash_compiler->currentToken->Value, ")") == 0)
         {
             squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move to the next token
         }
