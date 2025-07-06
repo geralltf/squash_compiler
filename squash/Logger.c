@@ -43,7 +43,7 @@ void LogInformation(const char* format, ...)
 	va_start(args, format); // Initialize va_list with the format string
 
 	StringBuilder* sb = sb_create();
-	sb_append(sb, "\033[97mINFO: \033[0m");
+	sb_append(sb, "\033[32mINFO: \033[0m");
 	sb_append(sb, format);
 	sb_append(sb, "\n");
 	char* format_str = sb_concat(sb);
