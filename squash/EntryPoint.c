@@ -1,4 +1,4 @@
-﻿#include "Assembler.h"
+#include "Assembler.h"
 #include "SquashCompiler.h"
 #include "FileIO.h"
 
@@ -10,7 +10,7 @@ int main(void)
     size_t length;
     squash_compiler_t* squash_compiler;
 
-    printf("Wello, Horld!\n");
+    printf("*-*-*-*-*-*-* SquashC Compiler *-*-*-*-*-*-*\n");
 
     if (FileReadString("scripts\\EntryPoint.c", &buffer, &length) && buffer)
     {
