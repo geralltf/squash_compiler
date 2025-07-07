@@ -268,7 +268,7 @@ void* Optimiser_ParseNumber(astnode_t* node)
     }
     else if (node->ValueType == AST_VALUE_UNDEFINED)
     {
-        //Logger.Log.LogError("Optimiser_ParseNumber(): AST_VALUE_UNDEFINED");
+        LogError("Optimiser_ParseNumber(): AST_VALUE_UNDEFINED");
         return NULL;
     }
     return NULL;
@@ -276,225 +276,243 @@ void* Optimiser_ParseNumber(astnode_t* node)
 
 int ApplyOperatorII(astnode_t* node, int operandLeft, int operandRight)
 {
-    char c = *node->Value;
+    char* c = node->Value;
     int result = 0;
-    switch (c)
+    if (strcmp(c, "+") == 0)
     {
-    case '+':
         result = operandLeft + operandRight;
-        break;
-    case '-':
+    }
+    else if (strcmp(c, "-") == 0)
+    {
         result = operandLeft - operandRight;
-        break;
-    case '*':
+    }
+    else if (strcmp(c, "*") == 0)
+    {
         result = operandLeft * operandRight;
-        break;
-    case '/':
+    }
+    else if (strcmp(c, "/") == 0)
+    {
         result = operandLeft / operandRight;
-        break;
-    default:
-        //Logger.Log.LogError("Optimiser.OptimiseNode(): Invalid operator");
-        break;
+    }
+    else 
+    {
+        LogError("Optimiser.ApplyOperatorII(): Invalid operator");
     }
     return result;
 }
 
 double ApplyOperatorID(astnode_t* node, int operandLeft, double operandRight)
 {
-    char c = *node->Value;
+    char* c = node->Value;
     double result = 0;
-    switch (c)
+    if (strcmp(c, "+") == 0)
     {
-    case '+':
         result = operandLeft + operandRight;
-        break;
-    case '-':
+    }
+    else if (strcmp(c, "-") == 0)
+    {
         result = operandLeft - operandRight;
-        break;
-    case '*':
+    }
+    else if (strcmp(c, "*") == 0)
+    {
         result = operandLeft * operandRight;
-        break;
-    case '/':
+    }
+    else if (strcmp(c, "/") == 0)
+    {
         result = operandLeft / operandRight;
-        break;
-    default:
-        //Logger.Log.LogError("Optimiser.OptimiseNode(): Invalid operator");
-        break;
+    }
+    else
+    {
+        LogError("Optimiser.ApplyOperatorID(): Invalid operator");
     }
     return result;
 }
 
 float ApplyOperatorIF(astnode_t* node, int operandLeft, float operandRight)
 {
-    char c = *node->Value;
+    char* c = node->Value;
     float result = 0;
-    switch (c)
+    if (strcmp(c, "+") == 0)
     {
-    case '+':
         result = operandLeft + operandRight;
-        break;
-    case '-':
+    }
+    else if (strcmp(c, "-") == 0)
+    {
         result = operandLeft - operandRight;
-        break;
-    case '*':
+    }
+    else if (strcmp(c, "*") == 0)
+    {
         result = operandLeft * operandRight;
-        break;
-    case '/':
+    }
+    else if (strcmp(c, "/") == 0)
+    {
         result = operandLeft / operandRight;
-        break;
-    default:
-        //Logger.Log.LogError("Optimiser.OptimiseNode(): Invalid operator");
-        break;
+    }
+    else
+    {
+        LogError("Optimiser.ApplyOperatorIF(): Invalid operator");
     }
     return result;
 }
 
 double ApplyOperatorDI(astnode_t* node, double operandLeft, int operandRight)
 {
-    char c = *node->Value;
+    char* c = node->Value;
     double result = 0;
-    switch (c)
+    if (strcmp(c, "+") == 0)
     {
-    case '+':
         result = operandLeft + operandRight;
-        break;
-    case '-':
+    }
+    else if (strcmp(c, "-") == 0)
+    {
         result = operandLeft - operandRight;
-        break;
-    case '*':
+    }
+    else if (strcmp(c, "*") == 0)
+    {
         result = operandLeft * operandRight;
-        break;
-    case '/':
+    }
+    else if (strcmp(c, "/") == 0)
+    {
         result = operandLeft / operandRight;
-        break;
-    default:
-        //Logger.Log.LogError("Optimiser.OptimiseNode(): Invalid operator");
-        break;
+    }
+    else
+    {
+        LogError("Optimiser.ApplyOperatorDI(): Invalid operator");
     }
     return result;
 }
 
 double ApplyOperatorDD(astnode_t* node, double operandLeft, double operandRight)
 {
-    char c = *node->Value;
+    char* c = node->Value;
     double result = 0;
-    switch (c)
+    if (strcmp(c, "+") == 0)
     {
-    case '+':
         result = operandLeft + operandRight;
-        break;
-    case '-':
+    }
+    else if (strcmp(c, "-") == 0)
+    {
         result = operandLeft - operandRight;
-        break;
-    case '*':
+    }
+    else if (strcmp(c, "*") == 0)
+    {
         result = operandLeft * operandRight;
-        break;
-    case '/':
+    }
+    else if (strcmp(c, "/") == 0)
+    {
         result = operandLeft / operandRight;
-        break;
-    default:
-        //Logger.Log.LogError("Optimiser.OptimiseNode(): Invalid operator");
-        break;
+    }
+    else
+    {
+        LogError("Optimiser.ApplyOperatorDD(): Invalid operator");
     }
     return result;
 }
 
 double ApplyOperatorDF(astnode_t* node, double operandLeft, float operandRight)
 {
-    char c = *node->Value;
+    char* c = node->Value;
     double result = 0;
-    switch (c)
+    if (strcmp(c, "+") == 0)
     {
-    case '+':
         result = operandLeft + operandRight;
-        break;
-    case '-':
+    }
+    else if (strcmp(c, "-") == 0)
+    {
         result = operandLeft - operandRight;
-        break;
-    case '*':
+    }
+    else if (strcmp(c, "*") == 0)
+    {
         result = operandLeft * operandRight;
-        break;
-    case '/':
+    }
+    else if (strcmp(c, "/") == 0)
+    {
         result = operandLeft / operandRight;
-        break;
-    default:
-        //Logger.Log.LogError("Optimiser.OptimiseNode(): Invalid operator");
-        break;
+    }
+    else
+    {
+        LogError("Optimiser.ApplyOperatorDF(): Invalid operator");
     }
     return result;
 }
 
 float ApplyOperatorFI(astnode_t* node, float operandLeft, int operandRight)
 {
-    char c = *node->Value;
+    char* c = node->Value;
     float result = 0;
-    switch (c)
+    if (strcmp(c, "+") == 0)
     {
-    case '+':
         result = operandLeft + operandRight;
-        break;
-    case '-':
+    }
+    else if (strcmp(c, "-") == 0)
+    {
         result = operandLeft - operandRight;
-        break;
-    case '*':
+    }
+    else if (strcmp(c, "*") == 0)
+    {
         result = operandLeft * operandRight;
-        break;
-    case '/':
+    }
+    else if (strcmp(c, "/") == 0)
+    {
         result = operandLeft / operandRight;
-        break;
-    default:
-        //Logger.Log.LogError("Optimiser.OptimiseNode(): Invalid operator");
-        break;
+    }
+    else
+    {
+        LogError("Optimiser.ApplyOperatorFI(): Invalid operator");
     }
     return result;
 }
 
 float ApplyOperatorFD(astnode_t* node, float operandLeft, double operandRight)
 {
-    char c = *node->Value;
+    char* c = node->Value;
     float result = 0;
-    switch (c)
+    if (strcmp(c, "+") == 0)
     {
-    case '+':
         result = operandLeft + operandRight;
-        break;
-    case '-':
+    }
+    else if (strcmp(c, "-") == 0)
+    {
         result = operandLeft - operandRight;
-        break;
-    case '*':
+    }
+    else if (strcmp(c, "*") == 0)
+    {
         result = operandLeft * operandRight;
-        break;
-    case '/':
+    }
+    else if (strcmp(c, "/") == 0)
+    {
         result = operandLeft / operandRight;
-        break;
-    default:
-        //Logger.Log.LogError("Optimiser.OptimiseNode(): Invalid operator");
-        break;
+    }
+    else
+    {
+        LogError("Optimiser.ApplyOperatorFD(): Invalid operator");
     }
     return result;
 }
 
 float ApplyOperatorFF(astnode_t* node, float operandLeft, float operandRight)
 {
-    char c = *node->Value;
+    char* c = node->Value;
     float result = 0;
-    switch (c)
+    if (strcmp(c, "+") == 0)
     {
-    case '+':
         result = operandLeft + operandRight;
-        break;
-    case '-':
+    }
+    else if (strcmp(c, "-") == 0)
+    {
         result = operandLeft - operandRight;
-        break;
-    case '*':
+    }
+    else if (strcmp(c, "*") == 0)
+    {
         result = operandLeft * operandRight;
-        break;
-    case '/':
+    }
+    else if (strcmp(c, "/") == 0)
+    {
         result = operandLeft / operandRight;
-        break;
-    default:
-        //Logger.Log.LogError("Optimiser.OptimiseNode(): Invalid operator");
-        break;
+    }
+    else
+    {
+        LogError("Optimiser.ApplyOperatorFF(): Invalid operator");
     }
     return result;
 }
