@@ -403,3 +403,5 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 ExampleCPrograms/hello.exe
+
+squash/squash.s
