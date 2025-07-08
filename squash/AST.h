@@ -36,8 +36,13 @@ enum ASTNodeValueType
 typedef struct ASTNode
 {
     enum ASTNodeType Type;
+
     char* Value;
     enum ASTNodeValueType ValueType;
+    int ValueInt;
+    float ValueFloat;
+    double ValueDouble;
+
     struct ASTNode* Left;
     struct ASTNode* Right;
     int Precedence;

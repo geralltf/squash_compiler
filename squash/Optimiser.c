@@ -64,7 +64,7 @@ void OptimiseBinaryOperator(astnode_t** nde, bool optimiseConstVariables)
 
             if (left->Type == AST_Number)
             {
-                operandLeft = (char*)Optimiser_ParseNumber(left);
+                Optimiser_ParseNumber(left);
             }
             if (left->Type == AST_Variable && optimiseConstVariables)
             {
@@ -75,7 +75,7 @@ void OptimiseBinaryOperator(astnode_t** nde, bool optimiseConstVariables)
 
                     if (variableSymbol->Value != NULL)// && (int)variableSymbol.Value != 0)
                     {
-                        operandLeft = (char*)variableSymbol->Value;
+                        left->Value = (char*)variableSymbol->Value;
                     }
                 }
             }
@@ -89,7 +89,7 @@ void OptimiseBinaryOperator(astnode_t** nde, bool optimiseConstVariables)
 
             if (right->Type == AST_Number)
             {
-                operandRight = (char*)Optimiser_ParseNumber(right);
+                Optimiser_ParseNumber(right);
             }
             if (right->Type == AST_Variable && optimiseConstVariables)
             {
@@ -100,15 +100,15 @@ void OptimiseBinaryOperator(astnode_t** nde, bool optimiseConstVariables)
 
                     if (variableSymbol->Value != NULL)// (int)variableSymbol.Value != 0)
                     {
-                        operandRight = (char*)variableSymbol->Value;
+                        right->Value = (char*)variableSymbol->Value;
                     }
                 }
             }
         }
 
-        if (operandLeft != NULL && operandRight != NULL)
+        if (left != NULL && right != NULL && left->Type == AST_Number && right->Type == AST_Number)
         {
-            result = Optimiser_ApplyOperator(node, operandLeft, leftType, operandRight, rightType);
+            result = Optimiser_ApplyOperator(node, left, leftType, right, rightType);
 
             CollapseNode(&node, result);
         }
@@ -130,15 +130,15 @@ void CollapseNode(astnode_t** nde, char* result)
     (*nde) = node;
 }
 
-char* Optimiser_ApplyOperator(astnode_t* node, char* operandLeft, enum ASTNodeValueType operandLeftType, char* operandRight, enum ASTNodeValueType operandRightType)
+char* Optimiser_ApplyOperator(astnode_t* node, astnode_t* left, enum ASTNodeValueType operandLeftType, astnode_t* right, enum ASTNodeValueType operandRightType)
 {
     char* result = NULL;
     if (operandLeftType == AST_VALUE_INT)
     {
-        int resultLeftInt = atoi(operandLeft);
+        int resultLeftInt = left->ValueInt;
         if (operandRightType == AST_VALUE_INT)
         {
-            int resultRightInt = atoi(operandRight);
+            int resultRightInt = right->ValueInt;
 
             int resultInt = ApplyOperatorII(node, resultLeftInt, resultRightInt);
 
@@ -148,7 +148,7 @@ char* Optimiser_ApplyOperator(astnode_t* node, char* operandLeft, enum ASTNodeVa
         }
         else if (operandRightType == AST_VALUE_DOUBLE)
         {
-            double resultRightDouble = atof(operandRight);
+            double resultRightDouble = right->ValueDouble;
 
             double resultDouble = ApplyOperatorID(node, resultLeftInt, resultRightDouble);
 
@@ -158,7 +158,7 @@ char* Optimiser_ApplyOperator(astnode_t* node, char* operandLeft, enum ASTNodeVa
         }
         else if (operandRightType == AST_VALUE_FLOAT)
         {
-            float resultRightFloat = (float)atof(operandRight);
+            float resultRightFloat = right->ValueFloat;
 
             double resultFloat = ApplyOperatorIF(node, resultLeftInt, resultRightFloat);
 
@@ -169,10 +169,10 @@ char* Optimiser_ApplyOperator(astnode_t* node, char* operandLeft, enum ASTNodeVa
     }
     else if (operandLeftType == AST_VALUE_DOUBLE)
     {
-        double resultLeftDouble = atof(operandLeft);
+        double resultLeftDouble = left->ValueDouble;
         if (operandRightType == AST_VALUE_INT)
         {
-            int resultRightInt = atoi(operandRight);
+            int resultRightInt = right->ValueInt;
 
             double resultDouble = ApplyOperatorDI(node, resultLeftDouble, resultRightInt);
 
@@ -182,7 +182,7 @@ char* Optimiser_ApplyOperator(astnode_t* node, char* operandLeft, enum ASTNodeVa
         }
         else if (operandRightType == AST_VALUE_DOUBLE)
         {
-            double resultRightDouble = (double)atof(operandRight);
+            double resultRightDouble = right->ValueDouble;
 
             double resultDouble = ApplyOperatorDD(node, resultLeftDouble, resultRightDouble);
 
@@ -192,7 +192,7 @@ char* Optimiser_ApplyOperator(astnode_t* node, char* operandLeft, enum ASTNodeVa
         }
         else if (operandRightType == AST_VALUE_FLOAT)
         {
-            float resultRightFloat = (float)atof(operandRight);
+            float resultRightFloat = right->ValueFloat;
 
             double resultDouble = ApplyOperatorDF(node, resultLeftDouble, resultRightFloat);
 
@@ -203,10 +203,10 @@ char* Optimiser_ApplyOperator(astnode_t* node, char* operandLeft, enum ASTNodeVa
     }
     else if (operandLeftType == AST_VALUE_FLOAT)
     {
-        float resultLeftFloat = (float)atof(operandLeft);
+        float resultLeftFloat = left->ValueFloat;
         if (operandRightType == AST_VALUE_INT)
         {
-            int resultRightInt = atoi(operandRight);
+            int resultRightInt = right->ValueInt;
 
             float resultFloat = ApplyOperatorFI(node, resultLeftFloat, resultRightInt);
 
@@ -216,7 +216,7 @@ char* Optimiser_ApplyOperator(astnode_t* node, char* operandLeft, enum ASTNodeVa
         }
         else if (operandRightType == AST_VALUE_DOUBLE)
         {
-            double resultRightDouble = (double)atof(operandRight);
+            double resultRightDouble = right->ValueDouble;
 
             float resultFloat = ApplyOperatorFD(node, resultLeftFloat, resultRightDouble);
 
@@ -226,7 +226,7 @@ char* Optimiser_ApplyOperator(astnode_t* node, char* operandLeft, enum ASTNodeVa
         }
         else if (operandRightType == AST_VALUE_FLOAT)
         {
-            float resultRightFloat = (float)atof(operandRight);
+            float resultRightFloat = right->ValueFloat;
 
             float resultFloat = ApplyOperatorFF(node, resultLeftFloat, resultRightFloat);
 
@@ -238,40 +238,31 @@ char* Optimiser_ApplyOperator(astnode_t* node, char* operandLeft, enum ASTNodeVa
     return result;
 }
 
-void* Optimiser_ParseNumber(astnode_t* node)
+void Optimiser_ParseNumber(astnode_t* node)
 {
     if (node->ValueType == AST_VALUE_INT)
     {
         int num = atoi(node->Value);
-        int* numPtr = &num;
-        void* d = (void*)numPtr;
-        return d;
+        node->ValueInt = num;
     }
     else if (node->ValueType == AST_VALUE_FLOAT)
     {
         float num = (float)atof(node->Value);
-        float* numPtr = &num;
-        void* d = (void*)numPtr;
-        return d;
+        node->ValueFloat = num;
     }
     else if (node->ValueType == AST_VALUE_DOUBLE)
     {
         double num = atof(node->Value);
-        double* numPtr = &num;
-        void* d = (void*)numPtr;
-        return d;
+        node->ValueDouble = num;
     }
     else if (node->ValueType == AST_VALUE_STRING)
     {
-        void* d = (void*)node->Value;
-        return d;
+        // Implicitly a string.
     }
     else if (node->ValueType == AST_VALUE_UNDEFINED)
     {
         LogError("Optimiser_ParseNumber(): AST_VALUE_UNDEFINED");
-        return NULL;
     }
-    return NULL;
 }
 
 int ApplyOperatorII(astnode_t* node, int operandLeft, int operandRight)

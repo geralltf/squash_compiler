@@ -12,9 +12,9 @@ void OptimiseBinaryOperator(astnode_t** nde, bool optimiseConstVariables);
 
 void CollapseNode(astnode_t** nde, char* result);
 
-char* Optimiser_ApplyOperator(astnode_t* node, char* operandLeft, enum ASTNodeValueType operandLeftType, char* operandRight, enum ASTNodeValueType operandRightType);
+char* Optimiser_ApplyOperator(astnode_t* node, astnode_t* left, enum ASTNodeValueType operandLeftType, astnode_t* right, enum ASTNodeValueType operandRightType);
 
-void* Optimiser_ParseNumber(astnode_t* node);
+void Optimiser_ParseNumber(astnode_t* node);
 
 int ApplyOperatorII(astnode_t* node, int operandLeft, int operandRight);
 double ApplyOperatorID(astnode_t* node, int operandLeft, double operandRight);

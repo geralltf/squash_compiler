@@ -1,4 +1,4 @@
-#include "Assembler.h"
+﻿#include "Assembler.h"
 #include "SquashCompiler.h"
 #include "FileIO.h"
 
