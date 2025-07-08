@@ -20,7 +20,7 @@ assembler_t* assembler_new()
 /// <exception cref="Exception">
 /// Underlying Assemble() method can throw exceptions as well as this method.
 /// </exception>
-void GenerateCode(assembler_t* assembler, astnode_t* astNode)
+void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_name, bool enable_tracing)
 {
     char* astnode_str;
     if (astNode != NULL)
@@ -49,7 +49,11 @@ void GenerateCode(assembler_t* assembler, astnode_t* astNode)
         sb_append(sb, Assemble(assembler, astNode));
 
         //Logger._log.PrintEndStatistics();
-        LogInformation("************* Compiled Assembler Codegen Full Program Dump");
+
+        if (enable_tracing)
+        {
+            LogInformation("************* Compiled Assembler Codegen Full Program Dump");
+        }
 
         if (assembler->Is_Linux)
         {
@@ -62,10 +66,29 @@ void GenerateCode(assembler_t* assembler, astnode_t* astNode)
 
         }
 
-        // Console.Write(outputAssembly);
-
+        // Assembly .s file generation.
         char* outputAssembly = sb_concat(sb);
-        printf("%s", outputAssembly);
+
+        if (enable_tracing)
+        {
+            printf("%s", outputAssembly);
+        }
+
+        if (output_file_name != NULL)
+        {
+            if (FileWriteString(output_file_name, outputAssembly)) 
+            {
+                LogInformation("*-*-*-*-*- output assembly (.s) created '%s' -*-*-*-*-*", output_file_name);
+            }
+            else 
+            {
+                LogCritical("*-*-*-*-*- output assembly (.s) failed to compile here '%s' -*-*-*-*-*", output_file_name);
+            }
+        }
+        else 
+        {
+            LogCritical("*-*-*-*-*- output assembly (.s) failed to compile here '%s' -*-*-*-*-*", output_file_name);
+        }
     }
     else
     {

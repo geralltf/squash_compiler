@@ -24,7 +24,7 @@ typedef struct SquashCompiler
 
 squash_compiler_t* squash_compiler_new();
 void squash_compiler_init(squash_compiler_t* squash_compiler, char* input, int inputLength);
-void CompileExpression(squash_compiler_t* squash_compiler);
+void CompileExpression(squash_compiler_t* squash_compiler, char* output_file_name, bool enable_tracing);
 astnode_t* ParseStatements(squash_compiler_t* squash_compiler);
 astnode_t* ParseVariableDeclaration(squash_compiler_t* squash_compiler, enum VarType varType);
 astnode_t* ParseVariableDefine(squash_compiler_t* squash_compiler, enum VarType varType);

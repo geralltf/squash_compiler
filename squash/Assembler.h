@@ -3,6 +3,7 @@
 
 #include "AST.h"
 #include "sb.h"
+#include "FileIO.h"
 
 #include <stdio.h>
 
@@ -26,7 +27,7 @@ assembler_t* assembler_new();
 /// <exception cref="Exception">
 /// Underlying Assemble() method can throw exceptions as well as this method.
 /// </exception>
-void GenerateCode(assembler_t* assembler, astnode_t* astNode);
+void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_name, bool enable_tracing);
 
 /// <summary>
 /// Assembles the specified ASTNode into assembly language instructions.
