@@ -12,7 +12,7 @@ int main(void)
 
     printf("*-*-*-*-*-*-* SquashC Compiler *-*-*-*-*-*-*\n");
 
-    if (FileReadString("scripts\\EntryPoint.c", &buffer, &length) && buffer)
+    if (FileReadString("scripts/EntryPoint.c", &buffer, &length) && buffer)
     {
         squash_compiler = squash_compiler_new();
         squash_compiler_init(squash_compiler, (char*)buffer, length);
