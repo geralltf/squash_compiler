@@ -122,15 +122,15 @@ char* VariableSymbol_to_string(VariableSymbol_t* symbol)
 
     if (symbol->ValueType == VAR_Int)
     {
-        snprintf(result, 256, "%d", symbol->Value);
+        snprintf(result, 256, "%d", (char*)symbol->Value);
     }
     else if (symbol->ValueType == VAR_Double)
     {
-        sprintf(result, "%f", symbol->Value);
+        sprintf(result, "%f", (char*)symbol->Value);
     }
     else if (symbol->ValueType == VAR_Float)
     { 
-        sprintf(result, "%.6f", symbol->Value);
+        sprintf(result, "%.6f", (char*)symbol->Value);
 
         //float* fptr = (float*)symbol->Value;
         //float f = *fptr;
