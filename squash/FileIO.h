@@ -6,5 +6,6 @@
 #include <stdlib.h>
 
 bool FileReadString(char* filename, void** buffer, size_t* file_length);
+bool FileWriteString(char* filename, char* buffer);
 
 #endif

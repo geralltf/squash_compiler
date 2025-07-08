@@ -1,4 +1,5 @@
 #include "FileIO.h"
+#include "Logger.h"
 
 bool FileReadString(char* filename, void** filebuffer, size_t* file_length)
 {
@@ -21,5 +22,28 @@ bool FileReadString(char* filename, void** filebuffer, size_t* file_length)
         fclose(f);
 
         *filebuffer = buffer;
+
+        return true;
     }
+    else
+    {
+        LogCritical("FileReadString(): Error opening the file for reading! File was: '%s'", filename);
+        return false;
+    }
+}
+
+bool FileWriteString(char* filename, char* buffer)
+{
+    FILE* f = fopen(filename, "w");
+
+    if (f == NULL) 
+    {
+        LogCritical("FileWriteString(): Error opening the file for writing! File was: '%s'", filename);
+        return false;
+    }
+
+    fprintf(f, "%s", buffer);
+    fclose(f);
+
+    return true;
 }
