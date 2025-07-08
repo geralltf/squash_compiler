@@ -122,32 +122,30 @@ char* VariableSymbol_to_string(VariableSymbol_t* symbol)
 
     if (symbol->ValueType == VAR_Int)
     {
-        int* iptr = (int*)symbol->Value;
-        int i = *iptr;
-
-        _itoa(i, result, 10);
+        snprintf(result, 256, "%d", symbol->Value);
     }
     else if (symbol->ValueType == VAR_Double)
     {
-        double* dptr = (double*)symbol->Value;
-        double d = *dptr;
-
-        sprintf(result, "%f", d);
+        sprintf(result, "%f", symbol->Value);
     }
     else if (symbol->ValueType == VAR_Float)
-    {
-        float* fptr = (float*)symbol->Value;
-        float f = *fptr;
+    { 
+        sprintf(result, "%.6f", symbol->Value);
 
-        _gcvt(f, 6, result);
+        //float* fptr = (float*)symbol->Value;
+        //float f = *fptr;
+
+        //_gcvt(f, 6, result);
     }
     else if (symbol->ValueType == VAR_Undefined)
     {
-        return '\0';
+        result[0] = '\0';
+        return result;
     }
     else
     {
-        return '\0';
+        result[0] = '\0';
+        return result;
     }
     return result;
 }
