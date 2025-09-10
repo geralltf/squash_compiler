@@ -38,7 +38,7 @@ void squash_compiler_init(squash_compiler_t* squash_compiler, char* input, int i
     squash_compiler->asm0 = assembler_new(); // new Assembler(rootAST)
 }
 
-void CompileExpression(squash_compiler_t* squash_compiler, char* output_file_name, bool enable_tracing)
+void CompileExpression(squash_compiler_t* squash_compiler, char* output_file_name, char* output_binary_file_name, bool enable_tracing)
 {
     astnode_t* expression = ParseStatements(squash_compiler);
 
@@ -56,7 +56,7 @@ void CompileExpression(squash_compiler_t* squash_compiler, char* output_file_nam
     //squash_compiler->asm->Is_Linux = true;
     squash_compiler->asm0->Is_Windows = true;
 
-    GenerateCode(squash_compiler->asm0, expression, output_file_name, enable_tracing);
+    GenerateCode(squash_compiler->asm0, expression, output_file_name, output_binary_file_name, enable_tracing);
 }
 
 astnode_t* ParseStatements(squash_compiler_t* squash_compiler)

@@ -4,6 +4,7 @@
 #include "AST.h"
 #include "sb.h"
 #include "FileIO.h"
+#include "Encoder.h"
 
 #include <stdio.h>
 
@@ -27,7 +28,7 @@ assembler_t* assembler_new();
 /// <exception cref="Exception">
 /// Underlying Assemble() method can throw exceptions as well as this method.
 /// </exception>
-void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_name, bool enable_tracing);
+void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_name, char* output_binary_file_name, bool enable_tracing);
 
 /// <summary>
 /// Assembles the specified ASTNode into assembly language instructions.
@@ -43,5 +44,7 @@ void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_
 /// Can throw exceptions related to invalid ASTNodeType types.
 /// </exception>
 char* Assemble(assembler_t* assembler, astnode_t* node);
+
+void squash_assembler(assembler_t* assembler, char* source_asm, int source_size, char* output_binary_file_name);
 
 #endif

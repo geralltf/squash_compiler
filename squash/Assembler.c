@@ -20,7 +20,7 @@ assembler_t* assembler_new()
 /// <exception cref="Exception">
 /// Underlying Assemble() method can throw exceptions as well as this method.
 /// </exception>
-void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_name, bool enable_tracing)
+void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_name, char* output_binary_file_name, bool enable_tracing)
 {
     char* astnode_str;
     if (astNode != NULL)
@@ -38,11 +38,11 @@ void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_
         {
             if (assembler->Is_macOS)
             {
-                sb_append(sb, "section .text\r\n    global  _main\n");
+                sb_append(sb, "section .text\r\nglobal _main\n");
             }
             else
             {
-                sb_append(sb, "section .text\r\n    global  main\n");
+                sb_append(sb, "section .text\r\nglobal main\n");
             }
         }
 
@@ -68,6 +68,7 @@ void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_
 
         // Assembly .s file generation.
         char* outputAssembly = sb_concat(sb);
+        int source_length = strlen(outputAssembly);
 
         if (enable_tracing)
         {
@@ -89,6 +90,8 @@ void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_
         {
             LogCritical("*-*-*-*-*- output assembly (.s) failed to compile here '%s' -*-*-*-*-*", output_file_name);
         }
+
+        squash_assembler(assembler, outputAssembly, source_length, output_binary_file_name);
     }
     else
     {
@@ -182,7 +185,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
             //Console.WriteLine($"var {node.VarSymbol.Name}"); //TODO: Assembly equivalent
             //Console.WriteLine($"mov rax, [{node.VarSymbol.Name},{node.VarSymbol.Value}] ;{node.VarSymbol.VariableType.ToString()}");
             sb_append(sb, Assemble(assembler, node->Left));
-            sb_append(sb, "mov\trax, \t[");
+            sb_append(sb, "mov rax, [");
             sb_append(sb, node->VarSymbol->Name);
             sb_append(sb, "]\n");
 
@@ -222,7 +225,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
             LogInformation("Assemble(): ASTNodeType.Number");
 
             // Load the number value into a register
-            sb_append(sb, "mov\trax, \t");
+            sb_append(sb, "mov rax, ");
             sb_append(sb, node->Value);
             sb_append(sb, "\n");
 
@@ -233,7 +236,7 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
             LogInformation("Assemble(): ASTNodeType.Variable");
 
             // Load the variable value into a register
-            sb_append(sb, "mov\trax, \t[");
+            sb_append(sb, "mov rax, [");
             sb_append(sb, node->VarSymbol->Name);
             sb_append(sb, "]\n");
 
@@ -282,32 +285,32 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
             // Generate code for left and right operands
             sb_append(sb, Assemble(assembler, node->Left));
 
-            sb_append(sb, "push\trax\n");
+            sb_append(sb, "push rax\n");
             //Console.WriteLine("push\trax"); // Save value on the stack
 
             sb_append(sb, Assemble(assembler, node->Right));
 
             // Perform the operation (addition or subtraction in this example)
-            sb_append(sb, "pop\trbx\n");
+            sb_append(sb, "pop rbx\n");
             //Console.WriteLine("pop\trbx"); // Retrieve left operand from the stack
             if (strcmp(node->Value, "+") == 0)
             {
-                sb_append(sb, "add\trax,\trbx\n");
+                sb_append(sb, "add rax, rbx\n");
                 //Console.WriteLine("add\trax,\trbx");
             }
             else if (strcmp(node->Value, "-") == 0)
             {
-                sb_append(sb, "sub\trax,\trbx\n");
+                sb_append(sb, "sub rax, rbx\n");
                 //Console.WriteLine("sub\trax,\trbx");
             }
             else if (strcmp(node->Value, "*") == 0)
             {
-                sb_append(sb, "mul\trax,\trbx\n");
+                sb_append(sb, "mul rax, rbx\n");
                 //Console.WriteLine("mul\trax,\trbx");
             }
             else if (strcmp(node->Value, "/") == 0)
             {
-                sb_append(sb, "div\trax,\trbx\n");
+                sb_append(sb, "div rax, rbx\n");
                 //TODO: idiv for signed division
                 //Console.WriteLine("div\trax,\trbx"); // TODO: confirm if this is the correct divide operator
             }
@@ -447,4 +450,82 @@ char* Assemble(assembler_t* assembler, astnode_t* node)
         }
     }
     return sb_concat(sb);
+}
+
+void asm_encode_instruction(unsigned char* mnumonic, unsigned char* register_name, unsigned char* operands)
+{
+   
+
+}
+
+void asm_parse_instruction(char* carr_line)
+{
+    char* token;
+    const char* delimiter = ", ";
+
+    token = strtok(carr_line, delimiter);
+    printf("%s\n", token);
+
+    while (token != NULL)
+    {
+        printf("%s\n", token);
+        token = strtok(NULL, delimiter);
+    }
+
+    unsigned char* mnumonic = "SUB";
+    unsigned char* operands = "RSP, 0x28"; // right operand is of type 'O_IMM' because it is a constant value obtained immediately after the register.
+    unsigned char* register_name = "RSP"; // left operand is of type 'O_REG'
+    
+    asm_encode_instruction(mnumonic, register_name, operands); // should encode to the following hex sequence: 4883ec28
+}
+
+void asm_parse_line(char* carr_line)
+{
+    if (strcmp(carr_line, "section .text") == 0)
+    {
+
+    }
+    else if (strcmp(carr_line, "global main") == 0)
+    {
+
+    }
+    else
+    {
+        // instruction.
+        asm_parse_instruction(carr_line);
+    }
+}
+
+void squash_assembler(assembler_t* assembler, char* source_asm, int source_size, char* output_binary_file_name)
+{
+    int index;
+    char currentChar = '\0';
+    index = 0;
+    StringBuilder* sb = sb_create();
+    char* carr_line;
+    char* mem = (char*)malloc(sizeof(char) * 2);
+
+    while (index < source_size)
+    {
+        currentChar = (source_asm + index)[0];
+
+        if (currentChar == '\n' || currentChar == '\r')
+        {
+            carr_line = sb_concat(sb);
+            
+            asm_parse_line(carr_line);
+
+            sb_reset(sb);
+        }
+        else
+        {
+            mem[0] = currentChar;
+            mem[1] = '\0';
+
+            sb_append(sb, mem);
+        }
+        index++;
+    }
+
+    LogInformation("*-*-*-*-*- output assemble portable executable (.exe) created '%s' -*-*-*-*-*", output_binary_file_name);
 }

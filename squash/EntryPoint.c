@@ -169,7 +169,7 @@ int main(int argc, char* argv[])
             squash_compiler = squash_compiler_new();
             squash_compiler_init(squash_compiler, (char*)buffer, length);
 
-            CompileExpression(squash_compiler, output_file_name, enable_tracing);
+            CompileExpression(squash_compiler, output_file_name, output_bin_file_name, enable_tracing);
         }
     }
 
