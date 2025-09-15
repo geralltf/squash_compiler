@@ -125,5 +125,8 @@
     <ClInclude Include="InstructionOpCounts.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="InstructionMemorySizes.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

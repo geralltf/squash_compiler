@@ -155,6 +155,7 @@
     <ClInclude Include="Enums.h" />
     <ClInclude Include="FileIO.h" />
     <ClInclude Include="Instruction.h" />
+    <ClInclude Include="InstructionMemorySizes.h" />
     <ClInclude Include="InstructionOpCounts.h" />
     <ClInclude Include="Lexer.h" />
     <ClInclude Include="List.h" />

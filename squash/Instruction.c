@@ -323,7 +323,7 @@ enum OpKind GetOp2Kind(struct Instruction* i)
 /// <summary>
 /// Sets operand #2's kind if the operand exists (see <see cref="OpCount"/> and <see cref="GetOpKind(int)"/>)
 /// </summary>
-void GetOp2Kind(struct Instruction* i, enum OpKind value)
+void SetOp2Kind(struct Instruction* i, enum OpKind value)
 {
 	i->opKind2 = (unsigned char)value;
 }
@@ -338,7 +338,7 @@ enum OpKind GetOp3Kind(struct Instruction* i)
 /// <summary>
 /// Sets operand #3's kind if the operand exists (see <see cref="OpCount"/> and <see cref="GetOpKind(int)"/>)
 /// </summary>
-void GetOp3Kind(struct Instruction* i, enum OpKind value)
+void SetOp3Kind(struct Instruction* i, enum OpKind value)
 {
 	i->opKind3 = (unsigned char)value;
 }
@@ -353,7 +353,7 @@ enum OpKind GetOp4Kind(struct Instruction* i)
 /// <summary>
 /// Sets operand #4's kind if the operand exists (see <see cref="OpCount"/> and <see cref="GetOpKind(int)"/>)
 /// </summary>
-void GetOp4Kind(struct Instruction* i, enum OpKind value)
+void SetOp4Kind(struct Instruction* i, enum OpKind value)
 {
 	if (value != OK_Immediate8)
 	{
@@ -418,6 +418,39 @@ void SetOpKind(struct Instruction* i, int operand, enum OpKind opKind)
 	}
 }
 
+/// <summary>
+/// <see langword="true"/> if the instruction has the <c>LOCK</c> prefix (<c>F0</c>)
+/// </summary>
+bool Get_HasLockPrefix(struct Instruction* i)
+{
+	return (i->flags1 & (unsigned int)IF_LockPrefix) != 0;
+}
+
+/// <summary>
+/// <see langword="true"/> if the instruction has the <c>LOCK</c> prefix (<c>F0</c>)
+/// </summary>
+void Set_HasLockPrefix(struct Instruction* i, bool value)
+{
+	if (value)
+	{
+		i->flags1 |= (unsigned int)IF_LockPrefix;
+	}
+	else
+	{
+		i->flags1 &= ~(unsigned int)IF_LockPrefix;
+	}
+}
+
+void InternalSetHasLockPrefix(struct Instruction* i)
+{
+	i->flags1 |= (unsigned int)IF_LockPrefix;
+}
+
+void InternalClearHasLockPrefix(struct Instruction* i) 
+{
+	i->flags1 &= ~(unsigned int)IF_LockPrefix;
+}
+
 bool IsXacquireInstr(struct Instruction* i) 
 {
 	if (GetOp0Kind(i) != OK_Memory)
@@ -425,29 +458,38 @@ bool IsXacquireInstr(struct Instruction* i)
 		return false;
 	}
 		
-	if (HasLockPrefix)
-		return Code != Code.Cmpxchg16b_m128;
-	return Mnemonic == Mnemonic.Xchg;
+	if (Get_HasLockPrefix(i))
+	{
+		return GetCode(i) != Cmpxchg16b_m128;
+	}
+	return GetMnemonic(i) == M_Xchg;
 }
 
-readonly bool IsXreleaseInstr() {
-	if (Op0Kind != OpKind.Memory)
+bool IsXreleaseInstr(struct Instruction* i)
+{
+	if (GetOp0Kind(i) != OK_Memory)
+	{
 		return false;
-	if (HasLockPrefix)
-		return Code != Code.Cmpxchg16b_m128;
-	switch (Code) {
-	case Code.Xchg_rm8_r8:
-	case Code.Xchg_rm16_r16:
-	case Code.Xchg_rm32_r32:
-	case Code.Xchg_rm64_r64:
-	case Code.Mov_rm8_r8:
-	case Code.Mov_rm16_r16:
-	case Code.Mov_rm32_r32:
-	case Code.Mov_rm64_r64:
-	case Code.Mov_rm8_imm8:
-	case Code.Mov_rm16_imm16:
-	case Code.Mov_rm32_imm32:
-	case Code.Mov_rm64_imm32:
+	}
+	if (GetHasLockPrefix(i))
+	{
+		return GetCode(i) != Cmpxchg16b_m128;
+	}
+		
+	switch (GetCode(i)) 
+	{
+	case Xchg_rm8_r8:
+	case Xchg_rm16_r16:
+	case Xchg_rm32_r32:
+	case Xchg_rm64_r64:
+	case Mov_rm8_r8:
+	case Mov_rm16_r16:
+	case Mov_rm32_r32:
+	case Mov_rm64_r64:
+	case Mov_rm8_imm8:
+	case Mov_rm16_imm16:
+	case Mov_rm32_imm32:
+	case Mov_rm64_imm32:
 		return true;
 	default:
 		return false;
@@ -457,113 +499,147 @@ readonly bool IsXreleaseInstr() {
 /// <summary>
 /// <see langword="true"/> if the instruction has the <c>XACQUIRE</c> prefix (<c>F2</c>)
 /// </summary>
-public bool HasXacquirePrefix{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (flags1 & (uint)InstrFlags1.RepnePrefix) != 0 && IsXacquireInstr();
-	set {
-		if (value)
-			flags1 |= (uint)InstrFlags1.RepnePrefix;
-		else
-			flags1 &= ~(uint)InstrFlags1.RepnePrefix;
+bool Get_HasXacquirePrefix(struct Instruction* i)
+{
+	return (i->flags1 & (unsigned int)IF_RepnePrefix) != 0 && IsXacquireInstr(i);
+}
+
+/// <summary>
+/// <see langword="true"/> if the instruction has the <c>XACQUIRE</c> prefix (<c>F2</c>)
+/// </summary>
+void Set_HasXacquirePrefix(struct Instruction* i, bool value)
+{
+	if (value)
+	{
+		i->flags1 |= (unsigned int)IF_RepnePrefix;
+	}
+	else
+	{
+		i->flags1 &= ~(unsigned int)IF_RepnePrefix;
 	}
 }
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalSetHasXacquirePrefix() = > flags1 |= (uint)InstrFlags1.RepnePrefix;
+
+void InternalSetHasXacquirePrefix(struct Instruction* i)
+{
+	i->flags1 |= (unsigned int)IF_RepnePrefix;
+}
 
 /// <summary>
 /// <see langword="true"/> if the instruction has the <c>XRELEASE</c> prefix (<c>F3</c>)
 /// </summary>
-public bool HasXreleasePrefix{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (flags1 & (uint)InstrFlags1.RepePrefix) != 0 && IsXreleaseInstr();
-	set {
-		if (value)
-			flags1 |= (uint)InstrFlags1.RepePrefix;
-		else
-			flags1 &= ~(uint)InstrFlags1.RepePrefix;
+bool HasXreleasePrefix(struct Instruction* i)
+{
+	return (i->flags1 & (unsigned int)IF_RepePrefix) != 0 && IsXreleaseInstr(i);
+}
+
+void Set_HasXreleasePrefix(struct Instruction* i, bool value)
+{
+	if (value)
+	{
+		i->flags1 |= (unsigned int)IF_RepePrefix;
+	}
+	else
+	{
+		i->flags1 &= ~(unsigned int)IF_RepePrefix;
 	}
 }
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalSetHasXreleasePrefix() = > flags1 |= (uint)InstrFlags1.RepePrefix;
 
-/// <summary>
-/// <see langword="true"/> if the instruction has the <c>REPE</c> or <c>REP</c> prefix (<c>F3</c>)
-/// </summary>
-public bool HasRepPrefix{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (flags1 & (uint)InstrFlags1.RepePrefix) != 0;
-	set {
-		if (value)
-			flags1 |= (uint)InstrFlags1.RepePrefix;
-		else
-			flags1 &= ~(uint)InstrFlags1.RepePrefix;
-	}
+void InternalSetHasXreleasePrefix(struct Instruction* i)
+{
+	i->flags1 |= (unsigned int)IF_RepePrefix;
 }
 
 /// <summary>
 /// <see langword="true"/> if the instruction has the <c>REPE</c> or <c>REP</c> prefix (<c>F3</c>)
 /// </summary>
-public bool HasRepePrefix{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (flags1 & (uint)InstrFlags1.RepePrefix) != 0;
-	set {
-		if (value)
-			flags1 |= (uint)InstrFlags1.RepePrefix;
-		else
-			flags1 &= ~(uint)InstrFlags1.RepePrefix;
+bool Get_HasRepPrefix(struct Instruction* i)
+{
+	return (i->flags1 & (unsigned int)IF_RepePrefix) != 0;
+}
+
+void Set_HasRepPrefix(struct Instruction* i, bool value)
+{
+	if (value)
+	{
+		i->flags1 |= (unsigned int)IF_RepePrefix;
+	}
+	else 
+	{
+		i->flags1 &= ~(unsigned int)IF_RepePrefix;
 	}
 }
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalSetHasRepePrefix() = > flags1 = (flags1 & ~(uint)InstrFlags1.RepnePrefix) | (uint)InstrFlags1.RepePrefix;
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalClearHasRepePrefix() = > flags1 &= ~(uint)InstrFlags1.RepePrefix;
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalClearHasRepeRepnePrefix() = > flags1 &= ~((uint)InstrFlags1.RepePrefix | (uint)InstrFlags1.RepnePrefix);
+
+/// <summary>
+/// <see langword="true"/> if the instruction has the <c>REPE</c> or <c>REP</c> prefix (<c>F3</c>)
+/// </summary>
+bool Get_HasRepePrefix(struct Instruction* i)
+{
+	return (i->flags1 & (unsigned int)IF_RepePrefix) != 0;
+}
+
+void Set_HasRepePrefix(struct Instruction* i, bool value)
+{
+	if (value) 
+	{
+		i->flags1 |= (unsigned int)IF_RepePrefix;
+	}
+	else 
+	{
+		i->flags1 &= ~(unsigned int)IF_RepePrefix;
+	}
+}
+
+void InternalSetHasRepePrefix(struct Instruction* i)
+{
+	i->flags1 = (i->flags1 & ~(unsigned int)IF_RepnePrefix) | (unsigned int)IF_RepePrefix;
+}
+
+void InternalClearHasRepePrefix(struct Instruction* i)
+{
+	i->flags1 &= ~(unsigned int)IF_RepePrefix;
+}
+
+void InternalClearHasRepeRepnePrefix(struct Instruction* i)
+{
+	i->flags1 &= ~((unsigned int)IF_RepePrefix | (unsigned int)IF_RepnePrefix);
+}
 
 /// <summary>
 /// <see langword="true"/> if the instruction has the <c>REPNE</c> prefix (<c>F2</c>)
 /// </summary>
-public bool HasRepnePrefix{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (flags1 & (uint)InstrFlags1.RepnePrefix) != 0;
-	set {
-		if (value)
-			flags1 |= (uint)InstrFlags1.RepnePrefix;
-		else
-			flags1 &= ~(uint)InstrFlags1.RepnePrefix;
+bool Get_HasRepnePrefix(struct Instruction* i)
+{
+	return (i->flags1 & (unsigned int)IF_RepnePrefix) != 0;
+}
+
+void Set_HasRepnePrefix(struct Instruction* i, bool value)
+{
+	if (value)
+	{
+		i->flags1 |= (unsigned int)IF_RepnePrefix;
+	}
+	else
+	{
+		i->flags1 &= ~(unsigned int)IF_RepnePrefix;
 	}
 }
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalSetHasRepnePrefix() = > flags1 = (flags1 & ~(uint)InstrFlags1.RepePrefix) | (uint)InstrFlags1.RepnePrefix;
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalClearHasRepnePrefix() = > flags1 &= ~(uint)InstrFlags1.RepnePrefix;
 
-/// <summary>
-/// <see langword="true"/> if the instruction has the <c>LOCK</c> prefix (<c>F0</c>)
-/// </summary>
-public bool HasLockPrefix{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (flags1 & (uint)InstrFlags1.LockPrefix) != 0;
-	set {
-		if (value)
-			flags1 |= (uint)InstrFlags1.LockPrefix;
-		else
-			flags1 &= ~(uint)InstrFlags1.LockPrefix;
-	}
+void InternalSetHasRepnePrefix(struct Instruction* i)
+{
+	i->flags1 = (i->flags1 & ~(unsigned int)IF_RepePrefix) | (unsigned int)IF_RepnePrefix;
 }
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalSetHasLockPrefix() = > flags1 |= (uint)InstrFlags1.LockPrefix;
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalClearHasLockPrefix() = > flags1 &= ~(uint)InstrFlags1.LockPrefix;
 
-
+void InternalClearHasRepnePrefix(struct Instruction* i)
+{
+	i->flags1 &= ~(unsigned int)IF_RepnePrefix;
+}
 
 /// <summary>
 /// Checks if the instruction has a segment override prefix, see <see cref="SegmentPrefix"/>
 /// </summary>
-public readonly bool HasSegmentPrefix{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	get = > (((flags1 >> (int)InstrFlags1.SegmentPrefixShift) & (uint)InstrFlags1.SegmentPrefixMask) - 1) < 6;
+bool HasSegmentPrefix(struct Instruction* i)
+{
+	return (((i->flags1 >> (int)IF_SegmentPrefixShift) & (unsigned int)IF_SegmentPrefixMask) - 1) < 6;
 }
 
 /// <summary>
@@ -571,20 +647,43 @@ public readonly bool HasSegmentPrefix{
 /// Use this property if the operand has kind <see cref="OpKind.Memory"/>,
 /// <see cref="OpKind.MemorySegSI"/>, <see cref="OpKind.MemorySegESI"/>, <see cref="OpKind.MemorySegRSI"/>
 /// </summary>
-public Register SegmentPrefix{
-	readonly get {
-		uint index = ((flags1 >> (int)InstrFlags1.SegmentPrefixShift) & (uint)InstrFlags1.SegmentPrefixMask) - 1;
-		return index < 6 ? Register.ES + (int)index : Register.None;
+enum Register Get_SegmentPrefix(struct Instruction* i)
+{
+	unsigned int index = ((i->flags1 >> (int)IF_SegmentPrefixShift) & (unsigned int)IF_SegmentPrefixMask) - 1;
+	return index < 6 ? Register_ES + (int)index : Register_None;
+}
+
+void Set_SegmentPrefix(struct Instruction* i, enum Register value)
+{
+	unsigned int encValue;
+	if (value == Register_None)
+	{
+		encValue = 0;
 	}
-	set {
-		uint encValue;
-		if (value == Register.None)
-			encValue = 0;
-		else
-			encValue = (((uint)value - (uint)Register.ES) + 1) & (uint)InstrFlags1.SegmentPrefixMask;
-		flags1 = (flags1 & ~((uint)InstrFlags1.SegmentPrefixMask << (int)InstrFlags1.SegmentPrefixShift)) |
-			(encValue << (int)InstrFlags1.SegmentPrefixShift);
+	else
+	{
+		encValue = (((unsigned int)value - (unsigned int)Register_ES) + 1) & (unsigned int)IF_SegmentPrefixMask;
 	}
+	i->flags1 = (i->flags1 & ~((unsigned int)IF_SegmentPrefixMask << (int)IF_SegmentPrefixShift)) |
+		(encValue << (int)IF_SegmentPrefixShift);
+}
+
+/// <summary>
+/// Gets the memory operand's base register or <see cref="Register.None"/> if none. Use this property if the operand has kind <see cref="OpKind.Memory"/>
+/// </summary>
+enum Register GetMemoryBase(struct Instruction* i)
+{
+	return (enum Register)i->memBaseReg;
+}
+
+void SetMemoryBase(struct Instruction* i, enum Register value)
+{
+	i->memBaseReg = (unsigned char)value;
+}
+
+void SetInternalMemoryBase(struct Instruction* i, enum Register value)
+{
+	i->memBaseReg = (unsigned char)value;
 }
 
 /// <summary>
@@ -592,16 +691,19 @@ public Register SegmentPrefix{
 /// Use this property if the operand has kind <see cref="OpKind.Memory"/>,
 /// <see cref="OpKind.MemorySegSI"/>, <see cref="OpKind.MemorySegESI"/>, <see cref="OpKind.MemorySegRSI"/>
 /// </summary>
-public readonly Register MemorySegment{
-	get {
-		var segReg = SegmentPrefix;
-		if (segReg != Register.None)
-			return segReg;
-		var baseReg = MemoryBase;
-		if (baseReg == Register.BP || baseReg == Register.EBP || baseReg == Register.ESP || baseReg == Register.RBP || baseReg == Register.RSP)
-			return Register.SS;
-		return Register.DS;
+enum Register MemorySegment(struct Instruction* i)
+{
+	enum Register segReg = Get_SegmentPrefix(i);
+	if (segReg != Register_None)
+	{
+		return segReg;
 	}
+	enum Register baseReg = GetMemoryBase(i);
+	if (baseReg == Register_BP || baseReg == Register_EBP || baseReg == Register_ESP || baseReg == Register_RBP || baseReg == Register_RSP)
+	{
+		return Register_SS;
+	}
+	return Register_DS;
 }
 
 /// <summary>
@@ -610,85 +712,233 @@ public readonly Register MemorySegment{
 /// a signed byte if it's an EVEX/MVEX encoded instruction.
 /// Use this property if the operand has kind <see cref="OpKind.Memory"/>
 /// </summary>
-public int MemoryDisplSize{
-	readonly get = >
-		displSize switch {
-			0 = > 0,
-			1 = > 1,
-			2 = > 2,
-			3 = > 4,
-			_ = > 8,
-		};
-	set {
-		displSize = value switch {
-			0 = > 0,
-			1 = > 1,
-			2 = > 2,
-			4 = > 3,
-			_ = > 4,
-		};
+int GetMemoryDisplSize(struct Instruction* i)
+{
+	switch (i->displSize)
+	{
+	case 0: return 0;
+	case 1: return 1;
+	case 2: return 2;
+	case 3: return 4;
+	case default: return 8;
 	}
 }
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalSetMemoryDisplSize(uint scale) {
-	Debug.Assert(0 <= scale && scale <= 4);
-	displSize = (byte)scale;
+
+void SetMemoryDisplSize(struct Instruction* i, int value)
+{
+	switch (value)
+	{
+	case 0:
+		i->displSize = 0;
+		break;
+	case 1:
+		i->displSize = 1;
+		break;
+	case 2:
+		i->displSize = 2;
+		break;
+	case 4:
+		i->displSize = 3;
+		break;
+	case default:
+		i->displSize = 4;
+		break;
+	}
+}
+
+void InternalSetMemoryDisplSize(struct Instruction* i, unsigned int scale) 
+{
+	//Debug.Assert(0 <= scale && scale <= 4);
+	i->displSize = (unsigned char)scale;
 }
 
 /// <summary>
 /// <see langword="true"/> if the data is broadcast (EVEX instructions only)
 /// </summary>
-public bool IsBroadcast{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (flags1 & (uint)InstrFlags1.Broadcast) != 0;
-	set {
-		if (value)
-			flags1 |= (uint)InstrFlags1.Broadcast;
-		else
-			flags1 &= ~(uint)InstrFlags1.Broadcast;
+bool IsBroadcast(struct Instruction* i)
+{
+	return (i->flags1 & (unsigned int)IF_Broadcast) != 0;
+}
+
+void IsBroadcast(struct Instruction* i, bool value)
+{
+	if (value)
+	{
+		i->flags1 |= (unsigned int)IF_Broadcast;
+	}	
+	else
+	{
+		i->flags1 &= ~(unsigned int)IF_Broadcast;
 	}
 }
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalSetIsBroadcast() = > flags1 |= (uint)InstrFlags1.Broadcast;
 
-#if MVEX
+void InternalSetIsBroadcast(struct Instruction* i)
+{
+	i->flags1 |= (unsigned int)IF_Broadcast;
+}
+
+bool IsMvex(struct Instruction* i, enum Code code)
+{
+	return ((unsigned int)code - MvexStart) < MvexLength;
+}
+
+bool IsMvexEvictionHint(struct Instruction* i)
+{
+	return IsMvex(i, GetCode(i)) && (i->immediate & (unsigned int)MIF_EvictionHint) != 0;
+}
+
 /// <summary>
 /// <see langword="true"/> if eviction hint bit is set (<c>{eh}</c>) (MVEX instructions only)
 /// </summary>
-public bool IsMvexEvictionHint{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > IcedConstants.IsMvex(Code) && (immediate & (uint)MvexInstrFlags.EvictionHint) != 0;
-	set {
-		if (value)
-			immediate |= (uint)MvexInstrFlags.EvictionHint;
-		else
-			immediate &= ~(uint)MvexInstrFlags.EvictionHint;
+bool GetIsMvexEvictionHint(struct Instruction* i)
+{
+	return IsMvex(i, GetCode(i)) && (i->immediate & (unsigned int)MIF_EvictionHint) != 0;
+}
+
+void SetIsMvexEvictionHint(struct Instruction* i, bool value)
+{
+	if (value) 
+	{
+		i->immediate |= (unsigned int)MIF_EvictionHint;
+	}
+	else
+	{
+		i->immediate &= ~(unsigned int)MIF_EvictionHint;
 	}
 }
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalSetIsMvexEvictionHint() = > immediate |= (uint)MvexInstrFlags.EvictionHint;
-#endif
 
-#if MVEX
+void InternalSetIsMvexEvictionHint(struct Instruction* i) 
+{
+	i->immediate |= (unsigned int)MIF_EvictionHint;
+}
+
 /// <summary>
 /// (MVEX) Register/memory operand conversion function
 /// </summary>
-public MvexRegMemConv MvexRegMemConv{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get {
-		if (!IcedConstants.IsMvex(Code))
-			return MvexRegMemConv.None;
-		return (MvexRegMemConv)((immediate >> (int)MvexInstrFlags.MvexRegMemConvShift) & (uint)MvexInstrFlags.MvexRegMemConvMask);
+enum MvexRegMemConv GetMvexRegMemConv(struct Instruction* i)
+{
+	if (!IsMvex(i, GetCode(i)))
+	{
+		return MRMC_None;
 	}
-	set {
-		immediate = (immediate & ~((uint)MvexInstrFlags.MvexRegMemConvMask << (int)MvexInstrFlags.MvexRegMemConvShift)) |
-			((uint)value << (int)MvexInstrFlags.MvexRegMemConvShift);
-	}
+		
+	return (enum MvexRegMemConv)((i->immediate >> (int)MIF_MvexRegMemConvShift) & (unsigned int)MIF_MvexRegMemConvMask);
 }
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalSetMvexRegMemConv(MvexRegMemConv newValue) = >
-immediate |= ((uint)newValue << (int)MvexInstrFlags.MvexRegMemConvShift);
-#endif
+
+void SetMvexRegMemConv(struct Instruction* i, enum MvexRegMemConv value)
+{
+	i->immediate = (i->immediate & ~((unsigned int)MIF_MvexRegMemConvMask << (int)MIF_MvexRegMemConvShift)) |
+		((unsigned int)value << (int)MIF_MvexRegMemConvShift);
+}
+
+void InternalSetMvexRegMemConv(struct Instruction* i, enum MvexRegMemConv newValue)
+{
+	i->immediate |= ((unsigned int)newValue << (int)MIF_MvexRegMemConvShift);
+}
+
+int GetIndexFromCode(enum Code code)
+{
+	int index = (int)code - (int)MvexStart;
+	//Debug.Assert((uint)index < IcedConstants.MvexLength);
+	return index;
+}
+
+int GetIndexFromInstruction(struct Instruction* i)
+{
+	return GetIndexFromCode((enum Code)i->code);
+}
+
+enum MvexTupleTypeLutKind TupleTypeLutKind(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return (enum MvexTupleTypeLutKind)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_TupleTypeLutKindIndex];
+}
+enum MvexEHBit EHBit(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return (enum MvexEHBit)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_EHBitIndex];
+}
+enum MvexConvFn ConvFn(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return (enum MvexConvFn)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_ConvFnIndex];
+}
+unsigned int InvalidConvFns(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_InvalidConvFnsIndex];
+}
+unsigned int InvalidSwizzleFns(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_InvalidSwizzleFnsIndex];
+}
+bool IsNDD(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return ((enum MvexInfoFlags1)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_Flags1Index] & MIF1_NDD) != 0;
+}
+bool IsNDS(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return ((enum MvexInfoFlags1)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_Flags1Index] & MIF1_NDS) != 0;
+}
+bool CanUseEvictionHint(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return ((enum MvexInfoFlags1)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_Flags1Index] & MIF1_EvictionHint) != 0;
+}
+bool CanUseImmRoundingControl(struct Instruction* i) 
+{
+	int index = GetIndexFromInstruction(i);
+	return ((enum MvexInfoFlags1)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_Flags1Index] & MIF1_ImmRoundingControl) != 0;
+}
+bool CanUseRoundingControl(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return ((enum MvexInfoFlags1)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_Flags1Index] & MIF1_RoundingControl) != 0;
+}
+bool CanUseSuppressAllExceptions(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return ((enum MvexInfoFlags1)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_Flags1Index] & MIF1_SuppressAllExceptions) != 0;
+}
+bool IgnoresOpMaskRegister(struct Instruction* i) 
+{
+	int index = GetIndexFromInstruction(i);
+	return ((enum MvexInfoFlags1)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_Flags1Index] & MIF1_IgnoresOpMaskRegister) != 0;
+}
+bool RequireOpMaskRegister(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return ((enum MvexInfoFlags1)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_Flags1Index] & MIF1_RequireOpMaskRegister) != 0;
+}
+bool NoSaeRc(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return ((enum MvexInfoFlags2)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_Flags2Index] & MIF2_NoSaeRoundingControl) != 0;
+}
+bool IsConvFn32(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return ((enum MvexInfoFlags2)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_Flags2Index] & MIF2_ConvFn32) != 0;
+}
+bool IgnoresEvictionHint(struct Instruction* i)
+{
+	int index = GetIndexFromInstruction(i);
+	return ((enum MvexInfoFlags2)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_Flags2Index] & MIF2_IgnoresEvictionHint) != 0;
+}
+
+//public MvexInfo(Code code) {
+//	index = (int)code - (int)IcedConstants.MvexStart;
+//	Debug.Assert((uint)index < IcedConstants.MvexLength);
+//}
+
+enum TupleType GetTupleType(struct Instruction* i, int sss)
+{
+	return (enum TupleType)MvexTupleTypeLut_Data[(int)TupleTypeLutKind(i) * 8 + sss];
+}
+
 
 /// <summary>
 /// Gets the size of the memory location that is referenced by the operand. See also <see cref="IsBroadcast"/>.
@@ -696,47 +946,61 @@ immediate |= ((uint)newValue << (int)MvexInstrFlags.MvexRegMemConvShift);
 /// <see cref="OpKind.MemorySegSI"/>, <see cref="OpKind.MemorySegESI"/>, <see cref="OpKind.MemorySegRSI"/>,
 /// <see cref="OpKind.MemoryESDI"/>, <see cref="OpKind.MemoryESEDI"/>, <see cref="OpKind.MemoryESRDI"/>
 /// </summary>
-public readonly MemorySize MemorySize{
-	get {
-		int index = (int)Code;
-#if MVEX
-				if (IcedConstants.IsMvex((Code)index)) {
-					var mvex = new MvexInfo((Code)index);
-					int sss = ((int)MvexRegMemConv - (int)MvexRegMemConv.MemConvNone) & 7;
-					return (MemorySize)MvexMemorySizeLut.Data[(int)mvex.TupleTypeLutKind * 8 + sss];
-				}
-#endif
-				if (IsBroadcast)
-					return (MemorySize)InstructionMemorySizes.SizesBcst[index];
-				else
-					return (MemorySize)InstructionMemorySizes.SizesNormal[index];
-			}
+enum MemorySize GetMemorySize(struct Instruction* i)
+{
+	int index = (int)GetCode(i);
+	if (IsMvex(i, (enum Code)index)) 
+	{
+		//var mvex = new MvexInfo((enum Code)index);
+		int sss = ((int)GetMvexRegMemConv(i) - (int)MRMC_MemConvNone) & 7;
+		return (enum MemorySize)MvexMemorySizeLut_Data[(int)TupleTypeLutKind(i) * 8 + sss];
+	}
+	if (IsBroadcast(i))
+	{
+		return (enum MemorySize)InstructionMemorySizes_SizesBcst[index];
+	}
+	else
+	{
+		return (enum MemorySize)InstructionMemorySizes_SizesNormal[index];
+	}
 }
 
 /// <summary>
 /// Gets the index register scale value, valid values are <c>*1</c>, <c>*2</c>, <c>*4</c>, <c>*8</c>. Use this property if the operand has kind <see cref="OpKind.Memory"/>
 /// </summary>
-public int MemoryIndexScale{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > 1 << (int)scale;
-	set {
-		if (value == 1)
-			scale = 0;
-		else if (value == 2)
-			scale = 1;
-		else if (value == 4)
-			scale = 2;
-		else {
-			Debug.Assert(value == 8);
-			scale = 3;
-		}
+int GetMemoryIndexScale(struct Instruction* i)
+{
+	return 1 << (int)i->scale;
+}
+
+void SetMemoryIndexScale(struct Instruction* i, int value)
+{
+	if (value == 1)
+	{
+		i->scale = 0;
+	}
+	else if (value == 2)
+	{
+		i->scale = 1;
+	}
+	else if (value == 4)
+	{
+		i->scale = 2;
+	}
+	else {
+		//Debug.Assert(value == 8);
+		i->scale = 3;
 	}
 }
-internal int InternalMemoryIndexScale{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > scale;
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	set = > scale = (byte)value;
+
+int GetInternalMemoryIndexScale(struct Instruction* i)
+{
+	return i->scale;
+}
+
+void SetInternalMemoryIndexScale(struct Instruction* i, int value)
+{
+	i->scale = (unsigned char)value;
 }
 
 /// <summary>
@@ -744,11 +1008,14 @@ internal int InternalMemoryIndexScale{
 /// an <c>EIP</c> or <c>RIP</c> relative memory operand.
 /// Use this property if the operand has kind <see cref="OpKind.Memory"/>
 /// </summary>
-public uint MemoryDisplacement32{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (uint)memDispl;
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	set = > memDispl = value;
+unsigned int GetMemoryDisplacement32(struct Instruction* i)
+{
+	return (unsigned int)i->memDispl;
+}
+
+void SetMemoryDisplacement32(struct Instruction* i, unsigned int value)
+{
+	i->memDispl = value;
 }
 
 /// <summary>
@@ -756,11 +1023,161 @@ public uint MemoryDisplacement32{
 /// an <c>EIP</c> or <c>RIP</c> relative memory operand.
 /// Use this property if the operand has kind <see cref="OpKind.Memory"/>
 /// </summary>
-public ulong MemoryDisplacement64{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > memDispl;
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	set = > memDispl = value;
+unsigned long GetMemoryDisplacement64(struct Instruction* i)
+{
+	return i->memDispl;
+}
+
+void SetMemoryDisplacement64(struct Instruction* i, unsigned long value)
+{
+	i->memDispl = value;
+}
+
+/// <summary>
+/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate8"/>
+/// </summary>
+unsigned char GetImmediate8(struct Instruction* i)
+{
+	return (unsigned char)i->immediate;
+}
+
+void SetImmediate8(struct Instruction* i, unsigned char value)
+{
+//#if MVEX
+	i->immediate = (i->immediate & 0xFFFFFF00) | (unsigned int)value;
+//#else
+//	i->immediate = value;
+//#endif
+}
+
+void SetInternalImmediate8(struct Instruction* i, unsigned int value)
+{
+	i->immediate = value;
+}
+
+/// <summary>
+/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate8_2nd"/>
+/// </summary>
+unsigned char GetImmediate8_2nd(struct Instruction* i)
+{
+	return (unsigned char)i->memDispl;
+}
+
+void SetImmediate8_2nd(struct Instruction* i, unsigned char value)
+{
+	i->memDispl = value;
+}
+
+void SetInternalImmediate8_2nd(struct Instruction* i, unsigned int value)
+{
+	i->memDispl = value;
+}
+
+/// <summary>
+/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate16"/>
+/// </summary>
+unsigned short GetImmediate16(struct Instruction* i)
+{
+	return (unsigned short)i->immediate;
+}
+
+void SetImmediate16(struct Instruction* i, unsigned short value)
+{
+	i->immediate = value;
+}
+
+void SetInternalImmediate16(struct Instruction* i, unsigned int value)
+{
+	i->immediate = value;
+}
+
+/// <summary>
+/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate32"/>
+/// </summary>
+unsigned int GetImmediate32(struct Instruction* i)
+{
+	return i->immediate;
+}
+
+void SetImmediate32(struct Instruction* i, unsigned int value)
+{
+	i->immediate = value;
+}
+
+/// <summary>
+/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate64"/>
+/// </summary>
+unsigned long GetImmediate64(struct Instruction* i)
+{
+	return (i->memDispl << 32) | i->immediate;
+}
+
+void SetImmediate64(struct Instruction* i, unsigned long value)
+{
+	i->immediate = (unsigned int)value;
+	i->memDispl = (unsigned int)(value >> 32);
+}
+
+void SetInternalImmediate64_lo(struct Instruction* i, unsigned int value)
+{
+	i->immediate = value;
+}
+
+void SetInternalImmediate64_hi(struct Instruction* i, unsigned int value)
+{
+	i->memDispl = value;
+}
+
+/// <summary>
+/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate8to16"/>
+/// </summary>
+short GetImmediate8to16(struct Instruction* i)
+{
+	return (short)(signed char)i->immediate;
+}
+
+void SetImmediate8to16(struct Instruction* i, short value)
+{
+	i->immediate = (unsigned int)(signed char)value;
+}
+
+/// <summary>
+/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate8to32"/>
+/// </summary>
+int GetImmediate8to32(struct Instruction* i)
+{
+	return (int)(signed char)i->immediate;
+}
+
+void SetImmediate8to32(struct Instruction* i, int value)
+{
+	i->immediate = (unsigned int)(signed char)value;
+}
+
+/// <summary>
+/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate8to64"/>
+/// </summary>
+long GetImmediate8to64(struct Instruction* i)
+{
+	return (long)(signed char)i->immediate;
+}
+
+void SetImmediate8to64(struct Instruction* i, long value)
+{
+	i->immediate = (unsigned int)(signed char)value;
+}
+
+/// <summary>
+/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate32to64"/>
+/// </summary>
+long GetImmediate32to64(struct Instruction* i)
+{
+	return (int)i->immediate;
+}
+
+void SetImmediate32to64(struct Instruction* i, long value)
+{
+	i->immediate = (unsigned int)value;
 }
 
 /// <summary>
@@ -768,19 +1185,31 @@ public ulong MemoryDisplacement64{
 /// </summary>
 /// <param name="operand">Operand number, 0-4</param>
 /// <returns></returns>
-public readonly ulong GetImmediate(int operand) = >
-GetOpKind(operand) switch {
-	OpKind.Immediate8 = > Immediate8,
-		OpKind.Immediate8_2nd = > Immediate8_2nd,
-		OpKind.Immediate16 = > Immediate16,
-		OpKind.Immediate32 = > Immediate32,
-		OpKind.Immediate64 = > Immediate64,
-		OpKind.Immediate8to16 = > (ulong)Immediate8to16,
-		OpKind.Immediate8to32 = > (ulong)Immediate8to32,
-		OpKind.Immediate8to64 = > (ulong)Immediate8to64,
-		OpKind.Immediate32to64 = > (ulong)Immediate32to64,
-		_ = > throw new ArgumentException($"Op{operand} isn't an immediate operand", nameof(operand)),
-};
+unsigned long GetImmediate(struct Instruction* i, int operand)
+{
+	switch (GetOpKind(i, operand))
+	{
+	case OK_Immediate8:
+		return GetImmediate8(i);
+	case OK_Immediate8_2nd:
+		return GetImmediate8_2nd(i);
+	case OK_Immediate16:
+		return GetImmediate16(i);
+	case OK_Immediate32:
+		return GetImmediate32(i);
+	case OK_Immediate64:
+		return GetImmediate64(i);
+	case OK_Immediate8to16:
+		return (unsigned long)GetImmediate8to16(i);
+	case OK_Immediate8to32:
+		return (unsigned long)GetImmediate8to32(i);
+	case OK_Immediate8to64:
+		return (unsigned long)GetImmediate8to64(i);
+	default:
+		// Op{operand} isn't an immediate operand
+		return 0;
+	}
+}
 
 /// <summary>
 /// Sets an operand's immediate value
@@ -788,7 +1217,10 @@ GetOpKind(operand) switch {
 /// <param name="operand">Operand number, 0-4</param>
 /// <param name="immediate">New immediate</param>
 /// <returns></returns>
-public void SetImmediate(int operand, int immediate) = > SetImmediate(operand, (ulong)immediate);
+void SetImmediate(struct Instruction* i, int operand, int immediate)
+{
+	SetImmediate(i, operand, (unsigned long)immediate);
+}
 
 /// <summary>
 /// Sets an operand's immediate value
@@ -796,7 +1228,10 @@ public void SetImmediate(int operand, int immediate) = > SetImmediate(operand, (
 /// <param name="operand">Operand number, 0-4</param>
 /// <param name="immediate">New immediate</param>
 /// <returns></returns>
-public void SetImmediate(int operand, uint immediate) = > SetImmediate(operand, (ulong)immediate);
+void SetImmediate(struct Instruction* i, int operand, unsigned int immediate)
+{
+	SetImmediate(i, operand, (unsigned long)immediate);
+}
 
 /// <summary>
 /// Sets an operand's immediate value
@@ -804,7 +1239,10 @@ public void SetImmediate(int operand, uint immediate) = > SetImmediate(operand, 
 /// <param name="operand">Operand number, 0-4</param>
 /// <param name="immediate">New immediate</param>
 /// <returns></returns>
-public void SetImmediate(int operand, long immediate) = > SetImmediate(operand, (ulong)immediate);
+void SetImmediate(struct Instruction* i, int operand, long immediate)
+{
+	SetImmediate(i, operand, (unsigned long)immediate);
+}
 
 /// <summary>
 /// Sets an operand's immediate value
@@ -812,290 +1250,263 @@ public void SetImmediate(int operand, long immediate) = > SetImmediate(operand, 
 /// <param name="operand">Operand number, 0-4</param>
 /// <param name="immediate">New immediate</param>
 /// <returns></returns>
-public void SetImmediate(int operand, ulong immediate) {
-	switch (GetOpKind(operand)) {
-	case OpKind.Immediate8:
-		Immediate8 = (byte)immediate;
+void SetImmediate(struct Instruction* i, int operand, unsigned long immediate) 
+{
+	switch (GetOpKind(i, operand)) 
+	{
+	case OK_Immediate8:
+		SetImmediate8(i, (unsigned char)immediate);
 		break;
-	case OpKind.Immediate8to16:
-		Immediate8to16 = (short)immediate;
+	case OK_Immediate8to16:
+		SetImmediate8to16(i, (short)immediate);
 		break;
-	case OpKind.Immediate8to32:
-		Immediate8to32 = (int)immediate;
+	case OK_Immediate8to32:
+		SetImmediate8to32(i, (int)immediate);
 		break;
-	case OpKind.Immediate8to64:
-		Immediate8to64 = (long)immediate;
+	case OK_Immediate8to64:
+		SetImmediate8to64(i, (long)immediate);
 		break;
-	case OpKind.Immediate8_2nd:
-		Immediate8_2nd = (byte)immediate;
+	case OK_Immediate8_2nd:
+		SetImmediate8_2nd(i, (unsigned char)immediate);
 		break;
-	case OpKind.Immediate16:
-		Immediate16 = (ushort)immediate;
+	case OK_Immediate16:
+		SetImmediate16(i, (unsigned short)immediate);
 		break;
-	case OpKind.Immediate32to64:
-		Immediate32to64 = (long)immediate;
+	case OK_Immediate32to64:
+		SetImmediate32to64(i, (long)immediate);
 		break;
-	case OpKind.Immediate32:
-		Immediate32 = (uint)immediate;
+	case OK_Immediate32:
+		SetImmediate32(i, (unsigned int)immediate);
 		break;
-	case OpKind.Immediate64:
-		Immediate64 = immediate;
+	case OK_Immediate64:
+		SetImmediate64(i, immediate);
 		break;
 	default:
-		throw new ArgumentException($"Op{operand} isn't an immediate operand", nameof(operand));
+		// Op{operand} isn't an immediate operand
+		break;
 	}
-}
-
-/// <summary>
-/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate8"/>
-/// </summary>
-public byte Immediate8{
-	readonly get = > (byte)immediate;
-#if MVEX
-			set = > immediate = (immediate & 0xFFFF_FF00) | (uint)value;
-#else
-			set = > immediate = value;
-#endif
-}
-internal uint InternalImmediate8{
-	set = > immediate = value;
-}
-
-/// <summary>
-/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate8_2nd"/>
-/// </summary>
-public byte Immediate8_2nd{
-	readonly get = > (byte)memDispl;
-	set = > memDispl = value;
-}
-internal uint InternalImmediate8_2nd{
-	set = > memDispl = value;
-}
-
-/// <summary>
-/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate16"/>
-/// </summary>
-public ushort Immediate16{
-	readonly get = > (ushort)immediate;
-	set = > immediate = value;
-}
-internal uint InternalImmediate16{
-	set = > immediate = value;
-}
-
-/// <summary>
-/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate32"/>
-/// </summary>
-public uint Immediate32{
-	readonly get = > immediate;
-	set = > immediate = value;
-}
-
-/// <summary>
-/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate64"/>
-/// </summary>
-public ulong Immediate64{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (memDispl << 32) | immediate;
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	set {
-		immediate = (uint)value;
-		memDispl = (uint)(value >> 32);
-	}
-}
-internal uint InternalImmediate64_lo{
-	set = > immediate = value;
-}
-internal uint InternalImmediate64_hi{
-	set = > memDispl = value;
-}
-
-/// <summary>
-/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate8to16"/>
-/// </summary>
-public short Immediate8to16{
-	readonly get = > (sbyte)immediate;
-	set = > immediate = (uint)(sbyte)value;
-}
-
-/// <summary>
-/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate8to32"/>
-/// </summary>
-public int Immediate8to32{
-	readonly get = > (sbyte)immediate;
-	set = > immediate = (uint)(sbyte)value;
-}
-
-/// <summary>
-/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate8to64"/>
-/// </summary>
-public long Immediate8to64{
-	readonly get = > (sbyte)immediate;
-	set = > immediate = (uint)(sbyte)value;
-}
-
-/// <summary>
-/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate32to64"/>
-/// </summary>
-public long Immediate32to64{
-	readonly get = > (int)immediate;
-	set = > immediate = (uint)value;
 }
 
 /// <summary>
 /// Gets the operand's branch target. Use this property if the operand has kind <see cref="OpKind.NearBranch16"/>
 /// </summary>
-public ushort NearBranch16{
-	readonly get = > (ushort)memDispl;
-	set = > memDispl = value;
+unsigned short GetNearBranch16(struct Instruction* i)
+{
+	return (unsigned short)i->memDispl;
 }
-internal uint InternalNearBranch16{
-	set = > memDispl = value;
+
+void SetNearBranch16(struct Instruction* i, unsigned short value)
+{
+	i->memDispl = value;
 }
 
 /// <summary>
 /// Gets the operand's branch target. Use this property if the operand has kind <see cref="OpKind.NearBranch32"/>
 /// </summary>
-public uint NearBranch32{
-	readonly get = > (uint)memDispl;
-	set = > memDispl = value;
+unsigned int GetInternalNearBranch16(struct Instruction* i)
+{
+	return (unsigned int)i->memDispl;
+}
+
+void SetNearBranch32(struct Instruction* i, unsigned int value)
+{
+	i->memDispl = value;
 }
 
 /// <summary>
 /// Gets the operand's branch target. Use this property if the operand has kind <see cref="OpKind.NearBranch64"/>
 /// </summary>
-public ulong NearBranch64{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > memDispl;
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	set = > memDispl = value;
+unsigned long GetNearBranch64(struct Instruction* i)
+{
+	return i->memDispl;
+}
+
+void SetNearBranch64(struct Instruction* i, unsigned long value)
+{
+	i->memDispl = value;
 }
 
 /// <summary>
 /// Gets the near branch target if it's a <c>CALL</c>/<c>JMP</c>/<c>Jcc</c> near branch instruction
 /// (i.e., if <see cref="Op0Kind"/> is <see cref="OpKind.NearBranch16"/>, <see cref="OpKind.NearBranch32"/> or <see cref="OpKind.NearBranch64"/>)
 /// </summary>
-public readonly ulong NearBranchTarget{
-	get {
-		var opKind = Op0Kind;
-#if MVEX
-// Check if JKZD/JKNZD
-if (OpCount == 2)
-	opKind = Op1Kind;
-#endif
-				return opKind switch {
-					OpKind.NearBranch16 = > NearBranch16,
-					OpKind.NearBranch32 = > NearBranch32,
-					OpKind.NearBranch64 = > NearBranch64,
-					_ = > 0,
-				};
-			}
+unsigned long GetNearBranchTarget(struct Instruction* i)
+{
+	enum OpKind opKind = GetOp0Kind(i);
+//#if MVEX
+	// Check if JKZD/JKNZD
+	if (OpCount == 2)
+	{
+		opKind = GetOp1Kind(i);
+	}
+//#endif
+
+	switch (opKind)
+	{
+	case OK_NearBranch16:
+		return GetNearBranch16(i);
+	case OK_NearBranch32:
+		return GetNearBranch32(i);
+	case OK_NearBranch64:
+		return GetNearBranch64(i);
+	case default:
+		return 0;
+	}
+	return 0;
 }
 
 /// <summary>
 /// Gets the operand's branch target. Use this property if the operand has kind <see cref="OpKind.FarBranch16"/>
 /// </summary>
-public ushort FarBranch16{
-	readonly get = > (ushort)immediate;
-	set = > immediate = value;
+unsigned short GetFarBranch16(struct Instruction* i)
+{
+	return (unsigned short)i->immediate;
 }
-internal uint InternalFarBranch16{
-	set = > immediate = value;
+
+void SetFarBranch16(struct Instruction* i, unsigned short value)
+{
+	i->immediate = value;
+}
+
+void SetInternalFarBranch16(struct Instruction* i, unsigned int value)
+{
+	i->immediate = value;
 }
 
 /// <summary>
 /// Gets the operand's branch target. Use this property if the operand has kind <see cref="OpKind.FarBranch32"/>
 /// </summary>
-public uint FarBranch32{
-	readonly get = > immediate;
-	set = > immediate = value;
+unsigned int GetFarBranch32(struct Instruction* i)
+{
+	return i->immediate;
+}
+
+void SetFarBranch32(struct Instruction* i, unsigned int value)
+{
+	i->immediate = value;
 }
 
 /// <summary>
 /// Gets the operand's branch target selector. Use this property if the operand has kind <see cref="OpKind.FarBranch16"/> or <see cref="OpKind.FarBranch32"/>
 /// </summary>
-public ushort FarBranchSelector{
-	readonly get = > (ushort)memDispl;
-	set = > memDispl = value;
-}
-internal uint InternalFarBranchSelector{
-	set = > memDispl = value;
+unsigned short GetFarBranchSelector(struct Instruction* i)
+{
+	return (unsigned short)i->memDispl;
 }
 
-/// <summary>
-/// Gets the memory operand's base register or <see cref="Register.None"/> if none. Use this property if the operand has kind <see cref="OpKind.Memory"/>
-/// </summary>
-public Register MemoryBase{
-	readonly get = > (Register)memBaseReg;
-	set = > memBaseReg = (byte)value;
+void SetFarBranchSelector(struct Instruction* i, unsigned short value)
+{
+	i->memDispl = value;
 }
-internal Register InternalMemoryBase{
-	set = > memBaseReg = (byte)value;
+
+void SetInternalFarBranchSelector(struct Instruction* i, unsigned int value)
+{
+	i->memDispl = value;
 }
 
 /// <summary>
 /// Gets the memory operand's index register or <see cref="Register.None"/> if none. Use this property if the operand has kind <see cref="OpKind.Memory"/>
 /// </summary>
-public Register MemoryIndex{
-	readonly get = > (Register)memIndexReg;
-	set = > memIndexReg = (byte)value;
+enum Register GetMemoryIndex(struct Instruction* i)
+{
+	return (enum Register)i->memIndexReg;
 }
-internal Register InternalMemoryIndex{
-	set = > memIndexReg = (byte)value;
+
+void SetMemoryIndex(struct Instruction* i, enum Register value)
+{
+	i->memIndexReg = (unsigned char)value;
+}
+
+void SetInternalMemoryIndex(struct Instruction* i, enum Register value)
+{
+	i->memIndexReg = (unsigned char)value;
 }
 
 /// <summary>
 /// Gets operand #0's register value. Use this property if operand #0 (<see cref="Op0Kind"/>) has kind <see cref="OpKind.Register"/>, see <see cref="OpCount"/> and <see cref="GetOpRegister(int)"/>
 /// </summary>
-public Register Op0Register{
-	readonly get = > (Register)reg0;
-	set = > reg0 = (byte)value;
+enum Register GetOp0Register(struct Instruction* i)
+{
+	return (enum Register)i->reg0;
 }
-internal Register InternalOp0Register{
-	set = > reg0 = (byte)value;
+
+void SetOp0Register(struct Instruction* i, enum Register value)
+{
+	i->reg0 = (unsigned char)value;
+}
+
+void SetInternalOp0Register(struct Instruction* i, enum Register value)
+{
+	i->reg0 = (unsigned char)value;
 }
 
 /// <summary>
 /// Gets operand #1's register value. Use this property if operand #1 (<see cref="Op1Kind"/>) has kind <see cref="OpKind.Register"/>, see <see cref="OpCount"/> and <see cref="GetOpRegister(int)"/>
 /// </summary>
-public Register Op1Register{
-	readonly get = > (Register)reg1;
-	set = > reg1 = (byte)value;
+enum Register GetOp1Register(struct Instruction* i)
+{
+	return (enum Register)i->reg1;
 }
-internal Register InternalOp1Register{
-	set = > reg1 = (byte)value;
+
+void SetOp1Register(struct Instruction* i, enum Register value)
+{
+	i->reg1 = (unsigned char)value;
+}
+
+void SetInternalOp1Register(struct Instruction* i, enum Register value)
+{
+	i->reg1 = (unsigned char)value;
 }
 
 /// <summary>
 /// Gets operand #2's register value. Use this property if operand #2 (<see cref="Op2Kind"/>) has kind <see cref="OpKind.Register"/>, see <see cref="OpCount"/> and <see cref="GetOpRegister(int)"/>
 /// </summary>
-public Register Op2Register{
-	readonly get = > (Register)reg2;
-	set = > reg2 = (byte)value;
+enum Register GetOp2Register(struct Instruction* i)
+{
+	return (enum Register)i->reg2;
 }
-internal Register InternalOp2Register{
-	set = > reg2 = (byte)value;
+
+void SetOp2Register(struct Instruction* i, enum Register value)
+{
+	i->reg2 = (unsigned char)value;
+}
+
+void SetInternalOp2Register(struct Instruction* i, enum Register value)
+{
+	i->reg2 = (unsigned char)value;
 }
 
 /// <summary>
 /// Gets operand #3's register value. Use this property if operand #3 (<see cref="Op3Kind"/>) has kind <see cref="OpKind.Register"/>, see <see cref="OpCount"/> and <see cref="GetOpRegister(int)"/>
 /// </summary>
-public Register Op3Register{
-	readonly get = > (Register)reg3;
-	set = > reg3 = (byte)value;
+enum Register GetOp3Register(struct Instruction* i)
+{
+	return (enum Register)i->reg3;
 }
-internal Register InternalOp3Register{
-	set = > reg3 = (byte)value;
+
+void SetOp3Register(struct Instruction* i, enum Register value)
+{
+	i->reg3 = (unsigned char)value;
+}
+
+void SetInternalOp3Register(struct Instruction* i, enum Register value)
+{
+	i->reg3 = (unsigned char)value;
 }
 
 /// <summary>
 /// Gets operand #4's register value. Use this property if operand #4 (<see cref="Op4Kind"/>) has kind <see cref="OpKind.Register"/>, see <see cref="OpCount"/> and <see cref="GetOpRegister(int)"/>
 /// </summary>
-public Register Op4Register{
-	readonly get = > Register.None;
-	set {
-		if (value != Register.None)
-			ThrowHelper.ThrowArgumentOutOfRangeException_value();
+enum Register GetOp4Register(struct Instruction* i)
+{
+	return Register_None;
+}
+
+void SetOp4Register(struct Instruction* i, enum Register value)
+{
+	if (value != Register_None)
+	{
+		// ThrowHelper.ThrowArgumentOutOfRangeException_value();
 	}
 }
 
@@ -1104,15 +1515,22 @@ public Register Op4Register{
 /// </summary>
 /// <param name="operand">Operand number, 0-4</param>
 /// <returns></returns>
-public readonly Register GetOpRegister(int operand) {
-	switch (operand) {
-	case 0: return Op0Register;
-	case 1: return Op1Register;
-	case 2: return Op2Register;
-	case 3: return Op3Register;
-	case 4: return Op4Register;
+enum Register GetOpRegister(struct Instruction* i, int operand)
+{
+	switch (operand) 
+	{
+	case 0: 
+		return GetOp0Register(i);
+	case 1: 
+		return GetOp1Register(i);
+	case 2: 
+		return GetOp2Register(i);
+	case 3: 
+		return GetOp3Register(i);
+	case 4: 
+		return GetOp4Register(i);
 	default:
-		ThrowHelper.ThrowArgumentOutOfRangeException_operand();
+		//ThrowHelper.ThrowArgumentOutOfRangeException_operand();
 		return 0;
 	}
 }
@@ -1121,85 +1539,125 @@ public readonly Register GetOpRegister(int operand) {
 /// Sets the operand's register value. Use this property if the operand has kind <see cref="OpKind.Register"/>
 /// </summary>
 /// <param name="operand">Operand number, 0-4</param>
-/// <param name="register">Register</param>
-public void SetOpRegister(int operand, Register register) {
-	switch (operand) {
-	case 0: Op0Register = register; break;
-	case 1: Op1Register = register; break;
-	case 2: Op2Register = register; break;
-	case 3: Op3Register = register; break;
-	case 4: Op4Register = register; break;
-	default: ThrowHelper.ThrowArgumentOutOfRangeException_operand(); break;
+/// <param name="_register">Register</param>
+void SetOpRegister(struct Instruction* i, int operand, enum Register _register) 
+{
+	switch (operand) 
+	{
+	case 0: 
+		SetOp0Register(i, _register); 
+		break;
+	case 1: 
+		SetOp1Register(i, _register); 
+		break;
+	case 2: 
+		SetOp2Register(i, _register); 
+		break;
+	case 3: 
+		SetOp3Register(i, _register); 
+		break;
+	case 4: 
+		SetOp4Register(i, _register); 
+		break;
+	default: 
+		//ThrowHelper.ThrowArgumentOutOfRangeException_operand(); 
+		break;
 	}
 }
 
 /// <summary>
 /// Gets the opmask register (<see cref="Register.K1"/> - <see cref="Register.K7"/>) or <see cref="Register.None"/> if none
 /// </summary>
-public Register OpMask{
-	readonly get {
-		int r = (int)(flags1 >> (int)InstrFlags1.OpMaskShift) & (int)InstrFlags1.OpMaskMask;
-		return r == 0 ? Register.None : r + Register.K0;
-	}
-	set {
-		uint r;
-		if (value == Register.None)
-			r = 0;
-		else
-			r = (uint)(value - Register.K0) & (uint)InstrFlags1.OpMaskMask;
-		flags1 = (flags1 & ~((uint)InstrFlags1.OpMaskMask << (int)InstrFlags1.OpMaskShift)) |
-				(r << (int)InstrFlags1.OpMaskShift);
-	}
+enum Register GetOpMask(struct Instruction* i)
+{
+	int r = (int)(i->flags1 >> (int)IF_OpMaskShift) & (int)IF_OpMaskMask;
+	return r == 0 ? Register_None : r + Register_K0;
 }
-internal uint InternalOpMask{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (flags1 >> (int)InstrFlags1.OpMaskShift) & (uint)InstrFlags1.OpMaskMask;
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	set = > flags1 |= value << (int)InstrFlags1.OpMaskShift;
+
+void SetOpMask(struct Instruction* i, enum Register value)
+{
+	unsigned int r;
+	if (value == Register_None)
+	{
+		r = 0;
+	}
+	else
+	{
+		r = (unsigned int)(value - Register_K0) & (unsigned int)IF_OpMaskMask;
+	}
+	i->flags1 = (i->flags1 & ~((unsigned int)IF_OpMaskMask << (int)IF_OpMaskShift)) 
+		| (r << (int)IF_OpMaskShift);
+}
+
+unsigned int GetInternalOpMask(struct Instruction* i)
+{
+	return (i->flags1 >> (int)IF_OpMaskShift) & (unsigned int)IF_OpMaskMask;
+}
+
+void SetInternalOpMask(struct Instruction* i, unsigned int value)
+{
+	i->flags1 |= value << (int)IF_OpMaskShift;
 }
 
 /// <summary>
 /// <see langword="true"/> if there's an opmask register (<see cref="OpMask"/>)
 /// </summary>
-public readonly bool HasOpMask{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	get = > (flags1 & ((uint)InstrFlags1.OpMaskMask << (int)InstrFlags1.OpMaskShift)) != 0;
+bool HasOpMask(struct Instruction* i)
+{
+	return (i->flags1 & ((unsigned int)IF_OpMaskMask << (int)IF_OpMaskShift)) != 0;
 }
 
-internal readonly bool HasOpMask_or_ZeroingMasking{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	get = > (flags1 & (((uint)InstrFlags1.OpMaskMask << (int)InstrFlags1.OpMaskShift) | (uint)InstrFlags1.ZeroingMasking)) != 0;
+bool HasOpMask_or_ZeroingMasking(struct Instruction* i)
+{
+	return (i->flags1 & (((unsigned int)IF_OpMaskMask << (int)IF_OpMaskShift) 
+		| (unsigned int)IF_ZeroingMasking)) != 0;
 }
 
 /// <summary>
 /// <see langword="true"/> if zeroing-masking, <see langword="false"/> if merging-masking.
 /// Only used by most EVEX encoded instructions that use opmask registers.
 /// </summary>
-public bool ZeroingMasking{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (flags1 & (uint)InstrFlags1.ZeroingMasking) != 0;
-	set {
-		if (value)
-			flags1 |= (uint)InstrFlags1.ZeroingMasking;
-		else
-			flags1 &= ~(uint)InstrFlags1.ZeroingMasking;
+bool GetZeroingMasking(struct Instruction* i)
+{
+	return (i->flags1 & (unsigned int)IF_ZeroingMasking) != 0;
+}
+
+void SetZeroingMasking(struct Instruction* i, bool value)
+{
+	if (value)
+	{
+		i->flags1 |= (unsigned int)IF_ZeroingMasking;
+	}
+	else
+	{
+		i->flags1 &= ~(unsigned int)IF_ZeroingMasking;
 	}
 }
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalSetZeroingMasking() = > flags1 |= (uint)InstrFlags1.ZeroingMasking;
+
+void InternalSetZeroingMasking(struct Instruction* i)
+{
+	i->flags1 |= (unsigned int)IF_ZeroingMasking;
+}
 
 /// <summary>
 /// <see langword="true"/> if merging-masking, <see langword="false"/> if zeroing-masking.
 /// Only used by most EVEX encoded instructions that use opmask registers.
 /// </summary>
-public bool MergingMasking{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (flags1 & (uint)InstrFlags1.ZeroingMasking) == 0;
-	set {
-		if (value)
-			flags1 &= ~(uint)InstrFlags1.ZeroingMasking;
-		else
-			flags1 |= (uint)InstrFlags1.ZeroingMasking;
+bool GetMergingMasking(struct Instruction* i)
+{
+	return (i->flags1 & (unsigned int)IF_ZeroingMasking) == 0;
+}
+
+
+void SetMergingMasking(struct Instruction* i, bool value)
+{
+	if (value)
+	{
+		i->flags1 &= ~(unsigned int)IF_ZeroingMasking;
+	}
+	else
+	{
+		i->flags1 |= (unsigned int)IF_ZeroingMasking;
 	}
 }
 
@@ -1207,35 +1665,45 @@ public bool MergingMasking{
 /// Rounding control (SAE is implied but <see cref="SuppressAllExceptions"/> still returns <see langword="false"/>)
 /// or <see cref="RoundingControl.None"/> if the instruction doesn't use it.
 /// </summary>
-public RoundingControl RoundingControl{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (RoundingControl)((flags1 >> (int)InstrFlags1.RoundingControlShift) & (int)InstrFlags1.RoundingControlMask);
-	set = > flags1 = (flags1 & ~((uint)InstrFlags1.RoundingControlMask << (int)InstrFlags1.RoundingControlShift)) |
-		((uint)value << (int)InstrFlags1.RoundingControlShift);
-}
-internal uint InternalRoundingControl{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	set = > flags1 |= value << (int)InstrFlags1.RoundingControlShift;
+enum RoundingControl GetRoundingControl(struct Instruction* i)
+{
+	return (enum RoundingControl)((i->flags1 >> (int)IF_RoundingControlShift) & (int)IF_RoundingControlMask);
 }
 
-internal readonly bool HasRoundingControlOrSae{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	get = > (flags1 & (((uint)InstrFlags1.RoundingControlMask << (int)InstrFlags1.RoundingControlShift) | (uint)InstrFlags1.SuppressAllExceptions)) != 0;
+void SetRoundingControl(struct Instruction* i, enum RoundingControl value)
+{
+	i->flags1 = (i->flags1 & ~((unsigned int)IF_RoundingControlMask << (int)IF_RoundingControlShift)) 
+		| ((unsigned int)value << (int)IF_RoundingControlShift);
+}
+
+unsigned int SetInternalRoundingControl(struct Instruction* i, unsigned int value)
+{
+	i->flags1 |= value << (int)IF_RoundingControlShift;
+}
+
+bool HasRoundingControlOrSae(struct Instruction* i)
+{
+	return (i->flags1 & (((unsigned int)IF_RoundingControlMask << (int)IF_RoundingControlShift) | (unsigned int)IF_SuppressAllExceptions)) != 0;
 }
 
 /// <summary>
 /// Number of elements in a db/dw/dd/dq directive: <c>db</c>: 1-16; <c>dw</c>: 1-8; <c>dd</c>: 1-4; <c>dq</c>: 1-2.
 /// Can only be called if <see cref="Code"/> is <see cref="Code.DeclareByte"/>, <see cref="Code.DeclareWord"/>, <see cref="Code.DeclareDword"/>, <see cref="Code.DeclareQword"/>
 /// </summary>
-public int DeclareDataCount{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (int)((flags1 >> (int)InstrFlags1.DataLengthShift) & (uint)InstrFlags1.DataLengthMask) + 1;
-	set = > flags1 = (flags1 & ~((uint)InstrFlags1.DataLengthMask << (int)InstrFlags1.DataLengthShift)) |
-			(((uint)(value - 1) & (uint)InstrFlags1.DataLengthMask) << (int)InstrFlags1.DataLengthShift);
+int GetDeclareDataCount(struct Instruction* i)
+{
+	return (int)((i->flags1 >> (int)IF_DataLengthShift) & (unsigned int)IF_DataLengthMask) + 1;
 }
-internal uint InternalDeclareDataCount{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	set = > flags1 |= (value - 1) << (int)InstrFlags1.DataLengthShift;
+
+void SetDeclareDataCount(struct Instruction* i, int value)
+{
+	i->flags1 = (i->flags1 & ~((unsigned int)IF_DataLengthMask << (int)IF_DataLengthShift)) 
+		| (((unsigned int)(value - 1) & (unsigned int)IF_DataLengthMask) << (int)IF_DataLengthShift);
+}
+
+void SetInternalDeclareDataCount(struct Instruction* i, unsigned int value)
+{
+	i->flags1 |= (value - 1) << (int)IF_DataLengthShift;
 }
 
 /// <summary>
