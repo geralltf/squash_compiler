@@ -247,7 +247,7 @@ enum Mnemonic GetMnemonic(struct Instruction* i)
 /// </summary>
 int GetOpCount(struct Instruction* i)
 {
-	return OpCount[(int)i->code];
+	return InstructionOpCounts_OpCount[(int)i->code];
 }
 
 /// <summary>
@@ -720,7 +720,7 @@ int GetMemoryDisplSize(struct Instruction* i)
 	case 1: return 1;
 	case 2: return 2;
 	case 3: return 4;
-	case default: return 8;
+	default: return 8;
 	}
 }
 
@@ -740,7 +740,7 @@ void SetMemoryDisplSize(struct Instruction* i, int value)
 	case 4:
 		i->displSize = 3;
 		break;
-	case default:
+	default:
 		i->displSize = 4;
 		break;
 	}
@@ -1335,7 +1335,7 @@ unsigned long GetNearBranchTarget(struct Instruction* i)
 	enum OpKind opKind = GetOp0Kind(i);
 //#if MVEX
 	// Check if JKZD/JKNZD
-	if (OpCount == 2)
+	if (GetOpCount(i) == 2)
 	{
 		opKind = GetOp1Kind(i);
 	}
@@ -1349,7 +1349,7 @@ unsigned long GetNearBranchTarget(struct Instruction* i)
 		return GetNearBranch32(i);
 	case OK_NearBranch64:
 		return GetNearBranch64(i);
-	case default:
+	default:
 		return 0;
 	}
 	return 0;
@@ -1712,7 +1712,10 @@ void SetInternalDeclareDataCount(struct Instruction* i, unsigned int value)
 /// </summary>
 /// <param name="index">Index (0-15)</param>
 /// <param name="value">New value</param>
-public void SetDeclareByteValue(int index, sbyte value) = > SetDeclareByteValue(index, (byte)value);
+void SetDeclareByteValue(struct Instruction* i, int index, signed char value)
+{
+	SetDeclareByteValue(i, index, (unsigned char)value);
+}
 
 /// <summary>
 /// Sets a new 'db' value, see also <see cref="DeclareDataCount"/>.
@@ -1720,58 +1723,59 @@ public void SetDeclareByteValue(int index, sbyte value) = > SetDeclareByteValue(
 /// </summary>
 /// <param name="index">Index (0-15)</param>
 /// <param name="value">New value</param>
-public void SetDeclareByteValue(int index, byte value) {
+void SetDeclareByteValue(struct Instruction* i, int index, unsigned char value)
+{
 	switch (index) {
 	case 0:
-		reg0 = value;
+		i->reg0 = value;
 		break;
 	case 1:
-		reg1 = value;
+		i->reg1 = value;
 		break;
 	case 2:
-		reg2 = value;
+		i->reg2 = value;
 		break;
 	case 3:
-		reg3 = value;
+		i->reg3 = value;
 		break;
 	case 4:
-		immediate = (immediate & 0xFFFFFF00) | value;
+		i->immediate = (i->immediate & 0xFFFFFF00) | value;
 		break;
 	case 5:
-		immediate = (immediate & 0xFFFF00FF) | ((uint)value << 8);
+		i->immediate = (i->immediate & 0xFFFF00FF) | ((unsigned int)value << 8);
 		break;
 	case 6:
-		immediate = (immediate & 0xFF00FFFF) | ((uint)value << 16);
+		i->immediate = (i->immediate & 0xFF00FFFF) | ((unsigned int)value << 16);
 		break;
 	case 7:
-		immediate = (immediate & 0x00FFFFFF) | ((uint)value << 24);
+		i->immediate = (i->immediate & 0x00FFFFFF) | ((unsigned int)value << 24);
 		break;
 	case 8:
-		memDispl = (memDispl & 0xFFFF_FFFF_FFFF_FF00) | (ulong)value;
+		i->memDispl = (i->memDispl & 0xFFFFFFFFFFFFFF00) | (unsigned long)value;
 		break;
 	case 9:
-		memDispl = (memDispl & 0xFFFF_FFFF_FFFF_00FF) | ((ulong)value << 8);
+		i->memDispl = (i->memDispl & 0xFFFFFFFFFFFF00FF) | ((unsigned long)value << 8);
 		break;
 	case 10:
-		memDispl = (memDispl & 0xFFFF_FFFF_FF00_FFFF) | ((ulong)value << 16);
+		i->memDispl = (i->memDispl & 0xFFFFFFFFFF00FFFF) | ((unsigned long)value << 16);
 		break;
 	case 11:
-		memDispl = (memDispl & 0xFFFF_FFFF_00FF_FFFF) | ((ulong)value << 24);
+		i->memDispl = (i->memDispl & 0xFFFFFFFF00FFFFFF) | ((unsigned long)value << 24);
 		break;
 	case 12:
-		memDispl = (memDispl & 0xFFFF_FF00_FFFF_FFFF) | ((ulong)value << 32);
+		i->memDispl = (i->memDispl & 0xFFFFFF00FFFFFFFF) | ((unsigned long)value << 32);
 		break;
 	case 13:
-		memDispl = (memDispl & 0xFFFF_00FF_FFFF_FFFF) | ((ulong)value << 40);
+		i->memDispl = (i->memDispl & 0xFFFF00FFFFFFFFFF) | ((unsigned long)value << 40);
 		break;
 	case 14:
-		memDispl = (memDispl & 0xFF00_FFFF_FFFF_FFFF) | ((ulong)value << 48);
+		i->memDispl = (i->memDispl & 0xFF00FFFFFFFFFFFF) | ((unsigned long)value << 48);
 		break;
 	case 15:
-		memDispl = (memDispl & 0x00FF_FFFF_FFFF_FFFF) | ((ulong)value << 56);
+		i->memDispl = (i->memDispl & 0x00FFFFFFFFFFFFFF) | ((unsigned long)value << 56);
 		break;
 	default:
-		ThrowHelper.ThrowArgumentOutOfRangeException_index();
+		//ThrowHelper.ThrowArgumentOutOfRangeException_index();
 		break;
 	}
 }
@@ -1782,26 +1786,28 @@ public void SetDeclareByteValue(int index, byte value) {
 /// </summary>
 /// <param name="index">Index (0-15)</param>
 /// <returns></returns>
-public readonly byte GetDeclareByteValue(int index) {
-	switch (index) {
-	case 0:		return reg0;
-	case 1:		return reg1;
-	case 2:		return reg2;
-	case 3:		return reg3;
-	case 4:		return (byte)immediate;
-	case 5:		return (byte)(immediate >> 8);
-	case 6:		return (byte)(immediate >> 16);
-	case 7:		return (byte)(immediate >> 24);
-	case 8:		return (byte)memDispl;
-	case 9:		return (byte)((uint)memDispl >> 8);
-	case 10:	return (byte)((uint)memDispl >> 16);
-	case 11:	return (byte)((uint)memDispl >> 24);
-	case 12:	return (byte)(memDispl >> 32);
-	case 13:	return (byte)(memDispl >> 40);
-	case 14:	return (byte)(memDispl >> 48);
-	case 15:	return (byte)(memDispl >> 56);
+unsigned char GetDeclareByteValue(struct Instruction* i, int index)
+{
+	switch (index) 
+	{
+	case 0:		return i->reg0;
+	case 1:		return i->reg1;
+	case 2:		return i->reg2;
+	case 3:		return i->reg3;
+	case 4:		return (unsigned char)i->immediate;
+	case 5:		return (unsigned char)(i->immediate >> 8);
+	case 6:		return (unsigned char)(i->immediate >> 16);
+	case 7:		return (unsigned char)(i->immediate >> 24);
+	case 8:		return (unsigned char)i->memDispl;
+	case 9:		return (unsigned char)((unsigned int)i->memDispl >> 8);
+	case 10:	return (unsigned char)((unsigned int)i->memDispl >> 16);
+	case 11:	return (unsigned char)((unsigned int)i->memDispl >> 24);
+	case 12:	return (unsigned char)(i->memDispl >> 32);
+	case 13:	return (unsigned char)(i->memDispl >> 40);
+	case 14:	return (unsigned char)(i->memDispl >> 48);
+	case 15:	return (unsigned char)(i->memDispl >> 56);
 	default:
-		ThrowHelper.ThrowArgumentOutOfRangeException_index();
+		//ThrowHelper.ThrowArgumentOutOfRangeException_index();
 		return 0;
 	}
 }
@@ -1812,7 +1818,10 @@ public readonly byte GetDeclareByteValue(int index) {
 /// </summary>
 /// <param name="index">Index (0-7)</param>
 /// <param name="value">New value</param>
-public void SetDeclareWordValue(int index, short value) = > SetDeclareWordValue(index, (ushort)value);
+void SetDeclareWordValue(struct Instruction* i, int index, short value)
+{
+	SetDeclareWordValue(i, index, (unsigned short)value);
+}
 
 /// <summary>
 /// Sets a new 'dw' value, see also <see cref="DeclareDataCount"/>.
@@ -1820,36 +1829,38 @@ public void SetDeclareWordValue(int index, short value) = > SetDeclareWordValue(
 /// </summary>
 /// <param name="index">Index (0-7)</param>
 /// <param name="value">New value</param>
-public void SetDeclareWordValue(int index, ushort value) {
-	switch (index) {
+void SetDeclareWordValue(struct Instruction* i, int index, unsigned short value) 
+{
+	switch (index) 
+	{
 	case 0:
-		reg0 = (byte)value;
-		reg1 = (byte)(value >> 8);
+		i->reg0 = (unsigned char)value;
+		i->reg1 = (unsigned char)(value >> 8);
 		break;
 	case 1:
-		reg2 = (byte)value;
-		reg3 = (byte)(value >> 8);
+		i->reg2 = (unsigned char)value;
+		i->reg3 = (unsigned char)(value >> 8);
 		break;
 	case 2:
-		immediate = (immediate & 0xFFFF0000) | value;
+		i->immediate = (i->immediate & 0xFFFF0000) | value;
 		break;
 	case 3:
-		immediate = (uint)(ushort)immediate | ((uint)value << 16);
+		i->immediate = (unsigned int)(unsigned short)i->immediate | ((unsigned int)value << 16);
 		break;
 	case 4:
-		memDispl = (memDispl & 0xFFFF_FFFF_FFFF_0000) | (ulong)value;
+		i->memDispl = (i->memDispl & 0xFFFFFFFFFFFF0000) | (unsigned long)value;
 		break;
 	case 5:
-		memDispl = (memDispl & 0xFFFF_FFFF_0000_FFFF) | ((ulong)value << 16);
+		i->memDispl = (i->memDispl & 0xFFFFFFFF0000FFFF) | ((unsigned long)value << 16);
 		break;
 	case 6:
-		memDispl = (memDispl & 0xFFFF_0000_FFFF_FFFF) | ((ulong)value << 32);
+		i->memDispl = (i->memDispl & 0xFFFF0000FFFFFFFF) | ((unsigned long)value << 32);
 		break;
 	case 7:
-		memDispl = (memDispl & 0x0000_FFFF_FFFF_FFFF) | ((ulong)value << 48);
+		i->memDispl = (i->memDispl & 0x0000FFFFFFFFFFFF) | ((unsigned long)value << 48);
 		break;
 	default:
-		ThrowHelper.ThrowArgumentOutOfRangeException_index();
+		//ThrowHelper.ThrowArgumentOutOfRangeException_index();
 		break;
 	}
 }
@@ -1860,18 +1871,20 @@ public void SetDeclareWordValue(int index, ushort value) {
 /// </summary>
 /// <param name="index">Index (0-7)</param>
 /// <returns></returns>
-public readonly ushort GetDeclareWordValue(int index) {
-	switch (index) {
-	case 0:	return (ushort)((uint)reg0 | (uint)(reg1 << 8));
-	case 1:	return (ushort)((uint)reg2 | (uint)(reg3 << 8));
-	case 2:	return (ushort)immediate;
-	case 3:	return (ushort)(immediate >> 16);
-	case 4:	return (ushort)memDispl;
-	case 5:	return (ushort)((uint)memDispl >> 16);
-	case 6:	return (ushort)(memDispl >> 32);
-	case 7:	return (ushort)(memDispl >> 48);
+unsigned short GetDeclareWordValue(struct Instruction* i, int index) 
+{
+	switch (index) 
+	{
+	case 0:	return (unsigned short)((unsigned int)i->reg0 | (unsigned int)(i->reg1 << 8));
+	case 1:	return (unsigned short)((unsigned int)i->reg2 | (unsigned int)(i->reg3 << 8));
+	case 2:	return (unsigned short)i->immediate;
+	case 3:	return (unsigned short)(i->immediate >> 16);
+	case 4:	return (unsigned short)i->memDispl;
+	case 5:	return (unsigned short)((unsigned int)i->memDispl >> 16);
+	case 6:	return (unsigned short)(i->memDispl >> 32);
+	case 7:	return (unsigned short)(i->memDispl >> 48);
 	default:
-		ThrowHelper.ThrowArgumentOutOfRangeException_index();
+		//ThrowHelper.ThrowArgumentOutOfRangeException_index();
 		return 0;
 	}
 }
@@ -1882,7 +1895,10 @@ public readonly ushort GetDeclareWordValue(int index) {
 /// </summary>
 /// <param name="index">Index (0-3)</param>
 /// <param name="value">New value</param>
-public void SetDeclareDwordValue(int index, int value) = > SetDeclareDwordValue(index, (uint)value);
+void SetDeclareDwordValue(struct Instruction* i, int index, int value)
+{
+	SetDeclareDwordValue(i, index, (unsigned int)value);
+}
 
 /// <summary>
 /// Sets a new 'dd' value, see also <see cref="DeclareDataCount"/>.
@@ -1890,25 +1906,27 @@ public void SetDeclareDwordValue(int index, int value) = > SetDeclareDwordValue(
 /// </summary>
 /// <param name="index">Index (0-3)</param>
 /// <param name="value">New value</param>
-public void SetDeclareDwordValue(int index, uint value) {
-	switch (index) {
+void SetDeclareDwordValue(struct Instruction* i, int index, unsigned int value) 
+{
+	switch (index) 
+	{
 	case 0:
-		reg0 = (byte)value;
-		reg1 = (byte)(value >> 8);
-		reg2 = (byte)(value >> 16);
-		reg3 = (byte)(value >> 24);
+		i->reg0 = (unsigned char)value;
+		i->reg1 = (unsigned char)(value >> 8);
+		i->reg2 = (unsigned char)(value >> 16);
+		i->reg3 = (unsigned char)(value >> 24);
 		break;
 	case 1:
-		immediate = value;
+		i->immediate = value;
 		break;
 	case 2:
-		memDispl = (memDispl & 0xFFFF_FFFF_0000_0000) | (ulong)value;
+		i->memDispl = (i->memDispl & 0xFFFFFFFF00000000) | (unsigned long)value;
 		break;
 	case 3:
-		memDispl = (memDispl & 0x0000_0000_FFFF_FFFF) | ((ulong)value << 32);
+		i->memDispl = (i->memDispl & 0x00000000FFFFFFFF) | ((unsigned long)value << 32);
 		break;
 	default:
-		ThrowHelper.ThrowArgumentOutOfRangeException_index();
+		//ThrowHelper.ThrowArgumentOutOfRangeException_index();
 		break;
 	}
 }
@@ -1919,14 +1937,16 @@ public void SetDeclareDwordValue(int index, uint value) {
 /// </summary>
 /// <param name="index">Index (0-3)</param>
 /// <returns></returns>
-public readonly uint GetDeclareDwordValue(int index) {
-	switch (index) {
-	case 0:	return (uint)reg0 | (uint)(reg1 << 8) | (uint)(reg2 << 16) | (uint)(reg3 << 24);
-	case 1:	return immediate;
-	case 2:	return (uint)memDispl;
-	case 3:	return (uint)(memDispl >> 32);
+unsigned int GetDeclareDwordValue(struct Instruction* i, int index) 
+{
+	switch (index) 
+	{
+	case 0:	return (unsigned int)i->reg0 | (unsigned int)(i->reg1 << 8) | (unsigned int)(i->reg2 << 16) | (unsigned int)(i->reg3 << 24);
+	case 1:	return i->immediate;
+	case 2:	return (unsigned int)i->memDispl;
+	case 3:	return (unsigned int)(i->memDispl >> 32);
 	default:
-		ThrowHelper.ThrowArgumentOutOfRangeException_index();
+		//ThrowHelper.ThrowArgumentOutOfRangeException_index();
 		return 0;
 	}
 }
@@ -1937,7 +1957,10 @@ public readonly uint GetDeclareDwordValue(int index) {
 /// </summary>
 /// <param name="index">Index (0-1)</param>
 /// <param name="value">New value</param>
-public void SetDeclareQwordValue(int index, long value) = > SetDeclareQwordValue(index, (ulong)value);
+void SetDeclareQwordValue(struct Instruction* i, int index, long value)
+{
+	SetDeclareQwordValue(i, index, (unsigned long)value);
+}
 
 /// <summary>
 /// Sets a new 'dq' value, see also <see cref="DeclareDataCount"/>.
@@ -1945,22 +1968,24 @@ public void SetDeclareQwordValue(int index, long value) = > SetDeclareQwordValue
 /// </summary>
 /// <param name="index">Index (0-1)</param>
 /// <param name="value">New value</param>
-public void SetDeclareQwordValue(int index, ulong value) {
-	uint v;
-	switch (index) {
+void SetDeclareQwordValue(struct Instruction* i, int index, unsigned long value) 
+{
+	unsigned int v;
+	switch (index) 
+	{
 	case 0:
-		v = (uint)value;
-		reg0 = (byte)v;
-		reg1 = (byte)(v >> 8);
-		reg2 = (byte)(v >> 16);
-		reg3 = (byte)(v >> 24);
-		immediate = (uint)(value >> 32);
+		v = (unsigned int)value;
+		i->reg0 = (unsigned char)v;
+		i->reg1 = (unsigned char)(v >> 8);
+		i->reg2 = (unsigned char)(v >> 16);
+		i->reg3 = (unsigned char)(v >> 24);
+		i->immediate = (unsigned int)(value >> 32);
 		break;
 	case 1:
-		memDispl = value;
+		i->memDispl = value;
 		break;
 	default:
-		ThrowHelper.ThrowArgumentOutOfRangeException_index();
+		//ThrowHelper.ThrowArgumentOutOfRangeException_index();
 		break;
 	}
 }
@@ -1971,12 +1996,14 @@ public void SetDeclareQwordValue(int index, ulong value) {
 /// </summary>
 /// <param name="index">Index (0-1)</param>
 /// <returns></returns>
-public readonly ulong GetDeclareQwordValue(int index) {
-	switch (index) {
-	case 0:	return (ulong)reg0 | (ulong)((uint)reg1 << 8) | (ulong)((uint)reg2 << 16) | (ulong)((uint)reg3 << 24) | ((ulong)immediate << 32);
-	case 1:	return memDispl;
+unsigned long GetDeclareQwordValue(struct Instruction* i, int index) 
+{
+	switch (index) 
+	{
+	case 0:	return (unsigned long)i->reg0 | (unsigned long)((unsigned int)i->reg1 << 8) | (unsigned long)((unsigned int)i->reg2 << 16) | (unsigned long)((unsigned int)i->reg3 << 24) | ((unsigned long)i->immediate << 32);
+	case 1:	return i->memDispl;
 	default:
-		ThrowHelper.ThrowArgumentOutOfRangeException_index();
+		//ThrowHelper.ThrowArgumentOutOfRangeException_index();
 		return 0;
 	}
 }
@@ -1984,17 +2011,29 @@ public readonly ulong GetDeclareQwordValue(int index) {
 /// <summary>
 /// Checks if this is a VSIB instruction, see also <see cref="IsVsib32"/>, <see cref="IsVsib64"/>
 /// </summary>
-public readonly bool IsVsib = > TryGetVsib64(out _);
+bool IsVsib(struct Instruction* i) 
+{
+	bool vsib64 = false;
+	return TryGetVsib64(i, &vsib64);
+}
 
 /// <summary>
 /// VSIB instructions only (<see cref="IsVsib"/>): <see langword="true"/> if it's using 32-bit indexes, <see langword="false"/> if it's using 64-bit indexes
 /// </summary>
-public readonly bool IsVsib32 = > TryGetVsib64(out bool vsib64) && !vsib64;
+bool IsVsib32(struct Instruction* i)
+{
+	bool vsib64 = false;
+	return TryGetVsib64(i, &vsib64) && !vsib64;
+}
 
 /// <summary>
 /// VSIB instructions only (<see cref="IsVsib"/>): <see langword="true"/> if it's using 64-bit indexes, <see langword="false"/> if it's using 32-bit indexes
 /// </summary>
-public readonly bool IsVsib64 = > TryGetVsib64(out bool vsib64) && vsib64;
+bool IsVsib64(struct Instruction* i) 
+{
+	bool vsib64 = false;
+	return TryGetVsib64(i, &vsib64) && vsib64;
+}
 
 /// <summary>
 /// Checks if it's a VSIB instruction. If it's a VSIB instruction, it sets <paramref name="vsib64"/> to <see langword="true"/> if it's
@@ -2002,115 +2041,117 @@ public readonly bool IsVsib64 = > TryGetVsib64(out bool vsib64) && vsib64;
 /// </summary>
 /// <param name="vsib64">If it's a VSIB instruction, set to <see langword="true"/> if it's using 64-bit indexes, set to <see langword="false"/> if it's using 32-bit indexes</param>
 /// <returns></returns>
-public readonly bool TryGetVsib64(out bool vsib64) {
-	switch (Code) {
+bool TryGetVsib64(struct Instruction* i, bool* vsib64)
+{
+	switch (GetCode(i)) 
+	{
 		// GENERATOR-BEGIN: Vsib32
 		// ⚠️This was generated by GENERATOR!🦹‍♂️
-	case Code.VEX_Vpgatherdd_xmm_vm32x_xmm:
-	case Code.VEX_Vpgatherdd_ymm_vm32y_ymm:
-	case Code.VEX_Vpgatherdq_xmm_vm32x_xmm:
-	case Code.VEX_Vpgatherdq_ymm_vm32x_ymm:
-	case Code.EVEX_Vpgatherdd_xmm_k1_vm32x:
-	case Code.EVEX_Vpgatherdd_ymm_k1_vm32y:
-	case Code.EVEX_Vpgatherdd_zmm_k1_vm32z:
-	case Code.EVEX_Vpgatherdq_xmm_k1_vm32x:
-	case Code.EVEX_Vpgatherdq_ymm_k1_vm32x:
-	case Code.EVEX_Vpgatherdq_zmm_k1_vm32y:
-	case Code.VEX_Vgatherdps_xmm_vm32x_xmm:
-	case Code.VEX_Vgatherdps_ymm_vm32y_ymm:
-	case Code.VEX_Vgatherdpd_xmm_vm32x_xmm:
-	case Code.VEX_Vgatherdpd_ymm_vm32x_ymm:
-	case Code.EVEX_Vgatherdps_xmm_k1_vm32x:
-	case Code.EVEX_Vgatherdps_ymm_k1_vm32y:
-	case Code.EVEX_Vgatherdps_zmm_k1_vm32z:
-	case Code.EVEX_Vgatherdpd_xmm_k1_vm32x:
-	case Code.EVEX_Vgatherdpd_ymm_k1_vm32x:
-	case Code.EVEX_Vgatherdpd_zmm_k1_vm32y:
-	case Code.EVEX_Vpscatterdd_vm32x_k1_xmm:
-	case Code.EVEX_Vpscatterdd_vm32y_k1_ymm:
-	case Code.EVEX_Vpscatterdd_vm32z_k1_zmm:
-	case Code.EVEX_Vpscatterdq_vm32x_k1_xmm:
-	case Code.EVEX_Vpscatterdq_vm32x_k1_ymm:
-	case Code.EVEX_Vpscatterdq_vm32y_k1_zmm:
-	case Code.EVEX_Vscatterdps_vm32x_k1_xmm:
-	case Code.EVEX_Vscatterdps_vm32y_k1_ymm:
-	case Code.EVEX_Vscatterdps_vm32z_k1_zmm:
-	case Code.EVEX_Vscatterdpd_vm32x_k1_xmm:
-	case Code.EVEX_Vscatterdpd_vm32x_k1_ymm:
-	case Code.EVEX_Vscatterdpd_vm32y_k1_zmm:
-	case Code.EVEX_Vgatherpf0dps_vm32z_k1:
-	case Code.EVEX_Vgatherpf0dpd_vm32y_k1:
-	case Code.EVEX_Vgatherpf1dps_vm32z_k1:
-	case Code.EVEX_Vgatherpf1dpd_vm32y_k1:
-	case Code.EVEX_Vscatterpf0dps_vm32z_k1:
-	case Code.EVEX_Vscatterpf0dpd_vm32y_k1:
-	case Code.EVEX_Vscatterpf1dps_vm32z_k1:
-	case Code.EVEX_Vscatterpf1dpd_vm32y_k1:
-	case Code.MVEX_Vpgatherdd_zmm_k1_mvt:
-	case Code.MVEX_Vpgatherdq_zmm_k1_mvt:
-	case Code.MVEX_Vgatherdps_zmm_k1_mvt:
-	case Code.MVEX_Vgatherdpd_zmm_k1_mvt:
-	case Code.MVEX_Vpscatterdd_mvt_k1_zmm:
-	case Code.MVEX_Vpscatterdq_mvt_k1_zmm:
-	case Code.MVEX_Vscatterdps_mvt_k1_zmm:
-	case Code.MVEX_Vscatterdpd_mvt_k1_zmm:
-	case Code.MVEX_Undoc_zmm_k1_mvt_512_66_0F38_W0_B0:
-	case Code.MVEX_Undoc_zmm_k1_mvt_512_66_0F38_W0_B2:
-	case Code.MVEX_Undoc_zmm_k1_mvt_512_66_0F38_W0_C0:
-	case Code.MVEX_Vgatherpf0hintdps_mvt_k1:
-	case Code.MVEX_Vgatherpf0hintdpd_mvt_k1:
-	case Code.MVEX_Vgatherpf0dps_mvt_k1:
-	case Code.MVEX_Vgatherpf1dps_mvt_k1:
-	case Code.MVEX_Vscatterpf0hintdps_mvt_k1:
-	case Code.MVEX_Vscatterpf0hintdpd_mvt_k1:
-	case Code.MVEX_Vscatterpf0dps_mvt_k1:
-	case Code.MVEX_Vscatterpf1dps_mvt_k1:
+	case VEX_Vpgatherdd_xmm_vm32x_xmm:
+	case VEX_Vpgatherdd_ymm_vm32y_ymm:
+	case VEX_Vpgatherdq_xmm_vm32x_xmm:
+	case VEX_Vpgatherdq_ymm_vm32x_ymm:
+	case EVEX_Vpgatherdd_xmm_k1_vm32x:
+	case EVEX_Vpgatherdd_ymm_k1_vm32y:
+	case EVEX_Vpgatherdd_zmm_k1_vm32z:
+	case EVEX_Vpgatherdq_xmm_k1_vm32x:
+	case EVEX_Vpgatherdq_ymm_k1_vm32x:
+	case EVEX_Vpgatherdq_zmm_k1_vm32y:
+	case VEX_Vgatherdps_xmm_vm32x_xmm:
+	case VEX_Vgatherdps_ymm_vm32y_ymm:
+	case VEX_Vgatherdpd_xmm_vm32x_xmm:
+	case VEX_Vgatherdpd_ymm_vm32x_ymm:
+	case EVEX_Vgatherdps_xmm_k1_vm32x:
+	case EVEX_Vgatherdps_ymm_k1_vm32y:
+	case EVEX_Vgatherdps_zmm_k1_vm32z:
+	case EVEX_Vgatherdpd_xmm_k1_vm32x:
+	case EVEX_Vgatherdpd_ymm_k1_vm32x:
+	case EVEX_Vgatherdpd_zmm_k1_vm32y:
+	case EVEX_Vpscatterdd_vm32x_k1_xmm:
+	case EVEX_Vpscatterdd_vm32y_k1_ymm:
+	case EVEX_Vpscatterdd_vm32z_k1_zmm:
+	case EVEX_Vpscatterdq_vm32x_k1_xmm:
+	case EVEX_Vpscatterdq_vm32x_k1_ymm:
+	case EVEX_Vpscatterdq_vm32y_k1_zmm:
+	case EVEX_Vscatterdps_vm32x_k1_xmm:
+	case EVEX_Vscatterdps_vm32y_k1_ymm:
+	case EVEX_Vscatterdps_vm32z_k1_zmm:
+	case EVEX_Vscatterdpd_vm32x_k1_xmm:
+	case EVEX_Vscatterdpd_vm32x_k1_ymm:
+	case EVEX_Vscatterdpd_vm32y_k1_zmm:
+	case EVEX_Vgatherpf0dps_vm32z_k1:
+	case EVEX_Vgatherpf0dpd_vm32y_k1:
+	case EVEX_Vgatherpf1dps_vm32z_k1:
+	case EVEX_Vgatherpf1dpd_vm32y_k1:
+	case EVEX_Vscatterpf0dps_vm32z_k1:
+	case EVEX_Vscatterpf0dpd_vm32y_k1:
+	case EVEX_Vscatterpf1dps_vm32z_k1:
+	case EVEX_Vscatterpf1dpd_vm32y_k1:
+	case MVEX_Vpgatherdd_zmm_k1_mvt:
+	case MVEX_Vpgatherdq_zmm_k1_mvt:
+	case MVEX_Vgatherdps_zmm_k1_mvt:
+	case MVEX_Vgatherdpd_zmm_k1_mvt:
+	case MVEX_Vpscatterdd_mvt_k1_zmm:
+	case MVEX_Vpscatterdq_mvt_k1_zmm:
+	case MVEX_Vscatterdps_mvt_k1_zmm:
+	case MVEX_Vscatterdpd_mvt_k1_zmm:
+	case MVEX_Undoc_zmm_k1_mvt_512_66_0F38_W0_B0:
+	case MVEX_Undoc_zmm_k1_mvt_512_66_0F38_W0_B2:
+	case MVEX_Undoc_zmm_k1_mvt_512_66_0F38_W0_C0:
+	case MVEX_Vgatherpf0hintdps_mvt_k1:
+	case MVEX_Vgatherpf0hintdpd_mvt_k1:
+	case MVEX_Vgatherpf0dps_mvt_k1:
+	case MVEX_Vgatherpf1dps_mvt_k1:
+	case MVEX_Vscatterpf0hintdps_mvt_k1:
+	case MVEX_Vscatterpf0hintdpd_mvt_k1:
+	case MVEX_Vscatterpf0dps_mvt_k1:
+	case MVEX_Vscatterpf1dps_mvt_k1:
 		vsib64 = false;
 		return true;
 		// GENERATOR-END: Vsib32
 
 		// GENERATOR-BEGIN: Vsib64
 		// ⚠️This was generated by GENERATOR!🦹‍♂️
-	case Code.VEX_Vpgatherqd_xmm_vm64x_xmm:
-	case Code.VEX_Vpgatherqd_xmm_vm64y_xmm:
-	case Code.VEX_Vpgatherqq_xmm_vm64x_xmm:
-	case Code.VEX_Vpgatherqq_ymm_vm64y_ymm:
-	case Code.EVEX_Vpgatherqd_xmm_k1_vm64x:
-	case Code.EVEX_Vpgatherqd_xmm_k1_vm64y:
-	case Code.EVEX_Vpgatherqd_ymm_k1_vm64z:
-	case Code.EVEX_Vpgatherqq_xmm_k1_vm64x:
-	case Code.EVEX_Vpgatherqq_ymm_k1_vm64y:
-	case Code.EVEX_Vpgatherqq_zmm_k1_vm64z:
-	case Code.VEX_Vgatherqps_xmm_vm64x_xmm:
-	case Code.VEX_Vgatherqps_xmm_vm64y_xmm:
-	case Code.VEX_Vgatherqpd_xmm_vm64x_xmm:
-	case Code.VEX_Vgatherqpd_ymm_vm64y_ymm:
-	case Code.EVEX_Vgatherqps_xmm_k1_vm64x:
-	case Code.EVEX_Vgatherqps_xmm_k1_vm64y:
-	case Code.EVEX_Vgatherqps_ymm_k1_vm64z:
-	case Code.EVEX_Vgatherqpd_xmm_k1_vm64x:
-	case Code.EVEX_Vgatherqpd_ymm_k1_vm64y:
-	case Code.EVEX_Vgatherqpd_zmm_k1_vm64z:
-	case Code.EVEX_Vpscatterqd_vm64x_k1_xmm:
-	case Code.EVEX_Vpscatterqd_vm64y_k1_xmm:
-	case Code.EVEX_Vpscatterqd_vm64z_k1_ymm:
-	case Code.EVEX_Vpscatterqq_vm64x_k1_xmm:
-	case Code.EVEX_Vpscatterqq_vm64y_k1_ymm:
-	case Code.EVEX_Vpscatterqq_vm64z_k1_zmm:
-	case Code.EVEX_Vscatterqps_vm64x_k1_xmm:
-	case Code.EVEX_Vscatterqps_vm64y_k1_xmm:
-	case Code.EVEX_Vscatterqps_vm64z_k1_ymm:
-	case Code.EVEX_Vscatterqpd_vm64x_k1_xmm:
-	case Code.EVEX_Vscatterqpd_vm64y_k1_ymm:
-	case Code.EVEX_Vscatterqpd_vm64z_k1_zmm:
-	case Code.EVEX_Vgatherpf0qps_vm64z_k1:
-	case Code.EVEX_Vgatherpf0qpd_vm64z_k1:
-	case Code.EVEX_Vgatherpf1qps_vm64z_k1:
-	case Code.EVEX_Vgatherpf1qpd_vm64z_k1:
-	case Code.EVEX_Vscatterpf0qps_vm64z_k1:
-	case Code.EVEX_Vscatterpf0qpd_vm64z_k1:
-	case Code.EVEX_Vscatterpf1qps_vm64z_k1:
-	case Code.EVEX_Vscatterpf1qpd_vm64z_k1:
+	case VEX_Vpgatherqd_xmm_vm64x_xmm:
+	case VEX_Vpgatherqd_xmm_vm64y_xmm:
+	case VEX_Vpgatherqq_xmm_vm64x_xmm:
+	case VEX_Vpgatherqq_ymm_vm64y_ymm:
+	case EVEX_Vpgatherqd_xmm_k1_vm64x:
+	case EVEX_Vpgatherqd_xmm_k1_vm64y:
+	case EVEX_Vpgatherqd_ymm_k1_vm64z:
+	case EVEX_Vpgatherqq_xmm_k1_vm64x:
+	case EVEX_Vpgatherqq_ymm_k1_vm64y:
+	case EVEX_Vpgatherqq_zmm_k1_vm64z:
+	case VEX_Vgatherqps_xmm_vm64x_xmm:
+	case VEX_Vgatherqps_xmm_vm64y_xmm:
+	case VEX_Vgatherqpd_xmm_vm64x_xmm:
+	case VEX_Vgatherqpd_ymm_vm64y_ymm:
+	case EVEX_Vgatherqps_xmm_k1_vm64x:
+	case EVEX_Vgatherqps_xmm_k1_vm64y:
+	case EVEX_Vgatherqps_ymm_k1_vm64z:
+	case EVEX_Vgatherqpd_xmm_k1_vm64x:
+	case EVEX_Vgatherqpd_ymm_k1_vm64y:
+	case EVEX_Vgatherqpd_zmm_k1_vm64z:
+	case EVEX_Vpscatterqd_vm64x_k1_xmm:
+	case EVEX_Vpscatterqd_vm64y_k1_xmm:
+	case EVEX_Vpscatterqd_vm64z_k1_ymm:
+	case EVEX_Vpscatterqq_vm64x_k1_xmm:
+	case EVEX_Vpscatterqq_vm64y_k1_ymm:
+	case EVEX_Vpscatterqq_vm64z_k1_zmm:
+	case EVEX_Vscatterqps_vm64x_k1_xmm:
+	case EVEX_Vscatterqps_vm64y_k1_xmm:
+	case EVEX_Vscatterqps_vm64z_k1_ymm:
+	case EVEX_Vscatterqpd_vm64x_k1_xmm:
+	case EVEX_Vscatterqpd_vm64y_k1_ymm:
+	case EVEX_Vscatterqpd_vm64z_k1_zmm:
+	case EVEX_Vgatherpf0qps_vm64z_k1:
+	case EVEX_Vgatherpf0qpd_vm64z_k1:
+	case EVEX_Vgatherpf1qps_vm64z_k1:
+	case EVEX_Vgatherpf1qpd_vm64z_k1:
+	case EVEX_Vscatterpf0qps_vm64z_k1:
+	case EVEX_Vscatterpf0qpd_vm64z_k1:
+	case EVEX_Vscatterpf1qps_vm64z_k1:
+	case EVEX_Vscatterpf1qpd_vm64z_k1:
 		vsib64 = true;
 		return true;
 		// GENERATOR-END: Vsib64
@@ -2125,44 +2166,69 @@ public readonly bool TryGetVsib64(out bool vsib64) {
 /// Suppress all exceptions (EVEX/MVEX encoded instructions). Note that if <see cref="RoundingControl"/> is
 /// not <see cref="RoundingControl.None"/>, SAE is implied but this property will still return <see langword="false"/>.
 /// </summary>
-public bool SuppressAllExceptions{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	readonly get = > (flags1 & (uint)InstrFlags1.SuppressAllExceptions) != 0;
-	set {
-		if (value)
-			flags1 |= (uint)InstrFlags1.SuppressAllExceptions;
-		else
-			flags1 &= ~(uint)InstrFlags1.SuppressAllExceptions;
+bool GetSuppressAllExceptions(struct Instruction* i)
+{
+	return (i->flags1 & (unsigned int)IF_SuppressAllExceptions) != 0;
+}
+
+void SetSuppressAllExceptions(struct Instruction* i, bool value)
+{
+	if (value)
+	{
+		i->flags1 |= (unsigned int)IF_SuppressAllExceptions;
+	}
+	else
+	{
+		i->flags1 &= ~(unsigned int)IF_SuppressAllExceptions;
 	}
 }
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void InternalSetSuppressAllExceptions() = > flags1 |= (uint)InstrFlags1.SuppressAllExceptions;
+
+void InternalSetSuppressAllExceptions(struct Instruction* i)
+{
+	i->flags1 |= (unsigned int)IF_SuppressAllExceptions;
+}
 
 /// <summary>
 /// Checks if the memory operand is RIP/EIP relative
 /// </summary>
-public readonly bool IsIPRelativeMemoryOperand{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	get = > MemoryBase == Register.RIP || MemoryBase == Register.EIP;
+bool IsIPRelativeMemoryOperand(struct Instruction* i)
+{
+	return GetMemoryBase(i) == Register_RIP || GetMemoryBase(i) == Register_EIP;
 }
 
 /// <summary>
 /// Gets the <c>RIP</c>/<c>EIP</c> releative address (<see cref="MemoryDisplacement32"/> or <see cref="MemoryDisplacement64"/>).
 /// This property is only valid if there's a memory operand with <c>RIP</c>/<c>EIP</c> relative addressing, see <see cref="IsIPRelativeMemoryOperand"/>
 /// </summary>
-public readonly ulong IPRelativeMemoryAddress = >
-MemoryBase == Register.EIP ? MemoryDisplacement32 : MemoryDisplacement64;
+unsigned long IPRelativeMemoryAddress(struct Instruction* i)
+{
+	return GetMemoryBase(i) == Register_EIP ? GetMemoryDisplacement32(i) : GetMemoryDisplacement64(i);
+}
 
-#if ENCODER && OPCODE_INFO
+struct OpCodeInfo* ToOpCode(enum Code code) 
+{
+	var infos = OpCodeInfos.Infos;
+	if ((unsigned int)code >= (unsigned int)infos.Length)
+	{
+		//ThrowHelper.ThrowArgumentOutOfRangeException_code();
+	}
+
+	OpCodeInfo_init((Code)i, (EncFlags1)encFlags1[i], (EncFlags2)encFlags2[i], (EncFlags3)encFlags3[i], (OpCodeInfoFlags1)opcFlags1[i], (OpCodeInfoFlags2)opcFlags2[i], sb);
+
+
+	return infos[(int)code];
+}
+
+//#if ENCODER && OPCODE_INFO
 /// <summary>
 /// Gets the <see cref="OpCodeInfo"/>
 /// </summary>
 /// <returns></returns>
-public readonly OpCodeInfo OpCode{
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	get = > Code.ToOpCode();
+struct OpCodeInfo* OpCode(struct Instruction* i)
+{
+	return ToOpCode(GetCode(i));
 }
-#endif
+//#endif
 
 ///// <summary>
 ///// Formats the instruction using the default formatter with default formatter options

@@ -163,6 +163,7 @@
     <ClInclude Include="Minifier.h" />
     <ClInclude Include="Encoder.h" />
     <ClInclude Include="Mnemonic.h" />
+    <ClInclude Include="OpCodeInfo.h" />
     <ClInclude Include="Optimiser.h" />
     <ClInclude Include="sb.h" />
     <ClInclude Include="SquashCompiler.h" />

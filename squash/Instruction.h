@@ -1419,4 +1419,6 @@ bool instruction_equals(struct Instruction* a, struct Instruction* b);
 bool instruction_equals_allbits(struct Instruction* a, struct Instruction* b);
 int gethashcode(struct Instruction* i);
 
+enum Mnemonic to_mnemonic(enum Code code);
+
 #endif

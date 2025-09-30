@@ -1,7 +1,7 @@
 #ifndef INSTRUCTION_OPCOUNTS_H
 #define INSTRUCTION_OPCOUNTS_H
 
-unsigned char OpCount[4936] = // CodeEnumCount
+unsigned char InstructionOpCounts_OpCount[4936] = // CodeEnumCount
 {
 	0,// INVALID
 	0,// DeclareByte
