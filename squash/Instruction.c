@@ -1,5 +1,6 @@
 ﻿#include "Instruction.h"
-
+#include "sb.h"
+#include "OpCodeInfoData.h"
 bool instruction_equals(struct Instruction* a, struct Instruction* b)
 {
 	return a->memDispl == b->memDispl &&
@@ -2207,16 +2208,28 @@ unsigned long IPRelativeMemoryAddress(struct Instruction* i)
 
 struct OpCodeInfo* ToOpCode(enum Code code) 
 {
-	var infos = OpCodeInfos.Infos;
-	if ((unsigned int)code >= (unsigned int)infos.Length)
-	{
+	//var infos = OpCodeInfos.Infos;
+	//if ((unsigned int)code >= (unsigned int)infos.Length)
+	//{
 		//ThrowHelper.ThrowArgumentOutOfRangeException_code();
-	}
+	//}
 
-	OpCodeInfo_init((Code)i, (EncFlags1)encFlags1[i], (EncFlags2)encFlags2[i], (EncFlags3)encFlags3[i], (OpCodeInfoFlags1)opcFlags1[i], (OpCodeInfoFlags2)opcFlags2[i], sb);
+	int i = (int)code;
+
+	StringBuilder* sb = sb_create();
+
+	auto encFlags1 = EncoderData_EncFlags1;
+	auto encFlags2 = EncoderData_EncFlags2;
+	auto encFlags3 = EncoderData_EncFlags3;
+	auto opcFlags1 = OpCodeInfoData_OpcFlags1;
+	auto opcFlags2 = OpCodeInfoData_OpcFlags2;
+
+	struct OpCodeInfo* o = OpCodeInfo_new();
+
+	OpCodeInfo_init(o, code, (enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], (enum EncFlags3)encFlags3[i], (enum OpCodeInfoFlags1)opcFlags1[i], (enum OpCodeInfoFlags2)opcFlags2[i], sb);
 
 
-	return infos[(int)code];
+	return o;
 }
 
 //#if ENCODER && OPCODE_INFO

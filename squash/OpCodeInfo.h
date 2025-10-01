@@ -838,6 +838,12 @@ struct OpCodeInfo
 	 enum Flags flags;
 };
 
+struct OpCodeInfo* OpCodeInfo_new()
+{
+	struct OpCodeInfo* o = (struct OpCodeInfo*)malloc(sizeof(struct OpCodeInfo));
+	return o;
+}
+
 void OpCodeInfo_init(struct OpCodeInfo** opcodeInfo, enum Code code, enum EncFlags1 encFlags1, enum EncFlags2 encFlags2, enum EncFlags3 encFlags3, enum OpCodeInfoFlags1 opcFlags1, enum OpCodeInfoFlags2 opcFlags2, StringBuilder* sb)
 {
 	//Debug.Assert((uint)code < (uint)IcedConstants.CodeEnumCount);
