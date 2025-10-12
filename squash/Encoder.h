@@ -288,7 +288,7 @@ struct Assembler* evex(struct Assembler* assembler);
 /// Adds data
 /// </summary>
 /// <param name="array">Data</param>
-void db(byte[] array);
+void db(unsigned char* array);
 
 /// <summary>
 /// Adds data
@@ -296,13 +296,13 @@ void db(byte[] array);
 /// <param name="array">Data</param>
 /// <param name="index">Start index</param>
 /// <param name="length">Length in bytes</param>
-void db(byte[] array, int index, int length);
+void db(unsigned char* array, int index, int length);
 
 /// <summary>call selector:offset instruction.</summary>
-void call(ushort selector, uint offset);
+void call(unsigned short selector, unsigned int offset);
 
 /// <summary>jmp selector:offset instruction.</summary>
-void jmp(ushort selector, uint offset);
+void jmp(unsigned short selector, unsigned int offset);
 
 /// <summary>xlatb instruction.</summary>
 void xlatb();

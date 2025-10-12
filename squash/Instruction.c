@@ -1,6 +1,53 @@
 ﻿#include "Instruction.h"
 #include "sb.h"
 #include "OpCodeInfoData.h"
+
+struct Instruction
+{
+	unsigned long nextRip;
+	unsigned long memDispl;
+	unsigned int flags1;// InstrFlags1
+	unsigned int immediate;
+	unsigned short code;
+	unsigned char memBaseReg;// Register
+	unsigned char memIndexReg;// Register
+	unsigned char reg0, reg1, reg2, reg3;// Register
+	unsigned char opKind0, opKind1, opKind2, opKind3;// OpKind
+	unsigned char scale;
+	unsigned char displSize;
+	unsigned char len;
+	unsigned char pad;
+};
+
+struct Instruction* instruction_new()
+{
+	struct Instruction* o = (struct Instruction*)malloc(sizeof(struct Instruction));
+	return o;
+}
+
+void instruction_init(struct Instruction** o)
+{
+	(*o)->nextRip = 0;
+	(*o)->memDispl = 0;
+	(*o)->flags1 = 0;
+	(*o)->immediate = 0;
+	(*o)->code = 0;
+	(*o)->memBaseReg = 0;
+	(*o)->memIndexReg = 0;
+	(*o)->reg0 = 0;
+	(*o)->reg1 = 0;
+	(*o)->reg2 = 0;
+	(*o)->reg3 = 0;
+	(*o)->opKind0 = 0;
+	(*o)->opKind1 = 0;
+	(*o)->opKind2 = 0;
+	(*o)->opKind3 = 0;
+	(*o)->scale = 0;
+	(*o)->displSize = 0;
+	(*o)->len = 0;
+	(*o)->pad = 0;
+}
+
 bool instruction_equals(struct Instruction* a, struct Instruction* b)
 {
 	return a->memDispl == b->memDispl &&
@@ -212,7 +259,7 @@ void SetCode(struct Instruction* i, enum Code value)
 {
 	if ((unsigned int)value >= (unsigned int)CodeEnumCount)
 	{
-		ThrowArgumentOutOfRangeException_value();
+		//ThrowArgumentOutOfRangeException_value();
 		return;
 	}
 	i->code = (unsigned short)value;
@@ -756,7 +803,7 @@ void InternalSetMemoryDisplSize(struct Instruction* i, unsigned int scale)
 /// <summary>
 /// <see langword="true"/> if the data is broadcast (EVEX instructions only)
 /// </summary>
-bool IsBroadcast(struct Instruction* i)
+bool IsBroadcast2(struct Instruction* i)
 {
 	return (i->flags1 & (unsigned int)IF_Broadcast) != 0;
 }

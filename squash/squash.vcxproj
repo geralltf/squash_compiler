@@ -136,11 +136,13 @@
     <ClCompile Include="EntryPoint.c" />
     <ClCompile Include="FileIO.c" />
     <ClCompile Include="Instruction.c" />
+    <ClCompile Include="Instruction.Create.c" />
     <ClCompile Include="Lexer.c" />
     <ClCompile Include="List.c" />
     <ClCompile Include="Logger.c" />
     <ClCompile Include="Minifier.c" />
     <ClCompile Include="Encoder.c" />
+    <ClCompile Include="OpCodeInfo.c" />
     <ClCompile Include="Optimiser.c" />
     <ClCompile Include="sb.c" />
     <ClCompile Include="SquashCompiler.c" />
@@ -154,6 +156,7 @@
     <ClInclude Include="EncoderInstructionSet.h" />
     <ClInclude Include="Enums.h" />
     <ClInclude Include="FileIO.h" />
+    <ClInclude Include="Instruction.Create.h" />
     <ClInclude Include="Instruction.h" />
     <ClInclude Include="InstructionMemorySizes.h" />
     <ClInclude Include="InstructionOpCounts.h" />

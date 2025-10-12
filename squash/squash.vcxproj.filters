@@ -66,6 +66,12 @@
     <ClCompile Include="Instruction.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="OpCodeInfo.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Instruction.Create.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h">
@@ -132,6 +138,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="OpCodeInfoData.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Instruction.Create.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

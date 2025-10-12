@@ -95,7 +95,7 @@ void label(struct Assembler* assembler, struct Label* label)
 		LogCritical("Invalid label. Must be created via create_label()");
 		return;
 	}
-	if (label->InstructionIndex >= 0)
+	if (label->instruction_index >= 0)
 	{
 		LogCritical("Cannot reuse label. The specified label is already associated with an instruction at index {label.InstructionIndex}.");
 		return;
@@ -105,7 +105,7 @@ void label(struct Assembler* assembler, struct Label* label)
 		//LogCritical("At most one label per instruction is allowed");
 		//return;
 	}
-	label->InstructionIndex = instructions_count(assembler);
+	label->instruction_index = instructions_count(assembler);
 	assembler->currentLabel = label;
 }
 
@@ -115,7 +115,7 @@ void label(struct Assembler* assembler, struct Label* label)
 /// </summary>
 void anonymous_label(struct Assembler* assembler)
 {
-	if (definedAnonLabel)
+	if (assembler->definedAnonLabel)
 	{
 		LogCritical("At most one anonymous label per instruction is allowed.");
 
@@ -172,11 +172,11 @@ void AddInstruction(struct Assembler* assembler, struct Instruction* instruction
 		
 	if (assembler->currentLabel != NULL)
 	{
-		instruction->IP = assembler->currentLabel->id;
+		SetIP(assembler, assembler->currentLabel->id);
 	}
-	else if (definedAnonLabel) 
+	else if (assembler->definedAnonLabel)
 	{
-		instruction->IP = assembler->currentAnonLabel->id;
+		SetIP(assembler, assembler->currentAnonLabel->id);
 	}
 
 	// Setup prefixes
@@ -184,19 +184,19 @@ void AddInstruction(struct Assembler* assembler, struct Instruction* instruction
 	{
 		if ((assembler->prefixFlags & PF_Lock) != 0)
 		{
-			instruction->HasLockPrefix = true;
+			Set_HasLockPrefix(instruction, true);
 		}
 		if ((assembler->prefixFlags & PF_Repe) != 0)
 		{
-			instruction->HasRepePrefix = true;
+			Set_HasRepePrefix(instruction, true);
 		}
 		else if ((assembler->prefixFlags & PF_Repne) != 0)
 		{
-			instruction->HasRepnePrefix = true;
+			Set_HasRepnePrefix(instruction, true);
 		}
 		if ((assembler->prefixFlags & PF_Notrack) != 0)
 		{
-			instruction->SegmentPrefix = Register.DS;
+			Set_SegmentPrefix(instruction, Register_DS);
 		}
 	}
 
@@ -213,31 +213,36 @@ void AddInstruction(struct Assembler* assembler, struct Instruction* instruction
 /// <param name="flags">Operand flags passed.</param>
 void AddInstruction(struct Assembler* assembler, struct Instruction* instruction, enum AssemblerOperandFlags flags)
 {
-	if (flags != AssemblerOperandFlags.None)
+	if (flags != AF_None)
 	{
-		if ((flags & AssemblerOperandFlags.Broadcast) != 0)
+		if ((flags & AF_Broadcast) != 0)
 		{
-			instruction.IsBroadcast = true;
+			IsBroadcast(instruction, true);
 		}
-		if ((flags & AssemblerOperandFlags.Zeroing) != 0)
+		if ((flags & AF_Zeroing) != 0)
 		{
-			instruction.ZeroingMasking = true;
+			SetZeroingMasking(instruction, true);
 		}
 		
-		if ((flags & AssemblerOperandFlags.RegisterMask) != 0) 
+		if ((flags & AF_RegisterMask) != 0)
 		{
 			// register mask is shift by 2 (starts at index 1 for K1)
-			instruction.OpMask = (Register)((int)Register.K0 + (((int)(flags & AssemblerOperandFlags.RegisterMask)) >> 6));
+			enum Register reg = (enum Register)((int)Register_K0 + (((int)(flags & AF_RegisterMask)) >> 6));
+
+			SetOpMask(instruction, reg);
 		}
-		if ((flags & AssemblerOperandFlags.SuppressAllExceptions) != 0) {
-			instruction.SuppressAllExceptions = true;
-		}
-		if ((flags & AssemblerOperandFlags.RoundingControlMask) != 0)
+		if ((flags & AF_SuppressAllExceptions) != 0) 
 		{
-			instruction.RoundingControl = (RoundingControl)((((int)(flags & AssemblerOperandFlags.RoundingControlMask)) >> 3));
+			SetSuppressAllExceptions(instruction, true);
+		}
+		if ((flags & AF_RoundingControlMask) != 0)
+		{
+			enum RoundingControl rc = (enum RoundingControl)((((int)(flags & AF_RoundingControlMask)) >> 3));
+
+			SetRoundingControl(instruction, rc);
 		}
 	}
-	AddInstruction(instruction);
+	AddInstruction(assembler, instruction);
 }
 
 /// <summary>
@@ -246,7 +251,7 @@ void AddInstruction(struct Assembler* assembler, struct Instruction* instruction
 /// <returns></returns>
 struct Assembler* lock(struct Assembler* assembler)
 {
-	prefixFlags |= PrefixFlags.Lock;
+	assembler->prefixFlags |= PF_Lock;
 	return assembler;
 }
 
@@ -256,7 +261,7 @@ struct Assembler* lock(struct Assembler* assembler)
 /// <returns></returns>
 struct Assembler* xacquire(struct Assembler* assembler)
 {
-	prefixFlags |= PrefixFlags.Repne;
+	assembler->prefixFlags |= PF_Repne;
 	return assembler;
 }
 
@@ -266,7 +271,7 @@ struct Assembler* xacquire(struct Assembler* assembler)
 /// <returns></returns>
 struct Assembler* xrelease(struct Assembler* assembler)
 {
-	prefixFlags |= PrefixFlags.Repe;
+	assembler->prefixFlags |= PF_Repe;
 	return assembler;
 }
 
@@ -276,7 +281,7 @@ struct Assembler* xrelease(struct Assembler* assembler)
 /// <returns></returns>
 struct Assembler* rep(struct Assembler* assembler)
 {
-	prefixFlags |= PrefixFlags.Repe;
+	assembler->prefixFlags |= PF_Repe;
 	return assembler;
 }
 
@@ -286,7 +291,7 @@ struct Assembler* rep(struct Assembler* assembler)
 /// <returns></returns>
 struct Assembler* repe(struct Assembler* assembler)
 {
-	prefixFlags |= PrefixFlags.Repe;
+	assembler->prefixFlags |= PF_Repe;
 	return assembler;
 }
 
@@ -296,7 +301,7 @@ struct Assembler* repe(struct Assembler* assembler)
 /// <returns></returns>
 struct Assembler* repz(struct Assembler* assembler)
 {
-	return repe();
+	return repe(assembler);
 }
 
 /// <summary>
@@ -305,7 +310,7 @@ struct Assembler* repz(struct Assembler* assembler)
 /// <returns></returns>
 struct Assembler* repne(struct Assembler* assembler)
 {
-	prefixFlags |= PrefixFlags.Repne;
+	assembler->prefixFlags |= PF_Repne;
 	return assembler;
 }
 
@@ -315,7 +320,7 @@ struct Assembler* repne(struct Assembler* assembler)
 /// <returns></returns>
 struct Assembler* repnz(struct Assembler* assembler)
 {
-	return repne();
+	return repne(assembler);
 }
 
 /// <summary>
@@ -324,7 +329,7 @@ struct Assembler* repnz(struct Assembler* assembler)
 /// <returns></returns>
 struct Assembler* bnd(struct Assembler* assembler)
 {
-	prefixFlags |= PrefixFlags.Repne;
+	assembler->prefixFlags |= PF_Repne;
 	return assembler;
 }
 
@@ -334,7 +339,7 @@ struct Assembler* bnd(struct Assembler* assembler)
 /// <returns></returns>
 struct Assembler* notrack(struct Assembler* assembler)
 {
-	prefixFlags |= PrefixFlags.Notrack;
+	assembler->prefixFlags |= PF_Notrack;
 	return assembler;
 }
 
@@ -344,7 +349,7 @@ struct Assembler* notrack(struct Assembler* assembler)
 /// <returns></returns>
 struct Assembler* vex(struct Assembler* assembler)
 {
-	prefixFlags |= PrefixFlags.PreferVex;
+	assembler->prefixFlags |= PF_PreferVex;
 	return assembler;
 }
 
@@ -354,20 +359,20 @@ struct Assembler* vex(struct Assembler* assembler)
 /// <returns></returns>
 struct Assembler* evex(struct Assembler* assembler)
 {
-	prefixFlags |= PrefixFlags.PreferEvex;
+	assembler->prefixFlags |= PF_PreferEvex;
 	return assembler;
 }
 
-/// <summary>
-/// Adds data
-/// </summary>
-/// <param name="array">Data</param>
-void db(byte[] array) 
-{
-	if (array is null)
-		ThrowHelper.ThrowArgumentNullException_array();
-	db(array, 0, array.Length);
-}
+///// <summary>
+///// Adds data
+///// </summary>
+///// <param name="array">Data</param>
+//void db(byte[] array) 
+//{
+//	if (array is null)
+//		ThrowHelper.ThrowArgumentNullException_array();
+//	db(array, 0, array.Length);
+//}
 
 /// <summary>
 /// Adds data
@@ -375,118 +380,178 @@ void db(byte[] array)
 /// <param name="array">Data</param>
 /// <param name="index">Start index</param>
 /// <param name="length">Length in bytes</param>
-void db(byte[] array, int index, int length) 
+void db(struct Assembler* assembler, unsigned char* array, int index, int length)
 {
-	if (array is null)
-		ThrowHelper.ThrowArgumentNullException_array();
+	if (array == NULL)
+	{
+		return;
+		//ThrowHelper.ThrowArgumentNullException_array();
+	}
+		
 	if (index < 0)
-		ThrowHelper.ThrowArgumentOutOfRangeException_index();
-	if (length < 0 || (uint)(index + length) >(uint)array.Length)
-		ThrowHelper.ThrowArgumentOutOfRangeException_length();
+	{
+		return;
+		//ThrowHelper.ThrowArgumentOutOfRangeException_index();
+	}
+	if (length < 0 || (unsigned int)(index + length) >(unsigned int)length)
+	{
+		return;
+		//ThrowHelper.ThrowArgumentOutOfRangeException_length();
+	}
 	const int maxLength = 16;
-	int cycles = Math.DivRem(length, maxLength, out int rest);
+	//int cycles = Math.DivRem(length, maxLength, out int rest);
+	int cycles = length / maxLength;
+	int rest = length % maxLength;
+
 	int currentPosition = index;
-	for (int i = 0; i < cycles; i++) {
+	for (int i = 0; i < cycles; i++) 
+	{
 		AddInstruction(Instruction.CreateDeclareByte(array, currentPosition, maxLength));
 		currentPosition += maxLength;
 	}
 	if (rest > 0)
+	{
 		AddInstruction(Instruction.CreateDeclareByte(array, currentPosition, rest));
+	}
 }
 
 /// <summary>call selector:offset instruction.</summary>
-void call(unsigned short selector, unsigned int offset)
+void call(struct Assembler* assembler, unsigned short selector, unsigned int offset)
 {
-	AddInstruction(Instruction.CreateBranch(Bitness >= 32 ? Code.Call_ptr1632 : Code.Call_ptr1616, selector, offset));
+	AddInstruction(assembler, Instruction.CreateBranch(assembler->Bitness >= 32 ? Call_ptr1632 : Call_ptr1616, selector, offset));
 }
 
 
 /// <summary>jmp selector:offset instruction.</summary>
-void jmp(unsigned short selector, unsigned int offset)
+void jmp(struct Assembler* assembler, unsigned short selector, unsigned int offset)
 {
-	AddInstruction(Instruction.CreateBranch(Bitness >= 32 ? Code.Jmp_ptr1632 : Code.Jmp_ptr1616, selector, offset));
+	AddInstruction(assembler, Instruction.CreateBranch(assembler->Bitness >= 32 ? Jmp_ptr1632 : Jmp_ptr1616, selector, offset));
 }
 
 /// <summary>xlatb instruction.</summary>
-void xlatb() 
+void xlatb(struct Assembler* assembler)
 {
-	var baseReg = Bitness switch {
-		64 = > Register.RBX,
-			32 = > Register.EBX,
-			_ = > Register.BX,
-	};
-	AddInstruction(Instruction.Create(Code.Xlat_m8, new MemoryOperand(baseReg, Register.AL)));
+	enum Register baseReg;
+
+	switch (assembler->Bitness)
+	{
+	case 64:
+		baseReg = Register_RBX;
+		break;
+	case 32:
+		baseReg = Register_EBX;
+		break;
+	default:
+		baseReg = Register_BX;
+		break;
+	}
+
+	AddInstruction(assembler, Instruction.Create(Xlat_m8, new MemoryOperand(baseReg, Register_AL)));
+}
+
+void AppendNop(struct Assembler* assembler, int amount) 
+{
+	switch (amount) 
+	{
+	case 1:
+		db(assembler, 0x90); // NOP
+		break;
+	case 2:
+		db(assembler, 0x66, 0x90); // 66 NOP
+		break;
+	case 3:
+		db(assembler, 0x0F, 0x1F, 0x00); // NOP dword ptr [eax] or NOP word ptr [bx+si]
+		break;
+	case 4:
+		db(assembler, 0x0F, 0x1F, 0x40, 0x00); // NOP dword ptr [eax + 00] or NOP word ptr [bx+si]
+		break;
+	case 5:
+		if (assembler->Bitness != 16) 
+		{
+			db(assembler, 0x0F, 0x1F, 0x44, 0x00, 0x00); // NOP dword ptr [eax + eax*1 + 00]
+		}
+		else
+		{
+			db(assembler, 0x0F, 0x1F, 0x80, 0x00, 0x00); // NOP word ptr[bx + si]
+		}
+		break;
+	case 6:
+		if (assembler->Bitness != 16) 
+		{
+			db(assembler, 0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00); // 66 NOP dword ptr [eax + eax*1 + 00]
+		}
+		else
+		{
+			db(assembler, 0x66, 0x0F, 0x1F, 0x80, 0x00, 0x00); // NOP dword ptr [bx+si]
+		}
+		break;
+	case 7:
+		if (assembler->Bitness != 16)
+		{
+			db(assembler, 0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00); // NOP dword ptr [eax + 00000000]
+		}
+		else
+		{
+			db(assembler, 0x67, 0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00); // NOP dword ptr [eax+eax]
+		}
+		break;
+	case 8:
+		if (assembler->Bitness != 16)
+		{
+			db(assembler, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00); // NOP dword ptr [eax + eax*1 + 00000000]
+		}
+		else
+		{
+			db(assembler, 0x67, 0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00); // NOP word ptr [eax]
+		}
+		break;
+	case 9:
+		if (assembler->Bitness != 16)
+		{
+			db(assembler, 0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00); // 66 NOP dword ptr [eax + eax*1 + 00000000]
+		}
+		else
+		{
+			db(assembler, 0x67, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00); // NOP word ptr [eax+eax]
+		}
+		break;
+	default:
+		//throw new InvalidOperationException();
+		break;
+	}
 }
 
 /// <summary>
 /// Generates multibyte NOP instructions
 /// </summary>
 /// <param name="sizeInBytes">Size in bytes of all nops</param>
-void nop(int sizeInBytes) 
+void nop(struct Assembler* assembler, int sizeInBytes)
 {
 	if (sizeInBytes < 0)
-		throw new ArgumentOutOfRangeException(nameof(sizeInBytes));
-	if (this.prefixFlags != PrefixFlags.None)
-		throw new InvalidOperationException("No prefixes are allowed");
+	{
+		//throw new ArgumentOutOfRangeException(nameof(sizeInBytes));
+	}
+	if (assembler->prefixFlags != PF_None)
+	{
+		//throw new InvalidOperationException("No prefixes are allowed");
+	}
 	if (sizeInBytes == 0)
+	{
 		return;
-
+	}
 	const int maxMultibyteNopInstructionLength = 9;
 
-	int cycles = Math.DivRem(sizeInBytes, maxMultibyteNopInstructionLength, out int rest);
+	//int cycles = Math.DivRem(sizeInBytes, maxMultibyteNopInstructionLength, out int rest);
+	int cycles = sizeInBytes / maxMultibyteNopInstructionLength;
+	int rest = sizeInBytes % maxMultibyteNopInstructionLength;
 
-	for (int i = 0; i < cycles; i++)
-		AppendNop(maxMultibyteNopInstructionLength);
+	for (int i = 0; i < cycles; i++) 
+	{
+		AppendNop(assembler, maxMultibyteNopInstructionLength);
+	}
 	if (rest > 0)
-		AppendNop(rest);
-
-	void AppendNop(int amount) {
-		switch (amount) {
-		case 1:
-			db(0x90); // NOP
-			break;
-		case 2:
-			db(0x66, 0x90); // 66 NOP
-			break;
-		case 3:
-			db(0x0F, 0x1F, 0x00); // NOP dword ptr [eax] or NOP word ptr [bx+si]
-			break;
-		case 4:
-			db(0x0F, 0x1F, 0x40, 0x00); // NOP dword ptr [eax + 00] or NOP word ptr [bx+si]
-			break;
-		case 5:
-			if (Bitness != 16)
-				db(0x0F, 0x1F, 0x44, 0x00, 0x00); // NOP dword ptr [eax + eax*1 + 00]
-			else
-				db(0x0F, 0x1F, 0x80, 0x00, 0x00); // NOP word ptr[bx + si]
-			break;
-		case 6:
-			if (Bitness != 16)
-				db(0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00); // 66 NOP dword ptr [eax + eax*1 + 00]
-			else
-				db(0x66, 0x0F, 0x1F, 0x80, 0x00, 0x00); // NOP dword ptr [bx+si]
-			break;
-		case 7:
-			if (Bitness != 16)
-				db(0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00); // NOP dword ptr [eax + 00000000]
-			else
-				db(0x67, 0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00); // NOP dword ptr [eax+eax]
-			break;
-		case 8:
-			if (Bitness != 16)
-				db(0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00); // NOP dword ptr [eax + eax*1 + 00000000]
-			else
-				db(0x67, 0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00); // NOP word ptr [eax]
-			break;
-		case 9:
-			if (Bitness != 16)
-				db(0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00); // 66 NOP dword ptr [eax + eax*1 + 00000000]
-			else
-				db(0x67, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00); // NOP word ptr [eax+eax]
-			break;
-		default:
-			throw new InvalidOperationException();
-		}
+	{
+		AppendNop(assembler, rest);
 	}
 }
 
@@ -589,78 +654,83 @@ bool Encode([NotNullWhen(false)] out string ? errorMessage, [NotNullWhen(true)] 
 	return true;
 }
 
-/// <summary>
-/// Assembles the instructions of this assembler with the specified options.
-/// </summary>
-/// <param name="writer">The code writer.</param>
-/// <param name="rip">Base address.</param>
-/// <param name="options">Encoding options.</param>
-/// <returns></returns>
-/// <exception cref="InvalidOperationException"></exception>
-struct AssemblerResult* Assemble(struct CodeWriter* writer, unsigned long rip, enum BlockEncoderOptions options)
-{ // = BlockEncoderOptions.None
-	char* errorMessage;
+///// <summary>
+///// Tries to assemble the instructions of this assembler with the specified options.
+///// </summary>
+///// <param name="writer">The code writer.</param>
+///// <param name="rip">Base address.</param>
+///// <param name="errorMessage">Error messages.</param>
+///// <param name="assemblerResult">The assembler result if successful.</param>
+///// <param name="options">Encoding options.</param>
+///// <returns><c>true</c> if the encoding was successful; <c>false</c> otherwise.</returns>
+//bool TryAssemble(struct Assembler* c, struct CodeWriter* writer, unsigned long rip, struct AssemblerResult* assemblerResult, enum BlockEncoderOptions options) // = BlockEncoderOptions.None
+//{
+//	if (writer is null)
+//	{
+//		//ThrowHelper.ThrowArgumentNullException_writer();
+//	}
+//
+//	assemblerResult = default;
+//
+//	// Protect against using a prefix without actually using it
+//	if (c->prefixFlags != PF_None) 
+//	{
+//		errorMessage = LogCritical("Unused prefixes {prefixFlags}. You must emit an instruction after using an instruction prefix.";
+//		return false;
+//	}
+//
+//	// Protect against a label emitted without being attached to an instruction
+//	if (!currentLabel.IsEmpty) 
+//	{
+//		LogCritical("Unused label {currentLabel}. You must emit an instruction after emitting a label.");
+//		return false;
+//	}
+//
+//	if (definedAnonLabel) 
+//	{
+//		LogCritical("Unused anonymous label. You must emit an instruction after emitting a label.");
+//		return false;
+//	}
+//
+//	if (!nextAnonLabel.IsEmpty) 
+//	{
+//		LogCritical("Found an @F anonymous label reference but there was no call to "); // +nameof(AnonymousLabel);
+//		return false;
+//	}
+//
+//	if (BlockEncoder.TryEncode(writer, instructions, rip, Bitness, blocks, out var blockResults, options)) 
+//	{
+//		assemblerResult = new AssemblerResult(blockResults);
+//		return true;
+//	}
+//	else 
+//	{
+//		assemblerResult = new AssemblerResult(Array2.Empty<BlockEncoderResult>());
+//		return false;
+//	}
+//}
 
-	if (!TryAssemble(writer, rip, out var errorMessage, out var assemblerResult, options))
-	{
-		//LogCritical(errorMessage);
-		// throw new InvalidOperationException(errorMessage);
-	}
-		
-	return assemblerResult;
-}
-
-/// <summary>
-/// Tries to assemble the instructions of this assembler with the specified options.
-/// </summary>
-/// <param name="writer">The code writer.</param>
-/// <param name="rip">Base address.</param>
-/// <param name="errorMessage">Error messages.</param>
-/// <param name="assemblerResult">The assembler result if successful.</param>
-/// <param name="options">Encoding options.</param>
-/// <returns><c>true</c> if the encoding was successful; <c>false</c> otherwise.</returns>
-bool TryAssemble(CodeWriter writer, unsigned long rip, struct AssemblerResult* assemblerResult, enum BlockEncoderOptions options) // = BlockEncoderOptions.None
-{
-	if (writer is null)
-		ThrowHelper.ThrowArgumentNullException_writer();
-
-	assemblerResult = default;
-
-	// Protect against using a prefix without actually using it
-	if (prefixFlags != PF_None) 
-	{
-		errorMessage = LogCritical("Unused prefixes {prefixFlags}. You must emit an instruction after using an instruction prefix.";
-		return false;
-	}
-
-	// Protect against a label emitted without being attached to an instruction
-	if (!currentLabel.IsEmpty) 
-	{
-		LogCritical("Unused label {currentLabel}. You must emit an instruction after emitting a label.");
-		return false;
-	}
-
-	if (definedAnonLabel) 
-	{
-		LogCritical("Unused anonymous label. You must emit an instruction after emitting a label.");
-		return false;
-	}
-
-	if (!nextAnonLabel.IsEmpty) 
-	{
-		LogCritical("Found an @F anonymous label reference but there was no call to "); // +nameof(AnonymousLabel);
-		return false;
-	}
-
-	if (BlockEncoder.TryEncode(writer, instructions, rip, Bitness, blocks, out var blockResults, options)) {
-		assemblerResult = new AssemblerResult(blockResults);
-		return true;
-	}
-	else {
-		assemblerResult = new AssemblerResult(Array2.Empty<BlockEncoderResult>());
-		return false;
-	}
-}
+///// <summary>
+///// Assembles the instructions of this assembler with the specified options.
+///// </summary>
+///// <param name="writer">The code writer.</param>
+///// <param name="rip">Base address.</param>
+///// <param name="options">Encoding options.</param>
+///// <returns></returns>
+///// <exception cref="InvalidOperationException"></exception>
+//struct AssemblerResult* Assemble(struct Assembler* c, struct CodeWriter* writer, unsigned long rip, enum BlockEncoderOptions options)
+//{ // = BlockEncoderOptions.None
+//	char* errorMessage;
+//	struct AssemblerResult* assemblerResult;
+//
+//	if (!TryAssemble(c, writer, rip, &errorMessage, &assemblerResult, options))
+//	{
+//		//LogCritical(errorMessage);
+//		// throw new InvalidOperationException(errorMessage);
+//	}
+//
+//	return assemblerResult;
+//}
 
 ///// <summary>
 ///// Internal method used to throw an InvalidOperationException if it was not possible to encode an OpCode.
@@ -778,5 +848,5 @@ void test_assembler()
 	c.Label(ref data1);
 	c.db(0xF3, 0x90); // pause
 
-	c.Assemble(new StreamCodeWriter(stream), RIP);
+	Assemble(c, new StreamCodeWriter(stream), RIP);
 }

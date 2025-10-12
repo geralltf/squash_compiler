@@ -1415,10 +1415,31 @@ const int RepPrefixKindEnumCount = 3;
 const int RoundingControlEnumCount = 5;
 const int TupleTypeEnumCount = 19;
 
+struct Instruction* instruction_new();
+void instruction_init(struct Instruction** o);
 bool instruction_equals(struct Instruction* a, struct Instruction* b);
 bool instruction_equals_allbits(struct Instruction* a, struct Instruction* b);
 int gethashcode(struct Instruction* i);
 
 enum Mnemonic to_mnemonic(enum Code code);
+
+void SetIP(struct Instruction* i, unsigned long value);
+void Set_HasLockPrefix(struct Instruction* i, bool value);
+void Set_HasRepePrefix(struct Instruction* i, bool value);
+void Set_HasRepnePrefix(struct Instruction* i, bool value);
+void Set_SegmentPrefix(struct Instruction* i, enum Register value);
+void SetZeroingMasking(struct Instruction* i, bool value);
+void SetOpMask(struct Instruction* i, enum Register value);
+void SetSuppressAllExceptions(struct Instruction* i, bool value);
+void SetRoundingControl(struct Instruction* i, enum RoundingControl value);
+void IsBroadcast(struct Instruction* i, bool value);
+void SetCode(struct Instruction* i, enum Code value);
+void SetOp0Kind(struct Instruction* i, enum OpKind value);
+void SetFarBranchSelector(struct Instruction* i, unsigned short value);
+void SetFarBranch32(struct Instruction* i, unsigned int value);
+void SetNearBranch64(struct Instruction* i, unsigned long value);
+
+int GetDeclareDataCount(struct Instruction* i);
+unsigned char GetDeclareByteValue(struct Instruction* i, int index);
 
 #endif
