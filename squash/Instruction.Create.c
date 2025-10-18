@@ -1,88 +1,179 @@
 #include "Instruction.Create.h"
 
-//struct OpCodeHandler* EncoderInternal_OpCodeHandlers_Handlers[4936] = // CodeEnumCount
-//{
-//
-//};
+struct OpCodeHandler* EncoderInternal_OpCodeHandlers_Handlers = (struct OpCodeHandler*)NULL; // CodeEnumCount
 
-struct OpCodeHandler* OpCodeHandlers_init(enum Code opcode)
+enum EncodingKind GetEncodingKindByOpcode(enum Code opcode)
 {
-	auto encFlags1 = EncoderData_EncFlags1;
-	auto encFlags2 = EncoderData_EncFlags2;
-	auto encFlags3Data = EncoderData_EncFlags3;
-	//auto handlers = new OpCodeHandler[IcedConstants.CodeEnumCount];
 	int i = (int)opcode;
-	auto invalidHandler = new InvalidHandler();
-	//for (; i < 3936; i++) 
-	//{
-		enum EncFlags3 encFlags3 = (enum EncFlags3)encFlags3Data[i];
-		struct OpCodeHandler* handler;
-		enum EncodingKind ekind = (enum EncodingKind)(((unsigned int)encFlags3 >> (int)EFLAGS3_EncodingShift) & (unsigned int)EFLAGS3_EncodingMask);
+
+	enum EncFlags3 encFlags3 = (enum EncFlags3)EncoderData_EncFlags3[i];
+
+	enum EncodingKind ekind = (enum EncodingKind)(((unsigned int)encFlags3 >> (int)EFLAGS3_EncodingShift) & (unsigned int)EFLAGS3_EncodingMask);
+
+	return ekind;
+}
+
+
+
+void OpCodeHandlers_init()
+{
+	enum Code code;
+	enum EncodingKind ekind;
+	struct OpCodeHandler* handler;
+	int i;
+	enum LegacyOpCodeTable tbl_type;
+	unsigned int encFlags1;
+	unsigned int encFlags2;
+	unsigned int encFlags3Data;
+	enum MandatoryPrefixByte mpb_value;
+
+	//auto handlers = new OpCodeHandler[IcedConstants.CodeEnumCount];
+	
+	EncoderInternal_OpCodeHandlers_Handlers = (struct OpCodeHandler*)malloc(sizeof(struct OpCodeHandler) * CodeEnumCount);
+
+	for (i = 0; i < CodeEnumCount; i++) // 4936.
+	{
+		encFlags1 = EncoderData_EncFlags1[i];
+		encFlags2 = EncoderData_EncFlags2[i];
+		encFlags3Data = EncoderData_EncFlags3[i];
+		code = (enum Code)i;
+		handler = (struct OpCodeHandler*)malloc(sizeof(struct OpCodeHandler));
+		ekind = GetEncodingKindByOpcode(i);
+
+		handler->GetOpCode = OpCodeHandler_GetOpCode;
+
 		switch (ekind)
 		{
 		case EncodingKind_Legacy:
-			enum Code code = (enum Code)i;
+			
 			if (code == INVALID)
 			{
-				handler = invalidHandler;
+				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, false, NULL, OpCodeHandler_GetOpCode, InvalidHandler_Encode);
+
+				handler->handler_conf = InvalidHandler;
+				handler->Encode = InvalidHandler_Encode;
+				//handler = invalidHandler;
 			}
 			else if (code <= DeclareQword)
 			{
-				handler = new DeclareDataHandler(code);
+				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, OpCodeHandler_GetOpCode, DeclareDataHandler_Encode);
+
+				handler->handler_conf = DeclareDataHandler;
+				handler->Encode = DeclareDataHandler_Encode;
+				//handler = new DeclareDataHandler(code);
 			}
 			else if (code == Zero_bytes)
 			{
-				handler = new ZeroBytesHandler(code);
+				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, OpCodeHandler_GetOpCode, ZeroBytesHandler_Encode);
+
+				handler->handler_conf = ZeroBytesHandler;
+				//handler = new ZeroBytesHandler(code);
 			}
 			else
 			{
-				handler = new LegacyHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
+				tbl_type = (enum LegacyOpCodeTable)(((unsigned int)encFlags2 >> (int)EFLAGS2_TableShift) & (unsigned int)EFLAGS2_TableMask);
+
+				switch (tbl_type)
+				{
+				case LegacyOpCodeTable_MAP0:
+					handler->tableByte1 = 0;
+					handler->tableByte2 = 0;
+					break;
+				case LegacyOpCodeTable_MAP0F:
+					handler->tableByte1 = 0x0F;
+					handler->tableByte2 = 0;
+					break;
+				case LegacyOpCodeTable_MAP0F38:
+					handler->tableByte1 = 0x0F;
+					handler->tableByte2 = 0x38;
+					break;
+				case LegacyOpCodeTable_MAP0F3A:
+					handler->tableByte1 = 0x0F;
+					handler->tableByte2 = 0x3A;
+					break;
+				default:
+					//throw new InvalidOperationException();
+					break;
+				}
+
+				mpb_value = (enum MandatoryPrefixByte)(((unsigned int)encFlags2 >> (int)EFLAGS2_MandatoryPrefixShift) & (unsigned int)EFLAGS2_MandatoryPrefixMask);
+				
+				switch (mpb_value)
+				{
+				case MPB_None:
+					handler->mandatoryPrefix = 0x00;
+					break;
+				case MPB_P66:
+					handler->mandatoryPrefix = 0x66;
+					break;
+				case MPB_PF3:
+					handler->mandatoryPrefix = 0xF3;
+					break;
+				case MPB_PF2:
+					handler->mandatoryPrefix = 0xF2;
+					break;
+				default:
+					// throw new InvalidOperationException()
+					break;
+				}
+
+				OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, NULL, OpCodeHandler_GetOpCode, LegacyHandler_Encode);
+
+				handler->handler_conf = LegacyHandler;
+				//handler = new LegacyHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
 			}
 			break;
 
 		case EncodingKind_VEX:
-			handler = new VexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
+			handler->handler_conf = VexHandler;
+			//handler = new VexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
 			break;
 
 		case EncodingKind_EVEX:
-			handler = new EvexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
+			handler->handler_conf = EvexHandler;
+			//handler = new EvexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
 			break;
 
 		case EncodingKind_XOP:
-			handler = new XopHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
+			handler->handler_conf = XopHandler;
+			//handler = new XopHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
 			break;
 
 		case EncodingKind_D3NOW:
-			handler = new D3nowHandler((enum EncFlags2)encFlags2[i], encFlags3);
+			handler->handler_conf = D3nowHandler;
+			//handler = new D3nowHandler((enum EncFlags2)encFlags2[i], encFlags3);
 			break;
 
 		case EncodingKind_MVEX:
-			handler = new MvexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
+			handler->handler_conf = MvexHandler;
+			//handler = new MvexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
 
 			break;
-
 		default:
+			handler->handler_conf = UndefinedHandler;
 			//throw new InvalidOperationException();
 			break;
 		}
-		return handler;
-		//handlers[i] = handler;
-		//EncoderInternal_OpCodeHandlers_Handlers[i] = handler;
-	//}
-	//if (i != handlers.Length)
-		//throw new InvalidOperationException();
-	//Handlers = handlers;
+
+		EncoderInternal_OpCodeHandlers_Handlers[i] = handler;
+	}
 }
 
 enum OpKind GetImmediateOpKind(enum Code code, int operand) 
 {
-	auto handlers = EncoderInternal_OpCodeHandlers_Handlers;
+	int index = (int)code;
+	OpCodeHandlers_init(code);
+	struct OpCodeHandler handler = EncoderInternal_OpCodeHandlers_Handlers[index];
+
+	//auto handlers = EncoderInternal_OpCodeHandlers_Handlers;
 	if ((unsigned int)code >= (unsigned int)4936)
 	{
 		//throw new ArgumentOutOfRangeException(nameof(code));
 	}
-	var operands = handlers[(int)code].Operands;
-	if ((uint)operand >= (uint)operands.Length)
+	//var operands = handlers[(int)code].Operands;
+	auto operands = handler.Operands;
+
+	if ((unsigned int)operand >= (uint)operands.Length)
 		throw new ArgumentOutOfRangeException(nameof(operand), $"{code} doesn't have at least {operand + 1} operands");
 	var opKind = operands[operand].GetImmediateOpKind();
 	if (opKind == OpKind.Immediate8 &&
