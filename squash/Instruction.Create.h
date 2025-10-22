@@ -16,8 +16,164 @@ enum HandlerTypeConfig
 	EvexHandler,
 	XopHandler,
 	D3nowHandler,
-	MvexHandler
+	MvexHandler,
 };
+
+enum OperandType 
+{
+	OT_UNDEFINED,
+	OT_OpA,
+	OT_OpO,
+	OT_OpModRM_rm_mem_only,
+	OT_OpModRM_rm,
+	OT_OpRegEmbed8,
+	OT_OpModRM_reg,
+	OT_OpModRM_reg_mem,
+	OT_OpModRM_rm_reg_only,
+	OT_OpModRM_regF0,
+	OT_OpReg,
+	OT_OpRegSTi,
+	OT_OpIb,
+	OT_OpImm,
+	OT_OpIw,
+	OT_OpId,
+	OT_OpIq,
+	OT_OpX,
+	OT_OpY,
+	OT_OprDI,
+	OT_OpMRBX,
+	OT_OpJ,
+	OT_OpJx,
+	OT_OpJdisp,
+};
+
+struct Op 
+{
+	enum OperandType operand_type;
+
+	int size;					// OpA
+	bool mustUseSib;			// OpModRM_rm_mem_only
+	enum Register regLo;		// OpModRM_rm
+	enum Register regHi;		// OpModRM_rm
+
+	void (*Encode)(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+	enum OpKind(*GetImmediateOpKind)(struct Op* op);
+	enum OpKind(*GetNearBranchOpKind)(struct Op* op);
+	enum OpKind(*GetFarBranchOpKind)(struct Op* op);
+};
+
+enum OpKind OpDefault_GetImmediateOpKind(struct Op* op)
+{
+	return (enum OpKind)(-1);
+}
+
+enum OpKind OpDefault_GetNearBranchOpKind(struct Op* op)
+{
+	return (enum OpKind)(-1);
+}
+
+enum OpKind OpDefault_GetFarBranchOpKind(struct Op* op)
+{
+	return (enum OpKind)(-1);
+}
+
+void OpA_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	AddFarBranch(encoder, instruction, operand, op->size);
+}
+enum OpKind OpA_GetFarBranchOpKind(struct Op* op)
+{
+	//Debug.Assert(size == 2 || size == 4);
+	return op->size == 2 ? OK_FarBranch16 : OK_FarBranch32;
+}
+
+void OpO_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	AddAbsMem(encoder, instruction, operand);
+}
+
+void OpModRM_rm_mem_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	if (op->mustUseSib)
+	{
+		encoder->EncoderFlags |= EncoderFlags_MustUseSib;
+	}
+
+	AddRegOrMem(encoder, instruction, operand, Register_None, Register_None, true, false); // allowMemOp: true, allowRegOp : false
+}
+
+void OpModRM_rm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op, enum Register regLo, enum Register regHi)
+{
+	AddRegOrMem(encoder, instruction, operand, regLo, regHi, true, true); // allowMemOp: true, allowRegOp : true
+}
+
+
+struct Op* Op_new()
+{
+	struct Op* op = (struct Op*)malloc(sizeof(struct Op));
+	op->operand_type = OT_UNDEFINED;
+	op->size = 0;
+	op->mustUseSib = false;
+	op->regLo = (enum Register)0;
+	op->regHi = (enum Register)0;
+	op->Encode = NULL;
+	op->GetImmediateOpKind = &OpDefault_GetImmediateOpKind;
+	op->GetNearBranchOpKind = &OpDefault_GetNearBranchOpKind;
+	op->GetFarBranchOpKind = &OpDefault_GetFarBranchOpKind;
+	return op;
+}
+
+struct Op* OpA_new(int size)
+{
+	struct Op* op = Op_new();
+	op->operand_type = OT_OpA;
+	op->size = size;
+	op->Encode = &OpA_Encode;
+	op->GetFarBranchOpKind = &OpA_GetFarBranchOpKind;
+	return op;
+}
+
+struct Op* OpO_new()
+{
+	struct Op* op = Op_new();
+	op->operand_type = OT_OpO;
+	op->Encode = &OpO_Encode;
+	
+	return op;
+}
+
+struct Op* OpModRM_rm_mem_only_new(bool mustUseSib)
+{
+	struct Op* op = Op_new();
+	op->mustUseSib = mustUseSib;
+	op->operand_type = OT_OpModRM_rm_mem_only;
+	op->Encode = &OpModRM_rm_mem_only_Encode;
+
+	return op;
+}
+
+struct Op* OpModRM_rm_new(enum Register regLo, enum Register regHi)
+{
+	struct Op* op = Op_new();
+	op->regLo = regLo;
+	op->regHi = regHi;
+	op->operand_type = OT_OpModRM_rm;
+	op->Encode = &OpModRM_rm_Encode;
+
+	return op;
+}
+
+struct Op* Operands_LegacyOps()
+{
+	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 75);
+	operands[0] = *OpA_new(2);
+	operands[1] = *OpA_new(4);
+	operands[2] = *OpO_new();
+	operands[3] = *OpModRM_rm_mem_only_new(false);
+	operands[4] = *OpModRM_rm_mem_only_new(false);
+	operands[5] = *OpModRM_rm_mem_only_new(false);
+	return operands;
+}
 
 struct OpCodeHandler
 {
@@ -33,6 +189,7 @@ struct OpCodeHandler
 	enum CodeSize AddrSize;
 	//TryConvertToDisp8N ? TryConvertToDisp8N;
 	struct Op* Operands;
+	unsigned int Operands_Length;
 
 	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
 	void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
@@ -73,6 +230,7 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 	bool isSpecialInstr, 
 	/*TryConvertToDisp8N ? tryConvertToDisp8N, */ 
 	struct Op* operands,
+	unsigned int operands_length,
 	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2),
 	void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction))
 {
@@ -80,6 +238,7 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 	(*o)->EncFlags3 = encFlags3;
 	(*o)->IsSpecialInstr = isSpecialInstr;
 	(*o)->Operands = operands;
+	(*o)->Operands_Length = operands_length;
 	(*o)->GetOpCode = GetOpCode;
 	(*o)->Encode = Encode;
 }

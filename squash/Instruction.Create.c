@@ -13,6 +13,29 @@ enum EncodingKind GetEncodingKindByOpcode(enum Code opcode)
 	return ekind;
 }
 
+struct Op* LegacyHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length) 
+{
+	int op0 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op0Shift) & (unsigned int)EFLAGS_Legacy_OpMask);
+	int op1 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op1Shift) & (unsigned int)EFLAGS_Legacy_OpMask);
+	int op2 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op2Shift) & (unsigned int)EFLAGS_Legacy_OpMask);
+	int op3 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op3Shift) & (unsigned int)EFLAGS_Legacy_OpMask);
+	if (op3 != 0) {
+		//Debug.Assert(op0 != 0 && op1 != 0 && op2 != 0);
+		return new Op[]{ OpHandlerData.LegacyOps[op0 - 1], OpHandlerData.LegacyOps[op1 - 1], OpHandlerData.LegacyOps[op2 - 1], OpHandlerData.LegacyOps[op3 - 1] };
+	}
+	if (op2 != 0) {
+		//Debug.Assert(op0 != 0 && op1 != 0);
+		return new Op[]{ OpHandlerData.LegacyOps[op0 - 1], OpHandlerData.LegacyOps[op1 - 1], OpHandlerData.LegacyOps[op2 - 1] };
+	}
+	if (op1 != 0) {
+		//Debug.Assert(op0 != 0);
+		return new Op[]{ OpHandlerData.LegacyOps[op0 - 1], OpHandlerData.LegacyOps[op1 - 1] };
+	}
+	if (op0 != 0)
+		return new Op[]{ OpHandlerData.LegacyOps[op0 - 1] };
+	return NULL;
+}
+
 
 
 void OpCodeHandlers_init()
@@ -26,6 +49,8 @@ void OpCodeHandlers_init()
 	unsigned int encFlags2;
 	unsigned int encFlags3Data;
 	enum MandatoryPrefixByte mpb_value;
+	unsigned int operands_length = 0;
+	struct Op* operands = NULL;
 
 	//auto handlers = new OpCodeHandler[IcedConstants.CodeEnumCount];
 	
@@ -48,7 +73,7 @@ void OpCodeHandlers_init()
 			
 			if (code == INVALID)
 			{
-				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, false, NULL, OpCodeHandler_GetOpCode, InvalidHandler_Encode);
+				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, false, NULL, 0, OpCodeHandler_GetOpCode, InvalidHandler_Encode);
 
 				handler->handler_conf = InvalidHandler;
 				handler->Encode = InvalidHandler_Encode;
@@ -56,7 +81,7 @@ void OpCodeHandlers_init()
 			}
 			else if (code <= DeclareQword)
 			{
-				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, OpCodeHandler_GetOpCode, DeclareDataHandler_Encode);
+				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, 0, OpCodeHandler_GetOpCode, DeclareDataHandler_Encode);
 
 				handler->handler_conf = DeclareDataHandler;
 				handler->Encode = DeclareDataHandler_Encode;
@@ -64,7 +89,7 @@ void OpCodeHandlers_init()
 			}
 			else if (code == Zero_bytes)
 			{
-				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, OpCodeHandler_GetOpCode, ZeroBytesHandler_Encode);
+				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, 0, OpCodeHandler_GetOpCode, ZeroBytesHandler_Encode);
 
 				handler->handler_conf = ZeroBytesHandler;
 				//handler = new ZeroBytesHandler(code);
@@ -116,14 +141,15 @@ void OpCodeHandlers_init()
 					// throw new InvalidOperationException()
 					break;
 				}
+				
+				operands = LegacyHandler_CreateOps(encFlags1, &operands_length);
 
-				OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, NULL, OpCodeHandler_GetOpCode, LegacyHandler_Encode);
+				OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, OpCodeHandler_GetOpCode, LegacyHandler_Encode);
 
 				handler->handler_conf = LegacyHandler;
 				//handler = new LegacyHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
 			}
 			break;
-
 		case EncodingKind_VEX:
 			handler->handler_conf = VexHandler;
 			//handler = new VexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
@@ -155,7 +181,7 @@ void OpCodeHandlers_init()
 			break;
 		}
 
-		EncoderInternal_OpCodeHandlers_Handlers[i] = handler;
+		EncoderInternal_OpCodeHandlers_Handlers[i] = *handler;
 	}
 }
 
@@ -171,20 +197,27 @@ enum OpKind GetImmediateOpKind(enum Code code, int operand)
 		//throw new ArgumentOutOfRangeException(nameof(code));
 	}
 	//var operands = handlers[(int)code].Operands;
-	auto operands = handler.Operands;
+	struct Op* operands = handler.Operands;
+	unsigned int operands_length = handler.Operands_Length;
 
-	if ((unsigned int)operand >= (uint)operands.Length)
-		throw new ArgumentOutOfRangeException(nameof(operand), $"{code} doesn't have at least {operand + 1} operands");
+	if ((unsigned int)operand >= operands_length)
+	{
+		//throw new ArgumentOutOfRangeException(nameof(operand), $"{code} doesn't have at least {operand + 1} operands");
+		return (enum OpKind)0;
+	}
+		
 	var opKind = operands[operand].GetImmediateOpKind();
-	if (opKind == OpKind.Immediate8 &&
+	if (opKind == OK_Immediate8 &&
 		operand > 0 &&
 		operand + 1 == operands.Length &&
 		operands[operand - 1].GetImmediateOpKind() is OpKind opKindPrev &&
-		(opKindPrev == OpKind.Immediate8 || opKindPrev == OpKind.Immediate16)) {
-		opKind = OpKind.Immediate8_2nd;
+		(opKindPrev == OK_Immediate8 || opKindPrev == OK_Immediate16)) {
+		opKind = OK_Immediate8_2nd;
 	}
-	if (opKind == (OpKind)(-1))
-		throw new ArgumentException($"{code}'s op{operand} isn't an immediate operand");
+	if (opKind == (enum OpKind)(-1))
+	{
+		//throw new ArgumentException($"{code}'s op{operand} isn't an immediate operand");
+	}
 	return opKind;
 }
 
