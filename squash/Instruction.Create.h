@@ -102,11 +102,31 @@ void OpModRM_rm_mem_only_Encode(struct Encoder* encoder, struct Instruction* ins
 	AddRegOrMem(encoder, instruction, operand, Register_None, Register_None, true, false); // allowMemOp: true, allowRegOp : false
 }
 
-void OpModRM_rm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op, enum Register regLo, enum Register regHi)
+void OpModRM_rm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	AddRegOrMem(encoder, instruction, operand, regLo, regHi, true, true); // allowMemOp: true, allowRegOp : true
+	AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, true, true); // allowMemOp: true, allowRegOp : true
 }
 
+void OpModRM_reg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	AddModRMRegister(encoder, instruction, operand, op->regLo, op->regHi);
+}
+
+void OpRegEmbed8_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	AddReg(encoder, instruction, operand, op->regLo, op->regHi);
+}
+
+void OpModRM_reg_mem_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	AddModRMRegister(encoder, instruction, operand, op->regLo, op->regHi);
+	encoder->EncoderFlags |= EncoderFlags_RegIsMemory;
+}
+
+void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, false, true); // allowMemOp: false, allowRegOp : true
+}
 
 struct Op* Op_new()
 {
@@ -163,6 +183,51 @@ struct Op* OpModRM_rm_new(enum Register regLo, enum Register regHi)
 	return op;
 }
 
+struct Op* OpModRM_reg_new(enum Register regLo, enum Register regHi)
+{
+	struct Op* op = Op_new();
+	op->regLo = regLo;
+	op->regHi = regHi;
+	op->operand_type = OT_OpModRM_reg;
+	op->Encode = &OpModRM_reg_Encode;
+
+	return op;
+}
+
+struct Op* OpRegEmbed8_new(enum Register regLo, enum Register regHi)
+{
+	struct Op* op = Op_new();
+	op->regLo = regLo;
+	op->regHi = regHi;
+	op->operand_type = OT_OpRegEmbed8;
+	op->Encode = &OpRegEmbed8_Encode;
+
+	return op;
+}
+
+struct Op* OpModRM_reg_mem_new(enum Register regLo, enum Register regHi)
+{
+	struct Op* op = Op_new();
+	op->regLo = regLo;
+	op->regHi = regHi;
+	op->operand_type = OT_OpModRM_reg_mem;
+	op->Encode = &OpModRM_reg_mem_Encode;
+
+	return op;
+}
+
+struct Op* OpModRM_rm_reg_only_new(enum Register regLo, enum Register regHi)
+{
+	struct Op* op = Op_new();
+	op->regLo = regLo;
+	op->regHi = regHi;
+	op->operand_type = OT_OpModRM_rm_reg_only;
+	op->Encode = &OpModRM_rm_reg_only_Encode;
+
+	return op;
+}
+
+// Op Tables.
 struct Op* Operands_LegacyOps()
 {
 	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 75);
@@ -172,6 +237,27 @@ struct Op* Operands_LegacyOps()
 	operands[3] = *OpModRM_rm_mem_only_new(false);
 	operands[4] = *OpModRM_rm_mem_only_new(false);
 	operands[5] = *OpModRM_rm_mem_only_new(false);
+	operands[6] = *OpModRM_rm_new(Register_AL, Register_R15L);
+	operands[7] = *OpModRM_rm_new(Register_AX, Register_R15W);
+	operands[8] = *OpModRM_rm_new(Register_EAX, Register_R15D);
+	operands[9] = *OpModRM_rm_new(Register_EAX, Register_R15D);
+	operands[10] = *OpModRM_rm_new(Register_RAX, Register_R15);
+	operands[11] = *OpModRM_rm_new(Register_RAX, Register_R15);
+	operands[12] = *OpModRM_rm_new(Register_MM0, Register_MM7);
+	operands[13] = *OpModRM_rm_new(Register_XMM0, Register_XMM15);
+	operands[14] = *OpModRM_rm_new(Register_BND0, Register_BND3);
+	operands[15] = *OpModRM_reg_new(Register_AL, Register_R15L);
+	operands[16] = *OpRegEmbed8_new(Register_AL, Register_R15L);
+	operands[17] = *OpModRM_reg_new(Register_AX, Register_R15W);
+	operands[18] = *OpModRM_reg_mem_new(Register_AX, Register_R15W);
+	operands[19] = *OpModRM_rm_reg_only_new(Register_AX, Register_R15W);
+	operands[20] = *OpRegEmbed8_new(Register_AX, Register_R15W);
+	operands[21] = *OpModRM_reg_new(Register_EAX, Register_R15D);
+	operands[22] = *OpModRM_reg_mem_new(Register_EAX, Register_R15D);
+	operands[23] = *OpModRM_rm_reg_only_new(Register_EAX, Register_R15D);
+	operands[24] = *OpRegEmbed8_new(Register_EAX, Register_R15D);
+	operands[25] = *OpModRM_reg_new(Register_RAX, Register_R15);
+	operands[26] = *OpModRM_reg_mem_new(Register_RAX, Register_R15);
 	return operands;
 }
 
