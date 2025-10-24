@@ -55,6 +55,7 @@ struct Op
 	bool mustUseSib;			// OpModRM_rm_mem_only
 	enum Register regLo;		// OpModRM_rm
 	enum Register regHi;		// OpModRM_rm
+	enum Register _register;	// OpReg
 
 	void (*Encode)(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 	enum OpKind(*GetImmediateOpKind)(struct Op* op);
@@ -128,6 +129,36 @@ void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* ins
 	AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, false, true); // allowMemOp: false, allowRegOp : true
 }
 
+void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	if (encoder->Bitness != 64 && GetOpKind(instruction, operand) == OK_Register && GetOpRegister(instruction, operand) >= op->regLo + 8 && GetOpRegister(instruction, operand) <= op->regLo + 15)
+	{
+		encoder->EncoderFlags |= EncoderFlags_PF0;
+		AddModRMRegister(encoder, instruction, operand, op->regLo + 8, op->regLo + 15);
+	}
+	else
+	{
+		AddModRMRegister(encoder, instruction, operand, op->regLo, op->regHi);
+	}
+}
+
+void OpReg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	Verify(encoder, operand, OK_Register, GetOpKind(instruction, operand));
+	Verify(encoder, operand, op->_register, GetOpRegister(instruction, operand));
+}
+
+void OpRegSTi_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	if (!Verify(encoder, operand, OK_Register, GetOpKind(instruction, operand)))
+		return;
+	enum Register reg = GetOpRegister(instruction, operand);
+	if (!Verify(encoder, operand, reg, Register_ST0, Register_ST7))
+		return;
+	//Debug.Assert((encoder.OpCode & 7) == 0);
+	encoder->OpCode |= (unsigned int)(reg - Register_ST0);
+}
+
 struct Op* Op_new()
 {
 	struct Op* op = (struct Op*)malloc(sizeof(struct Op));
@@ -136,6 +167,7 @@ struct Op* Op_new()
 	op->mustUseSib = false;
 	op->regLo = (enum Register)0;
 	op->regHi = (enum Register)0;
+	op->_register = (enum Register)0;
 	op->Encode = NULL;
 	op->GetImmediateOpKind = &OpDefault_GetImmediateOpKind;
 	op->GetNearBranchOpKind = &OpDefault_GetNearBranchOpKind;
@@ -227,6 +259,36 @@ struct Op* OpModRM_rm_reg_only_new(enum Register regLo, enum Register regHi)
 	return op;
 }
 
+struct Op* OpModRM_regF0_new(enum Register regLo, enum Register regHi)
+{
+	struct Op* op = Op_new();
+	op->regLo = regLo;
+	op->regHi = regHi;
+	op->operand_type = OT_OpModRM_regF0;
+	op->Encode = &OpModRM_regF0_Encode;
+
+	return op;
+}
+
+struct Op* OpReg_new(enum Register _register)
+{
+	struct Op* op = Op_new();
+	op->_register = _register;
+	op->operand_type = OT_OpReg;
+	op->Encode = &OpReg_Encode;
+
+	return op;
+}
+
+struct Op* OpRegSTi_new()
+{
+	struct Op* op = Op_new();
+	op->operand_type = OT_OpRegSTi;
+	op->Encode = &OpRegSTi_Encode;
+
+	return op;
+}
+
 // Op Tables.
 struct Op* Operands_LegacyOps()
 {
@@ -258,6 +320,32 @@ struct Op* Operands_LegacyOps()
 	operands[24] = *OpRegEmbed8_new(Register_EAX, Register_R15D);
 	operands[25] = *OpModRM_reg_new(Register_RAX, Register_R15);
 	operands[26] = *OpModRM_reg_mem_new(Register_RAX, Register_R15);
+	operands[27] = *OpModRM_rm_reg_only_new(Register_RAX, Register_R15);
+	operands[28] = *OpRegEmbed8_new(Register_RAX, Register_R15);
+	operands[29] = *OpModRM_reg_new(Register_ES, Register_GS);
+	operands[30] = *OpModRM_reg_new(Register_MM0, Register_MM7);
+	operands[31] = *OpModRM_rm_reg_only_new(Register_MM0, Register_MM7);
+	operands[32] = *OpModRM_reg_new(Register_XMM0, Register_XMM15);
+	operands[33] = *OpModRM_rm_reg_only_new(Register_XMM0, Register_XMM15);
+	operands[34] = *OpModRM_regF0_new(Register_CR0, Register_CR15);
+	operands[35] = *OpModRM_reg_new(Register_DR0, Register_DR15);
+	operands[36] = *OpModRM_reg_new(Register_TR0, Register_TR7);
+	operands[37] = *OpModRM_reg_new(Register_BND0, Register_BND3);
+	operands[38] = *OpReg_new(Register_ES);
+	operands[39] = *OpReg_new(Register_CS);
+	operands[38] = *OpReg_new(Register_SS);
+	operands[38] = *OpReg_new(Register_DS);
+	operands[38] = *OpReg_new(Register_FS);
+	operands[38] = *OpReg_new(Register_GS);
+	operands[38] = *OpReg_new(Register_AL);
+	operands[38] = *OpReg_new(Register_CL);
+	operands[38] = *OpReg_new(Register_AX);
+	operands[38] = *OpReg_new(Register_DX);
+	operands[38] = *OpReg_new(Register_EAX);
+	operands[38] = *OpReg_new(Register_RAX);
+	operands[38] = *OpReg_new(Register_ST0);
+	operands[39] = *OpRegSTi_new();
+	
 	return operands;
 }
 
