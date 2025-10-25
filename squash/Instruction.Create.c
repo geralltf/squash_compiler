@@ -71,6 +71,8 @@ void OpCodeHandlers_init()
 		{
 		case EncodingKind_Legacy:
 			
+			handler->Operands_Length = 75;
+
 			if (code == INVALID)
 			{
 				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, false, NULL, 0, OpCodeHandler_GetOpCode, InvalidHandler_Encode);
@@ -151,26 +153,36 @@ void OpCodeHandlers_init()
 			}
 			break;
 		case EncodingKind_VEX:
+			handler->Operands_Length = 38;
+
 			handler->handler_conf = VexHandler;
 			//handler = new VexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
 			break;
 
 		case EncodingKind_EVEX:
+			handler->Operands_Length = 31;
+
 			handler->handler_conf = EvexHandler;
 			//handler = new EvexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
 			break;
 
 		case EncodingKind_XOP:
+			handler->Operands_Length = 18;
+
 			handler->handler_conf = XopHandler;
 			//handler = new XopHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
 			break;
 
 		case EncodingKind_D3NOW:
+			handler->Operands_Length = 0; //TODO: test if valid if it is fine to have zero operands.
+
 			handler->handler_conf = D3nowHandler;
 			//handler = new D3nowHandler((enum EncFlags2)encFlags2[i], encFlags3);
 			break;
 
 		case EncodingKind_MVEX:
+			handler->Operands_Length = 8;
+
 			handler->handler_conf = MvexHandler;
 			//handler = new MvexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
 
@@ -206,11 +218,12 @@ enum OpKind GetImmediateOpKind(enum Code code, int operand)
 		return (enum OpKind)0;
 	}
 		
-	var opKind = operands[operand].GetImmediateOpKind();
+	struct Op op = operands[operand];
+	enum OpKind opKind = op.GetImmediateOpKind(&op);
 	if (opKind == OK_Immediate8 &&
 		operand > 0 &&
-		operand + 1 == operands.Length &&
-		operands[operand - 1].GetImmediateOpKind() is OpKind opKindPrev &&
+		operand + 1 == operands_length &&
+		operands[operand - 1].GetImmediateOpKind(&operands[operand - 1]) is OK_opKindPrev &&
 		(opKindPrev == OK_Immediate8 || opKindPrev == OK_Immediate16)) {
 		opKind = OK_Immediate8_2nd;
 	}
