@@ -1,6 +1,7 @@
 #include "Instruction.Create.h"
 
 struct OpCodeHandler* EncoderInternal_OpCodeHandlers_Handlers = (struct OpCodeHandler*)NULL; // CodeEnumCount
+struct Op* ops_legacy = NULL;
 
 enum EncodingKind GetEncodingKindByOpcode(enum Code opcode)
 {
@@ -15,24 +16,49 @@ enum EncodingKind GetEncodingKindByOpcode(enum Code opcode)
 
 struct Op* LegacyHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length) 
 {
+	if (ops_legacy == NULL)
+	{
+		ops_legacy = Operands_LegacyOps();
+	}
+
 	int op0 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op0Shift) & (unsigned int)EFLAGS_Legacy_OpMask);
 	int op1 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op1Shift) & (unsigned int)EFLAGS_Legacy_OpMask);
 	int op2 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op2Shift) & (unsigned int)EFLAGS_Legacy_OpMask);
 	int op3 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op3Shift) & (unsigned int)EFLAGS_Legacy_OpMask);
-	if (op3 != 0) {
+	if (op3 != 0) 
+	{
 		//Debug.Assert(op0 != 0 && op1 != 0 && op2 != 0);
-		return new Op[]{ OpHandlerData.LegacyOps[op0 - 1], OpHandlerData.LegacyOps[op1 - 1], OpHandlerData.LegacyOps[op2 - 1], OpHandlerData.LegacyOps[op3 - 1] };
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 4);
+		w[0] = ops_legacy[op0 - 1];
+		w[1] = ops_legacy[op1 - 1];
+		w[2] = ops_legacy[op2 - 1];
+		w[3] = ops_legacy[op3 - 1];
+		return w;
 	}
-	if (op2 != 0) {
+	if (op2 != 0) 
+	{
 		//Debug.Assert(op0 != 0 && op1 != 0);
-		return new Op[]{ OpHandlerData.LegacyOps[op0 - 1], OpHandlerData.LegacyOps[op1 - 1], OpHandlerData.LegacyOps[op2 - 1] };
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 3);
+		w[0] = ops_legacy[op0 - 1];
+		w[1] = ops_legacy[op1 - 1];
+		w[2] = ops_legacy[op2 - 1];
+		return w;
 	}
-	if (op1 != 0) {
+	if (op1 != 0) 
+	{
 		//Debug.Assert(op0 != 0);
-		return new Op[]{ OpHandlerData.LegacyOps[op0 - 1], OpHandlerData.LegacyOps[op1 - 1] };
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 2);
+		w[0] = ops_legacy[op0 - 1];
+		w[1] = ops_legacy[op1 - 1];
+		return w;
 	}
 	if (op0 != 0)
-		return new Op[]{ OpHandlerData.LegacyOps[op0 - 1] };
+	{
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 1);
+		w[0] = ops_legacy[op0 - 1];
+		return w;
+	}
+		
 	return NULL;
 }
 
@@ -220,11 +246,17 @@ enum OpKind GetImmediateOpKind(enum Code code, int operand)
 		
 	struct Op op = operands[operand];
 	enum OpKind opKind = op.GetImmediateOpKind(&op);
+	enum OpKind opKindPrev = (enum OpKind)(-1);
+
 	if (opKind == OK_Immediate8 &&
 		operand > 0 &&
-		operand + 1 == operands_length &&
-		operands[operand - 1].GetImmediateOpKind(&operands[operand - 1]) is OK_opKindPrev &&
-		(opKindPrev == OK_Immediate8 || opKindPrev == OK_Immediate16)) {
+		operand + 1 == operands_length)
+	{
+		opKindPrev = operands[operand - 1].GetImmediateOpKind(&operands[operand - 1]);
+	}
+
+	if (opKind == OK_Immediate8 && operand > 0 && operand + 1 == operands_length && (opKindPrev == OK_Immediate8 || opKindPrev == OK_Immediate16)) 
+	{
 		opKind = OK_Immediate8_2nd;
 	}
 	if (opKind == (enum OpKind)(-1))
@@ -236,29 +268,52 @@ enum OpKind GetImmediateOpKind(enum Code code, int operand)
 
 enum OpKind GetNearBranchOpKind(enum Code code, int operand) 
 {
-	var handlers = EncoderInternal.OpCodeHandlers.Handlers;
-	if ((uint)code >= (uint)handlers.Length)
-		throw new ArgumentOutOfRangeException(nameof(code));
-	var operands = handlers[(int)code].Operands;
-	if ((uint)operand >= (uint)operands.Length)
-		throw new ArgumentOutOfRangeException(nameof(operand), $"{code} doesn't have at least {operand + 1} operands");
-	var opKind = operands[operand].GetNearBranchOpKind();
-	if (opKind == (OpKind)(-1))
-		throw new ArgumentException($"{code}'s op{operand} isn't a near branch operand");
+	int index = (int)code;
+	OpCodeHandlers_init(code);
+	struct OpCodeHandler handler = EncoderInternal_OpCodeHandlers_Handlers[index];
+
+
+	if ((unsigned int)code >= (unsigned int)4936)
+	{
+		
+	}
+	struct Op* operands = handler.Operands;
+	unsigned int operands_length = handler.Operands_Length;
+	if ((unsigned int)operand >= operands_length)
+	{
+		//throw new ArgumentOutOfRangeException(nameof(operand), $"{code} doesn't have at least {operand + 1} operands");
+	}
+	enum OpKind opKind = operands->GetNearBranchOpKind(operands);
+	if (opKind == (enum OpKind)(-1))
+	{
+		//throw new ArgumentException($"{code}'s op{operand} isn't a near branch operand");
+	}
 	return opKind;
 }
 
 enum OpKind GetFarBranchOpKind(enum Code code, int operand) 
 {
-	var handlers = EncoderInternal.OpCodeHandlers.Handlers;
-	if ((uint)code >= (uint)handlers.Length)
-		throw new ArgumentOutOfRangeException(nameof(code));
-	var operands = handlers[(int)code].Operands;
-	if ((uint)operand >= (uint)operands.Length)
-		throw new ArgumentOutOfRangeException(nameof(operand), $"{code} doesn't have at least {operand + 1} operands");
-	var opKind = operands[operand].GetFarBranchOpKind();
-	if (opKind == (OpKind)(-1))
-		throw new ArgumentException($"{code}'s op{operand} isn't a far branch operand");
+	int index = (int)code;
+	OpCodeHandlers_init(code);
+	struct OpCodeHandler handler = EncoderInternal_OpCodeHandlers_Handlers[index];
+
+
+	if ((unsigned int)code >= (unsigned int)4936)
+	{
+
+	}
+	struct Op* operands = handler.Operands;
+	unsigned int operands_length = handler.Operands_Length;
+	if ((unsigned int)operand >= operands_length)
+	{
+		//throw new ArgumentOutOfRangeException(nameof(operand), $"{code} doesn't have at least {operand + 1} operands");
+	}
+	enum OpKind opKind = operands->GetFarBranchOpKind(operands);
+	if (opKind == (enum OpKind)(-1))
+	{
+		//throw new ArgumentException($"{code}'s op{operand} isn't a far branch operand");
+	}
+
 	return opKind;
 }
 
