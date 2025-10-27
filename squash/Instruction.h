@@ -1441,5 +1441,10 @@ void SetNearBranch64(struct Instruction* i, unsigned long value);
 
 int GetDeclareDataCount(struct Instruction* i);
 unsigned char GetDeclareByteValue(struct Instruction* i, int index);
+enum Register GetMemoryBase(struct Instruction* i);
+int GetMemoryDisplSize(struct Instruction* i);
+unsigned long GetMemoryDisplacement64(struct Instruction* i);
+int GetMemoryIndexScale(struct Instruction* i);
+enum Register GetMemoryIndex(struct Instruction* i);
 
 #endif

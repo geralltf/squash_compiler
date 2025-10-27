@@ -380,9 +380,9 @@ void OpMRBX_Encode(struct Encoder* encoder, struct Instruction* instruction, int
 	{
 		return;
 	}
-	enum Register baseReg = instruction.MemoryBase;
-	if (instruction.MemoryDisplSize != 0 || instruction.MemoryDisplacement64 != 0 ||
-		instruction.MemoryIndexScale != 1 || instruction.MemoryIndex != Register_AL ||
+	enum Register baseReg = GetMemoryBase(instruction);
+	if (GetMemoryDisplSize(instruction) != 0 || GetMemoryDisplacement64(instruction) != 0 ||
+		GetMemoryIndexScale(instruction) != 1 || GetMemoryIndex(instruction) != Register_AL ||
 		(baseReg != Register_BX && baseReg != Register_EBX && baseReg != Register_RBX)) 
 	{
 		//encoder.ErrorMessage = $"Operand {operand}: Operand must be [bx+al], [ebx+al], or [rbx+al]";
@@ -402,7 +402,7 @@ void OpMRBX_Encode(struct Encoder* encoder, struct Instruction* instruction, int
 		//Debug.Assert(baseReg == Register_BX);
 		regSize = 2;
 	}
-	encoder.SetAddrSize(regSize);
+	SetAddrSize(encoder, regSize);
 }
 
 void OpJ_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
