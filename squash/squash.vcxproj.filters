@@ -13,6 +13,12 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Iced">
+      <UniqueIdentifier>{ff2d8843-9753-471b-8ca4-96953566cc16}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Iced">
+      <UniqueIdentifier>{45914248-9115-4909-be24-a459bc1f5671}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AST.c">
@@ -57,20 +63,20 @@
     <ClCompile Include="Logger.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Encoder.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="EncoderInstructionSet.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="Instruction.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="OpCodeInfo.c">
-      <Filter>Source Files</Filter>
+      <Filter>Source Files\Iced</Filter>
     </ClCompile>
     <ClCompile Include="Instruction.Create.c">
-      <Filter>Source Files</Filter>
+      <Filter>Source Files\Iced</Filter>
+    </ClCompile>
+    <ClCompile Include="OpCodeInfo.c">
+      <Filter>Source Files\Iced</Filter>
+    </ClCompile>
+    <ClCompile Include="EncoderInstructionSet.c">
+      <Filter>Source Files\Iced</Filter>
+    </ClCompile>
+    <ClCompile Include="Encoder.c">
+      <Filter>Source Files\Iced</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -113,35 +119,35 @@
     <ClInclude Include="Logger.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Encoder.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="EncoderInstructionSet.h">
-      <Filter>Header Files</Filter>
+      <Filter>Iced</Filter>
     </ClInclude>
-    <ClInclude Include="Instruction.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Enums.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Mnemonic.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="InstructionOpCounts.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="InstructionMemorySizes.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="OpCodeInfo.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="Encoder.h">
+      <Filter>Iced</Filter>
     </ClInclude>
     <ClInclude Include="OpCodeInfoData.h">
-      <Filter>Header Files</Filter>
+      <Filter>Iced</Filter>
+    </ClInclude>
+    <ClInclude Include="OpCodeInfo.h">
+      <Filter>Iced</Filter>
+    </ClInclude>
+    <ClInclude Include="Mnemonic.h">
+      <Filter>Iced</Filter>
+    </ClInclude>
+    <ClInclude Include="InstructionOpCounts.h">
+      <Filter>Iced</Filter>
+    </ClInclude>
+    <ClInclude Include="InstructionMemorySizes.h">
+      <Filter>Iced</Filter>
     </ClInclude>
     <ClInclude Include="Instruction.Create.h">
-      <Filter>Header Files</Filter>
+      <Filter>Iced</Filter>
+    </ClInclude>
+    <ClInclude Include="Instruction.h">
+      <Filter>Iced</Filter>
+    </ClInclude>
+    <ClInclude Include="Enums.h">
+      <Filter>Iced</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
