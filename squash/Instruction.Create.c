@@ -317,6 +317,66 @@ enum OpKind GetFarBranchOpKind(enum Code code, int operand)
 	return opKind;
 }
 
+void InitializeSignedImmediate(struct Instruction* instruction, int operand, long immediate) 
+{
+	enum OpKind opKind = GetImmediateOpKind(GetCode(instruction), operand);
+	SetOpKind(instruction, operand, opKind);
+
+	switch (opKind) 
+	{
+	case OK_Immediate8:
+		// All sbyte and all byte values can be used
+		//if (!(sbyte.MinValue <= immediate && immediate <= byte.MaxValue))
+		//	throw new ArgumentOutOfRangeException(nameof(immediate));
+		SetInternalImmediate8(instruction, (unsigned int)((unsigned char)immediate));
+		break;
+	case OK_Immediate8_2nd:
+		// All sbyte and all byte values can be used
+		//if (!(sbyte.MinValue <= immediate && immediate <= byte.MaxValue))
+		//	throw new ArgumentOutOfRangeException(nameof(immediate));
+		SetInternalImmediate8_2nd(instruction, (unsigned int)((unsigned char)immediate));
+		break;
+	case OK_Immediate8to16:
+		//if (!(sbyte.MinValue <= immediate && immediate <= sbyte.MaxValue))
+		//	throw new ArgumentOutOfRangeException(nameof(immediate));
+		SetInternalImmediate8(instruction, (unsigned int)((unsigned char)immediate));
+		break;
+	case OK_Immediate8to32:
+		//if (!(sbyte.MinValue <= immediate && immediate <= sbyte.MaxValue))
+		//	throw new ArgumentOutOfRangeException(nameof(immediate));
+		SetInternalImmediate8(instruction, (unsigned int)((unsigned char)immediate));
+		break;
+	case OK_Immediate8to64:
+		//if (!(sbyte.MinValue <= immediate && immediate <= sbyte.MaxValue))
+		//	throw new ArgumentOutOfRangeException(nameof(immediate));
+		SetInternalImmediate8(instruction, (unsigned int)((unsigned char)immediate));
+		break;
+	case OK_Immediate16:
+		// All short and all ushort values can be used
+		//if (!(short.MinValue <= immediate && immediate <= ushort.MaxValue))
+		//	throw new ArgumentOutOfRangeException(nameof(immediate));
+		SetInternalImmediate16(instruction, (unsigned int)((unsigned short)immediate));
+		break;
+	case OK_Immediate32:
+		// All int and all uint values can be used
+		//if (!(int.MinValue <= immediate && immediate <= uint.MaxValue))
+		//	throw new ArgumentOutOfRangeException(nameof(immediate));
+		SetImmediate32(instruction, (unsigned int)immediate);
+		break;
+	case OK_Immediate32to64:
+		//if (!(int.MinValue <= immediate && immediate <= int.MaxValue))
+		//	throw new ArgumentOutOfRangeException(nameof(immediate));
+		SetImmediate32(instruction, (unsigned int)immediate);
+		break;
+	case OK_Immediate64:
+		SetImmediate64(instruction, (unsigned long)immediate);
+		break;
+	default:
+		//throw new ArgumentOutOfRangeException(nameof(instruction));
+		break;
+	}
+}
+
 /// <summary>
 /// Creates a new near/short branch instruction
 /// </summary>
@@ -358,5 +418,79 @@ struct Instruction* CreateBranch(enum Code code, unsigned short selector, unsign
 
 	//Debug.Assert(instruction.OpCount == 1);
 
+	return instruction;
+}
+
+/// <summary>
+/// Creates an instruction with 2 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register">op0: Register</param>
+/// <param name="immediate">op1: Immediate value</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register _register, int immediate)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, code);
+
+	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
+	//instruction.Op0Kind = OpKind.Register;
+	SetOp0Register(instruction, _register);
+
+	InitializeSignedImmediate(&instruction, 1, immediate);
+
+	//Debug.Assert(instruction.OpCount == 2);
+	return instruction;
+}
+
+/// <summary>
+/// Creates an instruction with 1 operand
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register">op0: Register</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register _register)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+	
+	SetCode(instruction, code);
+
+	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
+	//instruction.Op0Kind = OpKind.Register;
+	SetOp0Register(instruction, _register);
+
+	//Debug.Assert(instruction.OpCount == 1);
+	return instruction;
+}
+
+/// <summary>
+/// Creates an instruction with 2 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register1">op0: Register</param>
+/// <param name="register2">op1: Register</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register register1, enum Register register2)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, code);
+
+	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
+	//instruction.Op0Kind = OpKind.Register;
+	SetOp0Register(instruction, register1);
+
+	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
+	//instruction.Op1Kind = OpKind.Register;
+	SetOp1Register(instruction, register2);
+
+	//Debug.Assert(instruction.OpCount == 2);
 	return instruction;
 }

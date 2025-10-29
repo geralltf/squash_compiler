@@ -205,7 +205,7 @@ void OpImm_Encode(struct Encoder* encoder, struct Instruction* instruction, int 
 	{
 		return;
 	}
-	if (instruction.Immediate8 != op->value) 
+	if (GetImmediate8(instruction) != op->value)
 	{
 		//encoder.ErrorMessage = $"Operand {operand}: Expected 0x{value:X2}, actual: 0x{instruction.Immediate8:X2}";
 		return;
@@ -224,7 +224,7 @@ void OpIw_Encode(struct Encoder* encoder, struct Instruction* instruction, int o
 		return;
 	}
 	encoder.ImmSize = ImmSize_Size2;
-	encoder.Immediate = instruction.Immediate16;
+	encoder.Immediate = GetImmediate16(instruction);
 }
 
 enum OpKind OpIw_GetImmediateOpKind(struct Op* op)
@@ -940,11 +940,41 @@ void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, s
 }
 
 /// <summary>
+/// Creates a new near/short branch instruction
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="target">Target address</param>
+struct Instruction* CreateBranch(enum Code code, unsigned long target);
+
+/// <summary>
 /// Creates a new far branch instruction
 /// </summary>
 /// <param name="code">Code value</param>
 /// <param name="selector">Selector/segment value</param>
 /// <param name="offset">Offset</param>
 struct Instruction* CreateBranch(enum Code code, unsigned short selector, unsigned int offset);
+
+/// <summary>
+/// Creates an instruction with 2 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register">op0: Register</param>
+/// <param name="immediate">op1: Immediate value</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register _register, int immediate);
+
+/// <summary>
+/// Creates an instruction with 1 operand
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register">op0: Register</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register _register);
+
+/// <summary>
+/// Creates an instruction with 2 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register1">op0: Register</param>
+/// <param name="register2">op1: Register</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register register1, enum Register register2);
 
 #endif

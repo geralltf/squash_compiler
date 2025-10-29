@@ -1423,6 +1423,13 @@ int gethashcode(struct Instruction* i);
 
 enum Mnemonic to_mnemonic(enum Code code);
 
+/// <summary>
+/// Sets an operand's kind
+/// </summary>
+/// <param name="operand">Operand number, 0-4</param>
+/// <param name="opKind">Operand kind</param>
+void SetOpKind(struct Instruction* i, int operand, enum OpKind opKind);
+
 void SetIP(struct Instruction* i, unsigned long value);
 void Set_HasLockPrefix(struct Instruction* i, bool value);
 void Set_HasRepePrefix(struct Instruction* i, bool value);
@@ -1438,13 +1445,27 @@ void SetOp0Kind(struct Instruction* i, enum OpKind value);
 void SetFarBranchSelector(struct Instruction* i, unsigned short value);
 void SetFarBranch32(struct Instruction* i, unsigned int value);
 void SetNearBranch64(struct Instruction* i, unsigned long value);
+void SetOp0Register(struct Instruction* i, enum Register value);
+void SetOp1Register(struct Instruction* i, enum Register value);
+void SetInternalImmediate8(struct Instruction* i, unsigned int value);
+void SetInternalImmediate8_2nd(struct Instruction* i, unsigned int value);
+void SetInternalImmediate16(struct Instruction* i, unsigned int value);
+void SetImmediate32(struct Instruction* i, unsigned int value);
+void SetImmediate64(struct Instruction* i, unsigned long value);
 
 int GetDeclareDataCount(struct Instruction* i);
 unsigned char GetDeclareByteValue(struct Instruction* i, int index);
 enum Register GetMemoryBase(struct Instruction* i);
 int GetMemoryDisplSize(struct Instruction* i);
 unsigned long GetMemoryDisplacement64(struct Instruction* i);
-int GetMemoryIndexScale(struct Instruction* i);
+int GetMemoryIndexScale(struct Instruction* i);/// <summary>
+
+/// Instruction code, see also <see cref="Mnemonic"/>
+/// </summary>
+enum Code GetCode(struct Instruction* i);
+
 enum Register GetMemoryIndex(struct Instruction* i);
+unsigned char GetImmediate8(struct Instruction* i);
+unsigned short GetImmediate16(struct Instruction* i);
 
 #endif
