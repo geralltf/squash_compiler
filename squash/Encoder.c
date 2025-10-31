@@ -570,89 +570,90 @@ void nop(struct Assembler* assembler, int sizeInBytes)
 /// <param name="result">Result if this method returns <see langword="true"/></param>
 /// <param name="options">Encoder options</param>
 /// <returns></returns>
-public static bool TryEncode(int bitness, InstructionBlock[] blocks, [NotNullWhen(false)] out string ? errorMessage, [NotNullWhen(true)] out BlockEncoderResult[] ? result, BlockEncoderOptions options = BlockEncoderOptions.None) = >
-new BlockEncoder(bitness, blocks, options).Encode(out errorMessage, out result);
+//public static bool TryEncode(int bitness, InstructionBlock[] blocks, [NotNullWhen(false)] out string ? errorMessage, [NotNullWhen(true)] out BlockEncoderResult[] ? result, BlockEncoderOptions options = BlockEncoderOptions.None) = >
+//new BlockEncoder(bitness, blocks, options).Encode(out errorMessage, out result);
 
-bool Encode([NotNullWhen(false)] out string ? errorMessage, [NotNullWhen(true)] out BlockEncoderResult[] ? result) {
-	const int MAX_ITERS = 5;
-	for (int iter = 0; iter < MAX_ITERS; iter++) {
-		bool updated = false;
-		foreach(var block in blocks) {
-			ulong ip = block.RIP;
-			ulong gained = 0;
-			foreach(var instr in block.Instructions) {
-				instr.IP = ip;
-				if (!instr.Done) {
-					var oldSize = instr.Size;
-					if (instr.Optimize(gained)) {
-						if (instr.Size > oldSize) {
-							errorMessage = "Internal error: new size > old size";
-							result = null;
-							return false;
-						}
-						if (instr.Size < oldSize) {
-							gained += oldSize - instr.Size;
-							updated = true;
-						}
-					}
-					else if (instr.Size != oldSize) {
-						errorMessage = "Internal error: new size != old size";
-						result = null;
-						return false;
-					}
-				}
-				ip += instr.Size;
-			}
-		}
-		if (!updated)
-			break;
-	}
-
-	foreach(var block in blocks)
-		block.InitializeData();
-
-	var resultArray = new BlockEncoderResult[blocks.Length];
-	for (int i = 0; i < blocks.Length; i++) {
-		var block = blocks[i];
-		var encoder = Encoder.Create(bitness, block.CodeWriter);
-		ulong ip = block.RIP;
-		var newInstructionOffsets = ReturnNewInstructionOffsets ? new uint[block.Instructions.Length] : null;
-		var constantOffsets = ReturnConstantOffsets ? new ConstantOffsets[block.Instructions.Length] : null;
-		var instructions = block.Instructions;
-		for (int j = 0; j < instructions.Length; j++) {
-			var instr = instructions[j];
-			uint bytesWritten = block.CodeWriter.BytesWritten;
-			bool isOriginalInstruction;
-			if (constantOffsets is not null)
-				errorMessage = instr.TryEncode(encoder, out constantOffsets[j], out isOriginalInstruction);
-			else
-				errorMessage = instr.TryEncode(encoder, out _, out isOriginalInstruction);
-			if (errorMessage is not null) {
-				result = null;
-				return false;
-			}
-			uint size = block.CodeWriter.BytesWritten - bytesWritten;
-			if (size != instr.Size) {
-				errorMessage = "Internal error: didn't write all bytes";
-				result = null;
-				return false;
-			}
-			if (newInstructionOffsets is not null) {
-				if (isOriginalInstruction)
-					newInstructionOffsets[j] = (uint)(ip - block.RIP);
-				else
-					newInstructionOffsets[j] = uint.MaxValue;
-			}
-			ip += size;
-		}
-		resultArray[i] = new BlockEncoderResult(block.RIP, block.relocInfos, newInstructionOffsets, constantOffsets);
-		block.WriteData();
-	}
-
-	errorMessage = null;
-	result = resultArray;
-	return true;
-}
+//bool Encode(char** errorMessage, struct BlockEncoderResult** result) 
+//{
+//	const int MAX_ITERS = 5;
+//	for (int iter = 0; iter < MAX_ITERS; iter++) {
+//		bool updated = false;
+//		foreach(var block in blocks) {
+//			ulong ip = block.RIP;
+//			ulong gained = 0;
+//			foreach(var instr in block.Instructions) {
+//				instr.IP = ip;
+//				if (!instr.Done) {
+//					var oldSize = instr.Size;
+//					if (instr.Optimize(gained)) {
+//						if (instr.Size > oldSize) {
+//							errorMessage = "Internal error: new size > old size";
+//							result = null;
+//							return false;
+//						}
+//						if (instr.Size < oldSize) {
+//							gained += oldSize - instr.Size;
+//							updated = true;
+//						}
+//					}
+//					else if (instr.Size != oldSize) {
+//						errorMessage = "Internal error: new size != old size";
+//						result = null;
+//						return false;
+//					}
+//				}
+//				ip += instr.Size;
+//			}
+//		}
+//		if (!updated)
+//			break;
+//	}
+//
+//	foreach(var block in blocks)
+//		block.InitializeData();
+//
+//	var resultArray = new BlockEncoderResult[blocks.Length];
+//	for (int i = 0; i < blocks.Length; i++) {
+//		var block = blocks[i];
+//		var encoder = Encoder.Create(bitness, block.CodeWriter);
+//		ulong ip = block.RIP;
+//		var newInstructionOffsets = ReturnNewInstructionOffsets ? new uint[block.Instructions.Length] : null;
+//		var constantOffsets = ReturnConstantOffsets ? new ConstantOffsets[block.Instructions.Length] : null;
+//		var instructions = block.Instructions;
+//		for (int j = 0; j < instructions.Length; j++) {
+//			var instr = instructions[j];
+//			uint bytesWritten = block.CodeWriter.BytesWritten;
+//			bool isOriginalInstruction;
+//			if (constantOffsets is not null)
+//				errorMessage = instr.TryEncode(encoder, out constantOffsets[j], out isOriginalInstruction);
+//			else
+//				errorMessage = instr.TryEncode(encoder, out _, out isOriginalInstruction);
+//			if (errorMessage is not null) {
+//				result = null;
+//				return false;
+//			}
+//			uint size = block.CodeWriter.BytesWritten - bytesWritten;
+//			if (size != instr.Size) {
+//				errorMessage = "Internal error: didn't write all bytes";
+//				result = null;
+//				return false;
+//			}
+//			if (newInstructionOffsets is not null) {
+//				if (isOriginalInstruction)
+//					newInstructionOffsets[j] = (uint)(ip - block.RIP);
+//				else
+//					newInstructionOffsets[j] = uint.MaxValue;
+//			}
+//			ip += size;
+//		}
+//		resultArray[i] = new BlockEncoderResult(block.RIP, block.relocInfos, newInstructionOffsets, constantOffsets);
+//		block.WriteData();
+//	}
+//
+//	errorMessage = null;
+//	result = resultArray;
+//	return true;
+//}
 
 ///// <summary>
 ///// Tries to assemble the instructions of this assembler with the specified options.
@@ -760,6 +761,51 @@ void WriteByte(unsigned char* buffer, unsigned char value)
 
 }
 
+/// <summary>mov instruction.<br/>
+/// <br/>
+/// <c>MOV RAX, moffs64</c><br/>
+/// <br/>
+/// <c>o64 A1 mo</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c><br/>
+/// <br/>
+/// <c>MOV r64, r/m64</c><br/>
+/// <br/>
+/// <c>o64 8B /r</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c></summary>
+struct Instruction* mov64(enum Register dst, struct AssemblerMemoryOperand* src, int Bitness) // AssemblerRegister64 dst, AssemblerMemoryOperand src
+{
+	enum Code code;
+	struct Instruction* inst;
+
+	if (dst == Register_RAX && Bitness == 64 && IsDisplacementOnly(src))
+	{
+		code = Mov_RAX_moffs64;
+	}
+	else
+	{
+		if (dst == Register_RAX && Bitness < 64 && IsDisplacementOnly(src))
+		{
+			code = Mov_RAX_moffs64;
+		}
+		else
+		{
+			code = Mov_r64_rm64;
+		}
+	}
+
+	inst = Instruction_Create(code, dst, ToMemoryOperand(src, Bitness));
+	//AddInstruction(inst);
+	return inst;
+}
+
+
+
 void test_assembler()
 {
 	const unsigned long RIP = 0x1234567810000000;
@@ -768,47 +814,48 @@ void test_assembler()
 	struct Assembler* c = (struct Assembler*)malloc(sizeof(struct Assembler));
 	assembler(c, Bitness);
 
-	var label1 = c.CreateLabel();
-	var data1 = c.CreateLabel();
+	struct Label* label1 = CreateLabel(c);
+	struct Label* data1 = CreateLabel(c);
 
-	Instruction inst;
+	struct Instruction* inst;
 
 	//inst = Instruction.Create(Code.Sub_rm64_imm32, rsp, 0x20); // Requires more size in encoder so an optimiser might select Code.Sub_rm64_imm8 path to favor min size.
-	inst = Instruction.Create(Code.Sub_rm64_imm8, rsp, 0x20);
-	c.AddInstruction(inst);
+	inst = Instruction_Create(Sub_rm64_imm8, Register_RSP, 0x20);
+	AddInstruction(c, inst);
 
-	inst = Instruction.Create(Code.Push_r64, r15); // c.push(r15);
-	c.AddInstruction(inst);
-	inst = Instruction.Create(Code.Add_rm64_r64, rax, r15); //c.add(rax, r15);
-	c.AddInstruction(inst);
+	inst = Instruction_Create(Push_r64, Register_R15); // c.push(r15);
+	AddInstruction(c, inst);
+	inst = Instruction_Create(Add_rm64_r64, Register_RAX, Register_R15); //c.add(rax, r15);
+	AddInstruction(c, inst);
 
 	// If the memory operand can only have one size, __[] can be used. The assembler ignores
 	// the memory size unless it's an ambiguous instruction, eg. 'add [mem],123'
-	inst = mov(rax, __[rax], Bitness);  // c.mov(rax, __[rax]);
-	c.AddInstruction(inst);
+	inst = mov64(Register_RAX, ToMemoryOperandFromRegister(Register_RAX), Bitness);  // c.mov(rax, __[rax]);
+	AddInstruction(c, inst);
 
-	AssemblerMemoryOperand qword_operand2 = new AssemblerMemoryOperand(MemoryOperandSize.Qword, Register.None, rax, Register.None, 1, 0, AssemblerOperandFlags.None);
-	inst = mov(rax, qword_operand2, Bitness); //inst = mov(rax, __qword_ptr[rax], Bitness); // c.mov(rax, __qword_ptr[rax]);
-	c.AddInstruction(inst);
+	struct AssemblerMemoryOperand* qword_operand2;
+	qword_operand2 = AssemblerMemoryOperand_new(MOS_Qword, Register_None, Register_RAX, Register_None, 1, 0, AF_None);
+	inst = mov64(Register_RAX, qword_operand2, Bitness); //inst = mov(rax, __qword_ptr[rax], Bitness); // c.mov(rax, __qword_ptr[rax]);
+	AddInstruction(c, inst);
 
 	// The assembler must know the memory size to pick the correct instruction
 	inst = cmp(__dword_ptr[rax + rcx * 8 + 0x10], -1, Bitness); // c.cmp(__dword_ptr[rax + rcx * 8 + 0x10], -1);
-	c.AddInstruction(inst);
+	AddInstruction(c, inst);
 
 	inst = jne(label1, c.PreferShortBranch, Bitness); // c.jne(label1); // Jump to Label1
-	c.AddInstruction(inst);
+	AddInstruction(c, inst);
 
-	inst = Instruction.Create(Code.Inc_rm64, rax); // c.inc(rax);
-	c.AddInstruction(inst);
+	inst = Instruction_Create(Inc_rm64, Register_RAX); // c.inc(rax);
+	AddInstruction(c, inst);
 
 	// Labels can be referenced by memory operands (64-bit only) and call/jmp/jcc/loopcc instructions
-	inst = Instruction.Create(Code.Lea_r64_m, rcx, __[data1].ToMemoryOperand(Bitness)); // c.lea(rcx, __[data1]);
-	c.AddInstruction(inst);
+	inst = Instruction_Create(Lea_r64_m, Register_RCX, ToMemoryOperand(ToMemoryOperandFromLabel(data1), Bitness)); // c.lea(rcx, __[data1]);
+	AddInstruction(c, inst);
 
 	// The assembler has prefix properties that will be added to the following instruction
 	c.prefixFlags |= Iced.Intel.Assembler.PrefixFlags.Repe; // c.rep
 	inst = Instruction.CreateStosd(Bitness); //c.rep.stosd();
-	c.AddInstruction(inst);
+	AddInstruction(c, inst);
 
 	//c.xacquire.@lock.add(__qword_ptr[rax + rcx], 123); // f0f24883487b = xacquire lock add qword ptr [rax+rcx],7Bh
 	c.prefixFlags |= Assembler.PrefixFlags.Repne; // apply xacquire to flags
@@ -840,12 +887,12 @@ void test_assembler()
 	c.nop();
 
 	// Emit label1:
-	c.Label(ref label1);
+	c.Label(&label1);
 	// If needed, a zero-bytes instruction can be used as a label but this is optional
 	c.zero_bytes();
-	c.pop(r15);
+	c.pop(Register_R15);
 	c.ret();
-	c.Label(ref data1);
+	c.Label(&data1);
 	c.db(0xF3, 0x90); // pause
 
 	Assemble(c, new StreamCodeWriter(stream), RIP);

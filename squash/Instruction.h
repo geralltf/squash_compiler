@@ -1439,9 +1439,10 @@ void SetZeroingMasking(struct Instruction* i, bool value);
 void SetOpMask(struct Instruction* i, enum Register value);
 void SetSuppressAllExceptions(struct Instruction* i, bool value);
 void SetRoundingControl(struct Instruction* i, enum RoundingControl value);
-void IsBroadcast(struct Instruction* i, bool value);
+void SetIsBroadcast(struct Instruction* i, bool value);
 void SetCode(struct Instruction* i, enum Code value);
 void SetOp0Kind(struct Instruction* i, enum OpKind value);
+void SetOp1Kind(struct Instruction* i, enum OpKind value);
 void SetFarBranchSelector(struct Instruction* i, unsigned short value);
 void SetFarBranch32(struct Instruction* i, unsigned int value);
 void SetNearBranch64(struct Instruction* i, unsigned long value);
@@ -1453,13 +1454,20 @@ void SetInternalImmediate16(struct Instruction* i, unsigned int value);
 void SetImmediate32(struct Instruction* i, unsigned int value);
 void SetImmediate64(struct Instruction* i, unsigned long value);
 
+void SetInternalMemoryBase(struct Instruction* i, enum Register value);
+void SetInternalMemoryIndex(struct Instruction* i, enum Register value);
+void SetMemoryIndexScale(struct Instruction* i, int value);
+void SetMemoryDisplSize(struct Instruction* i, int value);
+void SetMemoryDisplacement64(struct Instruction* i, unsigned long value);
+
 int GetDeclareDataCount(struct Instruction* i);
 unsigned char GetDeclareByteValue(struct Instruction* i, int index);
 enum Register GetMemoryBase(struct Instruction* i);
 int GetMemoryDisplSize(struct Instruction* i);
 unsigned long GetMemoryDisplacement64(struct Instruction* i);
-int GetMemoryIndexScale(struct Instruction* i);/// <summary>
+int GetMemoryIndexScale(struct Instruction* i);
 
+/// <summary>
 /// Instruction code, see also <see cref="Mnemonic"/>
 /// </summary>
 enum Code GetCode(struct Instruction* i);

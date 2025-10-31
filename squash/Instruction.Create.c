@@ -377,6 +377,17 @@ void InitializeSignedImmediate(struct Instruction* instruction, int operand, lon
 	}
 }
 
+void InitMemoryOperand(struct Instruction* instruction, struct MemoryOperand* memory) 
+{
+	SetInternalMemoryBase(instruction, memory->Base);
+	SetInternalMemoryIndex(instruction, memory->Index);
+	SetMemoryIndexScale(instruction, memory->Scale);
+	SetMemoryDisplSize(instruction, memory->DisplSize);
+	SetMemoryDisplacement64(instruction, (unsigned long)memory->Displacement);
+	SetIsBroadcast(instruction, memory->IsBroadcast);
+	Set_SegmentPrefix(instruction, memory->SegmentPrefix);
+}
+
 /// <summary>
 /// Creates a new near/short branch instruction
 /// </summary>
@@ -438,6 +449,7 @@ struct Instruction* Instruction_Create(enum Code code, enum Register _register, 
 
 	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
 	//instruction.Op0Kind = OpKind.Register;
+	SetOp0Kind(instruction, OK_Register);
 	SetOp0Register(instruction, _register);
 
 	InitializeSignedImmediate(&instruction, 1, immediate);
@@ -462,6 +474,7 @@ struct Instruction* Instruction_Create(enum Code code, enum Register _register)
 
 	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
 	//instruction.Op0Kind = OpKind.Register;
+	SetOp0Kind(instruction, OK_Register);
 	SetOp0Register(instruction, _register);
 
 	//Debug.Assert(instruction.OpCount == 1);
@@ -485,11 +498,40 @@ struct Instruction* Instruction_Create(enum Code code, enum Register register1, 
 
 	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
 	//instruction.Op0Kind = OpKind.Register;
+	SetOp0Kind(instruction, OK_Register);
 	SetOp0Register(instruction, register1);
 
 	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
 	//instruction.Op1Kind = OpKind.Register;
+	SetOp1Kind(instruction, OK_Register);
 	SetOp1Register(instruction, register2);
+
+	//Debug.Assert(instruction.OpCount == 2);
+	return instruction;
+}
+
+/// <summary>
+/// Creates an instruction with 2 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register">op0: Register</param>
+/// <param name="memory">op1: Memory operand</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register register1, struct MemoryOperand* memory)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, code);
+
+	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
+	//instruction.Op0Kind = OpKind.Register;
+	SetOp0Kind(instruction, OK_Register);
+	SetOp0Register(instruction, register1);
+
+	SetOp1Kind(instruction, OK_Memory);
+	InitMemoryOperand(instruction, memory);
 
 	//Debug.Assert(instruction.OpCount == 2);
 	return instruction;

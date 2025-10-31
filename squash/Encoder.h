@@ -115,6 +115,243 @@ enum RepPrefixKind
 	RPK_Repne = 2,
 };
 
+enum MemoryOperandSize
+{
+	MOS_None,
+	MOS_Byte,
+	MOS_Word,
+	MOS_Dword,
+	MOS_Qword,
+	MOS_Tbyte,
+	MOS_Fword,
+	MOS_Xword,
+	MOS_Yword,
+	MOS_Zword,
+};
+
+struct AssemblerMemoryOperand
+{
+	/// <summary>
+	/// Gets the size of the operand.
+	/// </summary>
+	enum MemoryOperandSize Size;
+
+	/// <summary>
+	/// Gets the segment register.
+	/// </summary>
+	enum Register Segment;
+
+	/// <summary>
+	/// Gets the register used as a base.
+	/// </summary>
+	enum Register Base;
+
+	/// <summary>
+	/// Gets the register used as an index.
+	/// </summary>
+	enum Register Index;
+
+	/// <summary>
+	/// Gets the scale applied to the index register.
+	/// </summary>
+	int Scale;
+
+	/// <summary>
+	/// Gets the displacement.
+	/// </summary>
+	long Displacement;
+
+	/// <summary>
+	/// Gets the mask associated with this operand.
+	/// </summary>
+	enum AssemblerOperandFlags Flags;
+};
+
+/// <summary>
+/// Memory operand
+/// </summary>
+struct MemoryOperand 
+{
+	/// <summary>
+	/// Segment override or <see cref="Register.None"/>
+	/// </summary>
+	enum Register SegmentPrefix;
+
+	/// <summary>
+	/// Base register or <see cref="Register.None"/>
+	/// </summary>
+	enum Register Base;
+
+	/// <summary>
+	/// Index register or <see cref="Register.None"/>
+	/// </summary>
+	enum Register Index;
+
+	/// <summary>
+	/// Index register scale (1, 2, 4, or 8)
+	/// </summary>
+	int Scale;
+
+	/// <summary>
+	/// Memory displacement
+	/// </summary>
+	long Displacement;
+
+	/// <summary>
+	/// 0 (no displ), 1 (16/32/64-bit, but use 2/4/8 if it doesn't fit in a <see cref="sbyte"/>), 2 (16-bit), 4 (32-bit) or 8 (64-bit)
+	/// </summary>
+	int DisplSize;
+
+	/// <summary>
+	/// <see langword="true"/> if it's broadcast memory (EVEX instructions)
+	/// </summary>
+	bool IsBroadcast;
+};
+
+struct MemoryOperand* MemoryOperand_new(enum Register segmentPrefix, enum Register baseRegister, enum Register indexRegister, int scale, long displacement, int displSize, bool isBroadcast)
+{
+	struct MemoryOperand* o = (struct MemoryOperand*)malloc(sizeof(struct MemoryOperand));
+
+	o->SegmentPrefix = segmentPrefix;
+	o->Base = baseRegister;
+	o->Index = indexRegister;
+	o->Scale = scale;
+	o->Displacement = displacement;
+	o->DisplSize = displSize;
+	o->IsBroadcast = isBroadcast;
+
+	return o;
+}
+
+struct AssemblerMemoryOperand* AssemblerMemoryOperand_new(enum MemoryOperandSize size, enum Register segmentRegister, enum Register baseRegister, enum Register indexRegister, int scale, long displacement, enum AssemblerOperandFlags flags)
+{
+	struct AssemblerMemoryOperand* o = (struct AssemblerMemoryOperand*)malloc(sizeof(struct AssemblerMemoryOperand));
+	o->Size = size;
+	o->Segment = segmentRegister;
+	o->Base = baseRegister;
+	o->Index = indexRegister;
+	o->Scale = scale;
+	o->Flags = flags;
+	return o;
+}
+
+/// <summary>
+/// Gets a boolean indicating if this memory operand is a broadcast.
+/// </summary>
+bool IsBroadcast(struct AssemblerMemoryOperand* operand)
+{
+	return (operand->Flags & AF_Broadcast) != 0;
+}
+
+/// <summary>
+/// Gets a boolean indicating if this memory operand is a memory access using displacement only (no base and index registers are used).
+/// </summary>
+bool IsDisplacementOnly(struct AssemblerMemoryOperand* operand)
+{
+	return operand->Base == Register_None && operand->Index == Register_None;
+}
+
+/// <summary>
+/// Apply mask Register K1.
+/// </summary>
+struct AssemblerMemoryOperand* k1(struct AssemblerMemoryOperand* operand)
+{
+	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K1);
+	return o;
+}
+
+/// <summary>
+/// Apply mask Register K2.
+/// </summary>
+struct AssemblerMemoryOperand* k2(struct AssemblerMemoryOperand* operand)
+{
+	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K2);
+	return o;
+}
+
+/// <summary>
+/// Apply mask Register K3.
+/// </summary>
+struct AssemblerMemoryOperand* k3(struct AssemblerMemoryOperand* operand)
+{
+	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K3);
+	return o;
+}
+
+/// <summary>
+/// Apply mask Register K4.
+/// </summary>
+struct AssemblerMemoryOperand* k4(struct AssemblerMemoryOperand* operand)
+{
+	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K4);
+	return o;
+}
+
+/// <summary>
+/// Apply mask Register K5.
+/// </summary>
+struct AssemblerMemoryOperand* k5(struct AssemblerMemoryOperand* operand)
+{
+	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K5);
+	return o;
+}
+
+/// <summary>
+/// Apply mask Register K6.
+/// </summary>
+struct AssemblerMemoryOperand* k6(struct AssemblerMemoryOperand* operand)
+{
+	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K6);
+	return o;
+}
+
+/// <summary>
+/// Apply mask Register K7.
+/// </summary>
+struct AssemblerMemoryOperand* k7(struct AssemblerMemoryOperand* operand)
+{
+	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K7);
+	return o;
+}
+
+/// <summary>
+/// Gets a memory operand for the specified bitness.
+/// </summary>
+/// <param name="bitness">The bitness</param>
+struct MemoryOperand* ToMemoryOperand(struct AssemblerMemoryOperand* operand, int bitness)
+{
+	struct MemoryOperand* memoryOperand;
+	int displSize = 1;
+	bool flagsIsBroadcast;
+
+	if (IsDisplacementOnly(operand)) 
+	{
+		displSize = bitness / 8;
+	}
+	else if (operand->Displacement == 0)
+	{
+		displSize = 0;
+	}
+
+	flagsIsBroadcast = (operand->Flags & AF_Broadcast) != 0;
+
+	memoryOperand = MemoryOperand_new(operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, displSize, flagsIsBroadcast);
+
+	return memoryOperand;
+}
+
+struct AssemblerMemoryOperand* ToMemoryOperandFromRegister(enum Register baseRegister)
+{
+	struct AssemblerMemoryOperand* memOp = AssemblerMemoryOperand_new(MOS_None, Register_None, baseRegister, Register_None, 1, 0, AF_None);
+	return memOp;
+}
+
+struct AssemblerMemoryOperand* ToMemoryOperandFromLabel(struct Label* label)
+{
+	struct AssemblerMemoryOperand* memOp = AssemblerMemoryOperand_new(MOS_None, Register_None, Register_RIP, Register_None, 1, label->id, AF_None);
+	return memOp;
+}
+
 /// <summary>
 /// A label that can be created by <see cref="Assembler.CreateLabel"/>.
 /// </summary>
@@ -328,9 +565,9 @@ void nop(int sizeInBytes);
 /// <param name="result">Result if this method returns <see langword="true"/></param>
 /// <param name="options">Encoder options</param>
 /// <returns></returns>
-bool TryEncode(int bitness, InstructionBlock[] blocks, [NotNullWhen(false)] out string ? errorMessage, [NotNullWhen(true)] out BlockEncoderResult[] ? result, BlockEncoderOptions options = BlockEncoderOptions.None);
+//bool TryEncode(int bitness, InstructionBlock[] blocks, [NotNullWhen(false)] out string ? errorMessage, [NotNullWhen(true)] out BlockEncoderResult[] ? result, BlockEncoderOptions options = BlockEncoderOptions.None);
 
-bool Encode([NotNullWhen(false)] out string ? errorMessage, [NotNullWhen(true)] out BlockEncoderResult[] ? result);
+bool Encode(char** errorMessage, struct BlockEncoderResult** result);
 
 /// <summary>
 /// Assembles the instructions of this assembler with the specified options.
@@ -340,7 +577,7 @@ bool Encode([NotNullWhen(false)] out string ? errorMessage, [NotNullWhen(true)] 
 /// <param name="options">Encoding options.</param>
 /// <returns></returns>
 /// <exception cref="InvalidOperationException"></exception>
-struct AssemblerResult* Assemble(struct CodeWriter* writer, unsigned long rip, enum BlockEncoderOptions options);
+//struct AssemblerResult* Assemble(struct CodeWriter* writer, unsigned long rip, enum BlockEncoderOptions options);
 
 /// <summary>
 /// Tries to assemble the instructions of this assembler with the specified options.
@@ -351,7 +588,7 @@ struct AssemblerResult* Assemble(struct CodeWriter* writer, unsigned long rip, e
 /// <param name="assemblerResult">The assembler result if successful.</param>
 /// <param name="options">Encoding options.</param>
 /// <returns><c>true</c> if the encoding was successful; <c>false</c> otherwise.</returns>
-bool TryAssemble(struct CodeWriter* writer, unsigned long rip, char** errorMessage, struct AssemblerResult** assemblerResult, enum BlockEncoderOptions options); // = BlockEncoderOptions.None
+//bool TryAssemble(struct CodeWriter* writer, unsigned long rip, char** errorMessage, struct AssemblerResult** assemblerResult, enum BlockEncoderOptions options); // = BlockEncoderOptions.None
 
 /// <summary>
 /// Internal method used to throw an InvalidOperationException if it was not possible to encode an OpCode.

@@ -4,6 +4,7 @@
 #include "OpCodeInfo.h"
 #include "Instruction.h"
 #include "OpCodeInfoData.h"
+#include "Encoder.h"
 
 enum HandlerTypeConfig
 {
@@ -184,11 +185,11 @@ void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int o
 		{
 			return;
 		}
-		encoder.ImmSize = ImmSize.Size2_1;
+		encoder.ImmSize = ImmSize_Size2_1;
 		encoder.ImmediateHi = instruction.Immediate8_2nd;
 		break;
 	default:
-		var opImmKind = GetOpKind(instruction, operand);
+		enum OpCodeOperandKind opImmKind = GetOpKind(instruction, operand);
 		if (!Verify(encoder, operand, opKind, opImmKind))
 		{
 			return;
@@ -976,5 +977,13 @@ struct Instruction* Instruction_Create(enum Code code, enum Register _register);
 /// <param name="register1">op0: Register</param>
 /// <param name="register2">op1: Register</param>
 struct Instruction* Instruction_Create(enum Code code, enum Register register1, enum Register register2);
+
+/// <summary>
+/// Creates an instruction with 2 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register">op0: Register</param>
+/// <param name="memory">op1: Memory operand</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register register1, struct MemoryOperand* memory);
 
 #endif

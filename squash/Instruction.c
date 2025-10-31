@@ -808,7 +808,7 @@ bool IsBroadcast2(struct Instruction* i)
 	return (i->flags1 & (unsigned int)IF_Broadcast) != 0;
 }
 
-void IsBroadcast(struct Instruction* i, bool value)
+void SetIsBroadcast(struct Instruction* i, bool value)
 {
 	if (value)
 	{
