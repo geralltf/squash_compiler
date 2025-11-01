@@ -945,7 +945,7 @@ void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, s
 /// </summary>
 /// <param name="code">Code value</param>
 /// <param name="target">Target address</param>
-struct Instruction* CreateBranch(enum Code code, unsigned long target);
+struct Instruction* Instruction_CreateBranch(enum Code code, unsigned long target);
 
 /// <summary>
 /// Creates a new far branch instruction
@@ -953,7 +953,7 @@ struct Instruction* CreateBranch(enum Code code, unsigned long target);
 /// <param name="code">Code value</param>
 /// <param name="selector">Selector/segment value</param>
 /// <param name="offset">Offset</param>
-struct Instruction* CreateBranch(enum Code code, unsigned short selector, unsigned int offset);
+struct Instruction* Instruction_CreateBranch(enum Code code, unsigned short selector, unsigned int offset);
 
 /// <summary>
 /// Creates an instruction with 2 operands

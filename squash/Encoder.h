@@ -3,6 +3,8 @@
 
 // Ported to C language from the C# version of Iced found here: https://github.com/icedland/iced/blob/master/src/csharp/Intel/README.md
 
+#include <limits.h>
+
 #include "List.h"
 #include "Logger.h"
 #include "Instruction.h"

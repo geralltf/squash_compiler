@@ -804,7 +804,162 @@ struct Instruction* mov64(enum Register dst, struct AssemblerMemoryOperand* src,
 	return inst;
 }
 
+/// <summary>cmp instruction.<br/>
+/// <br/>
+/// <c>CMP r/m64, imm32</c><br/>
+/// <br/>
+/// <c>o64 81 /7 id</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c><br/>
+/// <br/>
+/// <c>CMP r/m64, imm8</c><br/>
+/// <br/>
+/// <c>o64 83 /7 ib</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c><br/>
+/// <br/>
+/// <c>CMP r/m32, imm32</c><br/>
+/// <br/>
+/// <c>o32 81 /7 id</c><br/>
+/// <br/>
+/// <c>386+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c><br/>
+/// <br/>
+/// <c>CMP r/m32, imm8</c><br/>
+/// <br/>
+/// <c>o32 83 /7 ib</c><br/>
+/// <br/>
+/// <c>386+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c><br/>
+/// <br/>
+/// <c>CMP r/m16, imm16</c><br/>
+/// <br/>
+/// <c>o16 81 /7 iw</c><br/>
+/// <br/>
+/// <c>8086+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c><br/>
+/// <br/>
+/// <c>CMP r/m16, imm8</c><br/>
+/// <br/>
+/// <c>o16 83 /7 ib</c><br/>
+/// <br/>
+/// <c>8086+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c><br/>
+/// <br/>
+/// <c>CMP r/m8, imm8</c><br/>
+/// <br/>
+/// <c>80 /7 ib</c><br/>
+/// <br/>
+/// <c>8086+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c></summary>
+struct Instruction* cmp(struct AssemblerMemoryOperand* dst, int imm, int Bitness)
+{
+	struct Instruction* inst;
+	enum Code code;
+	if (dst->Size == MOS_Qword) 
+	{
+		code = imm >= SCHAR_MIN && imm <= SCHAR_MAX ? Cmp_rm64_imm8 : Cmp_rm64_imm32;
+	}
+	else if (dst->Size == MOS_Dword) 
+	{
+		code = imm >= SCHAR_MIN && imm <= SCHAR_MAX ? Cmp_rm32_imm8 : Cmp_rm32_imm32;
+	}
+	else if (dst->Size == MOS_Word) 
+	{
+		code = imm >= SCHAR_MIN && imm <= SCHAR_MAX ? Cmp_rm16_imm8 : Cmp_rm16_imm16;
+	}
+	else if (dst->Size == MOS_Byte) 
+	{
+		code = Cmp_rm8_imm8;
+	}
+	else 
+	{
+		//throw NoOpCodeFoundFor(Mnemonic.Cmp, dst, imm);
+	}
+	//AddInstruction(Instruction.Create(code, dst.ToMemoryOperand(Bitness), imm));
+	inst = Instruction_Create(code, ToMemoryOperand(dst, Bitness));
+	return inst;
+}
 
+/// <summary>jne instruction.<br/>
+/// <br/>
+/// <c>JNE rel8</c><br/>
+/// <br/>
+/// <c>o64 75 cb</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c><br/>
+/// <br/>
+/// <c>JNE rel32</c><br/>
+/// <br/>
+/// <c>o64 0F 85 cd</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c><br/>
+/// <br/>
+/// <c>JNE rel8</c><br/>
+/// <br/>
+/// <c>o32 75 cb</c><br/>
+/// <br/>
+/// <c>386+</c><br/>
+/// <br/>
+/// <c>16/32-bit</c><br/>
+/// <br/>
+/// <c>JNE rel32</c><br/>
+/// <br/>
+/// <c>o32 0F 85 cd</c><br/>
+/// <br/>
+/// <c>386+</c><br/>
+/// <br/>
+/// <c>16/32-bit</c><br/>
+/// <br/>
+/// <c>JNE rel8</c><br/>
+/// <br/>
+/// <c>o16 75 cb</c><br/>
+/// <br/>
+/// <c>8086+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c><br/>
+/// <br/>
+/// <c>JNE rel16</c><br/>
+/// <br/>
+/// <c>o16 0F 85 cw</c><br/>
+/// <br/>
+/// <c>386+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c></summary>
+void jne(struct Label* dst, bool PreferShortBranch, int Bitness)
+{
+	struct Instruction* inst;
+	enum Code code;
+	if (PreferShortBranch)
+	{
+		if (Bitness == 64)
+		{
+			code = Jne_rel8_64;
+		}
+		else code = Bitness >= 32 ? Jne_rel8_32 : Jne_rel8_16;
+	}
+	else if (Bitness == 64) 
+	{
+		code = Jne_rel32_64;
+	}
+	else code = Bitness >= 32 ? Jne_rel32_32 : Jne_rel16;
+	inst = Instruction_CreateBranch(code, dst->id);
+	//AddInstruction(inst);
+	return inst;
+}
 
 void test_assembler()
 {
@@ -813,7 +968,7 @@ void test_assembler()
 	// The assembler supports all modes: 16-bit, 32-bit and 64-bit.
 	struct Assembler* c = (struct Assembler*)malloc(sizeof(struct Assembler));
 	assembler(c, Bitness);
-
+	
 	struct Label* label1 = CreateLabel(c);
 	struct Label* data1 = CreateLabel(c);
 
@@ -839,10 +994,12 @@ void test_assembler()
 	AddInstruction(c, inst);
 
 	// The assembler must know the memory size to pick the correct instruction
-	inst = cmp(__dword_ptr[rax + rcx * 8 + 0x10], -1, Bitness); // c.cmp(__dword_ptr[rax + rcx * 8 + 0x10], -1);
+	// (Base + Index * Scale + Displacement)
+	qword_operand2 = AssemblerMemoryOperand_new(MOS_Dword, Register_None, Register_RAX, Register_RCX, 8, 0x10, AF_None);
+	inst = cmp(qword_operand2, -1, Bitness); // c.cmp(__dword_ptr[rax + rcx * 8 + 0x10], -1);
 	AddInstruction(c, inst);
 
-	inst = jne(label1, c.PreferShortBranch, Bitness); // c.jne(label1); // Jump to Label1
+	inst = jne(label1, c->PreferShortBranch, Bitness); // c.jne(label1); // Jump to Label1
 	AddInstruction(c, inst);
 
 	inst = Instruction_Create(Inc_rm64, Register_RAX); // c.inc(rax);
@@ -851,22 +1008,22 @@ void test_assembler()
 	// Labels can be referenced by memory operands (64-bit only) and call/jmp/jcc/loopcc instructions
 	inst = Instruction_Create(Lea_r64_m, Register_RCX, ToMemoryOperand(ToMemoryOperandFromLabel(data1), Bitness)); // c.lea(rcx, __[data1]);
 	AddInstruction(c, inst);
-
+	
 	// The assembler has prefix properties that will be added to the following instruction
-	c.prefixFlags |= Iced.Intel.Assembler.PrefixFlags.Repe; // c.rep
+	c->prefixFlags |= PF_Repe; // c.rep
 	inst = Instruction.CreateStosd(Bitness); //c.rep.stosd();
 	AddInstruction(c, inst);
 
 	//c.xacquire.@lock.add(__qword_ptr[rax + rcx], 123); // f0f24883487b = xacquire lock add qword ptr [rax+rcx],7Bh
-	c.prefixFlags |= Assembler.PrefixFlags.Repne; // apply xacquire to flags
-	c.prefixFlags |= Assembler.PrefixFlags.Lock; // apply @lock
+	c->prefixFlags |= PF_Repne; // apply xacquire to flags
+	c->prefixFlags |= PF_Lock; // apply @lock
 	//c.add(__qword_ptr[rax + rcx], 123);
 	AssemblerMemoryOperand qword_operand = new AssemblerMemoryOperand(MemoryOperandSize.Qword, Register.None, rax, rcx, 1, 0, AssemblerOperandFlags.None);
 	AssemblerMemoryOperand operand = new AssemblerMemoryOperand(qword_operand.Size, qword_operand.Segment, qword_operand.Base, qword_operand.Index, qword_operand.Scale, qword_operand.Displacement, qword_operand.Flags);
 	c.add(operand, 123);
 
 	// The assembler defaults to VEX instructions. If you need EVEX instructions, set PreferVex=false
-	c.PreferVex = false;
+	c->PreferVex = false;
 	// or call `c.vex` or `c.evex` prefixes to override the default encoding.
 	// AVX-512 decorators are properties on the memory and register operands
 	c.vaddpd(zmm1.k3.z, zmm2, zmm3.rz_sae);
