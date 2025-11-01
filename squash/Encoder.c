@@ -1046,6 +1046,78 @@ struct Instruction* add(struct AssemblerMemoryOperand* dst, int imm, int Bitness
 	return inst;
 }
 
+/// <summary>vaddpd instruction.<br/>
+/// <br/>
+/// <c>VADDPD zmm1 {k1}{z}, zmm2, zmm3/m512/m64bcst{er}</c><br/>
+/// <br/>
+/// <c>EVEX.512.66.0F.W1 58 /r</c><br/>
+/// <br/>
+/// <c>AVX512F</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c></summary>
+struct Instruction* vaddpd(struct Assembler* assembler, 
+	enum Register zmm_dst, 
+	enum AssemblerOperandFlags dst_flags, 
+	enum Register zmm_src1, 
+	enum Register zmm_src2,
+	enum AssemblerOperandFlags src2_flags)
+{
+	struct Instruction* inst;
+	inst = Instruction_Create(EVEX_Vaddpd_zmm_k1z_zmm_zmmm512b64_er, zmm_dst, zmm_src1, zmm_src2);
+
+	AddInstruction(inst, dst_flags | src2_flags);
+
+	return inst;
+}
+
+/// <summary>vunpcklps instruction.<br/>
+/// <br/>
+/// <c>VUNPCKLPS xmm1, xmm2, xmm3/m128</c><br/>
+/// <br/>
+/// <c>VEX.128.0F.WIG 14 /r</c><br/>
+/// <br/>
+/// <c>AVX</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c><br/>
+/// <br/>
+/// <c>VUNPCKLPS xmm1 {k1}{z}, xmm2, xmm3/m128/m32bcst</c><br/>
+/// <br/>
+/// <c>EVEX.128.0F.W0 14 /r</c><br/>
+/// <br/>
+/// <c>AVX512VL and AVX512F</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c></summary>
+struct Instruction* vunpcklps(
+	struct Assembler* assembler, 
+	enum Register xmm_dst, 
+	enum AssemblerOperandFlags xmm_dst_flags,
+	enum Register xmm_src1, 
+	struct AssemblerMemoryOperand* src2,
+	enum AssemblerOperandFlags src2_flags,
+	int Bitness)
+{
+	struct Instruction* inst;
+	enum Code code;
+	
+	if (IsBroadcast(src2))
+	{
+		code = EVEX_Vunpcklps_xmm_k1z_xmm_xmmm128b32;
+	}
+	else
+	{
+		if (InstructionPreferVex(assembler))
+		{
+			code = VEX_Vunpcklps_xmm_xmm_xmmm128;
+		}
+		else
+		{
+			code = EVEX_Vunpcklps_xmm_k1z_xmm_xmmm128b32;
+		}
+	}
+	inst = Instruction_Create(code, xmm_dst, xmm_src1, ToMemoryOperand(src2, Bitness));
+	AddInstruction(inst, xmm_dst_flags | src2_flags);
+}
+
 void test_assembler()
 {
 	const unsigned long RIP = 0x1234567810000000;
@@ -1096,7 +1168,7 @@ void test_assembler()
 	
 	// The assembler has prefix properties that will be added to the following instruction
 	c->prefixFlags |= PF_Repe; // c.rep
-	inst = Instruction.CreateStosd(Bitness); //c.rep.stosd();
+	inst = Instruction_CreateStosd(Bitness, RPK_None); //c.rep.stosd();
 	AddInstruction(c, inst);
 
 	//c.xacquire.@lock.add(__qword_ptr[rax + rcx], 123); // f0f24883487b = xacquire lock add qword ptr [rax+rcx],7Bh
@@ -1113,22 +1185,40 @@ void test_assembler()
 	c->PreferVex = false;
 	// or call `c.vex` or `c.evex` prefixes to override the default encoding.
 	// AVX-512 decorators are properties on the memory and register operands
-	c.vaddpd(zmm1.k3.z, zmm2, zmm3.rz_sae);
+	//vaddpd(c, zmm1.k3.z, zmm2, zmm3.rz_sae);
+
+	enum AssemblerOperandFlags dst_flags_zmm1_k3_z = AF_Zeroing;
+	enum AssemblerOperandFlags src2_flags_zmm3_rz_sae = AF_SuppressAllExceptions;
+
+	dst_flags_zmm1_k3_z = (dst_flags_zmm1_k3_z & ~AF_RegisterMask) | AF_K3;
+	src2_flags_zmm3_rz_sae = (src2_flags_zmm3_rz_sae & ~AF_RoundingControlMask) | AF_RoundTowardZero;
+
+	vaddpd(c, Register_ZMM1, dst_flags_zmm1_k3_z, Register_ZMM2, Register_ZMM3, src2_flags_zmm3_rz_sae);
+
+
 
 	// To broadcast memory, use the __dword_bcst/__qword_bcst memory types
 	//c.vunpcklps(xmm2.k5.z, xmm6, __dword_bcst[rax]);
-	AssemblerMemoryOperand dword_operand = new AssemblerMemoryOperand(MemoryOperandSize.Dword, Register.None, rax, Register.None, 1, 0, AssemblerOperandFlags.Broadcast);
-	c.vunpcklps(xmm2.k5.z, xmm6, dword_operand);
+
+	struct AssemblerMemoryOperand* dword_bcst_operand;
+	dword_bcst_operand = AssemblerMemoryOperand_new(MOS_Dword, Register_None, Register_RAX, Register_None, 1, 0, AF_Broadcast);
+	enum AssemblerOperandFlags dst_flags_xmm2_k5_z = AF_Zeroing;
+	enum AssemblerOperandFlags src2_flags = AF_Broadcast;
+
+	dst_flags_xmm2_k5_z = (dst_flags_xmm2_k5_z & ~AF_RegisterMask) | AF_K5;
+
+	//c.vunpcklps(xmm2.k5.z, xmm6, dword_operand);
+	vunpcklps(assembler, Register_XMM2, dst_flags_xmm2_k5_z, Register_XMM6, dword_bcst_operand, src2_flags, Bitness);
 
 	// You can create anonymous labels, just like in eg. masm, @@, @F and @B
-	c.AnonymousLabel(); // same as @@: in masm
-	c.inc(rax);
-	c.je(c.@B); // reference the previous anonymous label
-	c.inc(rcx);
-	c.je(c.@F); // reference the next anonymous label
-	c.nop();
-	c.AnonymousLabel();
-	c.nop();
+	AnonymousLabel(c); // same as @@: in masm
+	inc(rax);
+	je(c.@B); // reference the previous anonymous label
+	inc(rcx);
+	je(c.@F); // reference the next anonymous label
+	nop();
+	AnonymousLabel();
+	nop();
 
 	// Emit label1:
 	c.Label(&label1);

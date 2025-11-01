@@ -536,3 +536,95 @@ struct Instruction* Instruction_Create(enum Code code, enum Register register1, 
 	//Debug.Assert(instruction.OpCount == 2);
 	return instruction;
 }
+
+struct Instruction* CreateString_ESRDI_Reg(enum Code code, int addressSize, enum Register register1, enum RepPrefixKind repPrefix)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, code);
+
+	if (repPrefix == RPK_Repe)
+	{
+		InternalSetHasRepePrefix(instruction);
+	}
+	else if (repPrefix == RPK_Repne)
+	{
+		InternalSetHasRepnePrefix(instruction);
+	}
+	else
+	{
+		//Debug.Assert(repPrefix == RepPrefixKind.None);
+	}
+		
+	if (addressSize == 64)
+	{
+		SetOp0Kind(instruction, OK_MemoryESRDI);
+	}
+	else if (addressSize == 32)
+	{
+		SetOp0Kind(instruction, OK_MemoryESEDI);
+	}
+	else if (addressSize == 16)
+	{
+		SetOp0Kind(instruction, OK_MemoryESDI);
+	}
+	else
+	{
+		//throw new ArgumentOutOfRangeException(nameof(addressSize));
+	}
+		
+
+	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
+	//instruction.Op1Kind = OpKind.Register;
+	SetOp1Kind(instruction, OK_Register);
+	SetOp1Register(instruction, register1);
+
+	//Debug.Assert(instruction.OpCount == 2);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>STOSD</c> instruction
+/// </summary>
+/// <param name="addressSize">16, 32, or 64</param>
+/// <param name="repPrefix">Rep prefix or <see cref="RepPrefixKind.None"/></param>
+struct Instruction* Instruction_CreateStosd(int addressSize, enum RepPrefixKind repPrefix)
+{
+	return CreateString_ESRDI_Reg(Stosd_m32_EAX, addressSize, Register_EAX, repPrefix);
+}
+
+/// <summary>
+/// Creates an instruction with 3 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register1">op0: Register</param>
+/// <param name="register2">op1: Register</param>
+/// <param name="memory">op2: Memory operand</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register register1, enum Register register2, struct MemoryOperand* memory)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, code);
+
+	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
+	//instruction.Op0Kind = OpKind.Register;
+	SetOp0Kind(instruction, OK_Register);
+	SetOp0Register(instruction, register1);
+
+	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
+	//instruction.Op1Kind = OpKind.Register;
+	SetOp1Kind(instruction, OK_Register);
+	SetOp1Register(instruction, register2);
+
+	SetOp2Kind(instruction, OK_Memory);
+	InitMemoryOperand(instruction, memory);
+
+	//Debug.Assert(instruction.OpCount == 3);
+	return instruction;
+}

@@ -986,4 +986,22 @@ struct Instruction* Instruction_Create(enum Code code, enum Register register1, 
 /// <param name="memory">op1: Memory operand</param>
 struct Instruction* Instruction_Create(enum Code code, enum Register register1, struct MemoryOperand* memory);
 
+struct Instruction* CreateString_ESRDI_Reg(enum Code code, int addressSize, enum Register register, enum RepPrefixKind repPrefix);
+
+/// <summary>
+/// Creates a <c>STOSD</c> instruction
+/// </summary>
+/// <param name="addressSize">16, 32, or 64</param>
+/// <param name="repPrefix">Rep prefix or <see cref="RepPrefixKind.None"/></param>
+struct Instruction* Instruction_CreateStosd(int addressSize, enum RepPrefixKind repPrefix);
+
+/// <summary>
+/// Creates an instruction with 3 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register1">op0: Register</param>
+/// <param name="register2">op1: Register</param>
+/// <param name="memory">op2: Memory operand</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register register1, enum Register register2, struct MemoryOperand* memory);
+
 #endif

@@ -1443,6 +1443,8 @@ void SetIsBroadcast(struct Instruction* i, bool value);
 void SetCode(struct Instruction* i, enum Code value);
 void SetOp0Kind(struct Instruction* i, enum OpKind value);
 void SetOp1Kind(struct Instruction* i, enum OpKind value);
+void SetOp2Kind(struct Instruction* i, enum OpKind value);
+void SetOp3Kind(struct Instruction* i, enum OpKind value);
 void SetFarBranchSelector(struct Instruction* i, unsigned short value);
 void SetFarBranch32(struct Instruction* i, unsigned int value);
 void SetNearBranch64(struct Instruction* i, unsigned long value);
@@ -1459,6 +1461,9 @@ void SetInternalMemoryIndex(struct Instruction* i, enum Register value);
 void SetMemoryIndexScale(struct Instruction* i, int value);
 void SetMemoryDisplSize(struct Instruction* i, int value);
 void SetMemoryDisplacement64(struct Instruction* i, unsigned long value);
+
+void InternalSetHasRepePrefix(struct Instruction* i);
+void InternalSetHasRepnePrefix(struct Instruction* i);
 
 int GetDeclareDataCount(struct Instruction* i);
 unsigned char GetDeclareByteValue(struct Instruction* i, int index);
