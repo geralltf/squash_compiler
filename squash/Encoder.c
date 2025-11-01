@@ -939,7 +939,7 @@ struct Instruction* cmp(struct AssemblerMemoryOperand* dst, int imm, int Bitness
 /// <c>386+</c><br/>
 /// <br/>
 /// <c>16/32/64-bit</c></summary>
-void jne(struct Label* dst, bool PreferShortBranch, int Bitness)
+struct Instruction* jne(struct Label* dst, bool PreferShortBranch, int Bitness)
 {
 	struct Instruction* inst;
 	enum Code code;
@@ -958,6 +958,91 @@ void jne(struct Label* dst, bool PreferShortBranch, int Bitness)
 	else code = Bitness >= 32 ? Jne_rel32_32 : Jne_rel16;
 	inst = Instruction_CreateBranch(code, dst->id);
 	//AddInstruction(inst);
+	return inst;
+}
+
+/// <summary>add instruction.<br/>
+/// <br/>
+/// <c>ADD r/m64, imm32</c><br/>
+/// <br/>
+/// <c>o64 81 /0 id</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c><br/>
+/// <br/>
+/// <c>ADD r/m64, imm8</c><br/>
+/// <br/>
+/// <c>o64 83 /0 ib</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c><br/>
+/// <br/>
+/// <c>ADD r/m32, imm32</c><br/>
+/// <br/>
+/// <c>o32 81 /0 id</c><br/>
+/// <br/>
+/// <c>386+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c><br/>
+/// <br/>
+/// <c>ADD r/m32, imm8</c><br/>
+/// <br/>
+/// <c>o32 83 /0 ib</c><br/>
+/// <br/>
+/// <c>386+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c><br/>
+/// <br/>
+/// <c>ADD r/m16, imm16</c><br/>
+/// <br/>
+/// <c>o16 81 /0 iw</c><br/>
+/// <br/>
+/// <c>8086+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c><br/>
+/// <br/>
+/// <c>ADD r/m16, imm8</c><br/>
+/// <br/>
+/// <c>o16 83 /0 ib</c><br/>
+/// <br/>
+/// <c>8086+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c><br/>
+/// <br/>
+/// <c>ADD r/m8, imm8</c><br/>
+/// <br/>
+/// <c>80 /0 ib</c><br/>
+/// <br/>
+/// <c>8086+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c></summary>
+struct Instruction* add(struct AssemblerMemoryOperand* dst, int imm, int Bitness)
+{
+	struct Instruction* inst;
+	enum Code code;
+	if (dst->Size == MOS_Qword) 
+	{
+		code = imm >= SCHAR_MIN && imm <= SCHAR_MAX ? Add_rm64_imm8 : Add_rm64_imm32;
+	}
+	else if (dst->Size == MOS_Dword) 
+	{
+		code = imm >= SCHAR_MIN && imm <= SCHAR_MAX ? Add_rm32_imm8 : Add_rm32_imm32;
+	}
+	else if (dst->Size == MOS_Word) 
+	{
+		code = imm >= SCHAR_MIN && imm <= SCHAR_MAX ? Add_rm16_imm8 : Add_rm16_imm16;
+	}
+	else if (dst->Size == MOS_Byte) 
+	{
+		code = Add_rm8_imm8;
+	}
+	else {
+		//throw NoOpCodeFoundFor(Mnemonic.Add, dst, imm);
+	}
+	inst = Instruction_Create(code, ToMemoryOperand(dst, Bitness), imm);
+	//AddInstruction();
 	return inst;
 }
 
@@ -1018,9 +1103,11 @@ void test_assembler()
 	c->prefixFlags |= PF_Repne; // apply xacquire to flags
 	c->prefixFlags |= PF_Lock; // apply @lock
 	//c.add(__qword_ptr[rax + rcx], 123);
-	AssemblerMemoryOperand qword_operand = new AssemblerMemoryOperand(MemoryOperandSize.Qword, Register.None, rax, rcx, 1, 0, AssemblerOperandFlags.None);
-	AssemblerMemoryOperand operand = new AssemblerMemoryOperand(qword_operand.Size, qword_operand.Segment, qword_operand.Base, qword_operand.Index, qword_operand.Scale, qword_operand.Displacement, qword_operand.Flags);
-	c.add(operand, 123);
+
+	struct AssemblerMemoryOperand* qword_operand;
+	qword_operand = AssemblerMemoryOperand_new(MOS_Qword, Register_None, Register_RAX, Register_RCX, 1, 0, AF_None);
+	inst = add(qword_operand, 123, Bitness);
+	AddInstruction(c, inst);
 
 	// The assembler defaults to VEX instructions. If you need EVEX instructions, set PreferVex=false
 	c->PreferVex = false;
