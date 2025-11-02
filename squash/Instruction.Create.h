@@ -941,6 +941,13 @@ void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, s
 }
 
 /// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+struct Instruction* Instruction_CreateDeclareByte(unsigned char b0, unsigned char b1);
+
+/// <summary>
 /// Creates a new near/short branch instruction
 /// </summary>
 /// <param name="code">Code value</param>

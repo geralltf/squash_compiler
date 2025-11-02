@@ -1465,6 +1465,9 @@ void SetMemoryDisplacement64(struct Instruction* i, unsigned long value);
 void InternalSetHasRepePrefix(struct Instruction* i);
 void InternalSetHasRepnePrefix(struct Instruction* i);
 
+void SetInternalDeclareDataCount(struct Instruction* i, unsigned int value);
+void SetDeclareByteValue(struct Instruction* i, int index, unsigned char value);
+
 int GetDeclareDataCount(struct Instruction* i);
 unsigned char GetDeclareByteValue(struct Instruction* i, int index);
 enum Register GetMemoryBase(struct Instruction* i);

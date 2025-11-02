@@ -389,6 +389,29 @@ void InitMemoryOperand(struct Instruction* instruction, struct MemoryOperand* me
 }
 
 /// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+struct Instruction* Instruction_CreateDeclareByte(unsigned char b0, unsigned char b1)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 2);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
 /// Creates a new near/short branch instruction
 /// </summary>
 /// <param name="code">Code value</param>
