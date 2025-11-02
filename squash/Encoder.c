@@ -1118,6 +1118,208 @@ struct Instruction* vunpcklps(
 	AddInstruction(inst, xmm_dst_flags | src2_flags);
 }
 
+/// <summary>inc instruction.<br/>
+/// <br/>
+/// <c>INC r/m64</c><br/>
+/// <br/>
+/// <c>o64 FF /0</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c></summary>
+struct Instruction* inc(enum Register dst)
+{
+	return Instruction_Create(Inc_rm64, dst);
+}
+
+
+/// <summary>je instruction.<br/>
+/// <br/>
+/// <c>JE rel8</c><br/>
+/// <br/>
+/// <c>o64 74 cb</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c><br/>
+/// <br/>
+/// <c>JE rel32</c><br/>
+/// <br/>
+/// <c>o64 0F 84 cd</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c><br/>
+/// <br/>
+/// <c>JE rel8</c><br/>
+/// <br/>
+/// <c>o32 74 cb</c><br/>
+/// <br/>
+/// <c>386+</c><br/>
+/// <br/>
+/// <c>16/32-bit</c><br/>
+/// <br/>
+/// <c>JE rel32</c><br/>
+/// <br/>
+/// <c>o32 0F 84 cd</c><br/>
+/// <br/>
+/// <c>386+</c><br/>
+/// <br/>
+/// <c>16/32-bit</c><br/>
+/// <br/>
+/// <c>JE rel8</c><br/>
+/// <br/>
+/// <c>o16 74 cb</c><br/>
+/// <br/>
+/// <c>8086+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c><br/>
+/// <br/>
+/// <c>JE rel16</c><br/>
+/// <br/>
+/// <c>o16 0F 84 cw</c><br/>
+/// <br/>
+/// <c>386+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c></summary>
+void je(struct Assembler* assembler, struct Label* dst)
+{
+	enum Code code;
+	if (assembler->PreferShortBranch) 
+	{
+		if (assembler->Bitness == 64) 
+		{
+			code = Je_rel8_64;
+		}
+		else
+		{
+			if (assembler->Bitness >= 32)
+			{
+				code = Je_rel8_32;
+			}
+			else
+			{
+				code = Je_rel8_16;
+			}
+		}
+	}
+	else if (assembler->Bitness == 64) 
+	{
+		code = Je_rel32_64;
+	}
+	else 
+	{
+		if (assembler->Bitness >= 32)
+		{
+			code = Je_rel32_32;
+		}
+		else 
+		{
+			code = Je_rel16;
+		}
+	}
+	AddInstruction(assembler, Instruction_CreateBranch(code, dst->id));
+}
+
+/// <summary>nop instruction.<br/>
+/// <br/>
+/// <c>NOP</c><br/>
+/// <br/>
+/// <c>o32 90</c><br/>
+/// <br/>
+/// <c>8086+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c><br/>
+/// <br/>
+/// <c>NOP</c><br/>
+/// <br/>
+/// <c>o16 90</c><br/>
+/// <br/>
+/// <c>8086+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c></summary>
+void nop2(struct Assembler* assembler)
+{
+	enum Code code;
+	if (assembler->Bitness >= 32)
+	{
+		code = Nopd;
+	}
+	else
+	{
+		code = Nopw;
+	}
+	AddInstruction(assembler, Instruction_Create(code));
+}
+
+/// <summary>zero_bytes instruction.<br/>
+/// <br/>
+/// A zero-sized instruction. Can be used as a label.</summary>
+void zero_bytes(struct Assembler* assembler)
+{
+	AddInstruction(assembler, Instruction_Create(Zero_bytes));
+}
+
+/// <summary>pop instruction.<br/>
+/// <br/>
+/// <c>POP r64</c><br/>
+/// <br/>
+/// <c>o64 58+ro</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c></summary>
+void pop(struct Assembler* assembler, enum Register dst)
+{
+	AddInstruction(assembler, Instruction_Create(Pop_r64, dst));
+}
+
+/// <summary>ret instruction.<br/>
+/// <br/>
+/// <c>RET</c><br/>
+/// <br/>
+/// <c>o64 C3</c><br/>
+/// <br/>
+/// <c>X64</c><br/>
+/// <br/>
+/// <c>64-bit</c><br/>
+/// <br/>
+/// <c>RET</c><br/>
+/// <br/>
+/// <c>o32 C3</c><br/>
+/// <br/>
+/// <c>386+</c><br/>
+/// <br/>
+/// <c>16/32-bit</c><br/>
+/// <br/>
+/// <c>RET</c><br/>
+/// <br/>
+/// <c>o16 C3</c><br/>
+/// <br/>
+/// <c>8086+</c><br/>
+/// <br/>
+/// <c>16/32/64-bit</c></summary>
+void ret(struct Assembler* assembler)
+{
+	enum Code code;
+	if (assembler->Bitness == 64) 
+	{
+		code = Retnq;
+	}
+	else
+	{
+		if (assembler->Bitness >= 32)
+		{
+			code = Retnd;
+		}
+		else
+		{
+			code = Retnw;
+		}
+	}
+	AddInstruction(assembler, Instruction_Create(code));
+}
+
 void test_assembler()
 {
 	const unsigned long RIP = 0x1234567810000000;
@@ -1211,23 +1413,30 @@ void test_assembler()
 	vunpcklps(assembler, Register_XMM2, dst_flags_xmm2_k5_z, Register_XMM6, dword_bcst_operand, src2_flags, Bitness);
 
 	// You can create anonymous labels, just like in eg. masm, @@, @F and @B
-	AnonymousLabel(c); // same as @@: in masm
-	inc(rax);
-	je(c.@B); // reference the previous anonymous label
-	inc(rcx);
-	je(c.@F); // reference the next anonymous label
-	nop();
-	AnonymousLabel();
-	nop();
+	anonymous_label(c); // same as @@: in masm
+	
+	inst = inc(Register_RAX);
+	AddInstruction(assembler, inst);
+
+	je(c, B(c)); // reference the previous anonymous label
+	
+	inst = inc(Register_RCX);
+	AddInstruction(assembler, inst);
+
+	je(c, F(c)); // reference the next anonymous label
+	
+	nop2(c);
+	anonymous_label(c);
+	nop2(c);
 
 	// Emit label1:
-	c.Label(&label1);
+	label(c, &label1);
 	// If needed, a zero-bytes instruction can be used as a label but this is optional
-	c.zero_bytes();
-	c.pop(Register_R15);
-	c.ret();
-	c.Label(&data1);
-	c.db(0xF3, 0x90); // pause
+	zero_bytes(c);
+	pop(c, Register_R15);
+	ret(c);
+	label(c, &data1);
+	db(c, 0xF3, 0x90); // pause
 
 	Assemble(c, new StreamCodeWriter(stream), RIP);
 }
