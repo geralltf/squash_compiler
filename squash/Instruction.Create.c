@@ -392,6 +392,26 @@ void InitMemoryOperand(struct Instruction* instruction, struct MemoryOperand* me
 /// Creates a <c>db</c>/<c>.byte</c> asm directive
 /// </summary>
 /// <param name="b0">Byte 0</param>
+struct Instruction* Instruction_CreateDeclareByte(unsigned char b0)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 1);
+	SetDeclareByteValue(instruction, 0, b0);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
 /// <param name="b1">Byte 1</param>
 struct Instruction* Instruction_CreateDeclareByte(unsigned char b0, unsigned char b1)
 {
@@ -406,6 +426,30 @@ struct Instruction* Instruction_CreateDeclareByte(unsigned char b0, unsigned cha
 
 	SetDeclareByteValue(instruction, 0, b0);
 	SetDeclareByteValue(instruction, 1, b1);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+struct Instruction* Instruction_CreateDeclareByte(unsigned char b0, unsigned char b1, unsigned char b2)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 3);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
