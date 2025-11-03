@@ -416,10 +416,101 @@ void db(struct Assembler* assembler, unsigned char* array, int index, int length
 }
 
 /// <summary>Creates a <c>db</c> asm directive with the type <c>byte</c>.</summary>
+void db_imm1(struct Assembler* assembler, unsigned char imm0)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>byte</c>.</summary>
 void db_imm2(struct Assembler* assembler, unsigned char imm0, unsigned char imm1)
 {
 	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1));
 }
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>byte</c>.</summary>
+void db_imm3(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>byte</c>.</summary>
+void db_imm4(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>unsigned char</c>.</summary>
+void db_imm5(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3, unsigned char imm4)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3, imm4));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>unsigned char</c>.</summary>
+void db_imm6(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3, unsigned char imm4, unsigned char imm5)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3, imm4, imm5));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>unsigned char</c>.</summary>
+void db_imm7(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3, unsigned char imm4, unsigned char imm5, unsigned char imm6)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3, imm4, imm5, imm6));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>unsigned char</c>.</summary>
+void db_imm8(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3, unsigned char imm4, unsigned char imm5, unsigned char imm6, unsigned char imm7)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3, imm4, imm5, imm6, imm7));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>unsigned char</c>.</summary>
+void db_imm9(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3, unsigned char imm4, unsigned char imm5, unsigned char imm6, unsigned char imm7, unsigned char imm8)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3, imm4, imm5, imm6, imm7, imm8));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>unsigned char</c>.</summary>
+void db_imm10(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3, unsigned char imm4, unsigned char imm5, unsigned char imm6, unsigned char imm7, unsigned char imm8, unsigned char imm9)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3, imm4, imm5, imm6, imm7, imm8, imm9));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>unsigned char</c>.</summary>
+void db_imm11(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3, unsigned char imm4, unsigned char imm5, unsigned char imm6, unsigned char imm7, unsigned char imm8, unsigned char imm9, unsigned char imm10)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3, imm4, imm5, imm6, imm7, imm8, imm9, imm10));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>unsigned char</c>.</summary>
+void db_imm12(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3, unsigned char imm4, unsigned char imm5, unsigned char imm6, unsigned char imm7, unsigned char imm8, unsigned char imm9, unsigned char imm10, unsigned char imm11)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3, imm4, imm5, imm6, imm7, imm8, imm9, imm10, imm11));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>unsigned char</c>.</summary>
+void db_imm13(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3, unsigned char imm4, unsigned char imm5, unsigned char imm6, unsigned char imm7, unsigned char imm8, unsigned char imm9, unsigned char imm10, unsigned char imm11, unsigned char imm12)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3, imm4, imm5, imm6, imm7, imm8, imm9, imm10, imm11, imm12));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>unsigned char</c>.</summary>
+void db_imm14(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3, unsigned char imm4, unsigned char imm5, unsigned char imm6, unsigned char imm7, unsigned char imm8, unsigned char imm9, unsigned char imm10, unsigned char imm11, unsigned char imm12, unsigned char imm13)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3, imm4, imm5, imm6, imm7, imm8, imm9, imm10, imm11, imm12, imm13));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>unsigned char</c>.</summary>
+void db_imm15(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3, unsigned char imm4, unsigned char imm5, unsigned char imm6, unsigned char imm7, unsigned char imm8, unsigned char imm9, unsigned char imm10, unsigned char imm11, unsigned char imm12, unsigned char imm13, unsigned char imm14)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3, imm4, imm5, imm6, imm7, imm8, imm9, imm10, imm11, imm12, imm13, imm14));
+}
+
+/// <summary>Creates a <c>db</c> asm directive with the type <c>unsigned char</c>.</summary>
+void db_imm16(struct Assembler* assembler, unsigned char imm0, unsigned char imm1, unsigned char imm2, unsigned char imm3, unsigned char imm4, unsigned char imm5, unsigned char imm6, unsigned char imm7, unsigned char imm8, unsigned char imm9, unsigned char imm10, unsigned char imm11, unsigned char imm12, unsigned char imm13, unsigned char imm14, unsigned char imm15)
+{
+	AddInstruction(assembler, Instruction_CreateDeclareByte(imm0, imm1, imm2, imm3, imm4, imm5, imm6, imm7, imm8, imm9, imm10, imm11, imm12, imm13, imm14, imm15));
+}
+
 
 /// <summary>call selector:offset instruction.</summary>
 void call(struct Assembler* assembler, unsigned short selector, unsigned int offset)
@@ -466,7 +557,7 @@ void AppendNop(struct Assembler* assembler, int amount)
 		db(assembler, 0x90); // NOP
 		break;
 	case 2:
-		db(assembler, 0x66, 0x90); // 66 NOP
+		db_imm2(assembler, 0x66, 0x90); // 66 NOP
 		break;
 	case 3:
 		db(assembler, 0x0F, 0x1F, 0x00); // NOP dword ptr [eax] or NOP word ptr [bx+si]
