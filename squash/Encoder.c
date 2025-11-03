@@ -406,12 +406,12 @@ void db(struct Assembler* assembler, unsigned char* array, int index, int length
 	int currentPosition = index;
 	for (int i = 0; i < cycles; i++) 
 	{
-		AddInstruction(Instruction_CreateDeclareByte(array, currentPosition, maxLength));
+		AddInstruction(assembler, Instruction_CreateDeclareByte(array, currentPosition, maxLength));
 		currentPosition += maxLength;
 	}
 	if (rest > 0)
 	{
-		AddInstruction(Instruction_CreateDeclareByte(array, currentPosition, rest));
+		AddInstruction(assembler, Instruction_CreateDeclareByte(array, currentPosition, rest));
 	}
 }
 
