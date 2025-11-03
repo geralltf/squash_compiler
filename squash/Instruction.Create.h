@@ -993,7 +993,7 @@ struct Instruction* Instruction_Create(enum Code code, enum Register register1, 
 /// <param name="memory">op1: Memory operand</param>
 struct Instruction* Instruction_Create(enum Code code, enum Register register1, struct MemoryOperand* memory);
 
-struct Instruction* CreateString_ESRDI_Reg(enum Code code, int addressSize, enum Register register, enum RepPrefixKind repPrefix);
+struct Instruction* CreateString_ESRDI_Reg(enum Code code, int addressSize, enum Register register1, enum RepPrefixKind repPrefix);
 
 /// <summary>
 /// Creates a <c>STOSD</c> instruction
