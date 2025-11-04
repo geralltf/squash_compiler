@@ -392,7 +392,7 @@ void InitMemoryOperand(struct Instruction* instruction, struct MemoryOperand* me
 /// Creates a <c>db</c>/<c>.byte</c> asm directive
 /// </summary>
 /// <param name="b0">Byte 0</param>
-struct Instruction* Instruction_CreateDeclareByte(unsigned char b0)
+struct Instruction* Instruction_CreateDeclareByte_imm1(unsigned char b0)
 {
 	struct Instruction* instruction;
 
@@ -413,7 +413,7 @@ struct Instruction* Instruction_CreateDeclareByte(unsigned char b0)
 /// </summary>
 /// <param name="b0">Byte 0</param>
 /// <param name="b1">Byte 1</param>
-struct Instruction* Instruction_CreateDeclareByte(unsigned char b0, unsigned char b1)
+struct Instruction* Instruction_CreateDeclareByte_imm2(unsigned char b0, unsigned char b1)
 {
 	struct Instruction* instruction;
 
@@ -436,7 +436,8 @@ struct Instruction* Instruction_CreateDeclareByte(unsigned char b0, unsigned cha
 /// </summary>
 /// <param name="b0">Byte 0</param>
 /// <param name="b1">Byte 1</param>
-struct Instruction* Instruction_CreateDeclareByte(unsigned char b0, unsigned char b1, unsigned char b2)
+/// <param name="b2">Byte 2</param>
+struct Instruction* Instruction_CreateDeclareByte_imm3(unsigned char b0, unsigned char b1, unsigned char b2)
 {
 	struct Instruction* instruction;
 
@@ -450,6 +451,512 @@ struct Instruction* Instruction_CreateDeclareByte(unsigned char b0, unsigned cha
 	SetDeclareByteValue(instruction, 0, b0);
 	SetDeclareByteValue(instruction, 1, b1);
 	SetDeclareByteValue(instruction, 2, b2);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+struct Instruction* Instruction_CreateDeclareByte_imm4(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 4);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+struct Instruction* Instruction_CreateDeclareByte_imm5(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 5);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+	SetDeclareByteValue(instruction, 4, b4);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+struct Instruction* Instruction_CreateDeclareByte_imm6(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 6);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+	SetDeclareByteValue(instruction, 4, b4);
+	SetDeclareByteValue(instruction, 5, b5);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+struct Instruction* Instruction_CreateDeclareByte_imm7(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 7);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+	SetDeclareByteValue(instruction, 4, b4);
+	SetDeclareByteValue(instruction, 5, b5);
+	SetDeclareByteValue(instruction, 6, b6);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+struct Instruction* Instruction_CreateDeclareByte_imm8(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 8);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+	SetDeclareByteValue(instruction, 4, b4);
+	SetDeclareByteValue(instruction, 5, b5);
+	SetDeclareByteValue(instruction, 6, b6);
+	SetDeclareByteValue(instruction, 7, b7);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+struct Instruction* Instruction_CreateDeclareByte_imm9(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 9);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+	SetDeclareByteValue(instruction, 4, b4);
+	SetDeclareByteValue(instruction, 5, b5);
+	SetDeclareByteValue(instruction, 6, b6);
+	SetDeclareByteValue(instruction, 7, b7);
+	SetDeclareByteValue(instruction, 8, b8);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+struct Instruction* Instruction_CreateDeclareByte_imm10(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 10);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+	SetDeclareByteValue(instruction, 4, b4);
+	SetDeclareByteValue(instruction, 5, b5);
+	SetDeclareByteValue(instruction, 6, b6);
+	SetDeclareByteValue(instruction, 7, b7);
+	SetDeclareByteValue(instruction, 8, b8);
+	SetDeclareByteValue(instruction, 9, b9);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+struct Instruction* Instruction_CreateDeclareByte_imm11(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 11);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+	SetDeclareByteValue(instruction, 4, b4);
+	SetDeclareByteValue(instruction, 5, b5);
+	SetDeclareByteValue(instruction, 6, b6);
+	SetDeclareByteValue(instruction, 7, b7);
+	SetDeclareByteValue(instruction, 8, b8);
+	SetDeclareByteValue(instruction, 9, b9);
+	SetDeclareByteValue(instruction, 10, b10);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+struct Instruction* Instruction_CreateDeclareByte_imm12(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 12);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+	SetDeclareByteValue(instruction, 4, b4);
+	SetDeclareByteValue(instruction, 5, b5);
+	SetDeclareByteValue(instruction, 6, b6);
+	SetDeclareByteValue(instruction, 7, b7);
+	SetDeclareByteValue(instruction, 8, b8);
+	SetDeclareByteValue(instruction, 9, b9);
+	SetDeclareByteValue(instruction, 10, b10);
+	SetDeclareByteValue(instruction, 11, b11);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+/// <param name="b12">Byte 12</param>
+struct Instruction* Instruction_CreateDeclareByte_imm13(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11, unsigned char b12)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 13);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+	SetDeclareByteValue(instruction, 4, b4);
+	SetDeclareByteValue(instruction, 5, b5);
+	SetDeclareByteValue(instruction, 6, b6);
+	SetDeclareByteValue(instruction, 7, b7);
+	SetDeclareByteValue(instruction, 8, b8);
+	SetDeclareByteValue(instruction, 9, b9);
+	SetDeclareByteValue(instruction, 10, b10);
+	SetDeclareByteValue(instruction, 11, b11);
+	SetDeclareByteValue(instruction, 12, b12);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+/// <param name="b12">Byte 12</param>
+/// <param name="b13">Byte 13</param>
+struct Instruction* Instruction_CreateDeclareByte_imm14(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11, unsigned char b12, unsigned char b13)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 14);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+	SetDeclareByteValue(instruction, 4, b4);
+	SetDeclareByteValue(instruction, 5, b5);
+	SetDeclareByteValue(instruction, 6, b6);
+	SetDeclareByteValue(instruction, 7, b7);
+	SetDeclareByteValue(instruction, 8, b8);
+	SetDeclareByteValue(instruction, 9, b9);
+	SetDeclareByteValue(instruction, 10, b10);
+	SetDeclareByteValue(instruction, 11, b11);
+	SetDeclareByteValue(instruction, 12, b12);
+	SetDeclareByteValue(instruction, 13, b13);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+/// <param name="b12">Byte 12</param>
+/// <param name="b13">Byte 13</param>
+/// <param name="b14">Byte 14</param>
+struct Instruction* Instruction_CreateDeclareByte_imm15(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11, unsigned char b12, unsigned char b13, unsigned char b14)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 15);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+	SetDeclareByteValue(instruction, 4, b4);
+	SetDeclareByteValue(instruction, 5, b5);
+	SetDeclareByteValue(instruction, 6, b6);
+	SetDeclareByteValue(instruction, 7, b7);
+	SetDeclareByteValue(instruction, 8, b8);
+	SetDeclareByteValue(instruction, 9, b9);
+	SetDeclareByteValue(instruction, 10, b10);
+	SetDeclareByteValue(instruction, 11, b11);
+	SetDeclareByteValue(instruction, 12, b12);
+	SetDeclareByteValue(instruction, 13, b13);
+	SetDeclareByteValue(instruction, 14, b14);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+/// <param name="b12">Byte 12</param>
+/// <param name="b13">Byte 13</param>
+/// <param name="b14">Byte 14</param>
+struct Instruction* Instruction_CreateDeclareByte_imm16(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11, unsigned char b12, unsigned char b13, unsigned char b14, unsigned char b15)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, 16);
+
+	SetDeclareByteValue(instruction, 0, b0);
+	SetDeclareByteValue(instruction, 1, b1);
+	SetDeclareByteValue(instruction, 2, b2);
+	SetDeclareByteValue(instruction, 3, b3);
+	SetDeclareByteValue(instruction, 4, b4);
+	SetDeclareByteValue(instruction, 5, b5);
+	SetDeclareByteValue(instruction, 6, b6);
+	SetDeclareByteValue(instruction, 7, b7);
+	SetDeclareByteValue(instruction, 8, b8);
+	SetDeclareByteValue(instruction, 9, b9);
+	SetDeclareByteValue(instruction, 10, b10);
+	SetDeclareByteValue(instruction, 11, b11);
+	SetDeclareByteValue(instruction, 12, b12);
+	SetDeclareByteValue(instruction, 13, b13);
+	SetDeclareByteValue(instruction, 14, b14);
+	SetDeclareByteValue(instruction, 15, b15);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
