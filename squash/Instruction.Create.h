@@ -944,8 +944,216 @@ void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, s
 /// Creates a <c>db</c>/<c>.byte</c> asm directive
 /// </summary>
 /// <param name="b0">Byte 0</param>
+struct Instruction* Instruction_CreateDeclareByte_imm1(unsigned char b0);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
 /// <param name="b1">Byte 1</param>
-struct Instruction* Instruction_CreateDeclareByte(unsigned char b0, unsigned char b1);
+struct Instruction* Instruction_CreateDeclareByte_imm2(unsigned char b0, unsigned char b1);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+struct Instruction* Instruction_CreateDeclareByte_imm3(unsigned char b0, unsigned char b1, unsigned char b2);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+struct Instruction* Instruction_CreateDeclareByte_imm4(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+struct Instruction* Instruction_CreateDeclareByte_imm5(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+struct Instruction* Instruction_CreateDeclareByte_imm6(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+struct Instruction* Instruction_CreateDeclareByte_imm7(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+struct Instruction* Instruction_CreateDeclareByte_imm8(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+struct Instruction* Instruction_CreateDeclareByte_imm9(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+struct Instruction* Instruction_CreateDeclareByte_imm10(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+struct Instruction* Instruction_CreateDeclareByte_imm11(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+struct Instruction* Instruction_CreateDeclareByte_imm12(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+/// <param name="b12">Byte 12</param>
+struct Instruction* Instruction_CreateDeclareByte_imm13(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11, unsigned char b12);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+/// <param name="b12">Byte 12</param>
+/// <param name="b13">Byte 13</param>
+struct Instruction* Instruction_CreateDeclareByte_imm14(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11, unsigned char b12, unsigned char b13);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+/// <param name="b12">Byte 12</param>
+/// <param name="b13">Byte 13</param>
+/// <param name="b14">Byte 14</param>
+struct Instruction* Instruction_CreateDeclareByte_imm15(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11, unsigned char b12, unsigned char b13, unsigned char b14);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+/// <param name="b12">Byte 12</param>
+/// <param name="b13">Byte 13</param>
+/// <param name="b14">Byte 14</param>
+struct Instruction* Instruction_CreateDeclareByte_imm16(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11, unsigned char b12, unsigned char b13, unsigned char b14, unsigned char b15);
 
 /// <summary>
 /// Creates a new near/short branch instruction
