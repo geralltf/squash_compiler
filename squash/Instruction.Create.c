@@ -3,6 +3,27 @@
 struct OpCodeHandler* EncoderInternal_OpCodeHandlers_Handlers = (struct OpCodeHandler*)NULL; // CodeEnumCount
 struct Op* ops_legacy = NULL;
 
+struct OpCodeHandler* GetOpCodeHandlers()
+{
+	if (EncoderInternal_OpCodeHandlers_Handlers == NULL)
+	{
+		OpCodeHandlers_init();
+	}
+
+	return EncoderInternal_OpCodeHandlers_Handlers;
+}
+
+struct OpCodeHandler* GetOpCodeHandler(enum Code opcode)
+{
+	int index = (int)opcode;
+
+	struct OpCodeHandler* handlers = GetOpCodeHandlers();
+
+	struct OpCodeHandler handler =  handlers[index];
+
+	return &handler;
+}
+
 enum EncodingKind GetEncodingKindByOpcode(enum Code opcode)
 {
 	int i = (int)opcode;

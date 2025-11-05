@@ -940,6 +940,10 @@ void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, s
 	}
 }
 
+void OpCodeHandlers_init();
+struct OpCodeHandler* GetOpCodeHandlers();
+struct OpCodeHandler* GetOpCodeHandler(enum Code opcode);
+
 /// <summary>
 /// Creates a <c>db</c>/<c>.byte</c> asm directive
 /// </summary>
