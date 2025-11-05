@@ -9,6 +9,159 @@
 #include "Logger.h"
 #include "Instruction.h"
 #include "EncoderInstructionSet.h"
+#include "OpCodeInfo.h"
+
+unsigned int s_immSizes[19]  =
+{
+	0,// None
+	1,// Size1
+	2,// Size2
+	4,// Size4
+	8,// Size8
+	3,// Size2_1
+	2,// Size1_1
+	4,// Size2_2
+	6,// Size4_2
+	1,// RipRelSize1_Target16
+	1,// RipRelSize1_Target32
+	1,// RipRelSize1_Target64
+	2,// RipRelSize2_Target16
+	2,// RipRelSize2_Target32
+	2,// RipRelSize2_Target64
+	4,// RipRelSize4_Target32
+	4,// RipRelSize4_Target64
+	1,// SizeIbReg
+	1,// Size1OpCode
+};
+
+const char* ERROR_ONLY_1632_BIT_MODE = "The instruction can only be used in 16/32-bit mode";
+const char* ERROR_ONLY_64_BIT_MODE = "The instruction can only be used in 64-bit mode";
+
+struct Encoder
+{
+	unsigned int Internal_PreventVEX2;
+	unsigned int Internal_VEX_WIG_LIG;
+	unsigned int Internal_VEX_LIG;
+	unsigned int Internal_EVEX_WIG;
+	unsigned int Internal_EVEX_LIG;
+	unsigned int Internal_MVEX_WIG;
+
+	//readonly CodeWriter writer;
+	int bitness;
+	//OpCodeHandler[] handlers;
+	//unsigned int immSizes[19];
+	unsigned long currentRip;
+	char* errorMessage;
+	struct OpCodeHandler* handler;
+	unsigned int eip;
+	unsigned int displAddr;
+	unsigned int immAddr;
+	unsigned int Immediate;
+	// high 32 bits if it's a 64-bit immediate
+	// high 32 bits if it's an IP relative immediate (jcc,call target)
+	// high 32 bits if it's a 64-bit absolute address
+	unsigned int ImmediateHi;
+	unsigned int Displ;
+	// high 32 bits if it's an IP relative mem displ (target)
+	unsigned int DisplHi;
+	enum EncoderFlags opSize16Flags;
+	enum EncoderFlags opSize32Flags;
+	enum EncoderFlags adrSize16Flags;
+	enum EncoderFlags adrSize32Flags;
+	unsigned int OpCode;
+	enum EncoderFlags EncoderFlags;
+	enum DisplSize DisplSize;
+	enum ImmSize ImmSize;
+	unsigned char ModRM;
+	unsigned char Sib;
+};
+
+struct Encoder* Encoder_new()
+{
+	struct Encoder* encoder = (struct Encoder*)malloc(sizeof(struct Encoder));
+	encoder->Internal_PreventVEX2 = 0;
+	encoder->Internal_VEX_WIG_LIG = 0;
+	encoder->Internal_VEX_LIG = 0;
+	encoder->Internal_EVEX_WIG = 0;
+	encoder->Internal_EVEX_LIG = 0;
+	encoder->Internal_MVEX_WIG = 0;
+	encoder->bitness = 0;
+	encoder->currentRip = 0;
+	encoder->errorMessage = NULL;
+	encoder->handler = NULL;
+	encoder->eip = 0;
+	encoder->displAddr = 0;
+	encoder->immAddr = 0;
+	encoder->Immediate = 0;
+	encoder->ImmediateHi = 0;
+	encoder->Displ = 0;
+	encoder->DisplHi = 0;
+	encoder->opSize16Flags = EncoderFlags_None;
+	encoder->opSize32Flags = EncoderFlags_None;
+	encoder->adrSize16Flags = EncoderFlags_None;
+	encoder->adrSize32Flags = EncoderFlags_None;
+	encoder->OpCode = 0;
+	encoder->EncoderFlags = EncoderFlags_None;
+	encoder->DisplSize = 0;
+	encoder->ImmSize = 0;
+	encoder->ModRM = 0;
+	encoder->Sib = 0;
+	return encoder;
+}
+
+void Encoder_init(struct Encoder* encoder, int bitness)
+{
+	//Debug.Assert(bitness == 16 || bitness == 32 || bitness == 64);
+	//encoder->immSizes = s_immSizes;
+	//encoder->writer = writer;
+	encoder->bitness = bitness;
+	//encoder->handlers = OpCodeHandlers.Handlers;
+	encoder->handler = NULL;// It's initialized by TryEncode
+
+	if (bitness != 16)
+	{
+		encoder->opSize16Flags = EncoderFlags_P66;
+	}
+	else 
+	{
+		encoder->opSize16Flags = 0;
+	}
+
+	if (bitness == 16)
+	{
+		encoder->opSize32Flags = EncoderFlags_P66;
+	}
+	else
+	{
+		encoder->opSize32Flags = 0;
+	}
+
+	if (bitness != 16)
+	{
+		encoder->adrSize16Flags = EncoderFlags_P67;
+	}
+	else
+	{
+		encoder->adrSize16Flags = 0;
+	}
+
+	if (bitness != 32)
+	{
+		encoder->adrSize32Flags = EncoderFlags_P67;
+	}
+	else
+	{
+		encoder->adrSize32Flags = 0;
+	}
+}
+
+/// <summary>
+/// Gets the bitness (16, 32 or 64)
+/// </summary>
+int GetBitness(struct Encoder* encoder)
+{
+	return encoder->bitness;
+}
 
 enum PrefixFlags
 {

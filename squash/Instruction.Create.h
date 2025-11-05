@@ -136,7 +136,7 @@ void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* ins
 
 void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	if (encoder->Bitness != 64 && GetOpKind(instruction, operand) == OK_Register && GetOpRegister(instruction, operand) >= op->regLo + 8 && GetOpRegister(instruction, operand) <= op->regLo + 15)
+	if (GetBitness(encoder) != 64 && GetOpKind(instruction, operand) == OK_Register && GetOpRegister(instruction, operand) >= op->regLo + 8 && GetOpRegister(instruction, operand) <= op->regLo + 15)
 	{
 		encoder->EncoderFlags |= EncoderFlags_PF0;
 		AddModRMRegister(encoder, instruction, operand, op->regLo + 8, op->regLo + 15);
