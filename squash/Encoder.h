@@ -11,6 +11,18 @@
 #include "EncoderInstructionSet.h"
 #include "OpCodeInfo.h"
 
+enum CodeSize 
+{
+	/// <summary>Unknown size</summary>
+	CodeSize_Unknown = 0,
+	/// <summary>16-bit code</summary>
+	CodeSize_Code16 = 1,
+	/// <summary>32-bit code</summary>
+	CodeSize_Code32 = 2,
+	/// <summary>64-bit code</summary>
+	CodeSize_Code64 = 3,
+};
+
 unsigned int s_immSizes[19]  =
 {
 	0,// None
@@ -161,6 +173,208 @@ void Encoder_init(struct Encoder* encoder, int bitness)
 int GetBitness(struct Encoder* encoder)
 {
 	return encoder->bitness;
+}
+
+/// <summary>
+/// Creates an encoder
+/// </summary>
+/// <param name="bitness">16, 32 or 64</param>
+/// <returns></returns>
+struct Encoder* Create(int bitness)
+{
+	struct Encoder* encoder = NULL;
+	switch (bitness)
+	{
+	case 16:
+	case 32:
+	case 64:
+		encoder = Encoder_new();
+		Encoder_init(encoder, bitness);
+		break;
+	default:
+		// throw new ArgumentOutOfRangeException(nameof(bitness))
+		break;
+	}
+	return encoder;
+}
+
+/// <summary>
+/// Encodes an instruction
+/// </summary>
+/// <param name="instruction">Instruction to encode</param>
+/// <param name="rip"><c>RIP</c> of the encoded instruction</param>
+/// <param name="encodedLength">Updated with length of encoded instruction if successful</param>
+/// <param name="errorMessage">Set to the error message if we couldn't encode the instruction</param>
+/// <returns></returns>
+bool TryEncode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip, unsigned int* encodedLength)
+{
+	encoder->currentRip = rip;
+	encoder->eip = (unsigned int)rip;
+
+	encoder->EncoderFlags = EncoderFlags_None;
+	encoder->DisplSize = DisplSize_None;
+	encoder->ImmSize = ImmSize_None;
+	encoder->ModRM = 0;
+
+	//var handler = handlers[(int)instruction.Code];
+	//this.handler = handler;
+	
+	encoder->handler = GetOpCodeHandler(GetCode(instruction));
+	enum OpCode code = encoder->handler->OpCode;
+	encoder->OpCode = (unsigned int)code;
+
+	if (encoder->handler->GroupIndex >= 0)
+	{
+		//Debug.Assert(EncoderFlags == 0);
+		encoder->EncoderFlags = EncoderFlags_ModRM;
+		encoder->ModRM = (unsigned char)(encoder->handler->GroupIndex << 3);
+	}
+	if (encoder->handler->RmGroupIndex >= 0)
+	{
+		//Debug.Assert(EncoderFlags == 0 || EncoderFlags == EncoderFlags.ModRM);
+		encoder->EncoderFlags = EncoderFlags_ModRM;
+		encoder->ModRM |= (unsigned char)(encoder->handler->RmGroupIndex | 0xC0);
+	}
+
+	switch (encoder->handler->EncFlags3 & (EFLAGS3_Bit16or32 | EFLAGS3_Bit64)) 
+	{
+	case EFLAGS3_Bit16or32 | EFLAGS3_Bit64:
+		break;
+
+	case EFLAGS3_Bit16or32:
+		if (encoder->bitness == 64)
+		{
+			//ErrorMessage = ERROR_ONLY_1632_BIT_MODE;
+		}
+		break;
+
+	case EFLAGS3_Bit64:
+		if (encoder->bitness != 64)
+		{
+			//ErrorMessage = ERROR_ONLY_64_BIT_MODE;
+		}
+		break;
+
+	default:
+		//throw new InvalidOperationException();
+		break;
+	}
+
+	switch (encoder->handler->OpSize) 
+	{
+	case CodeSize_Unknown:
+		break;
+
+	case CodeSize_Code16:
+		encoder->EncoderFlags |= encoder->opSize16Flags;
+		break;
+
+	case CodeSize_Code32:
+		encoder->EncoderFlags |= encoder->opSize32Flags;
+		break;
+
+	case CodeSize_Code64:
+		if ((encoder->handler->EncFlags3 & EFLAGS3_DefaultOpSize64) == 0)
+			encoder->EncoderFlags |= EncoderFlags_W;
+		break;
+
+	default:
+		//throw new InvalidOperationException();
+		break;
+	}
+
+	switch (encoder->handler->AddrSize)
+	{
+	case CodeSize_Unknown:
+		break;
+
+	case CodeSize_Code16:
+		encoder->EncoderFlags |= encoder->adrSize16Flags;
+		break;
+
+	case CodeSize_Code32:
+		encoder->EncoderFlags |= encoder->adrSize32Flags;
+		break;
+
+	case CodeSize_Code64:
+		break;
+
+	default:
+		//throw new InvalidOperationException();
+		break;
+	}
+
+	if (!encoder->handler->IsSpecialInstr) 
+	{
+		struct Op* ops = encoder->handler->Operands;
+		for (int i = 0; i < encoder->handler->Operands_Length; i++)
+		{
+			ops[i].Encode(encoder, instruction, i, (ops + i));
+		}
+
+		if ((encoder->handler->EncFlags3 & EFLAGS3_Fwait) != 0)
+		{
+			WriteByteInternal(0x9B);
+		}
+
+		encoder->handler->Encode(encoder->handler, encoder, instruction);
+
+		unsigned int opCode = encoder->OpCode;
+		if (!encoder->handler->Is2ByteOpCode)
+		{
+			WriteByteInternal(opCode);
+		}
+		else
+		{
+			WriteByteInternal(opCode >> 8);
+			WriteByteInternal(opCode);
+		}
+
+		if ((encoder->EncoderFlags & (EncoderFlags_ModRM | EncoderFlags_Displ)) != 0)
+		{
+			WriteModRM();
+		}
+
+		if (encoder->ImmSize != ImmSize_None)
+		{
+			WriteImmediate();
+		}
+	}
+	else 
+	{
+		//Debug.Assert(handler is DeclareDataHandler || handler is ZeroBytesHandler);
+		encoder->handler->Encode(encoder->handler, encoder, instruction);
+	}
+
+	unsigned int instrLen = (unsigned int)encoder->currentRip - (unsigned int)rip;
+	//if (instrLen > IcedConstants.MaxInstructionLength && !handler.IsSpecialInstr)
+	//	ErrorMessage = $"Instruction length > {IcedConstants.MaxInstructionLength} bytes";
+	//errorMessage = this.errorMessage;
+	//if (errorMessage is not null) {
+	//	encodedLength = 0;
+	//	return false;
+	//}
+	*encodedLength = instrLen;
+	return true;
+}
+
+/// <summary>
+/// Encodes an instruction and returns the size of the encoded instruction.
+/// A <see cref="EncoderException"/> is thrown if it failed to encode the instruction.
+/// </summary>
+/// <param name="instruction">Instruction to encode</param>
+/// <param name="rip">RIP of the encoded instruction</param>
+/// <returns>
+/// Encoded length.
+/// </returns>
+unsigned int Encode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip)
+{
+	unsigned int encoded_length = 0;
+	if (!TryEncode(encoder, instruction, rip, &encoded_length))
+	{
+		//ThrowEncoderException(instruction, errorMessage);
+	}
+	return encoded_length;
 }
 
 enum PrefixFlags
@@ -736,7 +950,7 @@ unsigned char* squash_assemble(struct Assembler* assembler, unsigned long RIP_pr
 /// <returns></returns>
 //bool TryEncode(int bitness, InstructionBlock[] blocks, [NotNullWhen(false)] out string ? errorMessage, [NotNullWhen(true)] out BlockEncoderResult[] ? result, BlockEncoderOptions options = BlockEncoderOptions.None);
 
-bool Encode(char** errorMessage, struct BlockEncoderResult** result);
+//bool Encode(char** errorMessage, struct BlockEncoderResult** result);
 
 /// <summary>
 /// Assembles the instructions of this assembler with the specified options.
