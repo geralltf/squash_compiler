@@ -414,7 +414,7 @@ void SetOp4Kind(struct Instruction* i, enum OpKind value)
 /// </summary>
 /// <param name="operand">Operand number, 0-4</param>
 /// <returns></returns>
-enum OpKind GetOpKind(struct Instruction* i, int operand)
+enum OpKind Instruction_GetOpKind(struct Instruction* i, int operand)
 {
 	switch (operand) 
 	{
@@ -1352,6 +1352,14 @@ void SetNearBranch16(struct Instruction* i, unsigned short value)
 /// Gets the operand's branch target. Use this property if the operand has kind <see cref="OpKind.NearBranch32"/>
 /// </summary>
 unsigned int GetInternalNearBranch16(struct Instruction* i)
+{
+	return (unsigned int)i->memDispl;
+}
+
+/// <summary>
+/// Gets the operand's branch target. Use this property if the operand has kind <see cref="OpKind.NearBranch32"/>
+/// </summary>
+unsigned int GetNearBranch32(struct Instruction* i)
 {
 	return (unsigned int)i->memDispl;
 }

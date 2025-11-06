@@ -1467,13 +1467,16 @@ void InternalSetHasRepnePrefix(struct Instruction* i);
 
 void SetInternalDeclareDataCount(struct Instruction* i, unsigned int value);
 void SetDeclareByteValue(struct Instruction* i, int index, unsigned char value);
-
 int GetDeclareDataCount(struct Instruction* i);
 unsigned char GetDeclareByteValue(struct Instruction* i, int index);
 enum Register GetMemoryBase(struct Instruction* i);
 int GetMemoryDisplSize(struct Instruction* i);
 unsigned long GetMemoryDisplacement64(struct Instruction* i);
 int GetMemoryIndexScale(struct Instruction* i);
+
+unsigned long GetNearBranch64(struct Instruction* i);
+unsigned int GetNearBranch32(struct Instruction* i);
+unsigned short GetNearBranch16(struct Instruction* i);
 
 /// <summary>
 /// Instruction code, see also <see cref="Mnemonic"/>
@@ -1483,5 +1486,7 @@ enum Code GetCode(struct Instruction* i);
 enum Register GetMemoryIndex(struct Instruction* i);
 unsigned char GetImmediate8(struct Instruction* i);
 unsigned short GetImmediate16(struct Instruction* i);
+
+enum OpKind Instruction_GetOpKind(struct Instruction* i, int operand);
 
 #endif

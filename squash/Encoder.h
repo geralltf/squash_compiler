@@ -198,6 +198,42 @@ struct Encoder* Create(int bitness)
 	return encoder;
 }
 
+bool Verify(int operand, enum OpKind expected, enum OpKind actual)
+{
+	if (expected == actual)
+	{
+		return true;
+	}
+	//ErrorMessage = $"Operand {operand}: Expected: {expected}, actual: {actual}";
+	return false;
+}
+
+bool Verify(int operand, enum Register expected, enum Register actual)
+{
+	if (expected == actual)
+	{
+		return true;
+	}
+	//ErrorMessage = $"Operand {operand}: Expected: {expected}, actual: {actual}";
+	return false;
+}
+
+bool Verify(struct Encoder* encoder, int operand, enum Register registerValue, enum Register regLo, enum Register regHi)
+{
+	if (encoder->bitness != 64 && regHi > regLo + 7)
+	{
+		regHi = regLo + 7;
+	}
+	if (regLo <= registerValue && registerValue <= regHi)
+	{
+		return true;
+	}
+	//ErrorMessage = $"Operand {operand}: Register {register} is not between {regLo} and {regHi} (inclusive)";
+	return false;
+}
+
+void Encoder_AddBranch(struct Encoder* encoder, enum OpKind opKind, int immSize, struct Instruction* instruction, int operand);
+
 /// <summary>
 /// Encodes an instruction
 /// </summary>
