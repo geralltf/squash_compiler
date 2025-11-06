@@ -1487,6 +1487,21 @@ enum Register GetMemoryIndex(struct Instruction* i);
 unsigned char GetImmediate8(struct Instruction* i);
 unsigned short GetImmediate16(struct Instruction* i);
 
+/// <summary>
+/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate32"/>
+/// </summary>
+unsigned int GetImmediate32(struct Instruction* i);
+
+/// <summary>
+/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate64"/>
+/// </summary>
+unsigned long GetImmediate64(struct Instruction* i);
+
+/// <summary>
+/// Gets the operand's immediate value. Use this property if the operand has kind <see cref="OpKind.Immediate8_2nd"/>
+/// </summary>
+unsigned char GetImmediate8_2nd(struct Instruction* i);
+
 enum OpKind Instruction_GetOpKind(struct Instruction* i, int operand);
 
 #endif
