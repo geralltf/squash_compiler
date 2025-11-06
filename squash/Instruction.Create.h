@@ -173,29 +173,29 @@ void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int o
 	switch (encoder->ImmSize) 
 	{
 	case ImmSize_Size1:
-		if (!encoder.Verify(operand, OK_Immediate8_2nd, GetOpKind(instruction, operand)))
+		if (!Verify(operand, OK_Immediate8_2nd, GetOpKind(instruction, operand)))
 		{
 			return;
 		}
-		encoder.ImmSize = ImmSize_Size1_1;
-		encoder.ImmediateHi = instruction->Immediate8_2nd;
+		encoder->ImmSize = ImmSize_Size1_1;
+		encoder->ImmediateHi = GetImmediate8_2nd(instruction);
 		break;
 	case ImmSize_Size2:
-		if (!encoder.Verify(operand, OK_Immediate8_2nd, GetOpKind(instruction, operand)))
+		if (!Verify(operand, OK_Immediate8_2nd, GetOpKind(instruction, operand)))
 		{
 			return;
 		}
-		encoder.ImmSize = ImmSize_Size2_1;
-		encoder.ImmediateHi = instruction.Immediate8_2nd;
+		encoder->ImmSize = ImmSize_Size2_1;
+		encoder->ImmediateHi = GetImmediate8_2nd(instruction);
 		break;
 	default:
 		enum OpCodeOperandKind opImmKind = GetOpKind(instruction, operand);
-		if (!Verify(encoder, operand, opKind, opImmKind))
+		if (!Verify(encoder, operand, op->opKind, opImmKind))
 		{
 			return;
 		}
-		encoder.ImmSize = ImmSize_Size1;
-		encoder.Immediate = instruction->Immediate8;
+		encoder->ImmSize = ImmSize_Size1;
+		encoder->Immediate = GetImmediate8(instruction);
 		break;
 	}
 }
@@ -224,8 +224,8 @@ void OpIw_Encode(struct Encoder* encoder, struct Instruction* instruction, int o
 	{
 		return;
 	}
-	encoder.ImmSize = ImmSize_Size2;
-	encoder.Immediate = GetImmediate16(instruction);
+	encoder->ImmSize = ImmSize_Size2;
+	encoder->Immediate = GetImmediate16(instruction);
 }
 
 enum OpKind OpIw_GetImmediateOpKind(struct Op* op)
@@ -240,8 +240,8 @@ void OpId_Encode(struct Encoder* encoder, struct Instruction* instruction, int o
 	{
 		return;
 	}
-	encoder.ImmSize = ImmSize_Size4;
-	encoder.Immediate = instruction.Immediate32;
+	encoder->ImmSize = ImmSize_Size4;
+	encoder->Immediate = GetImmediate32(instruction);
 }
 
 enum OpKind OpId_GetImmediateOpKind(struct Op* op)
@@ -255,10 +255,10 @@ void OpIq_Encode(struct Encoder* encoder, struct Instruction* instruction, int o
 	{
 		return;
 	}
-	encoder.ImmSize = ImmSize_Size8;
-	unsigned long imm = instruction.Immediate64;
-	encoder.Immediate = (unsigned int)imm;
-	encoder.ImmediateHi = (unsigned int)(imm >> 32);
+	encoder->ImmSize = ImmSize_Size8;
+	unsigned long imm = GetImmediate64(instruction);
+	encoder->Immediate = (unsigned int)imm;
+	encoder->ImmediateHi = (unsigned int)(imm >> 32);
 }
 
 enum OpKind OpIq_GetImmediateOpKind(struct Op* op)
@@ -1222,5 +1222,257 @@ struct Instruction* Instruction_CreateStosd(int addressSize, enum RepPrefixKind 
 /// <param name="register2">op1: Register</param>
 /// <param name="memory">op2: Memory operand</param>
 struct Instruction* Instruction_Create(enum Code code, enum Register register1, enum Register register2, struct MemoryOperand* memory);
+
+enum CodeSize
+{
+	/// <summary>Unknown size</summary>
+	CodeSize_Unknown = 0,
+	/// <summary>16-bit code</summary>
+	CodeSize_Code16 = 1,
+	/// <summary>32-bit code</summary>
+	CodeSize_Code32 = 2,
+	/// <summary>64-bit code</summary>
+	CodeSize_Code64 = 3,
+};
+
+unsigned int s_immSizes[19] =
+{
+	0,// None
+	1,// Size1
+	2,// Size2
+	4,// Size4
+	8,// Size8
+	3,// Size2_1
+	2,// Size1_1
+	4,// Size2_2
+	6,// Size4_2
+	1,// RipRelSize1_Target16
+	1,// RipRelSize1_Target32
+	1,// RipRelSize1_Target64
+	2,// RipRelSize2_Target16
+	2,// RipRelSize2_Target32
+	2,// RipRelSize2_Target64
+	4,// RipRelSize4_Target32
+	4,// RipRelSize4_Target64
+	1,// SizeIbReg
+	1,// Size1OpCode
+};
+
+const char* ERROR_ONLY_1632_BIT_MODE = "The instruction can only be used in 16/32-bit mode";
+const char* ERROR_ONLY_64_BIT_MODE = "The instruction can only be used in 64-bit mode";
+
+struct Encoder
+{
+	unsigned int Internal_PreventVEX2;
+	unsigned int Internal_VEX_WIG_LIG;
+	unsigned int Internal_VEX_LIG;
+	unsigned int Internal_EVEX_WIG;
+	unsigned int Internal_EVEX_LIG;
+	unsigned int Internal_MVEX_WIG;
+
+	//readonly CodeWriter writer;
+	int bitness;
+	//OpCodeHandler[] handlers;
+	//unsigned int immSizes[19];
+	unsigned long currentRip;
+	char* errorMessage;
+	struct OpCodeHandler* handler;
+	unsigned int eip;
+	unsigned int displAddr;
+	unsigned int immAddr;
+	unsigned int Immediate;
+	// high 32 bits if it's a 64-bit immediate
+	// high 32 bits if it's an IP relative immediate (jcc,call target)
+	// high 32 bits if it's a 64-bit absolute address
+	unsigned int ImmediateHi;
+	unsigned int Displ;
+	// high 32 bits if it's an IP relative mem displ (target)
+	unsigned int DisplHi;
+	enum EncoderFlags opSize16Flags;
+	enum EncoderFlags opSize32Flags;
+	enum EncoderFlags adrSize16Flags;
+	enum EncoderFlags adrSize32Flags;
+	unsigned int OpCode;
+	enum EncoderFlags EncoderFlags;
+	enum DisplSize DisplSize;
+	enum ImmSize ImmSize;
+	unsigned char ModRM;
+	unsigned char Sib;
+};
+
+struct Encoder* Encoder_new()
+{
+	struct Encoder* encoder = (struct Encoder*)malloc(sizeof(struct Encoder));
+	encoder->Internal_PreventVEX2 = 0;
+	encoder->Internal_VEX_WIG_LIG = 0;
+	encoder->Internal_VEX_LIG = 0;
+	encoder->Internal_EVEX_WIG = 0;
+	encoder->Internal_EVEX_LIG = 0;
+	encoder->Internal_MVEX_WIG = 0;
+	encoder->bitness = 0;
+	encoder->currentRip = 0;
+	encoder->errorMessage = NULL;
+	encoder->handler = NULL;
+	encoder->eip = 0;
+	encoder->displAddr = 0;
+	encoder->immAddr = 0;
+	encoder->Immediate = 0;
+	encoder->ImmediateHi = 0;
+	encoder->Displ = 0;
+	encoder->DisplHi = 0;
+	encoder->opSize16Flags = EncoderFlags_None;
+	encoder->opSize32Flags = EncoderFlags_None;
+	encoder->adrSize16Flags = EncoderFlags_None;
+	encoder->adrSize32Flags = EncoderFlags_None;
+	encoder->OpCode = 0;
+	encoder->EncoderFlags = EncoderFlags_None;
+	encoder->DisplSize = 0;
+	encoder->ImmSize = 0;
+	encoder->ModRM = 0;
+	encoder->Sib = 0;
+	return encoder;
+}
+
+void Encoder_init(struct Encoder* encoder, int bitness)
+{
+	//Debug.Assert(bitness == 16 || bitness == 32 || bitness == 64);
+	//encoder->immSizes = s_immSizes;
+	//encoder->writer = writer;
+	encoder->bitness = bitness;
+	//encoder->handlers = OpCodeHandlers.Handlers;
+	encoder->handler = NULL;// It's initialized by TryEncode
+
+	if (bitness != 16)
+	{
+		encoder->opSize16Flags = EncoderFlags_P66;
+	}
+	else
+	{
+		encoder->opSize16Flags = 0;
+	}
+
+	if (bitness == 16)
+	{
+		encoder->opSize32Flags = EncoderFlags_P66;
+	}
+	else
+	{
+		encoder->opSize32Flags = 0;
+	}
+
+	if (bitness != 16)
+	{
+		encoder->adrSize16Flags = EncoderFlags_P67;
+	}
+	else
+	{
+		encoder->adrSize16Flags = 0;
+	}
+
+	if (bitness != 32)
+	{
+		encoder->adrSize32Flags = EncoderFlags_P67;
+	}
+	else
+	{
+		encoder->adrSize32Flags = 0;
+	}
+}
+
+/// <summary>
+/// Gets the bitness (16, 32 or 64)
+/// </summary>
+int GetBitness(struct Encoder* encoder)
+{
+	return encoder->bitness;
+}
+
+/// <summary>
+/// Creates an encoder
+/// </summary>
+/// <param name="bitness">16, 32 or 64</param>
+/// <returns></returns>
+struct Encoder* Create(int bitness)
+{
+	struct Encoder* encoder = NULL;
+	switch (bitness)
+	{
+	case 16:
+	case 32:
+	case 64:
+		encoder = Encoder_new();
+		Encoder_init(encoder, bitness);
+		break;
+	default:
+		// throw new ArgumentOutOfRangeException(nameof(bitness))
+		break;
+	}
+	return encoder;
+}
+
+bool Verify(int operand, enum OpKind expected, enum OpKind actual)
+{
+	if (expected == actual)
+	{
+		return true;
+	}
+	//ErrorMessage = $"Operand {operand}: Expected: {expected}, actual: {actual}";
+	return false;
+}
+
+bool Verify(int operand, enum Register expected, enum Register actual)
+{
+	if (expected == actual)
+	{
+		return true;
+	}
+	//ErrorMessage = $"Operand {operand}: Expected: {expected}, actual: {actual}";
+	return false;
+}
+
+bool Verify(struct Encoder* encoder, int operand, enum Register registerValue, enum Register regLo, enum Register regHi)
+{
+	if (encoder->bitness != 64 && regHi > regLo + 7)
+	{
+		regHi = regLo + 7;
+	}
+	if (regLo <= registerValue && registerValue <= regHi)
+	{
+		return true;
+	}
+	//ErrorMessage = $"Operand {operand}: Register {register} is not between {regLo} and {regHi} (inclusive)";
+	return false;
+}
+
+void Encoder_AddBranch(struct Encoder* encoder, struct Instruction* instruction, enum OpKind opKind, int immSize, int operand);
+
+/// <summary>
+/// Encodes an instruction
+/// </summary>
+/// <param name="instruction">Instruction to encode</param>
+/// <param name="rip"><c>RIP</c> of the encoded instruction</param>
+/// <param name="encodedLength">Updated with length of encoded instruction if successful</param>
+/// <param name="errorMessage">Set to the error message if we couldn't encode the instruction</param>
+/// <returns></returns>
+bool TryEncode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip, unsigned int* encodedLength);
+
+/// <summary>
+/// Encodes an instruction and returns the size of the encoded instruction.
+/// A <see cref="EncoderException"/> is thrown if it failed to encode the instruction.
+/// </summary>
+/// <param name="instruction">Instruction to encode</param>
+/// <param name="rip">RIP of the encoded instruction</param>
+/// <returns>
+/// Encoded length.
+/// </returns>
+unsigned int Encode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip)
+{
+	unsigned int encoded_length = 0;
+	if (!TryEncode(encoder, instruction, rip, &encoded_length))
+	{
+		//ThrowEncoderException(instruction, errorMessage);
+	}
+	return encoded_length;
+}
 
 #endif

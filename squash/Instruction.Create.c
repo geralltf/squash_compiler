@@ -1223,3 +1223,232 @@ struct Instruction* Instruction_Create(enum Code code, enum Register register1, 
 	//Debug.Assert(instruction.OpCount == 3);
 	return instruction;
 }
+
+void Encoder_AddBranch(struct Encoder* encoder, struct Instruction* instruction, enum OpKind opKind, int immSize, int operand)
+{
+	if (!Verify(operand, opKind, Instruction_GetOpKind(instruction, operand)))
+		return;
+
+	unsigned long target;
+	switch (immSize)
+	{
+	case 1:
+		switch (opKind)
+		{
+		case OK_NearBranch16:
+			encoder->EncoderFlags |= encoder->opSize16Flags;
+			encoder->ImmSize = ImmSize_RipRelSize1_Target16;
+			encoder->Immediate = GetNearBranch16(instruction);
+			break;
+		case OK_NearBranch32:
+			encoder->EncoderFlags |= encoder->opSize32Flags;
+			encoder->ImmSize = ImmSize_RipRelSize1_Target32;
+			encoder->Immediate = GetNearBranch32(instruction);
+			break;
+		case OK_NearBranch64:
+			encoder->ImmSize = ImmSize_RipRelSize1_Target64;
+			target = GetNearBranch64(instruction);
+			encoder->Immediate = (unsigned int)target;
+			encoder->ImmediateHi = (unsigned int)(target >> 32);
+			break;
+		default:
+			//throw new InvalidOperationException();
+			break;
+		}
+		break;
+	case 2:
+		switch (opKind) {
+		case OK_NearBranch16:
+			encoder->EncoderFlags |= encoder->opSize16Flags;
+			encoder->ImmSize = ImmSize_RipRelSize2_Target16;
+			encoder->Immediate = GetNearBranch16(instruction);
+			break;
+		default:
+			//throw new InvalidOperationException();
+			break;
+		}
+		break;
+	case 4:
+		switch (opKind) {
+		case OK_NearBranch32:
+			encoder->EncoderFlags |= encoder->opSize32Flags;
+			encoder->ImmSize = ImmSize_RipRelSize4_Target32;
+			encoder->Immediate = GetNearBranch32(instruction);
+			break;
+		case OK_NearBranch64:
+			encoder->ImmSize = ImmSize_RipRelSize4_Target64;
+			target = GetNearBranch64(instruction);
+			encoder->Immediate = (unsigned int)target;
+			encoder->ImmediateHi = (unsigned int)(target >> 32);
+			break;
+		default:
+			//throw new InvalidOperationException();
+			break;
+		}
+		break;
+
+	default:
+		//throw new InvalidOperationException();
+		break;
+	}
+}
+
+/// <summary>
+/// Encodes an instruction
+/// </summary>
+/// <param name="instruction">Instruction to encode</param>
+/// <param name="rip"><c>RIP</c> of the encoded instruction</param>
+/// <param name="encodedLength">Updated with length of encoded instruction if successful</param>
+/// <param name="errorMessage">Set to the error message if we couldn't encode the instruction</param>
+/// <returns></returns>
+bool TryEncode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip, unsigned int* encodedLength)
+{
+	encoder->currentRip = rip;
+	encoder->eip = (unsigned int)rip;
+
+	encoder->EncoderFlags = EncoderFlags_None;
+	encoder->DisplSize = DisplSize_None;
+	encoder->ImmSize = ImmSize_None;
+	encoder->ModRM = 0;
+
+	//var handler = handlers[(int)instruction.Code];
+	//this.handler = handler;
+
+	encoder->handler = GetOpCodeHandler(GetCode(instruction));
+	enum OpCode code = encoder->handler->OpCode;
+	encoder->OpCode = (unsigned int)code;
+
+	if (encoder->handler->GroupIndex >= 0)
+	{
+		//Debug.Assert(EncoderFlags == 0);
+		encoder->EncoderFlags = EncoderFlags_ModRM;
+		encoder->ModRM = (unsigned char)(encoder->handler->GroupIndex << 3);
+	}
+	if (encoder->handler->RmGroupIndex >= 0)
+	{
+		//Debug.Assert(EncoderFlags == 0 || EncoderFlags == EncoderFlags.ModRM);
+		encoder->EncoderFlags = EncoderFlags_ModRM;
+		encoder->ModRM |= (unsigned char)(encoder->handler->RmGroupIndex | 0xC0);
+	}
+
+	switch (encoder->handler->EncFlags3 & (EFLAGS3_Bit16or32 | EFLAGS3_Bit64))
+	{
+	case EFLAGS3_Bit16or32 | EFLAGS3_Bit64:
+		break;
+
+	case EFLAGS3_Bit16or32:
+		if (encoder->bitness == 64)
+		{
+			//ErrorMessage = ERROR_ONLY_1632_BIT_MODE;
+		}
+		break;
+
+	case EFLAGS3_Bit64:
+		if (encoder->bitness != 64)
+		{
+			//ErrorMessage = ERROR_ONLY_64_BIT_MODE;
+		}
+		break;
+
+	default:
+		//throw new InvalidOperationException();
+		break;
+	}
+
+	switch (encoder->handler->OpSize)
+	{
+	case CodeSize_Unknown:
+		break;
+
+	case CodeSize_Code16:
+		encoder->EncoderFlags |= encoder->opSize16Flags;
+		break;
+
+	case CodeSize_Code32:
+		encoder->EncoderFlags |= encoder->opSize32Flags;
+		break;
+
+	case CodeSize_Code64:
+		if ((encoder->handler->EncFlags3 & EFLAGS3_DefaultOpSize64) == 0)
+			encoder->EncoderFlags |= EncoderFlags_W;
+		break;
+
+	default:
+		//throw new InvalidOperationException();
+		break;
+	}
+
+	switch (encoder->handler->AddrSize)
+	{
+	case CodeSize_Unknown:
+		break;
+
+	case CodeSize_Code16:
+		encoder->EncoderFlags |= encoder->adrSize16Flags;
+		break;
+
+	case CodeSize_Code32:
+		encoder->EncoderFlags |= encoder->adrSize32Flags;
+		break;
+
+	case CodeSize_Code64:
+		break;
+
+	default:
+		//throw new InvalidOperationException();
+		break;
+	}
+
+	if (!encoder->handler->IsSpecialInstr)
+	{
+		struct Op* ops = encoder->handler->Operands;
+		for (int i = 0; i < encoder->handler->Operands_Length; i++)
+		{
+			ops[i].Encode(encoder, instruction, i, (ops + i));
+		}
+
+		if ((encoder->handler->EncFlags3 & EFLAGS3_Fwait) != 0)
+		{
+			WriteByteInternal(0x9B);
+		}
+
+		encoder->handler->Encode(encoder->handler, encoder, instruction);
+
+		unsigned int opCode = encoder->OpCode;
+		if (!encoder->handler->Is2ByteOpCode)
+		{
+			WriteByteInternal(opCode);
+		}
+		else
+		{
+			WriteByteInternal(opCode >> 8);
+			WriteByteInternal(opCode);
+		}
+
+		if ((encoder->EncoderFlags & (EncoderFlags_ModRM | EncoderFlags_Displ)) != 0)
+		{
+			WriteModRM();
+		}
+
+		if (encoder->ImmSize != ImmSize_None)
+		{
+			WriteImmediate();
+		}
+	}
+	else
+	{
+		//Debug.Assert(handler is DeclareDataHandler || handler is ZeroBytesHandler);
+		encoder->handler->Encode(encoder->handler, encoder, instruction);
+	}
+
+	unsigned int instrLen = (unsigned int)encoder->currentRip - (unsigned int)rip;
+	//if (instrLen > IcedConstants.MaxInstructionLength && !handler.IsSpecialInstr)
+	//	ErrorMessage = $"Instruction length > {IcedConstants.MaxInstructionLength} bytes";
+	//errorMessage = this.errorMessage;
+	//if (errorMessage is not null) {
+	//	encodedLength = 0;
+	//	return false;
+	//}
+	*encodedLength = instrLen;
+	return true;
+}
