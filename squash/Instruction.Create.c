@@ -1352,70 +1352,93 @@ void Encoder_AddBranchX(struct Encoder* encoder, int immSize, struct Instruction
 	}
 }
 
-void Encoder_AddBranchDisp(int displSize, in Instruction instruction, int operand) {
-	Debug.Assert(displSize == 2 || displSize == 4);
-	OpKind opKind;
-	switch (displSize) {
+void Encoder_AddBranchDisp(struct Encoder* encoder, int displSize, struct Instruction* instruction, int operand)
+{
+	//Debug.Assert(displSize == 2 || displSize == 4);
+	enum OpKind opKind;
+	switch (displSize)
+	{
 	case 2:
-		opKind = OpKind.NearBranch16;
-		ImmSize = ImmSize.Size2;
-		Immediate = instruction.NearBranch16;
+		opKind = OK_NearBranch16;
+		encoder->ImmSize = ImmSize_Size2;
+		encoder->Immediate = GetNearBranch16(instruction);
 		break;
-
 	case 4:
-		opKind = OpKind.NearBranch32;
-		ImmSize = ImmSize.Size4;
-		Immediate = instruction.NearBranch32;
+		opKind = OK_NearBranch32;
+		encoder->ImmSize = ImmSize_Size4;
+		encoder->Immediate = GetNearBranch32(instruction);
 		break;
-
 	default:
-		throw new InvalidOperationException();
+		//throw new InvalidOperationException();
+		break;
 	}
-	if (!Verify(operand, opKind, instruction.GetOpKind(operand)))
+	if (!Verify(operand, opKind, Instruction_GetOpKind(instruction, operand)))
+	{
 		return;
+	}
 }
 
-internal void Encoder_AddFarBranch(in Instruction instruction, int operand, int size) {
-	if (size == 2) {
-		if (!Verify(operand, OpKind.FarBranch16, instruction.GetOpKind(operand)))
+void Encoder_AddFarBranch(struct Encoder* encoder, struct Instruction* instruction, int operand, int size)
+{
+	if (size == 2)
+	{
+		if (!Verify(operand, OK_FarBranch16, Instruction_GetOpKind(instruction, operand)))
+		{
 			return;
-		ImmSize = ImmSize.Size2_2;
-		Immediate = instruction.FarBranch16;
-		ImmediateHi = instruction.FarBranchSelector;
+		}
+		encoder->ImmSize = ImmSize_Size2_2;
+		encoder->Immediate = GetFarBranch16(instruction);
+		encoder->ImmediateHi = GetFarBranchSelector(instruction);
 	}
-	else {
-		Debug.Assert(size == 4);
-		if (!Verify(operand, OpKind.FarBranch32, instruction.GetOpKind(operand)))
+	else
+	{
+		//Debug.Assert(size == 4);
+		if (!Verify(operand, OK_FarBranch32, Instruction_GetOpKind(instruction, operand)))
+		{
 			return;
-		ImmSize = ImmSize.Size4_2;
-		Immediate = instruction.FarBranch32;
-		ImmediateHi = instruction.FarBranchSelector;
+		}
+		encoder->ImmSize = ImmSize_Size4_2;
+		encoder->Immediate = GetFarBranch32(instruction);
+		encoder->ImmediateHi = GetFarBranchSelector(instruction);
 	}
-	if (bitness != size * 8)
-		EncoderFlags |= EncoderFlags.P66;
+	if (encoder->bitness != size * 8)
+	{
+		encoder->EncoderFlags |= EncoderFlags_P66;
+	}
 }
 
-internal void Encoder_SetAddrSize(int regSize) {
-	Debug.Assert(regSize == 2 || regSize == 4 || regSize == 8);
-	if (bitness == 64) {
-		if (regSize == 2) {
-			ErrorMessage = $"Invalid register size: {regSize * 8}, must be 32-bit or 64-bit";
+void Encoder_SetAddrSize(struct Encoder* encoder, int regSize)
+{
+	//Debug.Assert(regSize == 2 || regSize == 4 || regSize == 8);
+	if (encoder->bitness == 64)
+	{
+		if (regSize == 2)
+		{
+			//ErrorMessage = $"Invalid register size: {regSize * 8}, must be 32-bit or 64-bit";
 		}
 		else if (regSize == 4)
-			EncoderFlags |= EncoderFlags.P67;
+		{
+			encoder->EncoderFlags |= EncoderFlags_P67;
+		}
 	}
 	else {
-		if (regSize == 8) {
-			ErrorMessage = $"Invalid register size: {regSize * 8}, must be 16-bit or 32-bit";
+		if (regSize == 8)
+		{
+			//ErrorMessage = $"Invalid register size: {regSize * 8}, must be 16-bit or 32-bit";
 		}
-		else if (bitness == 16) {
+		else if (encoder->bitness == 16)
+		{
 			if (regSize == 4)
-				EncoderFlags |= EncoderFlags.P67;
+			{
+				encoder->EncoderFlags |= EncoderFlags_P67;
+			}
 		}
 		else {
-			Debug.Assert(bitness == 32);
+			//Debug.Assert(bitness == 32);
 			if (regSize == 2)
-				EncoderFlags |= EncoderFlags.P67;
+			{
+				encoder->EncoderFlags |= EncoderFlags_P67;
+			}
 		}
 	}
 }

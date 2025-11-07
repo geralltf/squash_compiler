@@ -1502,6 +1502,21 @@ unsigned long GetImmediate64(struct Instruction* i);
 /// </summary>
 unsigned char GetImmediate8_2nd(struct Instruction* i);
 
+/// <summary>
+/// Gets the operand's branch target. Use this property if the operand has kind <see cref="OpKind.FarBranch16"/>
+/// </summary>
+unsigned short GetFarBranch16(struct Instruction* i);
+
+/// <summary>
+/// Gets the operand's branch target. Use this property if the operand has kind <see cref="OpKind.FarBranch32"/>
+/// </summary>
+unsigned int GetFarBranch32(struct Instruction* i);
+
+/// <summary>
+/// Gets the operand's branch target selector. Use this property if the operand has kind <see cref="OpKind.FarBranch16"/> or <see cref="OpKind.FarBranch32"/>
+/// </summary>
+unsigned short GetFarBranchSelector(struct Instruction* i);
+
 enum OpKind Instruction_GetOpKind(struct Instruction* i, int operand);
 
 #endif
