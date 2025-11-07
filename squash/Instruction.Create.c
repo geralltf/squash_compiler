@@ -1227,8 +1227,9 @@ struct Instruction* Instruction_Create(enum Code code, enum Register register1, 
 void Encoder_AddBranch(struct Encoder* encoder, struct Instruction* instruction, enum OpKind opKind, int immSize, int operand)
 {
 	if (!Verify(operand, opKind, Instruction_GetOpKind(instruction, operand)))
+	{
 		return;
-
+	}
 	unsigned long target;
 	switch (immSize)
 	{
@@ -1257,7 +1258,8 @@ void Encoder_AddBranch(struct Encoder* encoder, struct Instruction* instruction,
 		}
 		break;
 	case 2:
-		switch (opKind) {
+		switch (opKind)
+		{
 		case OK_NearBranch16:
 			encoder->EncoderFlags |= encoder->opSize16Flags;
 			encoder->ImmSize = ImmSize_RipRelSize2_Target16;
@@ -1269,7 +1271,8 @@ void Encoder_AddBranch(struct Encoder* encoder, struct Instruction* instruction,
 		}
 		break;
 	case 4:
-		switch (opKind) {
+		switch (opKind)
+		{
 		case OK_NearBranch32:
 			encoder->EncoderFlags |= encoder->opSize32Flags;
 			encoder->ImmSize = ImmSize_RipRelSize4_Target32;
@@ -1293,6 +1296,860 @@ void Encoder_AddBranch(struct Encoder* encoder, struct Instruction* instruction,
 	}
 }
 
+void Encoder_AddBranchX(struct Encoder* encoder, int immSize, struct Instruction* instruction, int operand)
+{
+	if (encoder->bitness == 64)
+	{
+		if (!Verify(operand, OK_NearBranch64, Instruction_GetOpKind(instruction, operand)))
+		{
+			return;
+		}
+
+		unsigned long target = GetNearBranch64(instruction);
+		switch (immSize)
+		{
+		case 2:
+			encoder->EncoderFlags |= EncoderFlags_P66;
+			encoder->ImmSize = ImmSize_RipRelSize2_Target64;
+			encoder->Immediate = (unsigned int)target;
+			encoder->ImmediateHi = (unsigned int)(target >> 32);
+			break;
+		case 4:
+			encoder->ImmSize = ImmSize_RipRelSize4_Target64;
+			encoder->Immediate = (unsigned int)target;
+			encoder->ImmediateHi = (unsigned int)(target >> 32);
+			break;
+		default:
+			//throw new InvalidOperationException();
+			break;
+		}
+	}
+	else
+	{
+		//Debug.Assert(encoder->bitness == 16 || encoder->bitness == 32);
+		if (!Verify(operand, OK_NearBranch32, Instruction_GetOpKind(instruction, operand)))
+		{
+			return;
+		}
+		switch (immSize) {
+		case 2:
+			//Static.Assert((int)EncoderFlags.P66 == 0x80 ? 0 : -1);
+			encoder->EncoderFlags |= (enum EncoderFlags)((encoder->bitness & 0x20) << 2);
+			encoder->ImmSize = ImmSize_RipRelSize2_Target32;
+			encoder->Immediate = GetNearBranch32(instruction);
+			break;
+		case 4:
+			//Static.Assert((int)EncoderFlags.P66 == 0x80 ? 0 : -1);
+			encoder->EncoderFlags |= (enum EncoderFlags)((encoder->bitness & 0x10) << 3);
+			encoder->ImmSize = ImmSize_RipRelSize4_Target32;
+			encoder->Immediate = GetNearBranch32(instruction);
+			break;
+		case 8:
+		default:
+			//throw new InvalidOperationException();
+			break;
+		}
+	}
+}
+
+void Encoder_AddBranchDisp(int displSize, in Instruction instruction, int operand) {
+	Debug.Assert(displSize == 2 || displSize == 4);
+	OpKind opKind;
+	switch (displSize) {
+	case 2:
+		opKind = OpKind.NearBranch16;
+		ImmSize = ImmSize.Size2;
+		Immediate = instruction.NearBranch16;
+		break;
+
+	case 4:
+		opKind = OpKind.NearBranch32;
+		ImmSize = ImmSize.Size4;
+		Immediate = instruction.NearBranch32;
+		break;
+
+	default:
+		throw new InvalidOperationException();
+	}
+	if (!Verify(operand, opKind, instruction.GetOpKind(operand)))
+		return;
+}
+
+internal void Encoder_AddFarBranch(in Instruction instruction, int operand, int size) {
+	if (size == 2) {
+		if (!Verify(operand, OpKind.FarBranch16, instruction.GetOpKind(operand)))
+			return;
+		ImmSize = ImmSize.Size2_2;
+		Immediate = instruction.FarBranch16;
+		ImmediateHi = instruction.FarBranchSelector;
+	}
+	else {
+		Debug.Assert(size == 4);
+		if (!Verify(operand, OpKind.FarBranch32, instruction.GetOpKind(operand)))
+			return;
+		ImmSize = ImmSize.Size4_2;
+		Immediate = instruction.FarBranch32;
+		ImmediateHi = instruction.FarBranchSelector;
+	}
+	if (bitness != size * 8)
+		EncoderFlags |= EncoderFlags.P66;
+}
+
+internal void Encoder_SetAddrSize(int regSize) {
+	Debug.Assert(regSize == 2 || regSize == 4 || regSize == 8);
+	if (bitness == 64) {
+		if (regSize == 2) {
+			ErrorMessage = $"Invalid register size: {regSize * 8}, must be 32-bit or 64-bit";
+		}
+		else if (regSize == 4)
+			EncoderFlags |= EncoderFlags.P67;
+	}
+	else {
+		if (regSize == 8) {
+			ErrorMessage = $"Invalid register size: {regSize * 8}, must be 16-bit or 32-bit";
+		}
+		else if (bitness == 16) {
+			if (regSize == 4)
+				EncoderFlags |= EncoderFlags.P67;
+		}
+		else {
+			Debug.Assert(bitness == 32);
+			if (regSize == 2)
+				EncoderFlags |= EncoderFlags.P67;
+		}
+	}
+}
+
+internal void Encoder_AddAbsMem(in Instruction instruction, int operand) {
+	EncoderFlags |= EncoderFlags.Displ;
+	var opKind = instruction.GetOpKind(operand);
+	if (opKind == OpKind.Memory) {
+		if (instruction.MemoryBase != Register.None || instruction.MemoryIndex != Register.None) {
+			ErrorMessage = $"Operand {operand}: Absolute addresses can't have base and/or index regs";
+			return;
+		}
+		if (instruction.MemoryIndexScale != 1) {
+			ErrorMessage = $"Operand {operand}: Absolute addresses must have scale == *1";
+			return;
+		}
+		switch (instruction.MemoryDisplSize) {
+		case 2:
+			if (bitness == 64) {
+				ErrorMessage = $"Operand {operand}: 16-bit abs addresses can't be used in 64-bit mode";
+				return;
+			}
+			if (bitness == 32)
+				EncoderFlags |= EncoderFlags.P67;
+			DisplSize = DisplSize.Size2;
+			if (instruction.MemoryDisplacement64 > ushort.MaxValue) {
+				ErrorMessage = $"Operand {operand}: Displacement must fit in a ushort";
+				return;
+			}
+			Displ = instruction.MemoryDisplacement32;
+			break;
+		case 4:
+			EncoderFlags |= adrSize32Flags;
+			DisplSize = DisplSize.Size4;
+			if (instruction.MemoryDisplacement64 > uint.MaxValue) {
+				ErrorMessage = $"Operand {operand}: Displacement must fit in a uint";
+				return;
+			}
+			Displ = instruction.MemoryDisplacement32;
+			break;
+		case 8:
+			if (bitness != 64) {
+				ErrorMessage = $"Operand {operand}: 64-bit abs address is only available in 64-bit mode";
+				return;
+			}
+			DisplSize = DisplSize.Size8;
+			ulong addr = instruction.MemoryDisplacement64;
+			Displ = (uint)addr;
+			DisplHi = (uint)(addr >> 32);
+			break;
+		default:
+			ErrorMessage = $"Operand {operand}: {nameof(Instruction)}.{nameof(Instruction.MemoryDisplSize)} must be initialized to 2 (16-bit), 4 (32-bit) or 8 (64-bit)";
+			break;
+		}
+	}
+	else
+		ErrorMessage = $"Operand {operand}: Expected OpKind {nameof(OpKind.Memory)}, actual: {opKind}";
+}
+
+internal void Encoder_AddModRMRegister(in Instruction instruction, int operand, Register regLo, Register regHi) {
+	if (!Verify(operand, OpKind.Register, instruction.GetOpKind(operand)))
+		return;
+	var reg = instruction.GetOpRegister(operand);
+	if (!Verify(operand, reg, regLo, regHi))
+		return;
+	uint regNum = (uint)(reg - regLo);
+	if (regLo == Register.AL) {
+		if (reg >= Register.SPL) {
+			regNum -= 4;
+			EncoderFlags |= EncoderFlags.REX;
+		}
+		else if (reg >= Register.AH)
+			EncoderFlags |= EncoderFlags.HighLegacy8BitRegs;
+	}
+	Debug.Assert(regNum <= 31);
+	ModRM |= (byte)((regNum & 7) << 3);
+	EncoderFlags |= EncoderFlags.ModRM;
+	Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
+	EncoderFlags |= (EncoderFlags)((regNum & 8) >> 1);
+	Static.Assert((int)EncoderFlags.R2 == 0x200 ? 0 : -1);
+	EncoderFlags |= (EncoderFlags)((regNum & 0x10) << (9 - 4));
+}
+
+internal void Encoder_AddReg(in Instruction instruction, int operand, Register regLo, Register regHi) {
+	if (!Verify(operand, OpKind.Register, instruction.GetOpKind(operand)))
+		return;
+	var reg = instruction.GetOpRegister(operand);
+	if (!Verify(operand, reg, regLo, regHi))
+		return;
+	uint regNum = (uint)(reg - regLo);
+	if (regLo == Register.AL) {
+		if (reg >= Register.SPL) {
+			regNum -= 4;
+			EncoderFlags |= EncoderFlags.REX;
+		}
+		else if (reg >= Register.AH)
+			EncoderFlags |= EncoderFlags.HighLegacy8BitRegs;
+	}
+	Debug.Assert(regNum <= 15);
+	OpCode |= regNum & 7;
+	Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
+	Debug.Assert(regNum <= 15);
+	EncoderFlags |= (EncoderFlags)(regNum >> 3);// regNum <= 15, so no need to mask out anything
+}
+
+[MethodImpl(MethodImplOptions.AggressiveInlining)]
+internal void Encoder_AddRegOrMem(in Instruction instruction, int operand, Register regLo, Register regHi, bool allowMemOp, bool allowRegOp) = >
+AddRegOrMem(instruction, operand, regLo, regHi, Register.None, Register.None, allowMemOp, allowRegOp);
+
+internal void Encoder_AddRegOrMem(in Instruction instruction, int operand, Register regLo, Register regHi, Register vsibIndexRegLo, Register vsibIndexRegHi, bool allowMemOp, bool allowRegOp) {
+	var opKind = instruction.GetOpKind(operand);
+	EncoderFlags |= EncoderFlags.ModRM;
+	if (opKind == OpKind.Register) {
+		if (!allowRegOp) {
+			ErrorMessage = $"Operand {operand}: register operand is not allowed";
+			return;
+		}
+		var reg = instruction.GetOpRegister(operand);
+		if (!Verify(operand, reg, regLo, regHi))
+			return;
+		uint regNum = (uint)(reg - regLo);
+		if (regLo == Register.AL) {
+			if (reg >= Register.R8L)
+				regNum -= 4;
+			else if (reg >= Register.SPL) {
+				regNum -= 4;
+				EncoderFlags |= EncoderFlags.REX;
+			}
+			else if (reg >= Register.AH)
+				EncoderFlags |= EncoderFlags.HighLegacy8BitRegs;
+		}
+		ModRM |= (byte)(regNum & 7);
+		ModRM |= 0xC0;
+		Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
+		Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
+		EncoderFlags |= (EncoderFlags)((regNum >> 3) & 3);
+		Debug.Assert(regNum <= 31);
+	}
+	else if (opKind == OpKind.Memory) {
+		if (!allowMemOp) {
+			ErrorMessage = $"Operand {operand}: memory operand is not allowed";
+			return;
+		}
+		if (instruction.MemorySize.IsBroadcast())
+			EncoderFlags |= EncoderFlags.Broadcast;
+
+		var codeSize = instruction.CodeSize;
+		if (codeSize == CodeSize.Unknown) {
+			if (bitness == 64)
+				codeSize = CodeSize.Code64;
+			else if (bitness == 32)
+				codeSize = CodeSize.Code32;
+			else {
+				Debug.Assert(bitness == 16);
+				codeSize = CodeSize.Code16;
+			}
+		}
+		int addrSize = InstructionUtils.GetAddressSizeInBytes(instruction.MemoryBase, instruction.MemoryIndex, instruction.MemoryDisplSize, codeSize) * 8;
+		if (addrSize != bitness)
+			EncoderFlags |= EncoderFlags.P67;
+		if ((EncoderFlags & EncoderFlags.RegIsMemory) != 0) {
+			var regSize = GetRegisterOpSize(instruction);
+			if (regSize != addrSize) {
+				ErrorMessage = $"Operand {operand}: Register operand size must equal memory addressing mode (16/32/64)";
+				return;
+			}
+		}
+		if (addrSize == 16) {
+			if (vsibIndexRegLo != Register.None) {
+				ErrorMessage = $"Operand {operand}: VSIB operands can't use 16-bit addressing. It must be 32-bit or 64-bit addressing";
+				return;
+			}
+			AddMemOp16(instruction, operand);
+		}
+		else
+			AddMemOp(instruction, operand, addrSize, vsibIndexRegLo, vsibIndexRegHi);
+	}
+	else
+		ErrorMessage = $"Operand {operand}: Expected a register or memory operand, but opKind is {opKind}";
+}
+
+static int Encoder_GetRegisterOpSize(in Instruction instruction) {
+	Debug.Assert(instruction.Op0Kind == OpKind.Register);
+	if (instruction.Op0Kind == OpKind.Register) {
+		var reg = instruction.Op0Register;
+		if (reg.IsGPR64())
+			return 64;
+		if (reg.IsGPR32())
+			return 32;
+		if (reg.IsGPR16())
+			return 16;
+	}
+	return 0;
+}
+
+bool Encoder_TryConvertToDisp8N(in Instruction instruction, int displ, out sbyte compressedValue) {
+	var tryConvertToDisp8N = handler.TryConvertToDisp8N;
+	if (tryConvertToDisp8N is not null)
+		return tryConvertToDisp8N(this, handler, instruction, displ, out compressedValue);
+	if (sbyte.MinValue <= displ && displ <= sbyte.MaxValue) {
+		compressedValue = (sbyte)displ;
+		return true;
+	}
+	compressedValue = 0;
+	return false;
+}
+
+void Encoder_AddMemOp16(in Instruction instruction, int operand) {
+	if (bitness == 64) {
+		ErrorMessage = $"Operand {operand}: 16-bit addressing can't be used by 64-bit code";
+		return;
+	}
+	var baseReg = instruction.MemoryBase;
+	var indexReg = instruction.MemoryIndex;
+	var displSize = instruction.MemoryDisplSize;
+	if (baseReg == Register.BX && indexReg == Register.SI) {
+		// Nothing
+	}
+	else if (baseReg == Register.BX && indexReg == Register.DI)
+		ModRM |= 1;
+	else if (baseReg == Register.BP && indexReg == Register.SI)
+		ModRM |= 2;
+	else if (baseReg == Register.BP && indexReg == Register.DI)
+		ModRM |= 3;
+	else if (baseReg == Register.SI && indexReg == Register.None)
+		ModRM |= 4;
+	else if (baseReg == Register.DI && indexReg == Register.None)
+		ModRM |= 5;
+	else if (baseReg == Register.BP && indexReg == Register.None)
+		ModRM |= 6;
+	else if (baseReg == Register.BX && indexReg == Register.None)
+		ModRM |= 7;
+	else if (baseReg == Register.None && indexReg == Register.None) {
+		ModRM |= 6;
+		DisplSize = DisplSize.Size2;
+		if (instruction.MemoryDisplacement64 > ushort.MaxValue) {
+			ErrorMessage = $"Operand {operand}: Displacement must fit in a ushort";
+			return;
+		}
+		Displ = instruction.MemoryDisplacement32;
+	}
+	else {
+		ErrorMessage = $"Operand {operand}: Invalid 16-bit base + index registers: base={baseReg}, index={indexReg}";
+		return;
+	}
+
+	if (baseReg != Register.None || indexReg != Register.None) {
+		if ((long)instruction.MemoryDisplacement64 < short.MinValue || (long)instruction.MemoryDisplacement64 > ushort.MaxValue) {
+			ErrorMessage = $"Operand {operand}: Displacement must fit in a short or a ushort";
+			return;
+		}
+		Displ = instruction.MemoryDisplacement32;
+		// [bp] => [bp+00]
+		if (displSize == 0 && baseReg == Register.BP && indexReg == Register.None) {
+			displSize = 1;
+			if (Displ != 0) {
+				ErrorMessage = $"Operand {operand}: Displacement must be 0 if displSize == 0";
+				return;
+			}
+		}
+		if (displSize == 1) {
+			if (TryConvertToDisp8N(instruction, (short)Displ, out sbyte compressedValue))
+				Displ = (uint)compressedValue;
+			else
+				displSize = 2;
+		}
+		if (displSize == 0) {
+			if (Displ != 0) {
+				ErrorMessage = $"Operand {operand}: Displacement must be 0 if displSize == 0";
+				return;
+			}
+		}
+		else if (displSize == 1) {
+			// This if check should never be true when we're here
+			if ((int)Displ < sbyte.MinValue || (int)Displ > sbyte.MaxValue) {
+				ErrorMessage = $"Operand {operand}: Displacement must fit in an sbyte";
+				return;
+			}
+			ModRM |= 0x40;
+			DisplSize = DisplSize.Size1;
+		}
+		else if (displSize == 2) {
+			ModRM |= 0x80;
+			DisplSize = DisplSize.Size2;
+		}
+		else {
+			ErrorMessage = $"Operand {operand}: Invalid displacement size: {displSize}, must be 0, 1, or 2";
+			return;
+		}
+	}
+}
+
+void Encoder_AddMemOp(in Instruction instruction, int operand, int addrSize, Register vsibIndexRegLo, Register vsibIndexRegHi) {
+	Debug.Assert(addrSize == 32 || addrSize == 64);
+	if (bitness != 64 && addrSize == 64) {
+		ErrorMessage = $"Operand {operand}: 64-bit addressing can only be used in 64-bit mode";
+		return;
+	}
+
+	var baseReg = instruction.MemoryBase;
+	var indexReg = instruction.MemoryIndex;
+	var displSize = instruction.MemoryDisplSize;
+
+	Register baseRegLo, baseRegHi;
+	Register indexRegLo, indexRegHi;
+	if (addrSize == 64) {
+		baseRegLo = Register.RAX;
+		baseRegHi = Register.R15;
+	}
+	else {
+		Debug.Assert(addrSize == 32);
+		baseRegLo = Register.EAX;
+		baseRegHi = Register.R15D;
+	}
+	if (vsibIndexRegLo != Register.None) {
+		indexRegLo = vsibIndexRegLo;
+		indexRegHi = vsibIndexRegHi;
+	}
+	else {
+		indexRegLo = baseRegLo;
+		indexRegHi = baseRegHi;
+	}
+	if (baseReg != Register.None && baseReg != Register.RIP && baseReg != Register.EIP && !Verify(operand, baseReg, baseRegLo, baseRegHi))
+		return;
+	if (indexReg != Register.None && !Verify(operand, indexReg, indexRegLo, indexRegHi))
+		return;
+
+	if (displSize != 0 && displSize != 1 && displSize != 4 && displSize != 8) {
+		ErrorMessage = $"Operand {operand}: Invalid displ size: {displSize}, must be 0, 1, 4, 8";
+		return;
+	}
+	if (baseReg == Register.RIP || baseReg == Register.EIP) {
+		if (indexReg != Register.None) {
+			ErrorMessage = $"Operand {operand}: RIP relative addressing can't use an index register";
+			return;
+		}
+		if (instruction.InternalMemoryIndexScale != 0) {
+			ErrorMessage = $"Operand {operand}: RIP relative addressing must use scale *1";
+			return;
+		}
+		if (bitness != 64) {
+			ErrorMessage = $"Operand {operand}: RIP/EIP relative addressing is only available in 64-bit mode";
+			return;
+		}
+		if ((EncoderFlags & EncoderFlags.MustUseSib) != 0) {
+			ErrorMessage = $"Operand {operand}: RIP/EIP relative addressing isn't supported";
+			return;
+		}
+		ModRM |= 5;
+		ulong target = instruction.MemoryDisplacement64;
+		if (baseReg == Register.RIP) {
+			DisplSize = DisplSize.RipRelSize4_Target64;
+			Displ = (uint)target;
+			DisplHi = (uint)(target >> 32);
+		}
+		else {
+			DisplSize = DisplSize.RipRelSize4_Target32;
+			if (target > uint.MaxValue) {
+				ErrorMessage = $"Operand {operand}: Target address doesn't fit in 32 bits: 0x{target:X}";
+				return;
+			}
+			Displ = (uint)target;
+		}
+		return;
+	}
+	var scale = instruction.InternalMemoryIndexScale;
+	Displ = instruction.MemoryDisplacement32;
+	if (addrSize == 64) {
+		if ((long)instruction.MemoryDisplacement64 < int.MinValue || (long)instruction.MemoryDisplacement64 > int.MaxValue) {
+			ErrorMessage = $"Operand {operand}: Displacement must fit in an int";
+			return;
+		}
+	}
+	else {
+		Debug.Assert(addrSize == 32);
+		if ((long)instruction.MemoryDisplacement64 < int.MinValue || (long)instruction.MemoryDisplacement64 > uint.MaxValue) {
+			ErrorMessage = $"Operand {operand}: Displacement must fit in an int or a uint";
+			return;
+		}
+	}
+	if (baseReg == Register.None && indexReg == Register.None) {
+		if (vsibIndexRegLo != Register.None) {
+			ErrorMessage = $"Operand {operand}: VSIB addressing can't use an offset-only address";
+			return;
+		}
+		if (bitness == 64 || scale != 0 || (EncoderFlags & EncoderFlags.MustUseSib) != 0) {
+			ModRM |= 4;
+			DisplSize = DisplSize.Size4;
+			EncoderFlags |= EncoderFlags.Sib;
+			Sib = (byte)(0x25 | (scale << 6));
+			return;
+		}
+		else {
+			ModRM |= 5;
+			DisplSize = DisplSize.Size4;
+			return;
+		}
+	}
+
+	int baseNum = baseReg == Register.None ? -1 : baseReg - baseRegLo;
+	int indexNum = indexReg == Register.None ? -1 : indexReg - indexRegLo;
+
+	// [ebp]/[ebp+index*scale] => [ebp+00]/[ebp+index*scale+00]
+	if (displSize == 0 && (baseNum & 7) == 5) {
+		displSize = 1;
+		if (Displ != 0) {
+			ErrorMessage = $"Operand {operand}: Displacement must be 0 if displSize == 0";
+			return;
+		}
+	}
+
+	if (displSize == 1) {
+		if (TryConvertToDisp8N(instruction, (int)Displ, out sbyte compressedValue))
+			Displ = (uint)compressedValue;
+		else
+			displSize = addrSize / 8;
+	}
+
+	if (baseReg == Register.None) {
+		// Tested earlier in the method
+		Debug.Assert(indexReg != Register.None);
+		DisplSize = DisplSize.Size4;
+	}
+	else if (displSize == 1) {
+		// This if check should never be true when we're here
+		if ((int)Displ < sbyte.MinValue || (int)Displ > sbyte.MaxValue) {
+			ErrorMessage = $"Operand {operand}: Displacement must fit in an sbyte";
+			return;
+		}
+		ModRM |= 0x40;
+		DisplSize = DisplSize.Size1;
+	}
+	else if (displSize == addrSize / 8) {
+		ModRM |= 0x80;
+		DisplSize = DisplSize.Size4;
+	}
+	else if (displSize == 0) {
+		if (Displ != 0) {
+			ErrorMessage = $"Operand {operand}: Displacement must be 0 if displSize == 0";
+			return;
+		}
+	}
+	else {
+		ErrorMessage = $"Operand {operand}: Invalid {nameof(Instruction.MemoryDisplSize)} value";
+		return;
+	}
+
+	if (indexReg == Register.None && (baseNum & 7) != 4 && scale == 0 && (EncoderFlags & EncoderFlags.MustUseSib) == 0) {
+		// Tested earlier in the method
+		Debug.Assert(baseReg != Register.None);
+		ModRM |= (byte)(baseNum & 7);
+	}
+	else {
+		EncoderFlags |= EncoderFlags.Sib;
+		Sib = (byte)(scale << 6);
+		ModRM |= 4;
+		if (indexReg == Register.RSP || indexReg == Register.ESP) {
+			ErrorMessage = $"Operand {operand}: ESP/RSP can't be used as an index register";
+			return;
+		}
+		if (baseNum < 0)
+			Sib |= 5;
+		else
+			Sib |= (byte)(baseNum & 7);
+		if (indexNum < 0)
+			Sib |= 0x20;
+		else
+			Sib |= (byte)((indexNum & 7) << 3);
+	}
+
+	if (baseNum >= 0) {
+		Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
+		Debug.Assert(baseNum <= 15);// No '& 1' required below
+		EncoderFlags |= (EncoderFlags)(baseNum >> 3);
+	}
+	if (indexNum >= 0) {
+		Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
+		EncoderFlags |= (EncoderFlags)((indexNum >> 2) & 2);
+		EncoderFlags |= (EncoderFlags)((indexNum & 0x10) << (int)EncoderFlags.VvvvvShift);
+		Debug.Assert(indexNum <= 31);
+	}
+}
+
+void Encoder_WritePrefixes(in Instruction instruction, bool canWriteF3 = true)
+{
+	Debug.Assert(!handler.IsSpecialInstr);
+	var seg = instruction.SegmentPrefix;
+	if (seg != Register.None) {
+		Debug.Assert((uint)(seg - Register.ES) < (uint)SegmentOverrides.Length);
+		WriteByteInternal(SegmentOverrides[seg - Register.ES]);
+	}
+	if ((EncoderFlags & EncoderFlags.PF0) != 0 || instruction.HasLockPrefix)
+		WriteByteInternal(0xF0);
+	if ((EncoderFlags & EncoderFlags.P66) != 0)
+		WriteByteInternal(0x66);
+	if ((EncoderFlags & EncoderFlags.P67) != 0)
+		WriteByteInternal(0x67);
+	if (canWriteF3 && instruction.HasRepePrefix)
+		WriteByteInternal(0xF3);
+	if (instruction.HasRepnePrefix)
+		WriteByteInternal(0xF2);
+}
+
+void Encoder_WriteModRM()
+{
+	Debug.Assert(!handler.IsSpecialInstr);
+	Debug.Assert((EncoderFlags & (EncoderFlags.ModRM | EncoderFlags.Displ)) != 0);
+	if ((EncoderFlags & EncoderFlags.ModRM) != 0) {
+		WriteByteInternal(ModRM);
+		if ((EncoderFlags & EncoderFlags.Sib) != 0)
+			WriteByteInternal(Sib);
+	}
+
+	uint diff4;
+	displAddr = (uint)currentRip;
+	switch (DisplSize) {
+	case DisplSize.None:
+		break;
+
+	case DisplSize.Size1:
+		WriteByteInternal(Displ);
+		break;
+
+	case DisplSize.Size2:
+		diff4 = Displ;
+		WriteByteInternal(diff4);
+		WriteByteInternal(diff4 >> 8);
+		break;
+
+	case DisplSize.Size4:
+		diff4 = Displ;
+		WriteByteInternal(diff4);
+		WriteByteInternal(diff4 >> 8);
+		WriteByteInternal(diff4 >> 16);
+		WriteByteInternal(diff4 >> 24);
+		break;
+
+	case DisplSize.Size8:
+		diff4 = Displ;
+		WriteByteInternal(diff4);
+		WriteByteInternal(diff4 >> 8);
+		WriteByteInternal(diff4 >> 16);
+		WriteByteInternal(diff4 >> 24);
+		diff4 = DisplHi;
+		WriteByteInternal(diff4);
+		WriteByteInternal(diff4 >> 8);
+		WriteByteInternal(diff4 >> 16);
+		WriteByteInternal(diff4 >> 24);
+		break;
+
+	case DisplSize.RipRelSize4_Target32:
+		uint eip = (uint)currentRip + 4 + immSizes[(int)ImmSize];
+		diff4 = Displ - eip;
+		WriteByteInternal(diff4);
+		WriteByteInternal(diff4 >> 8);
+		WriteByteInternal(diff4 >> 16);
+		WriteByteInternal(diff4 >> 24);
+		break;
+
+	case DisplSize.RipRelSize4_Target64:
+		ulong rip = currentRip + 4 + immSizes[(int)ImmSize];
+		long diff8 = (long)(((ulong)DisplHi << 32) | (ulong)Displ) - (long)rip;
+		if (diff8 < int.MinValue || diff8 > int.MaxValue)
+			ErrorMessage = $"RIP relative distance is too far away: NextIP: 0x{rip:X16} target: 0x{DisplHi:X8}{Displ:X8}, diff = {diff8}, diff must fit in an Int32";
+		diff4 = (uint)diff8;
+		WriteByteInternal(diff4);
+		WriteByteInternal(diff4 >> 8);
+		WriteByteInternal(diff4 >> 16);
+		WriteByteInternal(diff4 >> 24);
+		break;
+
+	default:
+		throw new InvalidOperationException();
+	}
+}
+
+void Encoder_WriteImmediate()
+{
+	//Debug.Assert(!handler.IsSpecialInstr);
+	ushort ip;
+	uint eip;
+	ulong rip;
+	short diff2;
+	int diff4;
+	long diff8;
+	uint value;
+	immAddr = (uint)currentRip;
+	switch (ImmSize) 
+	{
+	case ImmSize.None:
+		break;
+
+	case ImmSize.Size1:
+	case ImmSize.SizeIbReg:
+	case ImmSize.Size1OpCode:
+		WriteByteInternal(Immediate);
+		break;
+
+	case ImmSize.Size2:
+		value = Immediate;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		break;
+
+	case ImmSize.Size4:
+		value = Immediate;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		WriteByteInternal(value >> 16);
+		WriteByteInternal(value >> 24);
+		break;
+
+	case ImmSize.Size8:
+		value = Immediate;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		WriteByteInternal(value >> 16);
+		WriteByteInternal(value >> 24);
+		value = ImmediateHi;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		WriteByteInternal(value >> 16);
+		WriteByteInternal(value >> 24);
+		break;
+
+	case ImmSize.Size2_1:
+		value = Immediate;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		WriteByteInternal(ImmediateHi);
+		break;
+
+	case ImmSize.Size1_1:
+		WriteByteInternal(Immediate);
+		WriteByteInternal(ImmediateHi);
+		break;
+
+	case ImmSize.Size2_2:
+		value = Immediate;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		value = ImmediateHi;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		break;
+
+	case ImmSize.Size4_2:
+		value = Immediate;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		WriteByteInternal(value >> 16);
+		WriteByteInternal(value >> 24);
+		value = ImmediateHi;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		break;
+
+	case ImmSize.RipRelSize1_Target16:
+		ip = (ushort)((uint)currentRip + 1);
+		diff2 = (short)((short)Immediate - (short)ip);
+		if (diff2 < sbyte.MinValue || diff2 > sbyte.MaxValue)
+			ErrorMessage = $"Branch distance is too far away: NextIP: 0x{ip:X4} target: 0x{(ushort)Immediate:X4}, diff = {diff2}, diff must fit in an Int8";
+		WriteByteInternal((uint)diff2);
+		break;
+
+	case ImmSize.RipRelSize1_Target32:
+		eip = (uint)currentRip + 1;
+		diff4 = (int)Immediate - (int)eip;
+		if (diff4 < sbyte.MinValue || diff4 > sbyte.MaxValue)
+			ErrorMessage = $"Branch distance is too far away: NextIP: 0x{eip:X8} target: 0x{Immediate:X8}, diff = {diff4}, diff must fit in an Int8";
+		WriteByteInternal((uint)diff4);
+		break;
+
+	case ImmSize.RipRelSize1_Target64:
+		rip = currentRip + 1;
+		diff8 = (long)(((ulong)ImmediateHi << 32) | (ulong)Immediate) - (long)rip;
+		if (diff8 < sbyte.MinValue || diff8 > sbyte.MaxValue)
+			ErrorMessage = $"Branch distance is too far away: NextIP: 0x{rip:X16} target: 0x{ImmediateHi:X8}{Immediate:X8}, diff = {diff8}, diff must fit in an Int8";
+		WriteByteInternal((uint)diff8);
+		break;
+
+	case ImmSize.RipRelSize2_Target16:
+		eip = (uint)currentRip + 2;
+		value = Immediate - eip;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		break;
+
+	case ImmSize.RipRelSize2_Target32:
+		eip = (uint)currentRip + 2;
+		diff4 = (int)(Immediate - eip);
+		if (diff4 < short.MinValue || diff4 > short.MaxValue)
+			ErrorMessage = $"Branch distance is too far away: NextIP: 0x{eip:X8} target: 0x{Immediate:X8}, diff = {diff4}, diff must fit in an Int16";
+		value = (uint)diff4;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		break;
+
+	case ImmSize.RipRelSize2_Target64:
+		rip = currentRip + 2;
+		diff8 = (long)(((ulong)ImmediateHi << 32) | (ulong)Immediate) - (long)rip;
+		if (diff8 < short.MinValue || diff8 > short.MaxValue)
+			ErrorMessage = $"Branch distance is too far away: NextIP: 0x{rip:X16} target: 0x{ImmediateHi:X8}{Immediate:X8}, diff = {diff8}, diff must fit in an Int16";
+		value = (uint)diff8;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		break;
+
+	case ImmSize.RipRelSize4_Target32:
+		eip = (uint)currentRip + 4;
+		value = Immediate - eip;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		WriteByteInternal(value >> 16);
+		WriteByteInternal(value >> 24);
+		break;
+
+	case ImmSize.RipRelSize4_Target64:
+		rip = currentRip + 4;
+		diff8 = (long)(((ulong)ImmediateHi << 32) | (ulong)Immediate) - (long)rip;
+		if (diff8 < int.MinValue || diff8 > int.MaxValue)
+			ErrorMessage = $"Branch distance is too far away: NextIP: 0x{rip:X16} target: 0x{ImmediateHi:X8}{Immediate:X8}, diff = {diff8}, diff must fit in an Int32";
+		value = (uint)diff8;
+		WriteByteInternal(value);
+		WriteByteInternal(value >> 8);
+		WriteByteInternal(value >> 16);
+		WriteByteInternal(value >> 24);
+		break;
+
+	default:
+		throw new InvalidOperationException();
+	}
+}
+
 /// <summary>
 /// Encodes an instruction
 /// </summary>
@@ -1301,7 +2158,7 @@ void Encoder_AddBranch(struct Encoder* encoder, struct Instruction* instruction,
 /// <param name="encodedLength">Updated with length of encoded instruction if successful</param>
 /// <param name="errorMessage">Set to the error message if we couldn't encode the instruction</param>
 /// <returns></returns>
-bool TryEncode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip, unsigned int* encodedLength)
+bool Encoder_TryEncode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip, unsigned int* encodedLength)
 {
 	encoder->currentRip = rip;
 	encoder->eip = (unsigned int)rip;
@@ -1393,7 +2250,6 @@ bool TryEncode(struct Encoder* encoder, struct Instruction* instruction, unsigne
 
 	case CodeSize_Code64:
 		break;
-
 	default:
 		//throw new InvalidOperationException();
 		break;
