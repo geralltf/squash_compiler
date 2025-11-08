@@ -1443,59 +1443,72 @@ void Encoder_SetAddrSize(struct Encoder* encoder, int regSize)
 	}
 }
 
-internal void Encoder_AddAbsMem(in Instruction instruction, int operand) {
-	EncoderFlags |= EncoderFlags.Displ;
-	var opKind = instruction.GetOpKind(operand);
-	if (opKind == OpKind.Memory) {
-		if (instruction.MemoryBase != Register.None || instruction.MemoryIndex != Register.None) {
-			ErrorMessage = $"Operand {operand}: Absolute addresses can't have base and/or index regs";
+void Encoder_AddAbsMem(struct Encoder* encoder, struct Instruction* instruction, int operand)
+{
+	encoder->EncoderFlags |= EncoderFlags_Displ;
+	enum OpKind opKind = Instruction_GetOpKind(instruction, operand);
+	if (opKind == OK_Memory)
+	{
+		if (GetMemoryBase(instruction) != Register_None || GetMemoryIndex(instruction) != Register_None)
+		{
+			//ErrorMessage = $"Operand {operand}: Absolute addresses can't have base and/or index regs";
 			return;
 		}
-		if (instruction.MemoryIndexScale != 1) {
-			ErrorMessage = $"Operand {operand}: Absolute addresses must have scale == *1";
+		if (GetMemoryIndexScale(instruction) != 1)
+		{
+			//ErrorMessage = $"Operand {operand}: Absolute addresses must have scale == *1";
 			return;
 		}
-		switch (instruction.MemoryDisplSize) {
+		switch (GetMemoryDisplSize(instruction))
+		{
 		case 2:
-			if (bitness == 64) {
-				ErrorMessage = $"Operand {operand}: 16-bit abs addresses can't be used in 64-bit mode";
+			if (encoder->bitness == 64)
+			{
+				//ErrorMessage = $"Operand {operand}: 16-bit abs addresses can't be used in 64-bit mode";
 				return;
 			}
-			if (bitness == 32)
-				EncoderFlags |= EncoderFlags.P67;
-			DisplSize = DisplSize.Size2;
-			if (instruction.MemoryDisplacement64 > ushort.MaxValue) {
-				ErrorMessage = $"Operand {operand}: Displacement must fit in a ushort";
+			if (encoder->bitness == 32)
+			{
+				encoder->EncoderFlags |= EncoderFlags_P67;
+			}
+			encoder->DisplSize = DisplSize_Size2;
+			if (GetMemoryDisplacement64(instruction) > USHRT_MAX)
+			{
+				//ErrorMessage = $"Operand {operand}: Displacement must fit in a ushort";
 				return;
 			}
-			Displ = instruction.MemoryDisplacement32;
+			Displ = GetMemoryDisplacement32(instruction);
 			break;
 		case 4:
-			EncoderFlags |= adrSize32Flags;
-			DisplSize = DisplSize.Size4;
-			if (instruction.MemoryDisplacement64 > uint.MaxValue) {
-				ErrorMessage = $"Operand {operand}: Displacement must fit in a uint";
+			encoder->EncoderFlags |= encoder->adrSize32Flags;
+			encoder->DisplSize = DisplSize_Size4;
+			if (GetMemoryDisplacement64(instruction) > UINT_MAX)
+			{
+				//ErrorMessage = $"Operand {operand}: Displacement must fit in a uint";
 				return;
 			}
-			Displ = instruction.MemoryDisplacement32;
+			encoder->Displ = GetMemoryDisplacement32(instruction);
 			break;
 		case 8:
-			if (bitness != 64) {
-				ErrorMessage = $"Operand {operand}: 64-bit abs address is only available in 64-bit mode";
+			if (encoder->bitness != 64)
+			{
+				//ErrorMessage = $"Operand {operand}: 64-bit abs address is only available in 64-bit mode";
 				return;
 			}
-			DisplSize = DisplSize.Size8;
-			ulong addr = instruction.MemoryDisplacement64;
-			Displ = (uint)addr;
-			DisplHi = (uint)(addr >> 32);
+			encoder->DisplSize = DisplSize_Size8;
+			unsigned long addr = GetMemoryDisplacement64(instruction);
+			encoder->Displ = (unsigned int)addr;
+			encoder->DisplHi = (unsigned int)(addr >> 32);
 			break;
 		default:
-			ErrorMessage = $"Operand {operand}: {nameof(Instruction)}.{nameof(Instruction.MemoryDisplSize)} must be initialized to 2 (16-bit), 4 (32-bit) or 8 (64-bit)";
+			//ErrorMessage = $"Operand {operand}: {nameof(Instruction)}.{nameof(Instruction.MemoryDisplSize)} must be initialized to 2 (16-bit), 4 (32-bit) or 8 (64-bit)";
 			break;
 		}
 	}
 	else
-		ErrorMessage = $"Operand {operand}: Expected OpKind {nameof(OpKind.Memory)}, actual: {opKind}";
+	{
+		//ErrorMessage = $"Operand {operand}: Expected OpKind {nameof(OpKind.Memory)}, actual: {opKind}";
+	}
 }
 
 internal void Encoder_AddModRMRegister(in Instruction instruction, int operand, Register regLo, Register regHi) {

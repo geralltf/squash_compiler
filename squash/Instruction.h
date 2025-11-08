@@ -1517,6 +1517,13 @@ unsigned int GetFarBranch32(struct Instruction* i);
 /// </summary>
 unsigned short GetFarBranchSelector(struct Instruction* i);
 
+/// <summary>
+/// Gets the memory operand's displacement or the 32-bit absolute address if it's
+/// an <c>EIP</c> or <c>RIP</c> relative memory operand.
+/// Use this property if the operand has kind <see cref="OpKind.Memory"/>
+/// </summary>
+unsigned int GetMemoryDisplacement32(struct Instruction* i);
+
 enum OpKind Instruction_GetOpKind(struct Instruction* i, int operand);
 
 #endif
