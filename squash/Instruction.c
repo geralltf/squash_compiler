@@ -994,7 +994,7 @@ enum TupleType GetTupleType(struct Instruction* i, int sss)
 /// <see cref="OpKind.MemorySegSI"/>, <see cref="OpKind.MemorySegESI"/>, <see cref="OpKind.MemorySegRSI"/>,
 /// <see cref="OpKind.MemoryESDI"/>, <see cref="OpKind.MemoryESEDI"/>, <see cref="OpKind.MemoryESRDI"/>
 /// </summary>
-enum MemorySize GetMemorySize(struct Instruction* i)
+enum MemorySize Instruction_GetMemorySize(struct Instruction* i)
 {
 	int index = (int)GetCode(i);
 	if (IsMvex(i, (enum Code)index)) 

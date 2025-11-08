@@ -1524,6 +1524,37 @@ unsigned short GetFarBranchSelector(struct Instruction* i);
 /// </summary>
 unsigned int GetMemoryDisplacement32(struct Instruction* i);
 
+/// <summary>
+/// Gets the operand's register value. Use this property if the operand has kind <see cref="OpKind.Register"/>
+/// </summary>
+/// <param name="operand">Operand number, 0-4</param>
+/// <returns></returns>
+enum Register GetOpRegister(struct Instruction* i, int operand);
+
 enum OpKind Instruction_GetOpKind(struct Instruction* i, int operand);
+
+/// <summary>
+/// Gets the size of the memory location that is referenced by the operand. See also <see cref="IsBroadcast"/>.
+/// Use this property if the operand has kind <see cref="OpKind.Memory"/>,
+/// <see cref="OpKind.MemorySegSI"/>, <see cref="OpKind.MemorySegESI"/>, <see cref="OpKind.MemorySegRSI"/>,
+/// <see cref="OpKind.MemoryESDI"/>, <see cref="OpKind.MemoryESEDI"/>, <see cref="OpKind.MemoryESRDI"/>
+/// </summary>
+enum MemorySize Instruction_GetMemorySize(struct Instruction* i);
+
+/// <summary>
+/// Gets the code size when the instruction was decoded. This value is informational and can
+/// be used by a formatter.
+/// </summary>
+enum CodeSize GetCodeSize(struct Instruction* i);
+
+/// <summary>
+/// Gets operand #0's kind if the operand exists (see <see cref="OpCount"/> and <see cref="GetOpKind(int)"/>)
+/// </summary>
+enum OpKind GetOp0Kind(struct Instruction* i);
+
+/// <summary>
+/// Gets operand #0's register value. Use this property if operand #0 (<see cref="Op0Kind"/>) has kind <see cref="OpKind.Register"/>, see <see cref="OpCount"/> and <see cref="GetOpRegister(int)"/>
+/// </summary>
+enum Register GetOp0Register(struct Instruction* i);
 
 #endif
