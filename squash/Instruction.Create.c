@@ -1477,7 +1477,7 @@ void Encoder_AddAbsMem(struct Encoder* encoder, struct Instruction* instruction,
 				//ErrorMessage = $"Operand {operand}: Displacement must fit in a ushort";
 				return;
 			}
-			Displ = GetMemoryDisplacement32(instruction);
+			encoder->Displ = GetMemoryDisplacement32(instruction);
 			break;
 		case 4:
 			encoder->EncoderFlags |= encoder->adrSize32Flags;
@@ -1511,140 +1511,270 @@ void Encoder_AddAbsMem(struct Encoder* encoder, struct Instruction* instruction,
 	}
 }
 
-internal void Encoder_AddModRMRegister(in Instruction instruction, int operand, Register regLo, Register regHi) {
-	if (!Verify(operand, OpKind.Register, instruction.GetOpKind(operand)))
+void Encoder_AddModRMRegister(struct Encoder* encoder, struct Instruction* instruction, int operand, enum Register regLo, enum Register regHi)
+{
+	if (!Verify(operand, OK_Register, Instruction_GetOpKind(instruction, operand)))
+	{
 		return;
-	var reg = instruction.GetOpRegister(operand);
+	}
+	enum Register reg = GetOpRegister(instruction, operand);
 	if (!Verify(operand, reg, regLo, regHi))
+	{
 		return;
-	uint regNum = (uint)(reg - regLo);
-	if (regLo == Register.AL) {
-		if (reg >= Register.SPL) {
-			regNum -= 4;
-			EncoderFlags |= EncoderFlags.REX;
-		}
-		else if (reg >= Register.AH)
-			EncoderFlags |= EncoderFlags.HighLegacy8BitRegs;
 	}
-	Debug.Assert(regNum <= 31);
-	ModRM |= (byte)((regNum & 7) << 3);
-	EncoderFlags |= EncoderFlags.ModRM;
-	Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
-	EncoderFlags |= (EncoderFlags)((regNum & 8) >> 1);
-	Static.Assert((int)EncoderFlags.R2 == 0x200 ? 0 : -1);
-	EncoderFlags |= (EncoderFlags)((regNum & 0x10) << (9 - 4));
+	unsigned int regNum = (unsigned int)(reg - regLo);
+	if (regLo == Register_AL) 
+	{
+		if (reg >= Register_SPL)
+		{
+			regNum -= 4;
+			encoder->EncoderFlags |= EncoderFlags_REX;
+		}
+		else if (reg >= Register_AH)
+		{
+			encoder->EncoderFlags |= EncoderFlags_HighLegacy8BitRegs;
+		}
+	}
+	//Debug.Assert(regNum <= 31);
+	encoder->ModRM |= (unsigned char)((regNum & 7) << 3);
+	encoder->EncoderFlags |= EncoderFlags_ModRM;
+	//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
+	encoder->EncoderFlags |= (enum EncoderFlags)((regNum & 8) >> 1);
+	//Static.Assert((int)EncoderFlags.R2 == 0x200 ? 0 : -1);
+	encoder->EncoderFlags |= (enum EncoderFlags)((regNum & 0x10) << (9 - 4));
 }
 
-internal void Encoder_AddReg(in Instruction instruction, int operand, Register regLo, Register regHi) {
-	if (!Verify(operand, OpKind.Register, instruction.GetOpKind(operand)))
+void Encoder_AddReg(struct Encoder* encoder, struct Instruction* instruction, int operand, enum Register regLo, enum Register regHi)
+{
+	if (!Verify(operand, OK_Register, Instruction_GetOpKind(instruction, operand)))
+	{
 		return;
-	var reg = instruction.GetOpRegister(operand);
+	}
+	enum Register reg = GetOpRegister(instruction, operand);
 	if (!Verify(operand, reg, regLo, regHi))
+	{
 		return;
-	uint regNum = (uint)(reg - regLo);
-	if (regLo == Register.AL) {
-		if (reg >= Register.SPL) {
+	}
+	unsigned int regNum = (unsigned int)(reg - regLo);
+	if (regLo == Register_AL)
+	{
+		if (reg >= Register_SPL)
+		{
 			regNum -= 4;
-			EncoderFlags |= EncoderFlags.REX;
+			encoder->EncoderFlags |= EncoderFlags_REX;
 		}
-		else if (reg >= Register.AH)
-			EncoderFlags |= EncoderFlags.HighLegacy8BitRegs;
+		else if (reg >= Register_AH)
+		{
+			encoder->EncoderFlags |= EncoderFlags_HighLegacy8BitRegs;
+		}
 	}
-	Debug.Assert(regNum <= 15);
-	OpCode |= regNum & 7;
-	Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
-	Debug.Assert(regNum <= 15);
-	EncoderFlags |= (EncoderFlags)(regNum >> 3);// regNum <= 15, so no need to mask out anything
+	//Debug.Assert(regNum <= 15);
+	encoder->OpCode |= regNum & 7;
+	//Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
+	//Debug.Assert(regNum <= 15);
+	encoder->EncoderFlags |= (enum EncoderFlags)(regNum >> 3);// regNum <= 15, so no need to mask out anything
 }
 
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal void Encoder_AddRegOrMem(in Instruction instruction, int operand, Register regLo, Register regHi, bool allowMemOp, bool allowRegOp) = >
-AddRegOrMem(instruction, operand, regLo, regHi, Register.None, Register.None, allowMemOp, allowRegOp);
-
-internal void Encoder_AddRegOrMem(in Instruction instruction, int operand, Register regLo, Register regHi, Register vsibIndexRegLo, Register vsibIndexRegHi, bool allowMemOp, bool allowRegOp) {
-	var opKind = instruction.GetOpKind(operand);
-	EncoderFlags |= EncoderFlags.ModRM;
-	if (opKind == OpKind.Register) {
-		if (!allowRegOp) {
-			ErrorMessage = $"Operand {operand}: register operand is not allowed";
-			return;
-		}
-		var reg = instruction.GetOpRegister(operand);
-		if (!Verify(operand, reg, regLo, regHi))
-			return;
-		uint regNum = (uint)(reg - regLo);
-		if (regLo == Register.AL) {
-			if (reg >= Register.R8L)
-				regNum -= 4;
-			else if (reg >= Register.SPL) {
-				regNum -= 4;
-				EncoderFlags |= EncoderFlags.REX;
-			}
-			else if (reg >= Register.AH)
-				EncoderFlags |= EncoderFlags.HighLegacy8BitRegs;
-		}
-		ModRM |= (byte)(regNum & 7);
-		ModRM |= 0xC0;
-		Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
-		Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
-		EncoderFlags |= (EncoderFlags)((regNum >> 3) & 3);
-		Debug.Assert(regNum <= 31);
-	}
-	else if (opKind == OpKind.Memory) {
-		if (!allowMemOp) {
-			ErrorMessage = $"Operand {operand}: memory operand is not allowed";
-			return;
-		}
-		if (instruction.MemorySize.IsBroadcast())
-			EncoderFlags |= EncoderFlags.Broadcast;
-
-		var codeSize = instruction.CodeSize;
-		if (codeSize == CodeSize.Unknown) {
-			if (bitness == 64)
-				codeSize = CodeSize.Code64;
-			else if (bitness == 32)
-				codeSize = CodeSize.Code32;
-			else {
-				Debug.Assert(bitness == 16);
-				codeSize = CodeSize.Code16;
-			}
-		}
-		int addrSize = InstructionUtils.GetAddressSizeInBytes(instruction.MemoryBase, instruction.MemoryIndex, instruction.MemoryDisplSize, codeSize) * 8;
-		if (addrSize != bitness)
-			EncoderFlags |= EncoderFlags.P67;
-		if ((EncoderFlags & EncoderFlags.RegIsMemory) != 0) {
-			var regSize = GetRegisterOpSize(instruction);
-			if (regSize != addrSize) {
-				ErrorMessage = $"Operand {operand}: Register operand size must equal memory addressing mode (16/32/64)";
-				return;
-			}
-		}
-		if (addrSize == 16) {
-			if (vsibIndexRegLo != Register.None) {
-				ErrorMessage = $"Operand {operand}: VSIB operands can't use 16-bit addressing. It must be 32-bit or 64-bit addressing";
-				return;
-			}
-			AddMemOp16(instruction, operand);
-		}
-		else
-			AddMemOp(instruction, operand, addrSize, vsibIndexRegLo, vsibIndexRegHi);
-	}
-	else
-		ErrorMessage = $"Operand {operand}: Expected a register or memory operand, but opKind is {opKind}";
+/// <summary>
+/// Checks if <paramref name="memorySize"/> is a broadcast memory type
+/// </summary>
+/// <param name="memorySize">Memory size</param>
+/// <returns></returns>
+bool MemorySize_IsBroadcast(enum MemorySize memorySize)
+{
+	return memorySize >= FirstBroadcastMemorySize;
 }
 
-static int Encoder_GetRegisterOpSize(in Instruction instruction) {
-	Debug.Assert(instruction.Op0Kind == OpKind.Register);
-	if (instruction.Op0Kind == OpKind.Register) {
-		var reg = instruction.Op0Register;
-		if (reg.IsGPR64())
+int GetAddressSizeInBytes(enum Register baseReg, enum Register indexReg, int displSize, enum CodeSize codeSize)
+{
+	if ((Register_RAX <= baseReg && baseReg <= Register_R15) || (Register_RAX <= indexReg && indexReg <= Register_R15) || baseReg == Register_RIP)
+	{
+		return 8;
+	}
+	if ((Register_EAX <= baseReg && baseReg <= Register_R15D) || (Register_EAX <= indexReg && indexReg <= Register_R15D) || baseReg == Register_EIP)
+	{
+		return 4;
+	}
+	if ((Register_AX <= baseReg && baseReg <= Register_DI) || (Register_AX <= indexReg && indexReg <= Register_DI))
+	{
+		return 2;
+	}
+	if (displSize == 2 || displSize == 4 || displSize == 8)
+	{
+		return displSize;
+	}
+	switch (codeSize)
+	{
+	case CodeSize_Code64:
+		return 8;
+	case CodeSize_Code32:
+		return 4;
+	case CodeSize_Code16:
+		return 2;
+	default:
+		return 8;
+	}
+}
+
+/// <summary>
+/// Checks if it's a 16-bit general purpose register (<c>AX</c>-<c>R15W</c>)
+/// </summary>
+/// <param name="register">Register</param>
+/// <returns></returns>
+bool IsGPR16(enum Register register1)
+{
+	return Register_AX <= register1 && register1 <= Register_R15W;
+}
+
+/// <summary>
+/// Checks if it's a 32-bit general purpose register (<c>EAX</c>-<c>R15D</c>)
+/// </summary>
+/// <param name="register">Register</param>
+/// <returns></returns>
+bool IsGPR32(enum Register register1)
+{
+	return Register_EAX <= register1 && register1 <= Register_R15D;
+}
+
+/// <summary>
+/// Checks if it's a 64-bit general purpose register (<c>RAX</c>-<c>R15</c>)
+/// </summary>
+/// <param name="register">Register</param>
+/// <returns></returns>
+bool IsGPR64(enum Register register1)
+{
+	return Register_RAX <= register1 && register1 <= Register_R15;
+}
+
+
+int Encoder_GetRegisterOpSize(struct Instruction* instruction)
+{
+	//Debug.Assert(instruction.Op0Kind == OpKind.Register);
+	if (GetOp0Kind(instruction) == OK_Register)
+	{
+		enum Register reg = GetOp0Register(instruction);
+		if (IsGPR64(reg))
+		{
 			return 64;
-		if (reg.IsGPR32())
+		}
+		if (IsGPR32(reg))
+		{
 			return 32;
-		if (reg.IsGPR16())
+		}
+		if (IsGPR16(reg))
+		{
 			return 16;
+		}
 	}
 	return 0;
+}
+
+void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instruction, int operand, enum Register regLo, enum Register regHi, enum Register vsibIndexRegLo, enum Register vsibIndexRegHi, bool allowMemOp, bool allowRegOp)
+{
+	enum OpKind opKind = Instruction_GetOpKind(instruction, operand);
+	encoder->EncoderFlags |= EncoderFlags_ModRM;
+	if (opKind == OK_Register)
+	{
+		if (!allowRegOp)
+		{
+			//ErrorMessage = $"Operand {operand}: register operand is not allowed";
+			return;
+		}
+		enum Register reg = GetOpRegister(instruction, operand);
+		if (!Verify(operand, reg, regLo, regHi))
+		{
+			return;
+		}
+		unsigned int regNum = (unsigned int)(reg - regLo);
+		if (regLo == Register_AL)
+		{
+			if (reg >= Register_R8L)
+			{
+				regNum -= 4;
+			}
+			else if (reg >= Register_SPL)
+			{
+				regNum -= 4;
+				encoder->EncoderFlags |= EncoderFlags_REX;
+			}
+			else if (reg >= Register_AH)
+			{
+				encoder->EncoderFlags |= EncoderFlags_HighLegacy8BitRegs;
+			}
+		}
+		encoder->ModRM |= (unsigned char)(regNum & 7);
+		encoder->ModRM |= 0xC0;
+		//Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
+		//Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
+		encoder->EncoderFlags |= (enum EncoderFlags)((regNum >> 3) & 3);
+		//Debug.Assert(regNum <= 31);
+	}
+	else if (opKind == OK_Memory)
+	{
+		if (!allowMemOp)
+		{
+			//ErrorMessage = $"Operand {operand}: memory operand is not allowed";
+			return;
+		}
+		if (MemorySize_IsBroadcast(Instruction_GetMemorySize(instruction)))
+		{
+			encoder->EncoderFlags |= EncoderFlags_Broadcast;
+		}
+
+		enum CodeSize codeSize = GetCodeSize(instruction);
+		if (codeSize == CodeSize_Unknown)
+		{
+			if (encoder->bitness == 64)
+			{
+				codeSize = CodeSize_Code64;
+			}
+			else if (encoder->bitness == 32)
+			{
+				codeSize = CodeSize_Code32;
+			}
+			else
+			{
+				//Debug.Assert(bitness == 16);
+				codeSize = CodeSize_Code16;
+			}
+		}
+		int addrSize = GetAddressSizeInBytes(GetMemoryBase(instruction), GetMemoryIndex(instruction), GetMemoryDisplSize(instruction), codeSize) * 8;
+		if (addrSize != encoder->bitness)
+		{
+			encoder->EncoderFlags |= EncoderFlags_P67;
+		}
+		if ((encoder->EncoderFlags & EncoderFlags_RegIsMemory) != 0)
+		{
+			int regSize = Encoder_GetRegisterOpSize(instruction);
+			if (regSize != addrSize)
+			{
+				//ErrorMessage = $"Operand {operand}: Register operand size must equal memory addressing mode (16/32/64)";
+				return;
+			}
+		}
+		if (addrSize == 16)
+		{
+			if (vsibIndexRegLo != Register_None)
+			{
+				//ErrorMessage = $"Operand {operand}: VSIB operands can't use 16-bit addressing. It must be 32-bit or 64-bit addressing";
+				return;
+			}
+			Encoder_AddMemOp16(instruction, operand);
+		}
+		else
+		{
+			Encoder_AddMemOp(instruction, operand, addrSize, vsibIndexRegLo, vsibIndexRegHi);
+		}
+	}
+	else
+	{
+		//ErrorMessage = $"Operand {operand}: Expected a register or memory operand, but opKind is {opKind}";
+	}
+}
+
+void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instruction, int operand, enum Register regLo, enum Register regHi, bool allowMemOp, bool allowRegOp)
+{
+	Encoder_AddRegOrMem(encoder, instruction, operand, regLo, regHi, Register_None, Register_None, allowMemOp, allowRegOp);
 }
 
 bool Encoder_TryConvertToDisp8N(in Instruction instruction, int displ, out sbyte compressedValue) {
