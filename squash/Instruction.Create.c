@@ -1777,15 +1777,19 @@ void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instructio
 	Encoder_AddRegOrMem(encoder, instruction, operand, regLo, regHi, Register_None, Register_None, allowMemOp, allowRegOp);
 }
 
-bool Encoder_TryConvertToDisp8N(in Instruction instruction, int displ, out sbyte compressedValue) {
-	var tryConvertToDisp8N = handler.TryConvertToDisp8N;
-	if (tryConvertToDisp8N is not null)
-		return tryConvertToDisp8N(this, handler, instruction, displ, out compressedValue);
-	if (sbyte.MinValue <= displ && displ <= sbyte.MaxValue) {
-		compressedValue = (sbyte)displ;
+bool Encoder_TryConvertToDisp8N(struct Encoder* encoder, struct Instruction* instruction, int displ, signed char* compressedValue)
+{
+	auto tryConvertToDisp8N = encoder->handler->TryConvertToDisp8N;
+	if (tryConvertToDisp8N != NULL)
+	{
+		return tryConvertToDisp8N(encoder, encoder->handler, instruction, displ, compressedValue);
+	}
+	if (SCHAR_MIN <= displ && displ <= SCHAR_MAX)
+	{
+		(*compressedValue) = (signed char)displ;
 		return true;
 	}
-	compressedValue = 0;
+	(*compressedValue) = 0;
 	return false;
 }
 

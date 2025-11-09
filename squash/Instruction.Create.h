@@ -782,10 +782,10 @@ struct OpCodeHandler
 	enum EncFlags3 EncFlags3;
 	enum CodeSize OpSize;
 	enum CodeSize AddrSize;
-	//TryConvertToDisp8N ? TryConvertToDisp8N;
 	struct Op* Operands;
 	unsigned int Operands_Length;
 
+	bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
 	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
 	void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
 
@@ -901,6 +901,7 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 	/*TryConvertToDisp8N ? tryConvertToDisp8N, */ 
 	struct Op* operands,
 	unsigned int operands_length,
+	bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue),
 	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2),
 	void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction))
 {
