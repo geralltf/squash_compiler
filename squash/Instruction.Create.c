@@ -1779,7 +1779,7 @@ void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instructio
 
 bool Encoder_TryConvertToDisp8N(struct Encoder* encoder, struct Instruction* instruction, int displ, signed char* compressedValue)
 {
-	auto tryConvertToDisp8N = encoder->handler->TryConvertToDisp8N;
+	bool(*tryConvertToDisp8N)(struct Encoder*, struct OpCodeHandler*, struct Instruction*, int, signed char*) = encoder->handler->TryConvertToDisp8N;
 	if (tryConvertToDisp8N != NULL)
 	{
 		return tryConvertToDisp8N(encoder, encoder->handler, instruction, displ, compressedValue);
