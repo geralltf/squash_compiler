@@ -1759,7 +1759,7 @@ void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instructio
 				//ErrorMessage = $"Operand {operand}: VSIB operands can't use 16-bit addressing. It must be 32-bit or 64-bit addressing";
 				return;
 			}
-			Encoder_AddMemOp16(instruction, operand);
+			Encoder_AddMemOp16(encoder, instruction, operand);
 		}
 		else
 		{
@@ -1793,86 +1793,121 @@ bool Encoder_TryConvertToDisp8N(struct Encoder* encoder, struct Instruction* ins
 	return false;
 }
 
-void Encoder_AddMemOp16(in Instruction instruction, int operand) {
-	if (bitness == 64) {
-		ErrorMessage = $"Operand {operand}: 16-bit addressing can't be used by 64-bit code";
+void Encoder_AddMemOp16(struct Encoder* encoder, struct Instruction* instruction, int operand)
+{
+	if (encoder->bitness == 64)
+	{
+		//ErrorMessage = $"Operand {operand}: 16-bit addressing can't be used by 64-bit code";
 		return;
 	}
-	var baseReg = instruction.MemoryBase;
-	var indexReg = instruction.MemoryIndex;
-	var displSize = instruction.MemoryDisplSize;
-	if (baseReg == Register.BX && indexReg == Register.SI) {
+	enum Register baseReg = GetMemoryBase(instruction);
+	enum Register indexReg = GetMemoryIndex(instruction);
+	int displSize = GetMemoryDisplSize(instruction);
+
+	if (baseReg == Register_BX && indexReg == Register_SI)
+	{
 		// Nothing
 	}
-	else if (baseReg == Register.BX && indexReg == Register.DI)
-		ModRM |= 1;
-	else if (baseReg == Register.BP && indexReg == Register.SI)
-		ModRM |= 2;
-	else if (baseReg == Register.BP && indexReg == Register.DI)
-		ModRM |= 3;
-	else if (baseReg == Register.SI && indexReg == Register.None)
-		ModRM |= 4;
-	else if (baseReg == Register.DI && indexReg == Register.None)
-		ModRM |= 5;
-	else if (baseReg == Register.BP && indexReg == Register.None)
-		ModRM |= 6;
-	else if (baseReg == Register.BX && indexReg == Register.None)
-		ModRM |= 7;
-	else if (baseReg == Register.None && indexReg == Register.None) {
-		ModRM |= 6;
-		DisplSize = DisplSize.Size2;
-		if (instruction.MemoryDisplacement64 > ushort.MaxValue) {
-			ErrorMessage = $"Operand {operand}: Displacement must fit in a ushort";
+	else if (baseReg == Register_BX && indexReg == Register_DI)
+	{
+		encoder->ModRM |= 1;
+	}
+	else if (baseReg == Register_BP && indexReg == Register_SI)
+	{
+		encoder->ModRM |= 2;
+	}
+	else if (baseReg == Register_BP && indexReg == Register_DI)
+	{
+		encoder->ModRM |= 3;
+	}
+	else if (baseReg == Register_SI && indexReg == Register_None)
+	{
+		encoder->ModRM |= 4;
+	}
+	else if (baseReg == Register_DI && indexReg == Register_None)
+	{
+		encoder->ModRM |= 5;
+	}
+	else if (baseReg == Register_BP && indexReg == Register_None)
+	{
+		encoder->ModRM |= 6;
+	}
+	else if (baseReg == Register_BX && indexReg == Register_None)
+	{
+		encoder->ModRM |= 7;
+	}
+	else if (baseReg == Register_None && indexReg == Register_None)
+	{
+		encoder->ModRM |= 6;
+		encoder->DisplSize = DisplSize_Size2;
+		if (GetMemoryDisplacement64(instruction) > USHRT_MAX)
+		{
+			//ErrorMessage = $"Operand {operand}: Displacement must fit in a ushort";
 			return;
 		}
-		Displ = instruction.MemoryDisplacement32;
+		encoder->Displ = GetMemoryDisplacement32(instruction);
 	}
-	else {
-		ErrorMessage = $"Operand {operand}: Invalid 16-bit base + index registers: base={baseReg}, index={indexReg}";
+	else
+	{
+		//ErrorMessage = $"Operand {operand}: Invalid 16-bit base + index registers: base={baseReg}, index={indexReg}";
 		return;
 	}
 
-	if (baseReg != Register.None || indexReg != Register.None) {
-		if ((long)instruction.MemoryDisplacement64 < short.MinValue || (long)instruction.MemoryDisplacement64 > ushort.MaxValue) {
-			ErrorMessage = $"Operand {operand}: Displacement must fit in a short or a ushort";
+	if (baseReg != Register_None || indexReg != Register_None) {
+		if ((long)GetMemoryDisplacement64(instruction) < SHRT_MIN || (long)GetMemoryDisplacement64(instruction) > USHRT_MAX)
+		{
+			//ErrorMessage = $"Operand {operand}: Displacement must fit in a short or a ushort";
 			return;
 		}
-		Displ = instruction.MemoryDisplacement32;
+		encoder->Displ = GetMemoryDisplacement32(instruction);
 		// [bp] => [bp+00]
-		if (displSize == 0 && baseReg == Register.BP && indexReg == Register.None) {
+		if (displSize == 0 && baseReg == Register_BP && indexReg == Register_None)
+		{
 			displSize = 1;
-			if (Displ != 0) {
-				ErrorMessage = $"Operand {operand}: Displacement must be 0 if displSize == 0";
+			if (encoder->Displ != 0)
+			{
+				//ErrorMessage = $"Operand {operand}: Displacement must be 0 if displSize == 0";
 				return;
 			}
 		}
-		if (displSize == 1) {
-			if (TryConvertToDisp8N(instruction, (short)Displ, out sbyte compressedValue))
-				Displ = (uint)compressedValue;
+		if (displSize == 1)
+		{
+			signed char compressedValue = 0;
+			if (Encoder_TryConvertToDisp8N(encoder, instruction, (short)encoder->Displ, &compressedValue))
+			{
+				encoder->Displ = (unsigned int)compressedValue;
+			}
 			else
+			{
 				displSize = 2;
+			}
 		}
-		if (displSize == 0) {
-			if (Displ != 0) {
-				ErrorMessage = $"Operand {operand}: Displacement must be 0 if displSize == 0";
+		if (displSize == 0)
+		{
+			if (encoder->Displ != 0)
+			{
+				//ErrorMessage = $"Operand {operand}: Displacement must be 0 if displSize == 0";
 				return;
 			}
 		}
-		else if (displSize == 1) {
+		else if (displSize == 1)
+		{
 			// This if check should never be true when we're here
-			if ((int)Displ < sbyte.MinValue || (int)Displ > sbyte.MaxValue) {
-				ErrorMessage = $"Operand {operand}: Displacement must fit in an sbyte";
+			if ((int)encoder->Displ < SCHAR_MIN || (int)encoder->Displ > SCHAR_MAX)
+			{
+				//ErrorMessage = $"Operand {operand}: Displacement must fit in an sbyte";
 				return;
 			}
-			ModRM |= 0x40;
-			DisplSize = DisplSize.Size1;
+			encoder->ModRM |= 0x40;
+			encoder->DisplSize = DisplSize_Size1;
 		}
 		else if (displSize == 2) {
-			ModRM |= 0x80;
-			DisplSize = DisplSize.Size2;
+			encoder->ModRM |= 0x80;
+			encoder->DisplSize = DisplSize_Size2;
 		}
-		else {
-			ErrorMessage = $"Operand {operand}: Invalid displacement size: {displSize}, must be 0, 1, or 2";
+		else
+		{
+			//ErrorMessage = $"Operand {operand}: Invalid displacement size: {displSize}, must be 0, 1, or 2";
 			return;
 		}
 	}
