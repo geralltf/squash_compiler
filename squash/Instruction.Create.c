@@ -122,7 +122,7 @@ void OpCodeHandlers_init()
 
 			if (code == INVALID)
 			{
-				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, false, NULL, 0, OpCodeHandler_GetOpCode, InvalidHandler_Encode);
+				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, false, NULL, 0, NULL, &OpCodeHandler_GetOpCode, &InvalidHandler_Encode);
 
 				handler->handler_conf = InvalidHandler;
 				handler->Encode = InvalidHandler_Encode;
@@ -130,7 +130,7 @@ void OpCodeHandlers_init()
 			}
 			else if (code <= DeclareQword)
 			{
-				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, 0, OpCodeHandler_GetOpCode, DeclareDataHandler_Encode);
+				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, 0, NULL, &OpCodeHandler_GetOpCode, &DeclareDataHandler_Encode);
 
 				handler->handler_conf = DeclareDataHandler;
 				handler->Encode = DeclareDataHandler_Encode;
@@ -138,7 +138,7 @@ void OpCodeHandlers_init()
 			}
 			else if (code == Zero_bytes)
 			{
-				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, 0, OpCodeHandler_GetOpCode, ZeroBytesHandler_Encode);
+				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, 0, NULL, &OpCodeHandler_GetOpCode, &ZeroBytesHandler_Encode);
 
 				handler->handler_conf = ZeroBytesHandler;
 				//handler = new ZeroBytesHandler(code);
@@ -193,7 +193,7 @@ void OpCodeHandlers_init()
 				
 				operands = LegacyHandler_CreateOps(encFlags1, &operands_length);
 
-				OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, OpCodeHandler_GetOpCode, LegacyHandler_Encode);
+				OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, &LegacyHandler_Encode);
 
 				handler->handler_conf = LegacyHandler;
 				//handler = new LegacyHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
