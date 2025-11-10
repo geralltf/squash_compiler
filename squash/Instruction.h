@@ -1557,4 +1557,26 @@ enum OpKind GetOp0Kind(struct Instruction* i);
 /// </summary>
 enum Register GetOp0Register(struct Instruction* i);
 
+/// <summary>
+/// Gets the segment override prefix or <see cref="Register.None"/> if none. See also <see cref="MemorySegment"/>.
+/// Use this property if the operand has kind <see cref="OpKind.Memory"/>,
+/// <see cref="OpKind.MemorySegSI"/>, <see cref="OpKind.MemorySegESI"/>, <see cref="OpKind.MemorySegRSI"/>
+/// </summary>
+enum Register Get_SegmentPrefix(struct Instruction* i);
+
+/// <summary>
+/// <see langword="true"/> if the instruction has the <c>REPE</c> or <c>REP</c> prefix (<c>F3</c>)
+/// </summary>
+bool Get_HasRepePrefix(struct Instruction* i);
+
+/// <summary>
+/// <see langword="true"/> if the instruction has the <c>LOCK</c> prefix (<c>F0</c>)
+/// </summary>
+bool Get_HasLockPrefix(struct Instruction* i);
+
+/// <summary>
+/// <see langword="true"/> if the instruction has the <c>REPNE</c> prefix (<c>F2</c>)
+/// </summary>
+bool Get_HasRepnePrefix(struct Instruction* i);
+
 #endif
