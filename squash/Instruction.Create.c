@@ -2195,10 +2195,10 @@ void Encoder_WriteModRM(struct Encoder* encoder)
 	//Debug.Assert((EncoderFlags & (EncoderFlags.ModRM | EncoderFlags.Displ)) != 0);
 	if ((encoder->EncoderFlags & EncoderFlags_ModRM) != 0)
 	{
-		Encoder_WriteByteInternal(encoder->ModRM);
+		Encoder_WriteByteInternal(encoder, encoder->ModRM);
 		if ((encoder->EncoderFlags & EncoderFlags_Sib) != 0)
 		{
-			Encoder_WriteByteInternal(encoder->Sib);
+			Encoder_WriteByteInternal(encoder, encoder->Sib);
 		}
 	}
 
@@ -2210,57 +2210,57 @@ void Encoder_WriteModRM(struct Encoder* encoder)
 		break;
 
 	case DisplSize_Size1:
-		Encoder_WriteByteInternal(encoder->Displ);
+		Encoder_WriteByteInternal(encoder, encoder->Displ);
 		break;
 
 	case DisplSize_Size2:
 		diff4 = encoder->Displ;
-		Encoder_WriteByteInternal(diff4);
-		Encoder_WriteByteInternal(diff4 >> 8);
+		Encoder_WriteByteInternal(encoder, diff4);
+		Encoder_WriteByteInternal(encoder, diff4 >> 8);
 		break;
 
 	case DisplSize_Size4:
 		diff4 = encoder->Displ;
-		Encoder_WriteByteInternal(diff4);
-		Encoder_WriteByteInternal(diff4 >> 8);
-		Encoder_WriteByteInternal(diff4 >> 16);
-		Encoder_WriteByteInternal(diff4 >> 24);
+		Encoder_WriteByteInternal(encoder, diff4);
+		Encoder_WriteByteInternal(encoder, diff4 >> 8);
+		Encoder_WriteByteInternal(encoder, diff4 >> 16);
+		Encoder_WriteByteInternal(encoder, diff4 >> 24);
 		break;
 
 	case DisplSize_Size8:
 		diff4 = encoder->Displ;
-		Encoder_WriteByteInternal(diff4);
-		Encoder_WriteByteInternal(diff4 >> 8);
-		Encoder_WriteByteInternal(diff4 >> 16);
-		Encoder_WriteByteInternal(diff4 >> 24);
+		Encoder_WriteByteInternal(encoder, diff4);
+		Encoder_WriteByteInternal(encoder, diff4 >> 8);
+		Encoder_WriteByteInternal(encoder, diff4 >> 16);
+		Encoder_WriteByteInternal(encoder, diff4 >> 24);
 		diff4 = encoder->DisplHi;
-		Encoder_WriteByteInternal(diff4);
-		Encoder_WriteByteInternal(diff4 >> 8);
-		Encoder_WriteByteInternal(diff4 >> 16);
-		Encoder_WriteByteInternal(diff4 >> 24);
+		Encoder_WriteByteInternal(encoder, diff4);
+		Encoder_WriteByteInternal(encoder, diff4 >> 8);
+		Encoder_WriteByteInternal(encoder, diff4 >> 16);
+		Encoder_WriteByteInternal(encoder, diff4 >> 24);
 		break;
 
 	case DisplSize_RipRelSize4_Target32:
-		unsigned int eip = (unsigned int)encoder->currentRip + 4 + immSizes[(int)ImmSize];
+		unsigned int eip = (unsigned int)encoder->currentRip + 4 + s_immSizes[(int)encoder->ImmSize];
 		diff4 = encoder->Displ - eip;
-		Encoder_WriteByteInternal(diff4);
-		Encoder_WriteByteInternal(diff4 >> 8);
-		Encoder_WriteByteInternal(diff4 >> 16);
-		Encoder_WriteByteInternal(diff4 >> 24);
+		Encoder_WriteByteInternal(encoder, diff4);
+		Encoder_WriteByteInternal(encoder, diff4 >> 8);
+		Encoder_WriteByteInternal(encoder, diff4 >> 16);
+		Encoder_WriteByteInternal(encoder, diff4 >> 24);
 		break;
 
 	case DisplSize_RipRelSize4_Target64:
-		unsigned long rip = encoder->currentRip + 4 + s_immSizes[(int)ImmSize];
+		unsigned long rip = encoder->currentRip + 4 + s_immSizes[(int)encoder->ImmSize];
 		long diff8 = (long)(((unsigned long)encoder->DisplHi << 32) | (unsigned long)encoder->Displ) - (long)rip;
 		if (diff8 < INT_MIN || diff8 > INT_MAX)
 		{
 			//ErrorMessage = $"RIP relative distance is too far away: NextIP: 0x{rip:X16} target: 0x{DisplHi:X8}{Displ:X8}, diff = {diff8}, diff must fit in an Int32";
 		}
 		diff4 = (unsigned int)diff8;
-		Encoder_WriteByteInternal(diff4);
-		Encoder_WriteByteInternal(diff4 >> 8);
-		Encoder_WriteByteInternal(diff4 >> 16);
-		Encoder_WriteByteInternal(diff4 >> 24);
+		Encoder_WriteByteInternal(encoder, diff4);
+		Encoder_WriteByteInternal(encoder, diff4 >> 8);
+		Encoder_WriteByteInternal(encoder, diff4 >> 16);
+		Encoder_WriteByteInternal(encoder, diff4 >> 24);
 		break;
 
 	default:
@@ -2272,158 +2272,171 @@ void Encoder_WriteModRM(struct Encoder* encoder)
 void Encoder_WriteImmediate(struct Encoder* encoder)
 {
 	//Debug.Assert(!handler.IsSpecialInstr);
-	ushort ip;
-	uint eip;
-	ulong rip;
+	unsigned short ip;
+	unsigned int eip;
+	unsigned long rip;
 	short diff2;
 	int diff4;
 	long diff8;
-	uint value;
-	immAddr = (uint)currentRip;
-	switch (ImmSize) 
+	unsigned int value;
+	encoder->immAddr = (unsigned int)encoder->currentRip;
+	switch (encoder->ImmSize)
 	{
-	case ImmSize.None:
+	case ImmSize_None:
 		break;
 
-	case ImmSize.Size1:
-	case ImmSize.SizeIbReg:
-	case ImmSize.Size1OpCode:
-		WriteByteInternal(Immediate);
+	case ImmSize_Size1:
+	case ImmSize_SizeIbReg:
+	case ImmSize_Size1OpCode:
+		Encoder_WriteByteInternal(encoder, encoder->Immediate);
 		break;
 
-	case ImmSize.Size2:
-		value = Immediate;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
+	case ImmSize_Size2:
+		value = encoder->Immediate;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
 		break;
 
-	case ImmSize.Size4:
-		value = Immediate;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
-		WriteByteInternal(value >> 16);
-		WriteByteInternal(value >> 24);
+	case ImmSize_Size4:
+		value = encoder->Immediate;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
+		Encoder_WriteByteInternal(encoder, value >> 16);
+		Encoder_WriteByteInternal(encoder, value >> 24);
 		break;
 
-	case ImmSize.Size8:
-		value = Immediate;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
-		WriteByteInternal(value >> 16);
-		WriteByteInternal(value >> 24);
-		value = ImmediateHi;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
-		WriteByteInternal(value >> 16);
-		WriteByteInternal(value >> 24);
+	case ImmSize_Size8:
+		value = encoder->Immediate;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
+		Encoder_WriteByteInternal(encoder, value >> 16);
+		Encoder_WriteByteInternal(encoder, value >> 24);
+		value = encoder->ImmediateHi;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
+		Encoder_WriteByteInternal(encoder, value >> 16);
+		Encoder_WriteByteInternal(encoder, value >> 24);
 		break;
 
-	case ImmSize.Size2_1:
-		value = Immediate;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
-		WriteByteInternal(ImmediateHi);
+	case ImmSize_Size2_1:
+		value = encoder->Immediate;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
+		Encoder_WriteByteInternal(encoder, encoder->ImmediateHi);
 		break;
 
-	case ImmSize.Size1_1:
-		WriteByteInternal(Immediate);
-		WriteByteInternal(ImmediateHi);
+	case ImmSize_Size1_1:
+		Encoder_WriteByteInternal(encoder, encoder->Immediate);
+		Encoder_WriteByteInternal(encoder, encoder->ImmediateHi);
 		break;
 
-	case ImmSize.Size2_2:
-		value = Immediate;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
-		value = ImmediateHi;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
+	case ImmSize_Size2_2:
+		value = encoder->Immediate;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
+		value = encoder->ImmediateHi;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
 		break;
 
-	case ImmSize.Size4_2:
-		value = Immediate;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
-		WriteByteInternal(value >> 16);
-		WriteByteInternal(value >> 24);
-		value = ImmediateHi;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
+	case ImmSize_Size4_2:
+		value = encoder->Immediate;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
+		Encoder_WriteByteInternal(encoder, value >> 16);
+		Encoder_WriteByteInternal(encoder, value >> 24);
+		value = encoder->ImmediateHi;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
 		break;
 
-	case ImmSize.RipRelSize1_Target16:
-		ip = (ushort)((uint)currentRip + 1);
-		diff2 = (short)((short)Immediate - (short)ip);
-		if (diff2 < sbyte.MinValue || diff2 > sbyte.MaxValue)
-			ErrorMessage = $"Branch distance is too far away: NextIP: 0x{ip:X4} target: 0x{(ushort)Immediate:X4}, diff = {diff2}, diff must fit in an Int8";
-		WriteByteInternal((uint)diff2);
+	case ImmSize_RipRelSize1_Target16:
+		ip = (unsigned short)((unsigned int)encoder->currentRip + 1);
+		diff2 = (short)((short)encoder->Immediate - (short)ip);
+		if (diff2 < SCHAR_MIN || diff2 > SCHAR_MAX)
+		{
+			//ErrorMessage = $"Branch distance is too far away: NextIP: 0x{ip:X4} target: 0x{(ushort)Immediate:X4}, diff = {diff2}, diff must fit in an Int8";
+		}
+		Encoder_WriteByteInternal(encoder, (unsigned int)diff2);
 		break;
 
-	case ImmSize.RipRelSize1_Target32:
-		eip = (uint)currentRip + 1;
-		diff4 = (int)Immediate - (int)eip;
-		if (diff4 < sbyte.MinValue || diff4 > sbyte.MaxValue)
-			ErrorMessage = $"Branch distance is too far away: NextIP: 0x{eip:X8} target: 0x{Immediate:X8}, diff = {diff4}, diff must fit in an Int8";
-		WriteByteInternal((uint)diff4);
+	case ImmSize_RipRelSize1_Target32:
+		eip = (unsigned int)encoder->currentRip + 1;
+		diff4 = (int)encoder->Immediate - (int)eip;
+		if (diff4 < SCHAR_MIN || diff4 > SCHAR_MAX)
+		{
+			//ErrorMessage = $"Branch distance is too far away: NextIP: 0x{eip:X8} target: 0x{Immediate:X8}, diff = {diff4}, diff must fit in an Int8";
+		}
+		Encoder_WriteByteInternal(encoder, (unsigned int)diff4);
 		break;
 
-	case ImmSize.RipRelSize1_Target64:
-		rip = currentRip + 1;
-		diff8 = (long)(((ulong)ImmediateHi << 32) | (ulong)Immediate) - (long)rip;
-		if (diff8 < sbyte.MinValue || diff8 > sbyte.MaxValue)
-			ErrorMessage = $"Branch distance is too far away: NextIP: 0x{rip:X16} target: 0x{ImmediateHi:X8}{Immediate:X8}, diff = {diff8}, diff must fit in an Int8";
-		WriteByteInternal((uint)diff8);
+	case ImmSize_RipRelSize1_Target64:
+		rip = encoder->currentRip + 1;
+		diff8 = (long)(((unsigned long)encoder->ImmediateHi << 32) | (unsigned long)encoder->Immediate) - (long)rip;
+		if (diff8 < SCHAR_MIN || diff8 > SCHAR_MAX)
+		{
+			//ErrorMessage = $"Branch distance is too far away: NextIP: 0x{rip:X16} target: 0x{ImmediateHi:X8}{Immediate:X8}, diff = {diff8}, diff must fit in an Int8";
+		}
+		Encoder_WriteByteInternal(encoder, (unsigned int)diff8);
 		break;
 
-	case ImmSize.RipRelSize2_Target16:
-		eip = (uint)currentRip + 2;
-		value = Immediate - eip;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
+	case ImmSize_RipRelSize2_Target16:
+		eip = (unsigned int)encoder->currentRip + 2;
+		value = encoder->Immediate - eip;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
 		break;
 
-	case ImmSize.RipRelSize2_Target32:
-		eip = (uint)currentRip + 2;
-		diff4 = (int)(Immediate - eip);
-		if (diff4 < short.MinValue || diff4 > short.MaxValue)
-			ErrorMessage = $"Branch distance is too far away: NextIP: 0x{eip:X8} target: 0x{Immediate:X8}, diff = {diff4}, diff must fit in an Int16";
-		value = (uint)diff4;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
+	case ImmSize_RipRelSize2_Target32:
+		eip = (unsigned int)encoder->currentRip + 2;
+		diff4 = (int)(encoder->Immediate - eip);
+		if (diff4 < SCHAR_MIN || diff4 > SCHAR_MAX)
+		{
+			//ErrorMessage = $"Branch distance is too far away: NextIP: 0x{eip:X8} target: 0x{Immediate:X8}, diff = {diff4}, diff must fit in an Int16";
+		}
+		value = (unsigned int)diff4;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
 		break;
 
-	case ImmSize.RipRelSize2_Target64:
-		rip = currentRip + 2;
-		diff8 = (long)(((ulong)ImmediateHi << 32) | (ulong)Immediate) - (long)rip;
-		if (diff8 < short.MinValue || diff8 > short.MaxValue)
-			ErrorMessage = $"Branch distance is too far away: NextIP: 0x{rip:X16} target: 0x{ImmediateHi:X8}{Immediate:X8}, diff = {diff8}, diff must fit in an Int16";
-		value = (uint)diff8;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
+	case ImmSize_RipRelSize2_Target64:
+		rip = encoder->currentRip + 2;
+		diff8 = (long)(((unsigned long)encoder->ImmediateHi << 32) | (unsigned long)encoder->Immediate) - (long)rip;
+		if (diff8 < SCHAR_MIN || diff8 > SCHAR_MAX)
+		{
+			//ErrorMessage = $"Branch distance is too far away: NextIP: 0x{rip:X16} target: 0x{ImmediateHi:X8}{Immediate:X8}, diff = {diff8}, diff must fit in an Int16";
+		}
+		value = (unsigned int)diff8;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
 		break;
 
-	case ImmSize.RipRelSize4_Target32:
-		eip = (uint)currentRip + 4;
-		value = Immediate - eip;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
-		WriteByteInternal(value >> 16);
-		WriteByteInternal(value >> 24);
+	case ImmSize_RipRelSize4_Target32:
+		eip = (unsigned int)encoder->currentRip + 4;
+		value = encoder->Immediate - eip;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
+		Encoder_WriteByteInternal(encoder, value >> 16);
+		Encoder_WriteByteInternal(encoder, value >> 24);
 		break;
 
-	case ImmSize.RipRelSize4_Target64:
-		rip = currentRip + 4;
-		diff8 = (long)(((ulong)ImmediateHi << 32) | (ulong)Immediate) - (long)rip;
-		if (diff8 < int.MinValue || diff8 > int.MaxValue)
-			ErrorMessage = $"Branch distance is too far away: NextIP: 0x{rip:X16} target: 0x{ImmediateHi:X8}{Immediate:X8}, diff = {diff8}, diff must fit in an Int32";
-		value = (uint)diff8;
-		WriteByteInternal(value);
-		WriteByteInternal(value >> 8);
-		WriteByteInternal(value >> 16);
-		WriteByteInternal(value >> 24);
+	case ImmSize_RipRelSize4_Target64:
+		rip = encoder->currentRip + 4;
+		diff8 = (long)(((unsigned long)encoder->ImmediateHi << 32) | (unsigned long)encoder->Immediate) - (long)rip;
+		if (diff8 < INT_MIN || diff8 > INT_MAX)
+		{
+			//ErrorMessage = $"Branch distance is too far away: NextIP: 0x{rip:X16} target: 0x{ImmediateHi:X8}{Immediate:X8}, diff = {diff8}, diff must fit in an Int32";
+		}
+		value = (unsigned int)diff8;
+		Encoder_WriteByteInternal(encoder, value);
+		Encoder_WriteByteInternal(encoder, value >> 8);
+		Encoder_WriteByteInternal(encoder, value >> 16);
+		Encoder_WriteByteInternal(encoder, value >> 24);
 		break;
 
 	default:
-		throw new InvalidOperationException();
+		//throw new InvalidOperationException();
+		break;
 	}
 }
 
