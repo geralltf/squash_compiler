@@ -913,10 +913,10 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 	(*o)->Encode = Encode;
 }
 
-void Encoder_WritePrefixes(struct Encoder* encoder, struct Instruction* instruction, bool canWriteF3)
-{
-	//TODO:
-}
+//void Encoder_WritePrefixes(struct Encoder* encoder, struct Instruction* instruction, bool canWriteF3)
+//{
+//	//TODO:
+//}
 
 void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value)
 {
