@@ -1763,7 +1763,7 @@ void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instructio
 		}
 		else
 		{
-			Encoder_AddMemOp(instruction, operand, addrSize, vsibIndexRegLo, vsibIndexRegHi);
+			Encoder_AddMemOp(encoder, instruction, operand, addrSize, vsibIndexRegLo, vsibIndexRegHi);
 		}
 	}
 	else
@@ -1913,194 +1913,248 @@ void Encoder_AddMemOp16(struct Encoder* encoder, struct Instruction* instruction
 	}
 }
 
-void Encoder_AddMemOp(in Instruction instruction, int operand, int addrSize, Register vsibIndexRegLo, Register vsibIndexRegHi) {
-	Debug.Assert(addrSize == 32 || addrSize == 64);
-	if (bitness != 64 && addrSize == 64) {
-		ErrorMessage = $"Operand {operand}: 64-bit addressing can only be used in 64-bit mode";
+void Encoder_AddMemOp(struct Encoder* encoder, struct Instruction* instruction, int operand, int addrSize, enum Register vsibIndexRegLo, enum Register vsibIndexRegHi)
+{
+	//Debug.Assert(addrSize == 32 || addrSize == 64);
+	if (encoder->bitness != 64 && addrSize == 64)
+	{
+		//ErrorMessage = $"Operand {operand}: 64-bit addressing can only be used in 64-bit mode";
 		return;
 	}
 
-	var baseReg = instruction.MemoryBase;
-	var indexReg = instruction.MemoryIndex;
-	var displSize = instruction.MemoryDisplSize;
+	enum Register baseReg = GetMemoryBase(instruction);
+	enum Register indexReg = GetMemoryIndex(instruction);
+	enum Register displSize = GetMemoryDisplSize(instruction);
 
-	Register baseRegLo, baseRegHi;
-	Register indexRegLo, indexRegHi;
-	if (addrSize == 64) {
-		baseRegLo = Register.RAX;
-		baseRegHi = Register.R15;
+	enum Register baseRegLo, baseRegHi;
+	enum Register indexRegLo, indexRegHi;
+	if (addrSize == 64)
+	{
+		baseRegLo = Register_RAX;
+		baseRegHi = Register_R15;
 	}
-	else {
-		Debug.Assert(addrSize == 32);
-		baseRegLo = Register.EAX;
-		baseRegHi = Register.R15D;
+	else
+	{
+		//Debug.Assert(addrSize == 32);
+		baseRegLo = Register_EAX;
+		baseRegHi = Register_R15D;
 	}
-	if (vsibIndexRegLo != Register.None) {
+	if (vsibIndexRegLo != Register_None)
+	{
 		indexRegLo = vsibIndexRegLo;
 		indexRegHi = vsibIndexRegHi;
 	}
-	else {
+	else
+	{
 		indexRegLo = baseRegLo;
 		indexRegHi = baseRegHi;
 	}
-	if (baseReg != Register.None && baseReg != Register.RIP && baseReg != Register.EIP && !Verify(operand, baseReg, baseRegLo, baseRegHi))
-		return;
-	if (indexReg != Register.None && !Verify(operand, indexReg, indexRegLo, indexRegHi))
-		return;
-
-	if (displSize != 0 && displSize != 1 && displSize != 4 && displSize != 8) {
-		ErrorMessage = $"Operand {operand}: Invalid displ size: {displSize}, must be 0, 1, 4, 8";
+	if (baseReg != Register_None && baseReg != Register_RIP && baseReg != Register_EIP && !Verify(operand, baseReg, baseRegLo, baseRegHi))
+	{
 		return;
 	}
-	if (baseReg == Register.RIP || baseReg == Register.EIP) {
-		if (indexReg != Register.None) {
-			ErrorMessage = $"Operand {operand}: RIP relative addressing can't use an index register";
+	if (indexReg != Register_None && !Verify(operand, indexReg, indexRegLo, indexRegHi))
+	{
+		return;
+	}
+
+	if (displSize != 0 && displSize != 1 && displSize != 4 && displSize != 8)
+	{
+		//ErrorMessage = $"Operand {operand}: Invalid displ size: {displSize}, must be 0, 1, 4, 8";
+		return;
+	}
+	if (baseReg == Register_RIP || baseReg == Register_EIP)
+	{
+		if (indexReg != Register_None)
+		{
+			//ErrorMessage = $"Operand {operand}: RIP relative addressing can't use an index register";
 			return;
 		}
-		if (instruction.InternalMemoryIndexScale != 0) {
-			ErrorMessage = $"Operand {operand}: RIP relative addressing must use scale *1";
+		if (GetMemoryIndexScale(instruction) != 0)
+		{
+			//ErrorMessage = $"Operand {operand}: RIP relative addressing must use scale *1";
 			return;
 		}
-		if (bitness != 64) {
-			ErrorMessage = $"Operand {operand}: RIP/EIP relative addressing is only available in 64-bit mode";
+		if (encoder->bitness != 64)
+		{
+			//ErrorMessage = $"Operand {operand}: RIP/EIP relative addressing is only available in 64-bit mode";
 			return;
 		}
-		if ((EncoderFlags & EncoderFlags.MustUseSib) != 0) {
-			ErrorMessage = $"Operand {operand}: RIP/EIP relative addressing isn't supported";
+		if ((encoder->EncoderFlags & EncoderFlags_MustUseSib) != 0)
+		{
+			//ErrorMessage = $"Operand {operand}: RIP/EIP relative addressing isn't supported";
 			return;
 		}
-		ModRM |= 5;
-		ulong target = instruction.MemoryDisplacement64;
-		if (baseReg == Register.RIP) {
-			DisplSize = DisplSize.RipRelSize4_Target64;
-			Displ = (uint)target;
-			DisplHi = (uint)(target >> 32);
+		encoder->ModRM |= 5;
+		unsigned long target = GetMemoryDisplacement64(instruction);
+		if (baseReg == Register_RIP)
+		{
+			encoder->DisplSize = DisplSize_RipRelSize4_Target64;
+			encoder->Displ = (unsigned int)target;
+			encoder->DisplHi = (unsigned int)(target >> 32);
 		}
-		else {
-			DisplSize = DisplSize.RipRelSize4_Target32;
-			if (target > uint.MaxValue) {
-				ErrorMessage = $"Operand {operand}: Target address doesn't fit in 32 bits: 0x{target:X}";
+		else
+		{
+			encoder->DisplSize = DisplSize_RipRelSize4_Target32;
+			if (target > UINT_MAX)
+			{
+				//ErrorMessage = $"Operand {operand}: Target address doesn't fit in 32 bits: 0x{target:X}";
 				return;
 			}
-			Displ = (uint)target;
+			encoder->Displ = (unsigned int)target;
 		}
 		return;
 	}
-	var scale = instruction.InternalMemoryIndexScale;
-	Displ = instruction.MemoryDisplacement32;
-	if (addrSize == 64) {
-		if ((long)instruction.MemoryDisplacement64 < int.MinValue || (long)instruction.MemoryDisplacement64 > int.MaxValue) {
-			ErrorMessage = $"Operand {operand}: Displacement must fit in an int";
+	int scale = GetMemoryIndexScale(instruction);
+	encoder->Displ = GetMemoryDisplacement32(instruction);
+	if (addrSize == 64)
+	{
+		if ((long)GetMemoryDisplacement64(instruction) < INT_MIN || (long)GetMemoryDisplacement64(instruction) > INT_MAX)
+		{
+			//ErrorMessage = $"Operand {operand}: Displacement must fit in an int";
 			return;
 		}
 	}
-	else {
-		Debug.Assert(addrSize == 32);
-		if ((long)instruction.MemoryDisplacement64 < int.MinValue || (long)instruction.MemoryDisplacement64 > uint.MaxValue) {
-			ErrorMessage = $"Operand {operand}: Displacement must fit in an int or a uint";
+	else
+	{
+		//Debug.Assert(addrSize == 32);
+		if ((long)GetMemoryDisplacement64(instruction) < INT_MIN || (long)GetMemoryDisplacement64(instruction) > UINT_MAX)
+		{
+			//ErrorMessage = $"Operand {operand}: Displacement must fit in an int or a uint";
 			return;
 		}
 	}
-	if (baseReg == Register.None && indexReg == Register.None) {
-		if (vsibIndexRegLo != Register.None) {
-			ErrorMessage = $"Operand {operand}: VSIB addressing can't use an offset-only address";
+	if (baseReg == Register_None && indexReg == Register_None)
+	{
+		if (vsibIndexRegLo != Register_None)
+		{
+			//ErrorMessage = $"Operand {operand}: VSIB addressing can't use an offset-only address";
 			return;
 		}
-		if (bitness == 64 || scale != 0 || (EncoderFlags & EncoderFlags.MustUseSib) != 0) {
-			ModRM |= 4;
-			DisplSize = DisplSize.Size4;
-			EncoderFlags |= EncoderFlags.Sib;
-			Sib = (byte)(0x25 | (scale << 6));
+		if (encoder->bitness == 64 || scale != 0 || (encoder->EncoderFlags & EncoderFlags_MustUseSib) != 0)
+		{
+			encoder->ModRM |= 4;
+			encoder->DisplSize = DisplSize_Size4;
+			encoder->EncoderFlags |= EncoderFlags_Sib;
+			encoder->Sib = (unsigned char)(0x25 | (scale << 6));
 			return;
 		}
-		else {
-			ModRM |= 5;
-			DisplSize = DisplSize.Size4;
+		else
+		{
+			encoder->ModRM |= 5;
+			encoder->DisplSize = DisplSize_Size4;
 			return;
 		}
 	}
 
-	int baseNum = baseReg == Register.None ? -1 : baseReg - baseRegLo;
-	int indexNum = indexReg == Register.None ? -1 : indexReg - indexRegLo;
+	int baseNum = baseReg == Register_None ? -1 : baseReg - baseRegLo;
+	int indexNum = indexReg == Register_None ? -1 : indexReg - indexRegLo;
 
 	// [ebp]/[ebp+index*scale] => [ebp+00]/[ebp+index*scale+00]
-	if (displSize == 0 && (baseNum & 7) == 5) {
+	if (displSize == 0 && (baseNum & 7) == 5)
+	{
 		displSize = 1;
-		if (Displ != 0) {
-			ErrorMessage = $"Operand {operand}: Displacement must be 0 if displSize == 0";
+		if (encoder->Displ != 0)
+		{
+			//ErrorMessage = $"Operand {operand}: Displacement must be 0 if displSize == 0";
 			return;
 		}
 	}
 
-	if (displSize == 1) {
-		if (TryConvertToDisp8N(instruction, (int)Displ, out sbyte compressedValue))
-			Displ = (uint)compressedValue;
+	if (displSize == 1)
+	{
+		signed char compressedValue = 0;
+		if (Encoder_TryConvertToDisp8N(encoder, instruction, (int)encoder->Displ, &compressedValue))
+		{
+			encoder->Displ = (unsigned int)compressedValue;
+		}
 		else
+		{
 			displSize = addrSize / 8;
+		}
 	}
 
-	if (baseReg == Register.None) {
+	if (baseReg == Register_None)
+	{
 		// Tested earlier in the method
-		Debug.Assert(indexReg != Register.None);
-		DisplSize = DisplSize.Size4;
+		//Debug.Assert(indexReg != Register.None);
+		encoder->DisplSize = DisplSize_Size4;
 	}
-	else if (displSize == 1) {
+	else if (displSize == 1)
+	{
 		// This if check should never be true when we're here
-		if ((int)Displ < sbyte.MinValue || (int)Displ > sbyte.MaxValue) {
-			ErrorMessage = $"Operand {operand}: Displacement must fit in an sbyte";
+		if ((int)encoder->Displ < SCHAR_MIN || (int)encoder->Displ > SCHAR_MAX)
+		{
+			//ErrorMessage = $"Operand {operand}: Displacement must fit in an sbyte";
 			return;
 		}
-		ModRM |= 0x40;
-		DisplSize = DisplSize.Size1;
+		encoder->ModRM |= 0x40;
+		encoder->DisplSize = DisplSize_Size1;
 	}
 	else if (displSize == addrSize / 8) {
-		ModRM |= 0x80;
-		DisplSize = DisplSize.Size4;
+		encoder->ModRM |= 0x80;
+		encoder->DisplSize = DisplSize_Size4;
 	}
-	else if (displSize == 0) {
-		if (Displ != 0) {
-			ErrorMessage = $"Operand {operand}: Displacement must be 0 if displSize == 0";
+	else if (displSize == 0)
+	{
+		if (encoder->Displ != 0)
+		{
+			//ErrorMessage = $"Operand {operand}: Displacement must be 0 if displSize == 0";
 			return;
 		}
 	}
-	else {
-		ErrorMessage = $"Operand {operand}: Invalid {nameof(Instruction.MemoryDisplSize)} value";
+	else
+	{
+		//ErrorMessage = $"Operand {operand}: Invalid {nameof(Instruction.MemoryDisplSize)} value";
 		return;
 	}
 
-	if (indexReg == Register.None && (baseNum & 7) != 4 && scale == 0 && (EncoderFlags & EncoderFlags.MustUseSib) == 0) {
+	if (indexReg == Register_None && (baseNum & 7) != 4 && scale == 0 && (encoder->EncoderFlags & EncoderFlags_MustUseSib) == 0)
+	{
 		// Tested earlier in the method
-		Debug.Assert(baseReg != Register.None);
-		ModRM |= (byte)(baseNum & 7);
+		//Debug.Assert(baseReg != Register.None);
+		encoder->ModRM |= (unsigned char)(baseNum & 7);
 	}
-	else {
-		EncoderFlags |= EncoderFlags.Sib;
-		Sib = (byte)(scale << 6);
-		ModRM |= 4;
-		if (indexReg == Register.RSP || indexReg == Register.ESP) {
-			ErrorMessage = $"Operand {operand}: ESP/RSP can't be used as an index register";
+	else
+	{
+		encoder->EncoderFlags |= EncoderFlags_Sib;
+		encoder->Sib = (unsigned char)(scale << 6);
+		encoder->ModRM |= 4;
+		if (indexReg == Register_RSP || indexReg == Register_ESP)
+		{
+			//ErrorMessage = $"Operand {operand}: ESP/RSP can't be used as an index register";
 			return;
 		}
 		if (baseNum < 0)
-			Sib |= 5;
+		{
+			encoder->Sib |= 5;
+		}
 		else
-			Sib |= (byte)(baseNum & 7);
+		{
+			encoder->Sib |= (unsigned char)(baseNum & 7);
+		}
 		if (indexNum < 0)
-			Sib |= 0x20;
+		{
+			encoder->Sib |= 0x20;
+		}
 		else
-			Sib |= (byte)((indexNum & 7) << 3);
+		{
+			encoder->Sib |= (unsigned char)((indexNum & 7) << 3);
+		}
 	}
 
-	if (baseNum >= 0) {
-		Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
-		Debug.Assert(baseNum <= 15);// No '& 1' required below
-		EncoderFlags |= (EncoderFlags)(baseNum >> 3);
+	if (baseNum >= 0)
+	{
+		//Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
+		//Debug.Assert(baseNum <= 15);// No '& 1' required below
+		encoder->EncoderFlags |= (enum EncoderFlags)(baseNum >> 3);
 	}
-	if (indexNum >= 0) {
-		Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
-		EncoderFlags |= (EncoderFlags)((indexNum >> 2) & 2);
-		EncoderFlags |= (EncoderFlags)((indexNum & 0x10) << (int)EncoderFlags.VvvvvShift);
-		Debug.Assert(indexNum <= 31);
+	if (indexNum >= 0)
+	{
+		//Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
+		encoder->EncoderFlags |= (enum EncoderFlags)((indexNum >> 2) & 2);
+		encoder->EncoderFlags |= (enum EncoderFlags)((indexNum & 0x10) << (int)EncoderFlags_VvvvvShift);
+		//Debug.Assert(indexNum <= 31);
 	}
 }
 
