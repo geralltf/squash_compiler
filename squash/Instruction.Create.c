@@ -2158,100 +2158,118 @@ void Encoder_AddMemOp(struct Encoder* encoder, struct Instruction* instruction, 
 	}
 }
 
-void Encoder_WritePrefixes(in Instruction instruction, bool canWriteF3 = true)
+void Encoder_WritePrefixes(struct Encoder* encoder, struct Instruction* instruction, bool canWriteF3) // bool canWriteF3 = true
 {
-	Debug.Assert(!handler.IsSpecialInstr);
-	var seg = instruction.SegmentPrefix;
-	if (seg != Register.None) {
-		Debug.Assert((uint)(seg - Register.ES) < (uint)SegmentOverrides.Length);
-		WriteByteInternal(SegmentOverrides[seg - Register.ES]);
+	//Debug.Assert(!handler.IsSpecialInstr);
+	enum Register seg = Get_SegmentPrefix(instruction);
+	if (seg != Register_None)
+	{
+		//Debug.Assert((uint)(seg - Register.ES) < (uint)SegmentOverrides.Length);
+		Encoder_WriteByteInternal(encoder, SegmentOverrides[seg - Register_ES]);
 	}
-	if ((EncoderFlags & EncoderFlags.PF0) != 0 || instruction.HasLockPrefix)
-		WriteByteInternal(0xF0);
-	if ((EncoderFlags & EncoderFlags.P66) != 0)
-		WriteByteInternal(0x66);
-	if ((EncoderFlags & EncoderFlags.P67) != 0)
-		WriteByteInternal(0x67);
-	if (canWriteF3 && instruction.HasRepePrefix)
-		WriteByteInternal(0xF3);
-	if (instruction.HasRepnePrefix)
-		WriteByteInternal(0xF2);
+	if ((encoder->EncoderFlags & EncoderFlags_PF0) != 0 || Get_HasLockPrefix(instruction))
+	{
+		Encoder_WriteByteInternal(encoder, 0xF0);
+	}
+	if ((encoder->EncoderFlags & EncoderFlags_P66) != 0)
+	{
+		Encoder_WriteByteInternal(encoder, 0x66);
+	}
+	if ((encoder->EncoderFlags & EncoderFlags_P67) != 0)
+	{
+		Encoder_WriteByteInternal(encoder, 0x67);
+	}
+	if (canWriteF3 && Get_HasRepePrefix(instruction))
+	{
+		Encoder_WriteByteInternal(encoder, 0xF3);
+	}
+	if (Get_HasRepnePrefix(instruction))
+	{
+		Encoder_WriteByteInternal(encoder, 0xF2);
+	}
 }
 
-void Encoder_WriteModRM()
+void Encoder_WriteModRM(struct Encoder* encoder)
 {
-	Debug.Assert(!handler.IsSpecialInstr);
-	Debug.Assert((EncoderFlags & (EncoderFlags.ModRM | EncoderFlags.Displ)) != 0);
-	if ((EncoderFlags & EncoderFlags.ModRM) != 0) {
-		WriteByteInternal(ModRM);
-		if ((EncoderFlags & EncoderFlags.Sib) != 0)
-			WriteByteInternal(Sib);
+	//Debug.Assert(!handler.IsSpecialInstr);
+	//Debug.Assert((EncoderFlags & (EncoderFlags.ModRM | EncoderFlags.Displ)) != 0);
+	if ((encoder->EncoderFlags & EncoderFlags_ModRM) != 0)
+	{
+		Encoder_WriteByteInternal(encoder->ModRM);
+		if ((encoder->EncoderFlags & EncoderFlags_Sib) != 0)
+		{
+			Encoder_WriteByteInternal(encoder->Sib);
+		}
 	}
 
-	uint diff4;
-	displAddr = (uint)currentRip;
-	switch (DisplSize) {
-	case DisplSize.None:
+	unsigned int diff4;
+	encoder->displAddr = (unsigned int)encoder->currentRip;
+	switch (encoder->DisplSize)
+	{
+	case DisplSize_None:
 		break;
 
-	case DisplSize.Size1:
-		WriteByteInternal(Displ);
+	case DisplSize_Size1:
+		Encoder_WriteByteInternal(encoder->Displ);
 		break;
 
-	case DisplSize.Size2:
-		diff4 = Displ;
-		WriteByteInternal(diff4);
-		WriteByteInternal(diff4 >> 8);
+	case DisplSize_Size2:
+		diff4 = encoder->Displ;
+		Encoder_WriteByteInternal(diff4);
+		Encoder_WriteByteInternal(diff4 >> 8);
 		break;
 
-	case DisplSize.Size4:
-		diff4 = Displ;
-		WriteByteInternal(diff4);
-		WriteByteInternal(diff4 >> 8);
-		WriteByteInternal(diff4 >> 16);
-		WriteByteInternal(diff4 >> 24);
+	case DisplSize_Size4:
+		diff4 = encoder->Displ;
+		Encoder_WriteByteInternal(diff4);
+		Encoder_WriteByteInternal(diff4 >> 8);
+		Encoder_WriteByteInternal(diff4 >> 16);
+		Encoder_WriteByteInternal(diff4 >> 24);
 		break;
 
-	case DisplSize.Size8:
-		diff4 = Displ;
-		WriteByteInternal(diff4);
-		WriteByteInternal(diff4 >> 8);
-		WriteByteInternal(diff4 >> 16);
-		WriteByteInternal(diff4 >> 24);
-		diff4 = DisplHi;
-		WriteByteInternal(diff4);
-		WriteByteInternal(diff4 >> 8);
-		WriteByteInternal(diff4 >> 16);
-		WriteByteInternal(diff4 >> 24);
+	case DisplSize_Size8:
+		diff4 = encoder->Displ;
+		Encoder_WriteByteInternal(diff4);
+		Encoder_WriteByteInternal(diff4 >> 8);
+		Encoder_WriteByteInternal(diff4 >> 16);
+		Encoder_WriteByteInternal(diff4 >> 24);
+		diff4 = encoder->DisplHi;
+		Encoder_WriteByteInternal(diff4);
+		Encoder_WriteByteInternal(diff4 >> 8);
+		Encoder_WriteByteInternal(diff4 >> 16);
+		Encoder_WriteByteInternal(diff4 >> 24);
 		break;
 
-	case DisplSize.RipRelSize4_Target32:
-		uint eip = (uint)currentRip + 4 + immSizes[(int)ImmSize];
-		diff4 = Displ - eip;
-		WriteByteInternal(diff4);
-		WriteByteInternal(diff4 >> 8);
-		WriteByteInternal(diff4 >> 16);
-		WriteByteInternal(diff4 >> 24);
+	case DisplSize_RipRelSize4_Target32:
+		unsigned int eip = (unsigned int)encoder->currentRip + 4 + immSizes[(int)ImmSize];
+		diff4 = encoder->Displ - eip;
+		Encoder_WriteByteInternal(diff4);
+		Encoder_WriteByteInternal(diff4 >> 8);
+		Encoder_WriteByteInternal(diff4 >> 16);
+		Encoder_WriteByteInternal(diff4 >> 24);
 		break;
 
-	case DisplSize.RipRelSize4_Target64:
-		ulong rip = currentRip + 4 + immSizes[(int)ImmSize];
-		long diff8 = (long)(((ulong)DisplHi << 32) | (ulong)Displ) - (long)rip;
-		if (diff8 < int.MinValue || diff8 > int.MaxValue)
-			ErrorMessage = $"RIP relative distance is too far away: NextIP: 0x{rip:X16} target: 0x{DisplHi:X8}{Displ:X8}, diff = {diff8}, diff must fit in an Int32";
-		diff4 = (uint)diff8;
-		WriteByteInternal(diff4);
-		WriteByteInternal(diff4 >> 8);
-		WriteByteInternal(diff4 >> 16);
-		WriteByteInternal(diff4 >> 24);
+	case DisplSize_RipRelSize4_Target64:
+		unsigned long rip = encoder->currentRip + 4 + s_immSizes[(int)ImmSize];
+		long diff8 = (long)(((unsigned long)encoder->DisplHi << 32) | (unsigned long)encoder->Displ) - (long)rip;
+		if (diff8 < INT_MIN || diff8 > INT_MAX)
+		{
+			//ErrorMessage = $"RIP relative distance is too far away: NextIP: 0x{rip:X16} target: 0x{DisplHi:X8}{Displ:X8}, diff = {diff8}, diff must fit in an Int32";
+		}
+		diff4 = (unsigned int)diff8;
+		Encoder_WriteByteInternal(diff4);
+		Encoder_WriteByteInternal(diff4 >> 8);
+		Encoder_WriteByteInternal(diff4 >> 16);
+		Encoder_WriteByteInternal(diff4 >> 24);
 		break;
 
 	default:
-		throw new InvalidOperationException();
+		//throw new InvalidOperationException();
+		break;
 	}
 }
 
-void Encoder_WriteImmediate()
+void Encoder_WriteImmediate(struct Encoder* encoder)
 {
 	//Debug.Assert(!handler.IsSpecialInstr);
 	ushort ip;
