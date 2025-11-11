@@ -797,6 +797,13 @@ struct OpCodeHandler
 	unsigned int tableByte1;
 	unsigned int tableByte2;
 	unsigned int mandatoryPrefix;
+
+	// VexHandler
+	unsigned int table;
+	unsigned int lastByte;
+	unsigned int mask_W_L;
+	unsigned int mask_L;
+	unsigned int W1;
 };
 
 struct InvalidHandler
@@ -1013,6 +1020,11 @@ void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, s
 			Encoder_WriteByteInternal(encoder, b);
 		}
 	}
+}
+
+void VEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+
 }
 
 void OpCodeHandlers_init();

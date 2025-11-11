@@ -2,6 +2,7 @@
 
 struct OpCodeHandler* EncoderInternal_OpCodeHandlers_Handlers = (struct OpCodeHandler*)NULL; // CodeEnumCount
 struct Op* ops_legacy = NULL;
+struct Op* ops_vex = NULL;
 
 struct OpCodeHandler* GetOpCodeHandlers()
 {
@@ -54,6 +55,7 @@ struct Op* LegacyHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_lengt
 		w[1] = ops_legacy[op1 - 1];
 		w[2] = ops_legacy[op2 - 1];
 		w[3] = ops_legacy[op3 - 1];
+		*operands_length = 4;
 		return w;
 	}
 	if (op2 != 0) 
@@ -63,6 +65,7 @@ struct Op* LegacyHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_lengt
 		w[0] = ops_legacy[op0 - 1];
 		w[1] = ops_legacy[op1 - 1];
 		w[2] = ops_legacy[op2 - 1];
+		*operands_length = 3;
 		return w;
 	}
 	if (op1 != 0) 
@@ -71,19 +74,88 @@ struct Op* LegacyHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_lengt
 		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 2);
 		w[0] = ops_legacy[op0 - 1];
 		w[1] = ops_legacy[op1 - 1];
+		*operands_length = 2;
 		return w;
 	}
 	if (op0 != 0)
 	{
 		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 1);
 		w[0] = ops_legacy[op0 - 1];
+		*operands_length = 1;
 		return w;
 	}
 		
 	return NULL;
 }
 
+struct Op* VEXHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
+{
+	if (ops_vex == NULL)
+	{
+		ops_vex = Operands_LegacyOps();
+	}
 
+	int op0 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op0Shift) & (unsigned int)EFLAGS_VEX_OpMask);
+	int op1 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op1Shift) & (unsigned int)EFLAGS_VEX_OpMask);
+	int op2 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op2Shift) & (unsigned int)EFLAGS_VEX_OpMask);
+	int op3 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op3Shift) & (unsigned int)EFLAGS_VEX_OpMask);
+	int op4 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op4Shift) & (unsigned int)EFLAGS_VEX_OpMask);
+	if (op4 != 0)
+	{
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 5);
+		w[0] = ops_vex[op0 - 1];
+		w[1] = ops_vex[op1 - 1];
+		w[2] = ops_vex[op2 - 1];
+		w[3] = ops_vex[op3 - 1];
+		w[4] = ops_vex[op4 - 1];
+		*operands_length = 5;
+		return w;
+		//Debug.Assert(op0 != 0 && op1 != 0 && op2 != 0 && op3 != 0);
+		//return new Op[]{ OpHandlerData.ops_vex[op0 - 1], OpHandlerData.ops_vex[op1 - 1], OpHandlerData.ops_vex[op2 - 1], OpHandlerData.ops_vex[op3 - 1], OpHandlerData.ops_vex[op4 - 1] };
+	}
+	if (op3 != 0)
+	{
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 4);
+		w[0] = ops_vex[op0 - 1];
+		w[1] = ops_vex[op1 - 1];
+		w[2] = ops_vex[op2 - 1];
+		w[3] = ops_vex[op3 - 1];
+		*operands_length = 4;
+		return w;
+		//Debug.Assert(op0 != 0 && op1 != 0 && op2 != 0);
+		//return new Op[]{ OpHandlerData.ops_vex[op0 - 1], OpHandlerData.ops_vex[op1 - 1], OpHandlerData.ops_vex[op2 - 1], OpHandlerData.ops_vex[op3 - 1] };
+	}
+	if (op2 != 0)
+	{
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 3);
+		w[0] = ops_vex[op0 - 1];
+		w[1] = ops_vex[op1 - 1];
+		w[2] = ops_vex[op2 - 1];
+		*operands_length = 3;
+		return w;
+		//Debug.Assert(op0 != 0 && op1 != 0);
+		//return new Op[]{ OpHandlerData.ops_vex[op0 - 1], OpHandlerData.ops_vex[op1 - 1], OpHandlerData.ops_vex[op2 - 1] };
+	}
+	if (op1 != 0)
+	{
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 2);
+		w[0] = ops_vex[op0 - 1];
+		w[1] = ops_vex[op1 - 1];
+		*operands_length = 2;
+		return w;
+		//Debug.Assert(op0 != 0);
+		//return new Op[]{ OpHandlerData.ops_vex[op0 - 1], OpHandlerData.ops_vex[op1 - 1] };
+	}
+	if (op0 != 0)
+	{
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 1);
+		w[0] = ops_vex[op0 - 1];
+		*operands_length = 1;
+		return w;
+		//return new Op[]{ OpHandlerData.VexOps[op0 - 1] };
+	}
+	return NULL;
+}
 
 void OpCodeHandlers_init()
 {
@@ -112,7 +184,7 @@ void OpCodeHandlers_init()
 		handler = (struct OpCodeHandler*)malloc(sizeof(struct OpCodeHandler));
 		ekind = GetEncodingKindByOpcode(i);
 
-		handler->GetOpCode = OpCodeHandler_GetOpCode;
+		handler->GetOpCode = &OpCodeHandler_GetOpCode;
 
 		switch (ekind)
 		{
@@ -201,6 +273,45 @@ void OpCodeHandlers_init()
 			break;
 		case EncodingKind_VEX:
 			handler->Operands_Length = 38;
+
+			handler->table = ((unsigned int)encFlags2 >> (int)EFLAGS2_TableShift) & (unsigned int)EFLAGS2_TableMask;
+			enum WBit wbit = (enum WBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_WBitShift) & (unsigned int)EFLAGS2_WBitMask);
+			enum LBit lbit = (enum LBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_LBitShift) & (int)EFLAGS2_LBitMask);
+
+			if (wbit == WBit_W1)
+			{
+				handler->W1 = UINT_MAX;
+			}
+			else
+			{
+				handler->W1 = 0;
+			}
+
+			switch (lbit)
+			{
+			case LBit_L1:
+			case LBit_L256:
+				handler->lastByte = 4;
+				break;
+			}
+			if (handler->W1 != 0)
+			{
+				handler->lastByte |= 0x80;
+			}
+			handler->lastByte |= ((unsigned int)encFlags2 >> (int)EFLAGS2_MandatoryPrefixShift) & (unsigned int)EFLAGS2_MandatoryPrefixMask;
+			if (wbit == WBit_WIG)
+			{
+				handler->mask_W_L |= 0x80;
+			}
+			if (lbit == LBit_LIG)
+			{
+				handler->mask_W_L |= 4;
+				handler->mask_L |= 4;
+			}
+
+			operands = VEXHandler_CreateOps(encFlags1, &operands_length);
+
+			OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, &VEXHandler_Encode);
 
 			handler->handler_conf = VexHandler;
 			//handler = new VexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
