@@ -1024,7 +1024,43 @@ void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, s
 
 void VEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
 {
+	bool canWriteF3 = true;
+	Encoder_WritePrefixes(encoder, instruction, canWriteF3);
 
+	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
+
+	//Static.Assert((int)MandatoryPrefixByte.None == 0 ? 0 : -1);
+	//Static.Assert((int)MandatoryPrefixByte.P66 == 1 ? 0 : -1);
+	//Static.Assert((int)MandatoryPrefixByte.PF3 == 2 ? 0 : -1);
+	//Static.Assert((int)MandatoryPrefixByte.PF2 == 3 ? 0 : -1);
+	unsigned int b = self->lastByte;
+	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
+
+	unsigned int XBW = (unsigned int)(EncoderFlags_X | EncoderFlags_B | EncoderFlags_W);
+
+	if ((encoder->Internal_PreventVEX2 | self->W1 | (self->table - (unsigned int)VexOpCodeTable_MAP0F) | (encoderFlags & XBW)) != 0)
+	{
+		Encoder_WriteByteInternal(encoder, 0xC4);
+		//Static.Assert((int)VexOpCodeTable.MAP0F == 1 ? 0 : -1);
+		//Static.Assert((int)VexOpCodeTable.MAP0F38 == 2 ? 0 : -1);
+		//Static.Assert((int)VexOpCodeTable.MAP0F3A == 3 ? 0 : -1);
+		unsigned int b2 = self->table;
+		//Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
+		//Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
+		//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
+		b2 |= (~encoderFlags & 7) << 5;
+		Encoder_WriteByteInternal(encoder, b2);
+		b |= self->mask_W_L & encoder->Internal_VEX_WIG_LIG;
+		Encoder_WriteByteInternal(encoder, b);
+	}
+	else
+	{
+		Encoder_WriteByteInternal(encoder, 0xC5);
+		//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
+		b |= (~encoderFlags & 4) << 5;
+		b |= self->mask_L & encoder->Internal_VEX_LIG;
+		Encoder_WriteByteInternal(encoder, b);
+	}
 }
 
 void OpCodeHandlers_init();

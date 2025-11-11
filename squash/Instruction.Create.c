@@ -92,7 +92,7 @@ struct Op* VEXHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
 {
 	if (ops_vex == NULL)
 	{
-		ops_vex = Operands_LegacyOps();
+		ops_vex = Operands_VexOps();
 	}
 
 	int op0 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op0Shift) & (unsigned int)EFLAGS_VEX_OpMask);
