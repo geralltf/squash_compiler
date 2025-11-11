@@ -770,6 +770,15 @@ struct Op* Operands_LegacyOps()
 	return operands;
 }
 
+// Op Tables.
+struct Op* Operands_VexOps()
+{
+	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 38);
+	//TODO
+
+	return operands;
+}
+
 struct OpCodeHandler
 {
 	enum HandlerTypeConfig handler_conf;
