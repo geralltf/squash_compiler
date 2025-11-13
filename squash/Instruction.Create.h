@@ -46,6 +46,12 @@ enum OperandType
 	OT_OpJ,
 	OT_OpJx,
 	OT_OpJdisp,
+	OT_OpVsib,
+	OT_OpHx,
+	OT_OpIsX,
+	OP_OpMRBX,
+	OP_OpI4,
+	OP_OprDI
 };
 
 struct Op 
@@ -190,7 +196,7 @@ void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int o
 		break;
 	default:
 		enum OpCodeOperandKind opImmKind = GetOpKind(instruction, operand);
-		if (!Verify(encoder, operand, op->opKind, opImmKind))
+		if (!Verify(operand, op->opKind, opImmKind))
 		{
 			return;
 		}
@@ -202,7 +208,7 @@ void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int o
 
 void OpImm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	if (!Verify(encoder, operand, OK_Immediate8, GetOpKind(instruction, operand)))
+	if (!Verify(operand, OK_Immediate8, GetOpKind(instruction, operand)))
 	{
 		return;
 	}
@@ -220,7 +226,7 @@ enum OpKind OpImm_GetImmediateOpKind(struct Op* op)
 
 void OpIw_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	if (!Verify(encoder, operand, OK_Immediate16, GetOpKind(instruction, operand)))
+	if (!Verify(operand, OK_Immediate16, GetOpKind(instruction, operand)))
 	{
 		return;
 	}
@@ -236,7 +242,7 @@ enum OpKind OpIw_GetImmediateOpKind(struct Op* op)
 void OpId_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
 	enum OpKind opImmKind = GetOpKind(instruction, operand);
-	if (!Verify(encoder, operand, op->opKind, opImmKind))
+	if (!Verify(operand, op->opKind, opImmKind))
 	{
 		return;
 	}
@@ -251,7 +257,7 @@ enum OpKind OpId_GetImmediateOpKind(struct Op* op)
 
 void OpIq_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	if (!Verify(encoder, operand, OK_Immediate64, GetOpKind(instruction, operand)))
+	if (!Verify(operand, OK_Immediate64, GetOpKind(instruction, operand)))
 	{
 		return;
 	}
@@ -321,7 +327,7 @@ void OpX_Encode(struct Encoder* encoder, struct Instruction* instruction, int op
 		}
 		break;
 	}
-	SetAddrSize(encoder, regXSize);
+	Encoder_SetAddrSize(encoder, regXSize);
 }
 
 void OpY_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
@@ -345,7 +351,7 @@ void OpY_Encode(struct Encoder* encoder, struct Instruction* instruction, int op
 		}
 		break;
 	}
-	SetAddrSize(encoder, regYSize);
+	Encoder_SetAddrSize(encoder, regYSize);
 }
 
 int GetRegSize(enum OpKind opKind) 
@@ -372,12 +378,12 @@ void OprDI_Encode(struct Encoder* encoder, struct Instruction* instruction, int 
 		//encoder.ErrorMessage = $"Operand {operand}: expected OpKind = {nameof(OpKind.MemorySegDI)}, {nameof(OpKind.MemorySegEDI)} or {nameof(OpKind.MemorySegRDI)}";
 		return;
 	}
-	SetAddrSize(encoder, regSize);
+	Encoder_SetAddrSize(encoder, regSize);
 }
 
 void OpMRBX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	if (!Verify(encoder, operand, OK_Memory, GetOpKind(instruction, operand)))
+	if (!Verify(operand, OK_Memory, GetOpKind(instruction, operand)))
 	{
 		return;
 	}
@@ -403,12 +409,12 @@ void OpMRBX_Encode(struct Encoder* encoder, struct Instruction* instruction, int
 		//Debug.Assert(baseReg == Register_BX);
 		regSize = 2;
 	}
-	SetAddrSize(encoder, regSize);
+	Encoder_SetAddrSize(encoder, regSize);
 }
 
 void OpJ_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	AddBranch(encoder, op->opKind, op->immSize, instruction, operand);
+	Encoder_AddBranch(encoder, instruction, op->opKind, op->immSize, instruction, operand);
 }
 
 enum OpKind OpJ_GetNearBranchOpKind(struct Op* op)
@@ -418,7 +424,7 @@ enum OpKind OpJ_GetNearBranchOpKind(struct Op* op)
 
 void OpJx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	AddBranchX(encoder, op->immSize, instruction, operand);
+	Encoder_AddBranchX(encoder, op->immSize, instruction, operand);
 }
 
 enum OpKind OpJx_GetNearBranchOpKind(struct Op* op)
@@ -431,7 +437,7 @@ enum OpKind OpJx_GetNearBranchOpKind(struct Op* op)
 
 void OpJdisp_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	AddBranchDisp(encoder, op->displSize, instruction, operand);
+	Encoder_AddBranchDisp(encoder, op->displSize, instruction, operand);
 }
 
 enum OpKind OpJdisp_GetNearBranchOpKind(struct Op* op)
@@ -444,6 +450,67 @@ enum OpKind OpJdisp_GetNearBranchOpKind(struct Op* op)
 	{
 		return OK_NearBranch32;
 	}
+}
+
+void OpVsib_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	encoder->EncoderFlags |= EncoderFlags_MustUseSib;
+
+	bool allowMemOp = true;
+	bool allowRegOp = true;
+	Encoder_AddRegOrMem(encoder, instruction, operand, Register_None, Register_None, op->regLo, op->regHi, allowMemOp, allowRegOp);
+}
+
+void OpHx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	if (!Verify(operand, OK_Register, Instruction_GetOpKind(instruction, operand)))
+	{
+		return;
+	}
+	enum Register reg = GetOpRegister(instruction, operand);
+	if (!VerifyRegister(encoder, operand, reg, op->regLo, op->regHi))
+	{
+		return;
+	}
+	encoder->EncoderFlags |= (enum EncoderFlags)((unsigned int)(reg - op->regLo) << (int)EncoderFlags_VvvvvShift);
+}
+
+void OpIsX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	if (!Verify(operand, OK_Register, Instruction_GetOpKind(instruction, operand)))
+	{
+		return;
+	}
+	enum Register reg = GetOpRegister(instruction, operand);
+	if (!VerifyRegister(encoder, operand, reg, op->regLo, op->regHi))
+	{
+		return;
+	}
+	encoder->ImmSize = ImmSize_SizeIbReg;
+	encoder->Immediate = (unsigned int)(reg - op->regLo) << 4;
+}
+
+enum OpKind OpI4_GetImmediateOpKind(struct Op* op)
+{
+	return OK_Immediate8;
+}
+
+void OpI4_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
+{
+	enum OpKind opImmKind = Instruction_GetOpKind(instruction, operand);
+	if (!Verify(operand, OK_Immediate8, opImmKind))
+	{
+		return;
+	}
+	//Debug.Assert(encoder.ImmSize == ImmSize.SizeIbReg);
+	//Debug.Assert((encoder.Immediate & 0xF) == 0);
+	if (GetImmediate8(instruction) > 0xF)
+	{
+		//encoder.ErrorMessage = $"Operand {operand}: Immediate value must be 0-15, but value is 0x{instruction.Immediate8:X2}";
+		return;
+	}
+	encoder->ImmSize = ImmSize_Size1;
+	encoder->Immediate |= (unsigned int)GetImmediate8(instruction);
 }
 
 struct Op* Op_new()
@@ -578,10 +645,11 @@ struct Op* OpRegSTi_new()
 	return op;
 }
 
-struct Op* OpIb_new()
+struct Op* OpIb_new(enum OpKind opKind)
 {
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpIb;
+	op->opKind = opKind;
 	op->Encode = &OpIb_Encode;
 
 	return op;
@@ -687,6 +755,48 @@ struct Op* OpJdisp_new(int displSize)
 	return op;
 }
 
+struct Op* OpVsib_new(enum Register regLo, enum Register regHi)
+{
+	struct Op* op = Op_new();
+	op->regLo = regLo;
+	op->regHi = regHi;
+	op->operand_type = OT_OpVsib;
+	op->Encode = &OpVsib_Encode;
+
+	return op;
+}
+
+struct Op* OpHx_new(enum Register regLo, enum Register regHi)
+{
+	struct Op* op = Op_new();
+	op->regLo = regLo;
+	op->regHi = regHi;
+	op->operand_type = OT_OpHx;
+	op->Encode = &OpHx_Encode;
+
+	return op;
+}
+
+struct Op* OpIsX_new(enum Register regLo, enum Register regHi)
+{
+	struct Op* op = Op_new();
+	op->regLo = regLo;
+	op->regHi = regHi;
+	op->operand_type = OT_OpIsX;
+	op->Encode = &OpIsX_Encode;
+
+	return op;
+}
+
+struct Op* OpI4_new()
+{
+	struct Op* op = Op_new();
+	op->operand_type = OP_OpI4;
+	op->Encode = &OpI4_Encode;
+	op->GetImmediateOpKind = &OpI4_GetImmediateOpKind;
+	return op;
+}
+
 // Op Tables.
 struct Op* Operands_LegacyOps()
 {
@@ -774,8 +884,44 @@ struct Op* Operands_LegacyOps()
 struct Op* Operands_VexOps()
 {
 	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 38);
-	//TODO
-
+	operands[0] = *OpModRM_rm_mem_only_new(false);
+	operands[1] = *OpVsib_new(Register_XMM0, Register_XMM15);
+	operands[2] = *OpVsib_new(Register_XMM0, Register_XMM15);
+	operands[3] = *OpVsib_new(Register_YMM0, Register_YMM15);
+	operands[4] = *OpVsib_new(Register_YMM0, Register_YMM15);
+	operands[5] = *OpModRM_rm_new(Register_EAX, Register_R15D);
+	operands[6] = *OpModRM_rm_new(Register_RAX, Register_R15);
+	operands[7] = *OpModRM_rm_new(Register_XMM0, Register_XMM15);
+	operands[8] = *OpModRM_rm_new(Register_YMM0, Register_YMM15);
+	operands[9] = *OpModRM_rm_new(Register_K0, Register_K7);
+	operands[10] = *OpModRM_reg_new(Register_EAX, Register_R15D);
+	operands[11] = *OpModRM_rm_reg_only_new(Register_EAX, Register_R15D);
+	operands[12] = *OpHx_new(Register_EAX, Register_R15D);
+	operands[13] = *OpModRM_reg_new(Register_RAX, Register_R15);
+	operands[14] = *OpModRM_rm_reg_only_new(Register_RAX, Register_R15);
+	operands[15] = *OpHx_new(Register_RAX, Register_R15);
+	operands[16] = *OpModRM_reg_new(Register_K0, Register_K7);
+	operands[17] = *OpModRM_rm_reg_only_new(Register_K0, Register_K7);
+	operands[18] = *OpHx_new(Register_K0, Register_K7);
+	operands[19] = *OpModRM_reg_new(Register_XMM0, Register_XMM15);
+	operands[20] = *OpModRM_rm_reg_only_new(Register_XMM0, Register_XMM15);
+	operands[21] = *OpHx_new(Register_XMM0, Register_XMM15);
+	operands[22] = *OpIsX_new(Register_XMM0, Register_XMM15);
+	operands[23] = *OpIsX_new(Register_XMM0, Register_XMM15);
+	operands[24] = *OpModRM_reg_new(Register_YMM0, Register_YMM15);
+	operands[25] = *OpModRM_rm_reg_only_new(Register_YMM0, Register_YMM15);
+	operands[26] = *OpHx_new(Register_YMM0, Register_YMM15);
+	operands[27] = *OpIsX_new(Register_YMM0, Register_YMM15);
+	operands[28] = *OpIsX_new(Register_YMM0, Register_YMM15);
+	operands[29] = *OpI4_new();
+	operands[30] = *OpIb_new(OK_Immediate8);
+	operands[31] = *OprDI_new();
+	operands[32] = *OpJ_new(OK_NearBranch64, 1);
+	operands[33] = *OpJ_new(OK_NearBranch64, 4);
+	operands[34] = *OpModRM_rm_mem_only_new(true);
+	operands[35] = *OpModRM_reg_new(Register_TMM0, Register_TMM7);
+	operands[36] = *OpModRM_rm_reg_only_new(Register_TMM0, Register_TMM7);
+	operands[37] = *OpHx_new(Register_TMM0, Register_TMM7);
 	return operands;
 }
 
@@ -1487,7 +1633,7 @@ bool Verify(int operand, enum OpKind expected, enum OpKind actual)
 	return false;
 }
 
-bool Verify(int operand, enum Register expected, enum Register actual)
+bool VerifyRegisters(int operand, enum Register expected, enum Register actual)
 {
 	if (expected == actual)
 	{
@@ -1497,7 +1643,7 @@ bool Verify(int operand, enum Register expected, enum Register actual)
 	return false;
 }
 
-bool Verify(struct Encoder* encoder, int operand, enum Register registerValue, enum Register regLo, enum Register regHi)
+bool VerifyRegister(struct Encoder* encoder, int operand, enum Register registerValue, enum Register regLo, enum Register regHi)
 {
 	if (encoder->bitness != 64 && regHi > regLo + 7)
 	{
