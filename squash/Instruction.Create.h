@@ -111,12 +111,12 @@ void OpModRM_rm_mem_only_Encode(struct Encoder* encoder, struct Instruction* ins
 		encoder->EncoderFlags |= EncoderFlags_MustUseSib;
 	}
 
-	Encoder_AddRegOrMem(encoder, instruction, operand, Register_None, Register_None, true, false); // allowMemOp: true, allowRegOp : false
+	Encoder_AddRegOrMem(encoder, instruction, operand, Register_None, Register_None, Register_None, Register_None, true, false); // allowMemOp: true, allowRegOp : false
 }
 
 void OpModRM_rm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	Encoder_AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, true, true); // allowMemOp: true, allowRegOp : true
+	Encoder_AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, Register_None, Register_None, true, true); // allowMemOp: true, allowRegOp : true
 }
 
 void OpModRM_reg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
@@ -137,7 +137,7 @@ void OpModRM_reg_mem_Encode(struct Encoder* encoder, struct Instruction* instruc
 
 void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	Encoder_AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, false, true); // allowMemOp: false, allowRegOp : true
+	Encoder_AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, Register_None, Register_None, false, true); // allowMemOp: false, allowRegOp : true
 }
 
 void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
