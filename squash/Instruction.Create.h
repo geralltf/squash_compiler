@@ -91,7 +91,7 @@ enum OpKind OpDefault_GetFarBranchOpKind(struct Op* op)
 
 void OpA_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	AddFarBranch(encoder, instruction, operand, op->size);
+	Encoder_AddFarBranch(encoder, instruction, operand, op->size);
 }
 enum OpKind OpA_GetFarBranchOpKind(struct Op* op)
 {
@@ -101,7 +101,7 @@ enum OpKind OpA_GetFarBranchOpKind(struct Op* op)
 
 void OpO_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	AddAbsMem(encoder, instruction, operand);
+	Encoder_AddAbsMem(encoder, instruction, operand);
 }
 
 void OpModRM_rm_mem_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
@@ -111,33 +111,33 @@ void OpModRM_rm_mem_only_Encode(struct Encoder* encoder, struct Instruction* ins
 		encoder->EncoderFlags |= EncoderFlags_MustUseSib;
 	}
 
-	AddRegOrMem(encoder, instruction, operand, Register_None, Register_None, true, false); // allowMemOp: true, allowRegOp : false
+	Encoder_AddRegOrMem(encoder, instruction, operand, Register_None, Register_None, true, false); // allowMemOp: true, allowRegOp : false
 }
 
 void OpModRM_rm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, true, true); // allowMemOp: true, allowRegOp : true
+	Encoder_AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, true, true); // allowMemOp: true, allowRegOp : true
 }
 
 void OpModRM_reg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	AddModRMRegister(encoder, instruction, operand, op->regLo, op->regHi);
+	Encoder_AddModRMRegister(encoder, instruction, operand, op->regLo, op->regHi);
 }
 
 void OpRegEmbed8_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	AddReg(encoder, instruction, operand, op->regLo, op->regHi);
+	Encoder_AddReg(encoder, instruction, operand, op->regLo, op->regHi);
 }
 
 void OpModRM_reg_mem_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	AddModRMRegister(encoder, instruction, operand, op->regLo, op->regHi);
+	Encoder_AddModRMRegister(encoder, instruction, operand, op->regLo, op->regHi);
 	encoder->EncoderFlags |= EncoderFlags_RegIsMemory;
 }
 
 void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, false, true); // allowMemOp: false, allowRegOp : true
+	Encoder_AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, false, true); // allowMemOp: false, allowRegOp : true
 }
 
 void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
@@ -145,18 +145,18 @@ void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instructi
 	if (GetBitness(encoder) != 64 && GetOpKind(instruction, operand) == OK_Register && GetOpRegister(instruction, operand) >= op->regLo + 8 && GetOpRegister(instruction, operand) <= op->regLo + 15)
 	{
 		encoder->EncoderFlags |= EncoderFlags_PF0;
-		AddModRMRegister(encoder, instruction, operand, op->regLo + 8, op->regLo + 15);
+		Encoder_AddModRMRegister(encoder, instruction, operand, op->regLo + 8, op->regLo + 15);
 	}
 	else
 	{
-		AddModRMRegister(encoder, instruction, operand, op->regLo, op->regHi);
+		Encoder_AddModRMRegister(encoder, instruction, operand, op->regLo, op->regHi);
 	}
 }
 
 void OpReg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	Verify(encoder, operand, OK_Register, GetOpKind(instruction, operand));
-	Verify(encoder, operand, op->_register, GetOpRegister(instruction, operand));
+	Verify(operand, OK_Register, GetOpKind(instruction, operand));
+	VerifyRegisters(operand, op->_register, GetOpRegister(instruction, operand));
 }
 
 void OpRegSTi_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
@@ -166,7 +166,7 @@ void OpRegSTi_Encode(struct Encoder* encoder, struct Instruction* instruction, i
 		return;
 	}
 	enum Register reg = GetOpRegister(instruction, operand);
-	if (!Verify(encoder, operand, reg, Register_ST0, Register_ST7))
+	if (!VerifyRegister(encoder, operand, reg, Register_ST0, Register_ST7))
 	{
 		return;
 	}
