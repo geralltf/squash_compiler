@@ -3,6 +3,7 @@
 struct OpCodeHandler* EncoderInternal_OpCodeHandlers_Handlers = (struct OpCodeHandler*)NULL; // CodeEnumCount
 struct Op* ops_legacy = NULL;
 struct Op* ops_vex = NULL;
+struct Op* ops_evex = NULL;
 
 struct OpCodeHandler* GetOpCodeHandlers()
 {
@@ -47,6 +48,7 @@ struct Op* LegacyHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_lengt
 	int op1 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op1Shift) & (unsigned int)EFLAGS_Legacy_OpMask);
 	int op2 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op2Shift) & (unsigned int)EFLAGS_Legacy_OpMask);
 	int op3 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op3Shift) & (unsigned int)EFLAGS_Legacy_OpMask);
+
 	if (op3 != 0) 
 	{
 		//Debug.Assert(op0 != 0 && op1 != 0 && op2 != 0);
@@ -100,6 +102,7 @@ struct Op* VEXHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
 	int op2 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op2Shift) & (unsigned int)EFLAGS_VEX_OpMask);
 	int op3 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op3Shift) & (unsigned int)EFLAGS_VEX_OpMask);
 	int op4 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op4Shift) & (unsigned int)EFLAGS_VEX_OpMask);
+
 	if (op4 != 0)
 	{
 		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 5);
@@ -154,6 +157,58 @@ struct Op* VEXHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
 		return w;
 		//return new Op[]{ OpHandlerData.VexOps[op0 - 1] };
 	}
+	return NULL;
+}
+
+struct Op* EVEXHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
+{
+	if (ops_evex == NULL)
+	{
+		ops_evex = Operands_EVexOps();
+	}
+	int op0 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op0Shift) & (unsigned int)EFLAGS_EVEX_OpMask);
+	int op1 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op1Shift) & (unsigned int)EFLAGS_EVEX_OpMask);
+	int op2 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op2Shift) & (unsigned int)EFLAGS_EVEX_OpMask);
+	int op3 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op3Shift) & (unsigned int)EFLAGS_EVEX_OpMask);
+
+	if (op3 != 0)
+	{
+		//Debug.Assert(op0 != 0 && op1 != 0 && op2 != 0);
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 4);
+		w[0] = ops_evex[op0 - 1];
+		w[1] = ops_evex[op1 - 1];
+		w[2] = ops_evex[op2 - 1];
+		w[3] = ops_evex[op3 - 1];
+		*operands_length = 4;
+		return w;
+	}
+	if (op2 != 0)
+	{
+		//Debug.Assert(op0 != 0 && op1 != 0);
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 3);
+		w[0] = ops_evex[op0 - 1];
+		w[1] = ops_evex[op1 - 1];
+		w[2] = ops_evex[op2 - 1];
+		*operands_length = 3;
+		return w;
+	}
+	if (op1 != 0)
+	{
+		//Debug.Assert(op0 != 0);
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 2);
+		w[0] = ops_evex[op0 - 1];
+		w[1] = ops_evex[op1 - 1];
+		*operands_length = 2;
+		return w;
+	}
+	if (op0 != 0)
+	{
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 1);
+		w[0] = ops_evex[op0 - 1];
+		*operands_length = 1;
+		return w;
+	}
+
 	return NULL;
 }
 
@@ -319,6 +374,49 @@ void OpCodeHandlers_init()
 
 		case EncodingKind_EVEX:
 			handler->Operands_Length = 31;
+
+			handler->tupleType = (enum TupleType)(((unsigned int)encFlags3Data >> (int)EFLAGS3_TupleTypeShift) & (unsigned int)EFLAGS3_TupleTypeMask);
+			handler->table = ((unsigned int)encFlags2 >> (int)EFLAGS2_TableShift) & (unsigned int)EFLAGS2_TableMask;
+			//Static.Assert((int)MandatoryPrefixByte.None == 0 ? 0 : -1);
+			//Static.Assert((int)MandatoryPrefixByte.P66 == 1 ? 0 : -1);
+			//Static.Assert((int)MandatoryPrefixByte.PF3 == 2 ? 0 : -1);
+			//Static.Assert((int)MandatoryPrefixByte.PF2 == 3 ? 0 : -1);
+			handler->p1Bits = 4 | (((unsigned int)encFlags2 >> (int)EFLAGS2_MandatoryPrefixShift) & (unsigned int)EFLAGS2_MandatoryPrefixMask);
+			handler->wbit = (enum WBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_WBitShift) & (unsigned int)EFLAGS2_WBitMask);
+			if (handler->wbit == WBit_W1)
+			{
+				handler->p1Bits |= 0x80;
+			}
+			switch ((enum LBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_LBitShift) & (int)EFLAGS2_LBitMask))
+			{
+			case LBit_LIG:
+				handler->llBits = 0 << 5;
+				handler->mask_LL = 3 << 5;
+				break;
+			case LBit_L0:
+			case LBit_LZ:
+			case LBit_L128:
+				handler->llBits = 0 << 5;
+				break;
+			case LBit_L1:
+			case LBit_L256:
+				handler->llBits = 1 << 5;
+				break;
+			case LBit_L512:
+				handler->llBits = 2 << 5;
+				break;
+			default:
+				//throw new InvalidOperationException();
+				break;
+			}
+			if (handler->wbit == WBit_WIG)
+			{
+				handler->mask_W |= 0x80;
+			}
+
+			operands = EVEXHandler_CreateOps(encFlags1, &operands_length);
+
+			OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, &EVEXHandler_TryConvertToDisp8N, &OpCodeHandler_GetOpCode, &EVEXHandler_Encode);
 
 			handler->handler_conf = EvexHandler;
 			//handler = new EvexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
