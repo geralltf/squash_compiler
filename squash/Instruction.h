@@ -1557,6 +1557,31 @@ enum OpKind GetOp0Kind(struct Instruction* i);
 /// </summary>
 enum Register GetOp0Register(struct Instruction* i);
 
+unsigned int GetInternalOpMask(struct Instruction* i);
+
+/// <summary>
+/// <see langword="true"/> if the data is broadcast (EVEX instructions only)
+/// </summary>
+bool IsBroadcast2(struct Instruction* i);
+
+/// <summary>
+/// <see langword="true"/> if zeroing-masking, <see langword="false"/> if merging-masking.
+/// Only used by most EVEX encoded instructions that use opmask registers.
+/// </summary>
+bool GetZeroingMasking(struct Instruction* i);
+
+/// <summary>
+/// Rounding control (SAE is implied but <see cref="SuppressAllExceptions"/> still returns <see langword="false"/>)
+/// or <see cref="RoundingControl.None"/> if the instruction doesn't use it.
+/// </summary>
+enum RoundingControl GetRoundingControl(struct Instruction* i);
+
+/// <summary>
+/// Suppress all exceptions (EVEX/MVEX encoded instructions). Note that if <see cref="RoundingControl"/> is
+/// not <see cref="RoundingControl.None"/>, SAE is implied but this property will still return <see langword="false"/>.
+/// </summary>
+bool GetSuppressAllExceptions(struct Instruction* i);
+
 /// <summary>
 /// Gets the segment override prefix or <see cref="Register.None"/> if none. See also <see cref="MemorySegment"/>.
 /// Use this property if the operand has kind <see cref="OpKind.Memory"/>,
