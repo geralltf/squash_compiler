@@ -925,6 +925,45 @@ struct Op* Operands_VexOps()
 	return operands;
 }
 
+// Op Tables.
+struct Op* Operands_EVexOps()
+{
+	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 31);
+	operands[0] = *OpModRM_rm_mem_only_new(false);
+	operands[1] = *OpVsib_new(Register_XMM0, Register_XMM31);
+	operands[2] = *OpVsib_new(Register_XMM0, Register_XMM31);
+	operands[3] = *OpVsib_new(Register_YMM0, Register_YMM31);
+	operands[4] = *OpVsib_new(Register_YMM0, Register_YMM31);
+	operands[5] = *OpVsib_new(Register_ZMM0, Register_ZMM31);
+	operands[6] = *OpVsib_new(Register_ZMM0, Register_ZMM31);
+	operands[7] = *OpModRM_rm_new(Register_EAX, Register_R15D);
+	operands[8] = *OpModRM_rm_new(Register_RAX, Register_R15);
+	operands[9] = *OpModRM_rm_new(Register_XMM0, Register_XMM31);
+	operands[10] = *OpModRM_rm_new(Register_YMM0, Register_YMM31);
+	operands[11] = *OpModRM_rm_new(Register_ZMM0, Register_ZMM31);
+	operands[12] = *OpModRM_reg_new(Register_EAX, Register_R15D);
+	operands[13] = *OpModRM_rm_reg_only_new(Register_EAX, Register_R15D);
+	operands[14] = *OpModRM_reg_new(Register_RAX, Register_R15);
+	operands[15] = *OpModRM_rm_reg_only_new(Register_RAX, Register_R15);
+	operands[16] = *OpModRM_reg_new(Register_K0, Register_K7);
+	operands[17] = *OpModRM_reg_new(Register_K0, Register_K7);
+	operands[18] = *OpModRM_rm_reg_only_new(Register_K0, Register_K7);
+	operands[19] = *OpModRM_reg_new(Register_XMM0, Register_XMM31);
+	operands[20] = *OpModRM_rm_reg_only_new(Register_XMM0, Register_XMM31);
+	operands[21] = *OpHx_new(Register_XMM0, Register_XMM31);
+	operands[22] = *OpHx_new(Register_XMM0, Register_XMM31);
+	operands[23] = *OpModRM_reg_new(Register_YMM0, Register_YMM31);
+	operands[24] = *OpModRM_rm_reg_only_new(Register_YMM0, Register_YMM31);
+	operands[25] = *OpHx_new(Register_YMM0, Register_YMM31);
+	operands[26] = *OpModRM_reg_new(Register_ZMM0, Register_ZMM31);
+	operands[27] = *OpModRM_rm_reg_only_new(Register_ZMM0, Register_ZMM31);
+	operands[28] = *OpHx_new(Register_ZMM0, Register_ZMM31);
+	operands[29] = *OpHx_new(Register_ZMM0, Register_ZMM31);
+	operands[30] = *OpIb_new(OK_Immediate8);
+
+	return operands;
+}
+
 struct OpCodeHandler
 {
 	enum HandlerTypeConfig handler_conf;
@@ -959,6 +998,15 @@ struct OpCodeHandler
 	unsigned int mask_W_L;
 	unsigned int mask_L;
 	unsigned int W1;
+
+	// EvexHandler
+	enum WBit wbit;
+	enum TupleType tupleType;
+	//readonly uint table;
+	unsigned int p1Bits;
+	unsigned int llBits;
+	unsigned int mask_W;
+	unsigned int mask_LL;
 };
 
 struct InvalidHandler
@@ -1216,6 +1264,176 @@ void VEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, stru
 		b |= self->mask_L & encoder->Internal_VEX_LIG;
 		Encoder_WriteByteInternal(encoder, b);
 	}
+}
+
+void EVEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
+
+	Encoder_WriteByteInternal(encoder, 0x62);
+
+	//Static.Assert((int)EvexOpCodeTable_MAP0F == 1 ? 0 : -1);
+	//Static.Assert((int)EvexOpCodeTable_MAP0F38 == 2 ? 0 : -1);
+	//Static.Assert((int)EvexOpCodeTable_MAP0F3A == 3 ? 0 : -1);
+	//Static.Assert((int)EvexOpCodeTable_MAP5 == 5 ? 0 : -1);
+	//Static.Assert((int)EvexOpCodeTable_MAP6 == 6 ? 0 : -1);
+	unsigned int b = self->table;
+	//Static.Assert((int)EncoderFlags_B == 1 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags_X == 2 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags_R == 4 ? 0 : -1);
+	b |= (encoderFlags & 7) << 5;
+	//Static.Assert((int)EncoderFlags_R2 == 0x00000200 ? 0 : -1);
+	b |= (encoderFlags >> (9 - 4)) & 0x10;
+	b ^= ~0xFU;
+	Encoder_WriteByteInternal(encoder, b);
+
+	b = self->p1Bits;
+	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
+	b |= self->mask_W & encoder->Internal_EVEX_WIG;
+	Encoder_WriteByteInternal(encoder, b);
+
+	b = GetInternalOpMask(instruction);
+	if (b != 0) {
+		if ((self->EncFlags3 & EFLAGS3_OpMaskRegister) == 0)
+		{
+			//encoder.ErrorMessage = "The instruction doesn't support opmask registers";
+		}
+	}
+	else {
+		if ((self->EncFlags3 & EFLAGS3_RequireOpMaskRegister) != 0)
+		{
+			//encoder.ErrorMessage = "The instruction must use an opmask register";
+		}
+	}
+	b |= (encoderFlags >> ((int)EncoderFlags_VvvvvShift + 4 - 3)) & 8;
+	if (GetSuppressAllExceptions(instruction))
+	{
+		if ((self->EncFlags3 & EFLAGS3_SuppressAllExceptions) == 0)
+		{
+			//encoder.ErrorMessage = "The instruction doesn't support suppress-all-exceptions";
+		}
+		b |= 0x10;
+	}
+	enum RoundingControl rc = GetRoundingControl(instruction);
+	if (rc != RC_None)
+	{
+		if ((self->EncFlags3 & EFLAGS3_RoundingControl) == 0)
+		{
+			//encoder.ErrorMessage = "The instruction doesn't support rounding control";
+		}
+		b |= 0x10;
+		//Static.Assert((int)RoundingControl.RoundToNearest == 1 ? 0 : -1);
+		//Static.Assert((int)RoundingControl.RoundDown == 2 ? 0 : -1);
+		//Static.Assert((int)RoundingControl.RoundUp == 3 ? 0 : -1);
+		//Static.Assert((int)RoundingControl.RoundTowardZero == 4 ? 0 : -1);
+		b |= (unsigned int)(rc - RC_RoundToNearest) << 5;
+	}
+	else if ((self->EncFlags3 & EFLAGS3_SuppressAllExceptions) == 0 || !GetSuppressAllExceptions(instruction))
+	{
+		b |= self->llBits;
+	}
+	if ((encoderFlags & (unsigned int)EncoderFlags_Broadcast) != 0)
+	{
+		b |= 0x10;
+	}
+	else if (IsBroadcast2(instruction))
+	{
+		//encoder.ErrorMessage = "The instruction doesn't support broadcasting";
+	}
+	if (GetZeroingMasking(instruction))
+	{
+		if ((self->EncFlags3 & EFLAGS3_ZeroingMasking) == 0)
+		{
+			//encoder.ErrorMessage = "The instruction doesn't support zeroing masking";
+		}
+		b |= 0x80;
+	}
+	b ^= 8;
+	b |= self->mask_LL & encoder->Internal_EVEX_LIG;
+	Encoder_WriteByteInternal(encoder, b);
+}
+
+unsigned int TupleTypeTable_GetDisp8N(enum TupleType tupleType, bool bcst)
+{
+	unsigned char tupleTypeData[38] =
+	{
+		// TupleType.N1
+		0x01,// N
+		0x01,// Nbcst
+		// TupleType.N2
+		0x02,// N
+		0x02,// Nbcst
+		// TupleType.N4
+		0x04,// N
+		0x04,// Nbcst
+		// TupleType.N8
+		0x08,// N
+		0x08,// Nbcst
+		// TupleType.N16
+		0x10,// N
+		0x10,// Nbcst
+		// TupleType.N32
+		0x20,// N
+		0x20,// Nbcst
+		// TupleType.N64
+		0x40,// N
+		0x40,// Nbcst
+		// TupleType.N8b4
+		0x08,// N
+		0x04,// Nbcst
+		// TupleType.N16b4
+		0x10,// N
+		0x04,// Nbcst
+		// TupleType.N32b4
+		0x20,// N
+		0x04,// Nbcst
+		// TupleType.N64b4
+		0x40,// N
+		0x04,// Nbcst
+		// TupleType.N16b8
+		0x10,// N
+		0x08,// Nbcst
+		// TupleType.N32b8
+		0x20,// N
+		0x08,// Nbcst
+		// TupleType.N64b8
+		0x40,// N
+		0x08,// Nbcst
+		// TupleType.N4b2
+		0x04,// N
+		0x02,// Nbcst
+		// TupleType.N8b2
+		0x08,// N
+		0x02,// Nbcst
+		// TupleType.N16b2
+		0x10,// N
+		0x02,// Nbcst
+		// TupleType.N32b2
+		0x20,// N
+		0x02,// Nbcst
+		// TupleType.N64b2
+		0x40,// N
+		0x02,// Nbcst
+		// GENERATOR-END: TupleTypeTable
+	};
+
+	int index = ((int)tupleType << 1) | (bcst ? 1 : 0);
+	//Debug.Assert((uint)index < (uint)tupleTypeData.Length);
+	return tupleTypeData[index];
+}
+
+bool EVEXHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue)
+{
+	int n = (int)TupleTypeTable_GetDisp8N(handler->tupleType, (encoder->EncoderFlags & EncoderFlags_Broadcast) != 0);
+	int res = displ / n;
+	if (res * n == displ && SCHAR_MIN <= res && res <= SCHAR_MAX)
+	{
+		compressedValue = (signed char)res;
+		return true;
+	}
+
+	compressedValue = 0;
+	return false;
 }
 
 void OpCodeHandlers_init();
