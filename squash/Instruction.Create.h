@@ -964,6 +964,31 @@ struct Op* Operands_EVexOps()
 	return operands;
 }
 
+// Op Tables.
+struct Op* Operands_XopOps()
+{
+	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 18);
+	operands[0] = *OpModRM_rm_new(Register_EAX, Register_R15D);
+	operands[1] = *OpModRM_rm_new(Register_RAX, Register_R15);
+	operands[2] = *OpModRM_rm_new(Register_XMM0, Register_XMM15);
+	operands[3] = *OpModRM_rm_new(Register_YMM0, Register_YMM15);
+	operands[4] = *OpModRM_reg_new(Register_EAX, Register_R15D);
+	operands[5] = *OpModRM_rm_reg_only_new(Register_EAX, Register_R15D);
+	operands[6] = *OpHx_new(Register_EAX, Register_R15D);
+	operands[7] = *OpModRM_reg_new(Register_RAX, Register_R15);
+	operands[8] = *OpModRM_rm_reg_only_new(Register_RAX, Register_R15);
+	operands[9] = *OpHx_new(Register_RAX, Register_R15);
+	operands[10] = *OpModRM_reg_new(Register_XMM0, Register_XMM15);
+	operands[11] = *OpHx_new(Register_XMM0, Register_XMM15);
+	operands[12] = *OpIsX_new(Register_XMM0, Register_XMM15);
+	operands[13] = *OpModRM_reg_new(Register_YMM0, Register_YMM15);
+	operands[14] = *OpHx_new(Register_YMM0, Register_YMM15);
+	operands[15] = *OpIsX_new(Register_YMM0, Register_YMM15);
+	operands[16] = *OpIb_new(OK_Immediate8);
+	operands[17] = *OpId_new(OK_Immediate32);
+	return operands;
+}
+
 struct OpCodeHandler
 {
 	enum HandlerTypeConfig handler_conf;
@@ -1002,29 +1027,13 @@ struct OpCodeHandler
 	// EvexHandler
 	enum WBit wbit;
 	enum TupleType tupleType;
-	//readonly uint table;
 	unsigned int p1Bits;
 	unsigned int llBits;
 	unsigned int mask_W;
 	unsigned int mask_LL;
-};
 
-struct InvalidHandler
-{
-	struct OpCodeHandler* base;
-};
-
-struct DeclareDataHandler
-{
-	struct OpCodeHandler* base;
-
-	int elemLength;
-	int maxLength;
-};
-
-struct ZeroBytesHandler
-{
-	struct OpCodeHandler* base;
+	// XopHandler
+	unsigned int lastByte;
 };
 
 unsigned char SegmentOverrides[6] =
@@ -1350,6 +1359,29 @@ void EVEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, str
 	}
 	b ^= 8;
 	b |= self->mask_LL & encoder->Internal_EVEX_LIG;
+	Encoder_WriteByteInternal(encoder, b);
+}
+
+void XopHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	Encoder_WritePrefixes(encoder, instruction, true);
+
+	Encoder_WriteByteInternal(encoder, 0x8F);
+
+	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
+	//Static.Assert((int)MandatoryPrefixByte.None == 0 ? 0 : -1);
+	//Static.Assert((int)MandatoryPrefixByte.P66 == 1 ? 0 : -1);
+	//Static.Assert((int)MandatoryPrefixByte.PF3 == 2 ? 0 : -1);
+	//Static.Assert((int)MandatoryPrefixByte.PF2 == 3 ? 0 : -1);
+
+	unsigned int b = self->table;
+	//Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
+	b |= (~encoderFlags & 7) << 5;
+	Encoder_WriteByteInternal(encoder, b);
+	b = self->lastByte;
+	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
 	Encoder_WriteByteInternal(encoder, b);
 }
 
