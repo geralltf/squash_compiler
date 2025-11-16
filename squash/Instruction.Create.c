@@ -4,6 +4,7 @@ struct OpCodeHandler* EncoderInternal_OpCodeHandlers_Handlers = (struct OpCodeHa
 struct Op* ops_legacy = NULL;
 struct Op* ops_vex = NULL;
 struct Op* ops_evex = NULL;
+struct Op* ops_xop = NULL;
 
 struct OpCodeHandler* GetOpCodeHandlers()
 {
@@ -166,6 +167,7 @@ struct Op* EVEXHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
 	{
 		ops_evex = Operands_EVexOps();
 	}
+
 	int op0 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op0Shift) & (unsigned int)EFLAGS_EVEX_OpMask);
 	int op1 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op1Shift) & (unsigned int)EFLAGS_EVEX_OpMask);
 	int op2 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op2Shift) & (unsigned int)EFLAGS_EVEX_OpMask);
@@ -205,6 +207,59 @@ struct Op* EVEXHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
 	{
 		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 1);
 		w[0] = ops_evex[op0 - 1];
+		*operands_length = 1;
+		return w;
+	}
+
+	return NULL;
+}
+
+struct Op* XopHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
+{
+	if (ops_xop == NULL)
+	{
+		ops_xop = Operands_XopOps();
+	}
+
+	int op0 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_XOP_Op0Shift) & (unsigned int)EFLAGS_XOP_OpMask);
+	int op1 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_XOP_Op1Shift) & (unsigned int)EFLAGS_XOP_OpMask);
+	int op2 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_XOP_Op2Shift) & (unsigned int)EFLAGS_XOP_OpMask);
+	int op3 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_XOP_Op3Shift) & (unsigned int)EFLAGS_XOP_OpMask);
+
+	if (op3 != 0)
+	{
+		//Debug.Assert(op0 != 0 && op1 != 0 && op2 != 0);
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 4);
+		w[0] = ops_xop[op0 - 1];
+		w[1] = ops_xop[op1 - 1];
+		w[2] = ops_xop[op2 - 1];
+		w[3] = ops_xop[op3 - 1];
+		*operands_length = 4;
+		return w;
+	}
+	if (op2 != 0)
+	{
+		//Debug.Assert(op0 != 0 && op1 != 0);
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 3);
+		w[0] = ops_xop[op0 - 1];
+		w[1] = ops_xop[op1 - 1];
+		w[2] = ops_xop[op2 - 1];
+		*operands_length = 3;
+		return w;
+	}
+	if (op1 != 0)
+	{
+		//Debug.Assert(op0 != 0);
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 2);
+		w[0] = ops_xop[op0 - 1];
+		w[1] = ops_xop[op1 - 1];
+		*operands_length = 2;
+		return w;
+	}
+	if (op0 != 0)
+	{
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 1);
+		w[0] = ops_xop[op0 - 1];
 		*operands_length = 1;
 		return w;
 	}
@@ -424,6 +479,29 @@ void OpCodeHandlers_init()
 
 		case EncodingKind_XOP:
 			handler->Operands_Length = 18;
+
+			//Static.Assert((int)XopOpCodeTable.MAP8 == 0 ? 0 : -1);
+			//Static.Assert((int)XopOpCodeTable.MAP9 == 1 ? 0 : -1);
+			//Static.Assert((int)XopOpCodeTable.MAP10 == 2 ? 0 : -1);
+			handler->table = 8 + (((unsigned int)encFlags2 >> (int)EFLAGS2_TableShift) & (unsigned int)EFLAGS2_TableMask);
+			//Debug.Assert(table == 8 || table == 9 || table == 10);
+			switch ((enum LBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_LBitShift) & (int)EFLAGS2_LBitMask))
+			{
+			case LBit_L1:
+			case LBit_L256:
+				handler->lastByte = 4;
+				break;
+			}
+			enum WBit wbit = (enum WBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_WBitShift) & (unsigned int)EFLAGS2_WBitMask);
+			if (wbit == WBit_W1)
+			{
+				handler->lastByte |= 0x80;
+			}
+			handler->lastByte |= ((unsigned int)encFlags2 >> (int)EFLAGS2_MandatoryPrefixShift) & (unsigned int)EFLAGS2_MandatoryPrefixMask;
+
+			operands = XopHandler_CreateOps(encFlags1, &operands_length);
+
+			OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, &XopHandler_Encode);
 
 			handler->handler_conf = XopHandler;
 			//handler = new XopHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
