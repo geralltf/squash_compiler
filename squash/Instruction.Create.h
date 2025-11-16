@@ -1885,7 +1885,7 @@ void Encoder_AddBranch(struct Encoder* encoder, struct Instruction* instruction,
 /// <param name="encodedLength">Updated with length of encoded instruction if successful</param>
 /// <param name="errorMessage">Set to the error message if we couldn't encode the instruction</param>
 /// <returns></returns>
-bool TryEncode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip, unsigned int* encodedLength);
+bool Encoder_TryEncode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip, unsigned int* encodedLength);
 
 /// <summary>
 /// Encodes an instruction and returns the size of the encoded instruction.
@@ -1899,7 +1899,7 @@ bool TryEncode(struct Encoder* encoder, struct Instruction* instruction, unsigne
 unsigned int Encode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip)
 {
 	unsigned int encoded_length = 0;
-	if (!TryEncode(encoder, instruction, rip, &encoded_length))
+	if (!Encoder_TryEncode(encoder, instruction, rip, &encoded_length))
 	{
 		//ThrowEncoderException(instruction, errorMessage);
 	}
