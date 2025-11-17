@@ -574,7 +574,7 @@ void OpCodeHandlers_init()
 		case EncodingKind_D3NOW:
 			handler->Operands_Length = 2;
 
-			handler->immediate = GetOpCode(encFlags2);
+			handler->immediate = OpCodeHandler_GetOpCode(handler, encFlags2);
 			
 			//Debug.Assert(immediate <= byte.MaxValue);
 
