@@ -1320,11 +1320,6 @@ enum MvexConvFn {
 	MCF_Di64 = 12,
 };
 
-//struct MvexInfo
-//{
-//	int index;
-//};
-
 enum RoundingControl 
 {
 	/// <summary>No rounding mode</summary>
@@ -1583,6 +1578,11 @@ enum RoundingControl GetRoundingControl(struct Instruction* i);
 bool GetSuppressAllExceptions(struct Instruction* i);
 
 /// <summary>
+/// (MVEX) Register/memory operand conversion function
+/// </summary>
+enum MvexRegMemConv GetMvexRegMemConv(struct Instruction* i);
+
+/// <summary>
 /// Gets the segment override prefix or <see cref="Register.None"/> if none. See also <see cref="MemorySegment"/>.
 /// Use this property if the operand has kind <see cref="OpKind.Memory"/>,
 /// <see cref="OpKind.MemorySegSI"/>, <see cref="OpKind.MemorySegESI"/>, <see cref="OpKind.MemorySegRSI"/>
@@ -1603,5 +1603,22 @@ bool Get_HasLockPrefix(struct Instruction* i);
 /// <see langword="true"/> if the instruction has the <c>REPNE</c> prefix (<c>F2</c>)
 /// </summary>
 bool Get_HasRepnePrefix(struct Instruction* i);
+
+/// <summary>
+/// Gets operand #1's kind if the operand exists (see <see cref="OpCount"/> and <see cref="GetOpKind(int)"/>)
+/// </summary>
+enum OpKind GetOp1Kind(struct Instruction* i);
+
+/// <summary>
+/// Gets operand #2's kind if the operand exists (see <see cref="OpCount"/> and <see cref="GetOpKind(int)"/>)
+/// </summary>
+enum OpKind GetOp2Kind(struct Instruction* i);
+
+/// <summary>
+/// <see langword="true"/> if eviction hint bit is set (<c>{eh}</c>) (MVEX instructions only)
+/// </summary>
+bool GetIsMvexEvictionHint(struct Instruction* i);
+
+bool IsMvexEvictionHint(struct Instruction* i);
 
 #endif
