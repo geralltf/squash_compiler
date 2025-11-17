@@ -989,6 +989,30 @@ struct Op* Operands_XopOps()
 	return operands;
 }
 
+// Op Tables.
+struct Op* Operands_MVEXOps()
+{
+	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 8);
+	operands[0] = *OpModRM_rm_mem_only_new(false);
+	operands[1] = *OpVsib_new(Register_ZMM0, Register_ZMM31);
+	operands[2] = *OpModRM_rm_new(Register_ZMM0, Register_ZMM31);
+	operands[3] = *OpModRM_reg_new(Register_K0, Register_K7);
+	operands[4] = *OpHx_new(Register_K0, Register_K7);
+	operands[5] = *OpModRM_reg_new(Register_ZMM0, Register_ZMM31);
+	operands[6] = *OpHx_new(Register_ZMM0, Register_ZMM31);
+	operands[7] = *OpIb_new(OK_Immediate8);
+	return operands;
+}
+
+// Op Tables.
+struct Op* Operands_D3NowOps()
+{
+	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 18);
+	operands[0] = *OpModRM_reg_new(Register_MM0, Register_MM7);
+	operands[1] = *OpModRM_rm_new(Register_MM0, Register_MM7);
+	return operands;
+}
+
 struct OpCodeHandler
 {
 	enum HandlerTypeConfig handler_conf;
@@ -1034,6 +1058,15 @@ struct OpCodeHandler
 
 	// XopHandler
 	unsigned int lastByte;
+
+	// MvexHandler
+	//enum WBit wbit;
+	//unsigned int table;
+	//unsigned int p1Bits;
+	//unsigned int mask_W;
+
+	// D3nowHandler
+	unsigned int immediate;
 };
 
 unsigned char SegmentOverrides[6] =
@@ -1131,11 +1164,6 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 	(*o)->GetOpCode = GetOpCode;
 	(*o)->Encode = Encode;
 }
-
-//void Encoder_WritePrefixes(struct Encoder* encoder, struct Instruction* instruction, bool canWriteF3)
-//{
-//	//TODO:
-//}
 
 void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value)
 {
@@ -1384,6 +1412,168 @@ void XopHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, stru
 	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
 	Encoder_WriteByteInternal(encoder, b);
 }
+
+bool MvexHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue)
+{
+	struct MvexInfo* mvex = MvexInfo_new(GetCode(instruction));
+
+	int sss = ((int)GetMvexRegMemConv(instruction) - (int)MRMC_MemConvNone) & 7;
+	enum TupleType tupleType = (enum TupleType)MvexTupleTypeLut_Data[(int)mvex->TupleTypeLutKind * 8 + sss];
+
+	int n = (int)TupleTypeTable_GetDisp8N(tupleType, false);
+	int res = displ / n;
+	if (res * n == displ && SCHAR_MIN <= res && res <= SCHAR_MAX)
+	{
+		compressedValue = (signed char)res;
+		return true;
+	}
+
+	compressedValue = 0;
+	return false;
+}
+
+void MvexHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	Encoder_WritePrefixes(encoder, instruction, true);
+
+	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
+
+	Encoder_WriteByteInternal(encoder, 0x62);
+
+	//Static.Assert((int)MvexOpCodeTable.MAP0F == 1 ? 0 : -1);
+	//Static.Assert((int)MvexOpCodeTable.MAP0F38 == 2 ? 0 : -1);
+	//Static.Assert((int)MvexOpCodeTable.MAP0F3A == 3 ? 0 : -1);
+	unsigned int b = self->table;
+	//Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
+	b |= (encoderFlags & 7) << 5;
+	//Static.Assert((int)EncoderFlags.R2 == 0x00000200 ? 0 : -1);
+	b |= (encoderFlags >> (9 - 4)) & 0x10;
+	b ^= ~0xFU;
+	Encoder_WriteByteInternal(encoder, b);
+
+	b = self->p1Bits;
+	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
+	b |= self->mask_W & encoder->Internal_MVEX_WIG;
+	Encoder_WriteByteInternal(encoder, b);
+
+	b = GetInternalOpMask(instruction);
+	if (b != 0)
+	{
+		if ((self->EncFlags3 & EFLAGS3_OpMaskRegister) == 0)
+		{
+			//encoder.ErrorMessage = "The instruction doesn't support opmask registers";
+		}
+	}
+	else
+	{
+		if ((self->EncFlags3 & EFLAGS3_RequireOpMaskRegister) != 0)
+		{
+			//encoder.ErrorMessage = "The instruction must use an opmask register";
+		}
+	}
+	b |= (encoderFlags >> ((int)EncoderFlags_VvvvvShift + 4 - 3)) & 8;
+
+	struct MvexInfo* mvex = MvexInfo_new(GetCode(instruction));
+
+	enum MvexRegMemConv conv = GetMvexRegMemConv(instruction);
+	// Memory ops can only be op0-op2, never op3 (imm8)
+	if (GetOp0Kind(instruction) == OK_Memory || GetOp1Kind(instruction) == OK_Memory || GetOp2Kind(instruction) == OK_Memory)
+	{
+		if (conv >= MRMC_MemConvNone && conv <= MRMC_MemConvSint16)
+		{
+			b |= ((unsigned int)conv - (unsigned int)MRMC_MemConvNone) << 4;
+		}
+		else if (conv == MRMC_None)
+		{
+			// Nothing, treat it as MvexRegMemConv.MemConvNone
+		}
+		else
+		{
+			//encoder.ErrorMessage = "Memory operands must use a valid MvexRegMemConv variant, eg. MvexRegMemConv.MemConvNone";
+		}
+		if (GetIsMvexEvictionHint(instruction))
+		{
+			if (mvex->CanUseEvictionHint)
+			{
+				b |= 0x80;
+			}
+			else
+			{
+				//encoder.ErrorMessage = "This instruction doesn't support eviction hint (`{eh}`)";
+			}
+		}
+	}
+	else
+	{
+		if (GetIsMvexEvictionHint(instruction))
+		{
+			//encoder.ErrorMessage = "Only memory operands can enable eviction hint (`{eh}`)";
+		}
+		if (conv == MRMC_None)
+		{
+			b |= 0x80;
+			if (GetSuppressAllExceptions(instruction))
+			{
+				b |= 0x40;
+				if ((self->EncFlags3 & EFLAGS3_SuppressAllExceptions) == 0)
+				{
+					//encoder.ErrorMessage = "The instruction doesn't support suppress-all-exceptions";
+				}
+			}
+			enum RoundingCongtrol rc = GetRoundingControl(instruction);
+			if (rc == RC_None) {
+				// Nothing
+			}
+			else {
+				if ((self->EncFlags3 & EFLAGS3_RoundingControl) == 0)
+				{
+					//encoder.ErrorMessage = "The instruction doesn't support rounding control";
+				}
+				else
+				{
+					//Static.Assert((int)RoundingControl.RoundToNearest == 1 ? 0 : -1);
+					//Static.Assert((int)RoundingControl.RoundDown == 2 ? 0 : -1);
+					//Static.Assert((int)RoundingControl.RoundUp == 3 ? 0 : -1);
+					//Static.Assert((int)RoundingControl.RoundTowardZero == 4 ? 0 : -1);
+					b |= ((unsigned int)rc - (unsigned int)RC_RoundToNearest) << 4;
+				}
+			}
+		}
+		else if (conv >= MRMC_RegSwizzleNone && conv <= MRMC_RegSwizzleDddd)
+		{
+			if (GetSuppressAllExceptions(instruction))
+			{
+				//encoder.ErrorMessage = "Can't use {sae} with register swizzles";
+			}
+			else if (GetRoundingControl(instruction) != RC_None)
+			{
+				//encoder.ErrorMessage = "Can't use rounding control with register swizzles";
+			}
+			b |= (((unsigned int)conv - (unsigned int)MRMC_RegSwizzleNone) & 7) << 4;
+		}
+		else
+		{
+			//encoder.ErrorMessage = "Register operands can't use memory up/down conversions";
+		}
+	}
+	if (mvex->EHBit == MEHB_EH1)
+	{
+		b |= 0x80;
+	}
+	b ^= 8;
+	Encoder_WriteByteInternal(encoder, b);
+}
+
+void D3nowHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	Encoder_WritePrefixes(encoder, instruction, true);
+	Encoder_WriteByteInternal(encoder, 0x0F);
+	encoder->ImmSize = ImmSize_Size1OpCode;
+	encoder->Immediate = self->immediate;
+}
+
 
 unsigned int TupleTypeTable_GetDisp8N(enum TupleType tupleType, bool bcst)
 {
