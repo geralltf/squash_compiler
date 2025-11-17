@@ -206,16 +206,16 @@ enum MandatoryPrefix
 	MP_PF2 = 4,
 };
 
-enum CodeSize 
+enum CodeSize
 {
 	/// <summary>Unknown size</summary>
-	CSIZE_Unknown = 0,
+	CodeSize_Unknown = 0,
 	/// <summary>16-bit code</summary>
-	CSIZE_Code16 = 1,
+	CodeSize_Code16 = 1,
 	/// <summary>32-bit code</summary>
-	CSIZE_Code32 = 2,
+	CodeSize_Code32 = 2,
 	/// <summary>64-bit code</summary>
-	CSIZE_Code64 = 3,
+	CodeSize_Code64 = 3,
 };
 
 enum LKind // : byte 

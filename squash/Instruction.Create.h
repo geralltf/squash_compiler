@@ -1941,18 +1941,6 @@ struct Instruction* Instruction_CreateStosd(int addressSize, enum RepPrefixKind 
 /// <param name="memory">op2: Memory operand</param>
 struct Instruction* Instruction_Create(enum Code code, enum Register register1, enum Register register2, struct MemoryOperand* memory);
 
-enum CodeSize
-{
-	/// <summary>Unknown size</summary>
-	CodeSize_Unknown = 0,
-	/// <summary>16-bit code</summary>
-	CodeSize_Code16 = 1,
-	/// <summary>32-bit code</summary>
-	CodeSize_Code32 = 2,
-	/// <summary>64-bit code</summary>
-	CodeSize_Code64 = 3,
-};
-
 struct Encoder* Encoder_new()
 {
 	struct Encoder* encoder = (struct Encoder*)malloc(sizeof(struct Encoder));

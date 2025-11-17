@@ -61,16 +61,16 @@ void OpCodeInfo_init(struct OpCodeInfo** opcodeInfo, enum Code code, enum EncFla
 
 	switch ((enum CodeSize)(((unsigned int)encFlags3 >> (int)EFLAGS3_OperandSizeShift) & (unsigned int)EFLAGS3_OperandSizeMask))
 	{
-	case CSIZE_Unknown:
+	case CodeSize_Unknown:
 		(*opcodeInfo)->operandSize = 0;
 		break;
-	case CSIZE_Code16:
+	case CodeSize_Code16:
 		(*opcodeInfo)->operandSize = 16;
 		break;
-	case CSIZE_Code32:
+	case CodeSize_Code32:
 		(*opcodeInfo)->operandSize = 32;
 		break;
-	case CSIZE_Code64:
+	case CodeSize_Code64:
 		(*opcodeInfo)->operandSize = 64;
 		break;
 	default:
@@ -80,16 +80,16 @@ void OpCodeInfo_init(struct OpCodeInfo** opcodeInfo, enum Code code, enum EncFla
 
 	switch ((enum CodeSize)(((unsigned int)encFlags3 >> (int)EFLAGS3_AddressSizeShift) & (unsigned int)EFLAGS3_AddressSizeMask))
 	{
-	case CSIZE_Unknown:
+	case CodeSize_Unknown:
 		(*opcodeInfo)->addressSize = 0;
 		break;
-	case CSIZE_Code16:
+	case CodeSize_Code16:
 		(*opcodeInfo)->addressSize = 16;
 		break;
-	case CSIZE_Code32:
+	case CodeSize_Code32:
 		(*opcodeInfo)->addressSize = 32;
 		break;
-	case CSIZE_Code64:
+	case CodeSize_Code64:
 		(*opcodeInfo)->addressSize = 64;
 		break;
 	default:

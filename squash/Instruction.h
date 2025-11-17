@@ -6,7 +6,7 @@
 #include "Enums.h"
 #include "Mnemonic.h"
 #include "InstructionOpCounts.h"
-#include "InstructionMemorySizes.h"
+//#include "InstructionMemorySizes.h"
 
 enum InstrFlags1 // : uint
 {
@@ -97,18 +97,6 @@ enum TupleType
 	TT_N32b2 = 17,
 	/// <summary><c>N = b ? 2 : 64</c></summary>
 	TT_N64b2 = 18,
-};
-
-enum CodeSize
-{
-	/// <summary>Unknown size</summary>
-	CS_Unknown = 0,
-	/// <summary>16-bit code</summary>
-	CS_Code16 = 1,
-	/// <summary>32-bit code</summary>
-	CS_Code32 = 2,
-	/// <summary>64-bit code</summary>
-	CS_Code64 = 3,
 };
 
 enum OpKind {
