@@ -5,6 +5,8 @@ struct Op* ops_legacy = NULL;
 struct Op* ops_vex = NULL;
 struct Op* ops_evex = NULL;
 struct Op* ops_xop = NULL;
+struct Op* ops_mvex = NULL;
+struct Op* ops_d3now = NULL;
 
 struct OpCodeHandler* GetOpCodeHandlers()
 {
@@ -267,6 +269,68 @@ struct Op* XopHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
 	return NULL;
 }
 
+struct Op* MvexHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
+{
+	if (ops_mvex == NULL)
+	{
+		ops_mvex = Operands_MVEXOps();
+	}
+
+	int op0 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_MVEX_Op0Shift) & (unsigned int)EFLAGS_MVEX_OpMask);
+	int op1 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_MVEX_Op1Shift) & (unsigned int)EFLAGS_MVEX_OpMask);
+	int op2 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_MVEX_Op2Shift) & (unsigned int)EFLAGS_MVEX_OpMask);
+	int op3 = (int)(((unsigned int)encFlags1 >> (int)EFLAGS_MVEX_Op3Shift) & (unsigned int)EFLAGS_MVEX_OpMask);
+
+	if (op3 != 0)
+	{
+		//Debug.Assert(op0 != 0 && op1 != 0 && op2 != 0);
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 4);
+		w[0] = ops_mvex[op0 - 1];
+		w[1] = ops_mvex[op1 - 1];
+		w[2] = ops_mvex[op2 - 1];
+		w[3] = ops_mvex[op3 - 1];
+		*operands_length = 4;
+		return w;
+	}
+	if (op2 != 0)
+	{
+		//Debug.Assert(op0 != 0 && op1 != 0);
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 3);
+		w[0] = ops_mvex[op0 - 1];
+		w[1] = ops_mvex[op1 - 1];
+		w[2] = ops_mvex[op2 - 1];
+		*operands_length = 3;
+		return w;
+	}
+	if (op1 != 0)
+	{
+		//Debug.Assert(op0 != 0);
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 2);
+		w[0] = ops_mvex[op0 - 1];
+		w[1] = ops_mvex[op1 - 1];
+		*operands_length = 2;
+		return w;
+	}
+	if (op0 != 0)
+	{
+		struct Op* w = (struct Op*)malloc(sizeof(struct Op) * 1);
+		w[0] = ops_mvex[op0 - 1];
+		*operands_length = 1;
+		return w;
+	}
+
+	return NULL;
+}
+
+struct Op* D3nowHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
+{
+	if (ops_d3now == NULL)
+	{
+		ops_d3now = Operands_D3NowOps();
+	}
+	return ops_d3now;
+}
+
 void OpCodeHandlers_init()
 {
 	enum Code code;
@@ -508,7 +572,15 @@ void OpCodeHandlers_init()
 			break;
 
 		case EncodingKind_D3NOW:
-			handler->Operands_Length = 0; //TODO: test if valid if it is fine to have zero operands.
+			handler->Operands_Length = 2;
+
+			handler->immediate = GetOpCode(encFlags2);
+			
+			//Debug.Assert(immediate <= byte.MaxValue);
+
+			operands = D3nowHandler_CreateOps(encFlags1, &operands_length);
+
+			OpCodeHandler_init(&handler, (enum EncFlags2)(((unsigned int)encFlags2 & ~(0xFFFF << (int)EFLAGS2_OpCodeShift)) | (0x000F << (int)EFLAGS2_OpCodeShift)), encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, &D3nowHandler_Encode);
 
 			handler->handler_conf = D3nowHandler;
 			//handler = new D3nowHandler((enum EncFlags2)encFlags2[i], encFlags3);
@@ -516,6 +588,26 @@ void OpCodeHandlers_init()
 
 		case EncodingKind_MVEX:
 			handler->Operands_Length = 8;
+
+			handler->table = ((unsigned int)encFlags2 >> (int)EFLAGS2_TableShift) & (unsigned int)EFLAGS2_TableMask;
+	/*		Static.Assert((int)MandatoryPrefixByte.None == 0 ? 0 : -1);
+			Static.Assert((int)MandatoryPrefixByte.P66 == 1 ? 0 : -1);
+			Static.Assert((int)MandatoryPrefixByte.PF3 == 2 ? 0 : -1);
+			Static.Assert((int)MandatoryPrefixByte.PF2 == 3 ? 0 : -1);*/
+			handler->p1Bits = ((unsigned int)encFlags2 >> (int)EFLAGS2_MandatoryPrefixShift) & (unsigned int)EFLAGS2_MandatoryPrefixMask;
+			handler->wbit = (enum WBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_WBitShift) & (unsigned int)EFLAGS2_WBitMask);
+			if (wbit == WBit_W1)
+			{
+				handler->p1Bits |= 0x80;
+			}
+			if (wbit == WBit_WIG)
+			{
+				handler->mask_W |= 0x80;
+			}
+			
+			operands = MvexHandler_CreateOps(encFlags1, &operands_length);
+
+			OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, &MvexHandler_TryConvertToDisp8N, &OpCodeHandler_GetOpCode, &MvexHandler_Encode);
 
 			handler->handler_conf = MvexHandler;
 			//handler = new MvexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
