@@ -10,7 +10,7 @@ int main(int argc, char* argv[])
 {
     void* buffer = NULL;
     size_t length = 0;
-    squash_compiler_t* squash_compiler = NULL;
+    struct SquashCompiler* squash_compiler = NULL; // squash_compiler_t
     char* arg = NULL;
     char* prev_arg = NULL;
     int index = 0;
