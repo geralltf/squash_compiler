@@ -1,12 +1,12 @@
 #include "SquashCompiler.h"
 
-squash_compiler_t* squash_compiler_new()
+struct SquashCompiler* squash_compiler_new()
 {
-    squash_compiler_t* squash_compiler = (squash_compiler_t*)malloc(sizeof(squash_compiler_t));
+    struct SquashCompiler* squash_compiler = (struct SquashCompiler*)malloc(sizeof(struct SquashCompiler));
     return squash_compiler;
 }
 
-void squash_compiler_init(squash_compiler_t* squash_compiler, char* input, int inputLength)
+void squash_compiler_init(struct SquashCompiler* squash_compiler, char* input, int inputLength)
 {
     LogInformation("SquashCompiler(): ctor");
 
@@ -38,7 +38,7 @@ void squash_compiler_init(squash_compiler_t* squash_compiler, char* input, int i
     squash_compiler->asm0 = assembler_new(); // new Assembler(rootAST)
 }
 
-void CompileExpression(squash_compiler_t* squash_compiler, char* output_file_name, char* output_binary_file_name, bool enable_tracing)
+void CompileExpression(struct SquashCompiler* squash_compiler, char* output_file_name, char* output_binary_file_name, bool enable_tracing)
 {
     astnode_t* expression = ParseStatements(squash_compiler);
 
@@ -59,7 +59,7 @@ void CompileExpression(squash_compiler_t* squash_compiler, char* output_file_nam
     GenerateCode(squash_compiler->asm0, expression, output_file_name, output_binary_file_name, enable_tracing);
 }
 
-astnode_t* ParseStatements(squash_compiler_t* squash_compiler)
+astnode_t* ParseStatements(struct SquashCompiler* squash_compiler)
 {
     LogInformation("ParseStatements(): Parsing individual statements that may be outside a function definition or inside a function definition.");
 
@@ -122,7 +122,7 @@ astnode_t* ParseStatements(squash_compiler_t* squash_compiler)
     return expression;
 }
 
-astnode_t* ParseVariableDeclaration(squash_compiler_t* squash_compiler, enum VarType varType)
+astnode_t* ParseVariableDeclaration(struct SquashCompiler* squash_compiler, enum VarType varType)
 {
     squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
     if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Whitespace)
@@ -148,7 +148,7 @@ astnode_t* ParseVariableDeclaration(squash_compiler_t* squash_compiler, enum Var
     return NULL;
 }
 
-astnode_t* ParseVariableDefine(squash_compiler_t* squash_compiler, enum VarType varType)
+astnode_t* ParseVariableDefine(struct SquashCompiler* squash_compiler, enum VarType varType)
 {
     bool varAssignment = true;
 
@@ -168,7 +168,7 @@ astnode_t* ParseVariableDefine(squash_compiler_t* squash_compiler, enum VarType 
     return parseAssignmentOperator(squash_compiler, varType);
 }
 
-astnode_t* parseAssignmentOperator(squash_compiler_t* squash_compiler, enum VarType varType)
+astnode_t* parseAssignmentOperator(struct SquashCompiler* squash_compiler, enum VarType varType)
 {
     if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Identifier)
     {
@@ -300,7 +300,7 @@ astnode_t* parseAssignmentOperator(squash_compiler_t* squash_compiler, enum VarT
     return NULL;
 }
 
-void parseEndStatement(squash_compiler_t* squash_compiler, astnode_t* varDefineNode)
+void parseEndStatement(struct SquashCompiler* squash_compiler, astnode_t* varDefineNode)
 {
     if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_SemiColon)
     {
@@ -343,7 +343,7 @@ bool tryParseFloat(const char* str, float* result)
     return true; // Indicate success
 }
 
-astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
+astnode_t* ParsePrimaryExpression(struct SquashCompiler* squash_compiler)
 {
     token_t* token = squash_compiler->currentToken;
 
@@ -946,7 +946,7 @@ astnode_t* ParsePrimaryExpression(squash_compiler_t* squash_compiler)
     return NULL;
 }
 
-void ParseEndOfFunction(squash_compiler_t* squash_compiler)
+void ParseEndOfFunction(struct SquashCompiler* squash_compiler)
 {
     if (squash_compiler->currentToken->Type == AST_SemiColon)
     {
@@ -959,7 +959,7 @@ void ParseEndOfFunction(squash_compiler_t* squash_compiler)
     }
 }
 
-astnode_t* ParseEntryPoint(squash_compiler_t* squash_compiler, char* functIdentifierName)
+astnode_t* ParseEntryPoint(struct SquashCompiler* squash_compiler, char* functIdentifierName)
 {
     //Token token1;
     bool rememberLocation = false;
@@ -1036,7 +1036,7 @@ astnode_t* ParseEntryPoint(squash_compiler_t* squash_compiler, char* functIdenti
     return NULL;
 }
 
-astnode_t* ParseFunctionDefinition(squash_compiler_t* squash_compiler, enum VarType retVarType, char* functIdentifierName)
+astnode_t* ParseFunctionDefinition(struct SquashCompiler* squash_compiler, enum VarType retVarType, char* functIdentifierName)
 {
     token_t* token1;
 
@@ -1098,7 +1098,7 @@ astnode_t* ParseFunctionDefinition(squash_compiler_t* squash_compiler, enum VarT
     return NULL;
 }
 
-void ParseFunctionArg(squash_compiler_t* squash_compiler, list_t* args, char* argType) // ref List<ASTNode> args
+void ParseFunctionArg(struct SquashCompiler* squash_compiler, list_t* args, char* argType) // ref List<ASTNode> args
 {
     squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
     if (squash_compiler->currentToken->Type == AST_Whitespace)
@@ -1124,7 +1124,7 @@ void ParseFunctionArg(squash_compiler_t* squash_compiler, list_t* args, char* ar
         }
     }
 }
-list_t* ParseFunctionArgs(squash_compiler_t* squash_compiler, enum VarType retVarType) // returns: List<ASTNode>
+list_t* ParseFunctionArgs(struct SquashCompiler* squash_compiler, enum VarType retVarType) // returns: List<ASTNode>
 {
     list_t* args = list_new(); //List<ASTNode> args = new List<ASTNode>();
     while (squash_compiler->currentToken != NULL && (squash_compiler->currentToken->Type != AST_Parenthesis || strcmp(squash_compiler->currentToken->Value, ")") != 0))
@@ -1151,7 +1151,7 @@ list_t* ParseFunctionArgs(squash_compiler_t* squash_compiler, enum VarType retVa
     return args;
 }
 
-list_t* ParseFunctionDefArguments(squash_compiler_t* squash_compiler, enum VarType retVarType) // returns: List<ASTNode>
+list_t* ParseFunctionDefArguments(struct SquashCompiler* squash_compiler, enum VarType retVarType) // returns: List<ASTNode>
 {
     list_t* arguments = list_new(); //List<ASTNode> arguments = new List<ASTNode>();
 
@@ -1198,7 +1198,7 @@ list_t* ParseFunctionDefArguments(squash_compiler_t* squash_compiler, enum VarTy
     return arguments;
 }
 
-list_t* ParseFunctionArguments(squash_compiler_t* squash_compiler) // returns: List<ASTNode>
+list_t* ParseFunctionArguments(struct SquashCompiler* squash_compiler) // returns: List<ASTNode>
 {
     list_t* arguments = list_new(); //List<ASTNode> arguments = new List<ASTNode>();
 
@@ -1244,7 +1244,7 @@ list_t* ParseFunctionArguments(squash_compiler_t* squash_compiler) // returns: L
     return arguments;
 }
 
-astnode_t* ParseExpression(squash_compiler_t* squash_compiler, int precedence)
+astnode_t* ParseExpression(struct SquashCompiler* squash_compiler, int precedence)
 {
     LogInformation("ParseExpression(): precedence: '%d'", precedence);
 
@@ -1356,14 +1356,14 @@ int GetPrecedence(char* op)
     //}
 }
 
-bool IsUnaryOperator(squash_compiler_t* squash_compiler)
+bool IsUnaryOperator(struct SquashCompiler* squash_compiler)
 {
     return squash_compiler->currentToken != NULL
         && squash_compiler->currentToken->Type == AST_Operator
         && (strcmp(squash_compiler->currentToken->Value, "--") == 0 || strcmp(squash_compiler->currentToken->Value, "++") == 0);
 }
 
-bool IsBinaryOperator(squash_compiler_t* squash_compiler)
+bool IsBinaryOperator(struct SquashCompiler* squash_compiler)
 {
     return squash_compiler->currentToken != NULL
         && squash_compiler->currentToken->Type == AST_Operator
