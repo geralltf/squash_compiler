@@ -1146,24 +1146,15 @@ struct Encoder
 
 enum EncodingKind GetEncodingKindByOpcode(enum Code opcode);
 
-void OpCodeHandler_init(struct OpCodeHandler** o, 
-	enum EncFlags2 encFlags2, 
-	enum EncFlags3 encFlags3, 
-	bool isSpecialInstr, 
+void OpCodeHandler_init(struct OpCodeHandler** o,
+	enum EncFlags2 encFlags2,
+	enum EncFlags3 encFlags3,
+	bool isSpecialInstr,
 	struct Op* operands,
 	unsigned int operands_length,
 	bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue),
 	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2),
-	void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction))
-{
-	(*o)->EncFlags2 = encFlags2;
-	(*o)->EncFlags3 = encFlags3;
-	(*o)->IsSpecialInstr = isSpecialInstr;
-	(*o)->Operands = operands;
-	(*o)->Operands_Length = operands_length;
-	(*o)->GetOpCode = GetOpCode;
-	(*o)->Encode = Encode;
-}
+	void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction));
 
 void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value)
 {
