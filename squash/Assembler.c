@@ -2,9 +2,9 @@
 #include "AST.h"
 #include "sb.h"
 
-assembler_t* assembler_new()
+struct Assembler* assembler_new()
 {
-    assembler_t* assembler = (assembler_t*)malloc(sizeof(assembler_t));
+    struct Assembler* assembler = (struct Assembler*)malloc(sizeof(struct Assembler));
     if (assembler)
     {
         assembler->Is_Windows = true;
@@ -20,7 +20,7 @@ assembler_t* assembler_new()
 /// <exception cref="Exception">
 /// Underlying Assemble() method can throw exceptions as well as this method.
 /// </exception>
-void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_name, char* output_binary_file_name, bool enable_tracing)
+void GenerateCode(struct Assembler* assembler, astnode_t* astNode, char* output_file_name, char* output_binary_file_name, bool enable_tracing)
 {
     char* astnode_str;
     if (astNode != NULL)
@@ -115,7 +115,7 @@ void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_
 /// <exception cref="Exception">
 /// Can throw exceptions related to invalid ASTNodeType types.
 /// </exception>
-char* Assemble(assembler_t* assembler, astnode_t* node)
+char* Assemble(struct Assembler* assembler, astnode_t* node)
 {
     StringBuilder* sb = sb_create();
 
@@ -496,7 +496,7 @@ void asm_parse_line(char* carr_line)
     }
 }
 
-void squash_assembler(assembler_t* assembler, char* source_asm, int source_size, char* output_binary_file_name)
+void squash_assembler(struct Assembler* assembler, char* source_asm, int source_size, char* output_binary_file_name)
 {
     int index;
     char currentChar = '\0';

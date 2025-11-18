@@ -8,7 +8,7 @@
 
 #include <stdio.h>
 
-typedef struct Assembler
+struct Assembler
 {
     /// <summary>
     /// The expression tree output from a specified ExpressionCompiler.
@@ -18,9 +18,9 @@ typedef struct Assembler
     bool Is_macOS;
     bool Is_Linux;
     bool Is_Windows;
-} assembler_t;
+};
 
-assembler_t* assembler_new();
+struct Assembler* assembler_new();
 
 /// <summary>
 /// Generates assembly language code given specified AST.
@@ -28,7 +28,7 @@ assembler_t* assembler_new();
 /// <exception cref="Exception">
 /// Underlying Assemble() method can throw exceptions as well as this method.
 /// </exception>
-void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_name, char* output_binary_file_name, bool enable_tracing);
+void GenerateCode(struct Assembler* assembler, astnode_t* astNode, char* output_file_name, char* output_binary_file_name, bool enable_tracing);
 
 /// <summary>
 /// Assembles the specified ASTNode into assembly language instructions.
@@ -43,8 +43,8 @@ void GenerateCode(assembler_t* assembler, astnode_t* astNode, char* output_file_
 /// <exception cref="Exception">
 /// Can throw exceptions related to invalid ASTNodeType types.
 /// </exception>
-char* Assemble(assembler_t* assembler, astnode_t* node);
+char* Assemble(struct Assembler* assembler, astnode_t* node);
 
-void squash_assembler(assembler_t* assembler, char* source_asm, int source_size, char* output_binary_file_name);
+void squash_assembler(struct Assembler* assembler, char* source_asm, int source_size, char* output_binary_file_name);
 
 #endif
