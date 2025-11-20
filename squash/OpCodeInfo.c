@@ -1,4 +1,5 @@
 #include "OpCodeInfo.h"
+#include "InstructionMemorySizes.h"
 
 struct OpCodeInfo* OpCodeInfo_new()
 {
@@ -164,12 +165,10 @@ void OpCodeInfo_init(struct OpCodeInfo** opcodeInfo, enum Code code, enum EncFla
 	switch ((enum EncodingKind)(*opcodeInfo)->encoding)
 	{
 	case EncodingKind_Legacy:
-
-		auto opKinds = OpCodeOperandKinds_LegacyOpKinds;
-		(*opcodeInfo)->op0Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op0Shift) & (unsigned int)EFLAGS_Legacy_OpMask)];
-		(*opcodeInfo)->op1Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op1Shift) & (unsigned int)EFLAGS_Legacy_OpMask)];
-		(*opcodeInfo)->op2Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op2Shift) & (unsigned int)EFLAGS_Legacy_OpMask)];
-		(*opcodeInfo)->op3Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op3Shift) & (unsigned int)EFLAGS_Legacy_OpMask)];
+		(*opcodeInfo)->op0Kind = OpCodeOperandKinds_LegacyOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op0Shift) & (unsigned int)EFLAGS_Legacy_OpMask)];
+		(*opcodeInfo)->op1Kind = OpCodeOperandKinds_LegacyOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op1Shift) & (unsigned int)EFLAGS_Legacy_OpMask)];
+		(*opcodeInfo)->op2Kind = OpCodeOperandKinds_LegacyOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op2Shift) & (unsigned int)EFLAGS_Legacy_OpMask)];
+		(*opcodeInfo)->op3Kind = OpCodeOperandKinds_LegacyOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_Legacy_Op3Shift) & (unsigned int)EFLAGS_Legacy_OpMask)];
 
 		switch ((enum LegacyOpCodeTable)(((unsigned int)encFlags2 >> (int)(EFLAGS2_TableShift)) & (unsigned int)EFLAGS2_TableMask))
 		{
@@ -192,12 +191,11 @@ void OpCodeInfo_init(struct OpCodeInfo** opcodeInfo, enum Code code, enum EncFla
 		break;
 	case EncodingKind_VEX:
 		//#if !NO_VEX
-		auto opKinds = OpCodeOperandKinds_VexOpKinds;
-		(*opcodeInfo)->op0Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op0Shift) & (unsigned int)EFLAGS_VEX_OpMask)];
-		(*opcodeInfo)->op1Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op1Shift) & (unsigned int)EFLAGS_VEX_OpMask)];
-		(*opcodeInfo)->op2Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op2Shift) & (unsigned int)EFLAGS_VEX_OpMask)];
-		(*opcodeInfo)->op3Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op3Shift) & (unsigned int)EFLAGS_VEX_OpMask)];
-		(*opcodeInfo)->op4Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op4Shift) & (unsigned int)EFLAGS_VEX_OpMask)];
+		(*opcodeInfo)->op0Kind = OpCodeOperandKinds_VexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op0Shift) & (unsigned int)EFLAGS_VEX_OpMask)];
+		(*opcodeInfo)->op1Kind = OpCodeOperandKinds_VexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op1Shift) & (unsigned int)EFLAGS_VEX_OpMask)];
+		(*opcodeInfo)->op2Kind = OpCodeOperandKinds_VexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op2Shift) & (unsigned int)EFLAGS_VEX_OpMask)];
+		(*opcodeInfo)->op3Kind = OpCodeOperandKinds_VexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op3Shift) & (unsigned int)EFLAGS_VEX_OpMask)];
+		(*opcodeInfo)->op4Kind = OpCodeOperandKinds_VexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_VEX_Op4Shift) & (unsigned int)EFLAGS_VEX_OpMask)];
 
 		switch ((enum VexOpCodeTable)(((unsigned int)encFlags2 >> (int)EFLAGS2_TableShift) & (unsigned int)EFLAGS2_TableMask))
 		{
@@ -227,11 +225,10 @@ void OpCodeInfo_init(struct OpCodeInfo** opcodeInfo, enum Code code, enum EncFla
 
 	case EncodingKind_EVEX:
 		//#if !NO_EVEX
-		auto opKinds = OpCodeOperandKinds_EvexOpKinds;
-		(*opcodeInfo)->op0Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op0Shift) & (unsigned int)EFLAGS_EVEX_OpMask)];
-		(*opcodeInfo)->op1Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op1Shift) & (unsigned int)EFLAGS_EVEX_OpMask)];
-		(*opcodeInfo)->op2Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op2Shift) & (unsigned int)EFLAGS_EVEX_OpMask)];
-		(*opcodeInfo)->op3Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op3Shift) & (unsigned int)EFLAGS_EVEX_OpMask)];
+		(*opcodeInfo)->op0Kind = OpCodeOperandKinds_EvexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op0Shift) & (unsigned int)EFLAGS_EVEX_OpMask)];
+		(*opcodeInfo)->op1Kind = OpCodeOperandKinds_EvexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op1Shift) & (unsigned int)EFLAGS_EVEX_OpMask)];
+		(*opcodeInfo)->op2Kind = OpCodeOperandKinds_EvexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op2Shift) & (unsigned int)EFLAGS_EVEX_OpMask)];
+		(*opcodeInfo)->op3Kind = OpCodeOperandKinds_EvexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_EVEX_Op3Shift) & (unsigned int)EFLAGS_EVEX_OpMask)];
 
 		switch ((enum EvexOpCodeTable)(((unsigned int)encFlags2 >> (int)EFLAGS2_TableShift) & (unsigned int)EFLAGS2_TableMask))
 		{
@@ -263,11 +260,10 @@ void OpCodeInfo_init(struct OpCodeInfo** opcodeInfo, enum Code code, enum EncFla
 
 	case EncodingKind_XOP:
 		//#if !NO_XOP
-		auto opKinds = OpCodeOperandKinds_XopOpKinds;
-		(*opcodeInfo)->op0Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_XOP_Op0Shift) & (unsigned int)EFLAGS_XOP_OpMask)];
-		(*opcodeInfo)->op1Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_XOP_Op1Shift) & (unsigned int)EFLAGS_XOP_OpMask)];
-		(*opcodeInfo)->op2Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_XOP_Op2Shift) & (unsigned int)EFLAGS_XOP_OpMask)];
-		(*opcodeInfo)->op3Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_XOP_Op3Shift) & (unsigned int)EFLAGS_XOP_OpMask)];
+		(*opcodeInfo)->op0Kind = OpCodeOperandKinds_XopOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_XOP_Op0Shift) & (unsigned int)EFLAGS_XOP_OpMask)];
+		(*opcodeInfo)->op1Kind = OpCodeOperandKinds_XopOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_XOP_Op1Shift) & (unsigned int)EFLAGS_XOP_OpMask)];
+		(*opcodeInfo)->op2Kind = OpCodeOperandKinds_XopOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_XOP_Op2Shift) & (unsigned int)EFLAGS_XOP_OpMask)];
+		(*opcodeInfo)->op3Kind = OpCodeOperandKinds_XopOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_XOP_Op3Shift) & (unsigned int)EFLAGS_XOP_OpMask)];
 
 		switch ((enum XopOpCodeTable)(((unsigned int)encFlags2 >> (int)EFLAGS2_TableShift) & (unsigned int)EFLAGS2_TableMask))
 		{
@@ -305,11 +301,10 @@ void OpCodeInfo_init(struct OpCodeInfo** opcodeInfo, enum Code code, enum EncFla
 
 	case EncodingKind_MVEX:
 		//#if MVEX
-		auto opKinds = OpCodeOperandKinds_MvexOpKinds;
-		(*opcodeInfo)->op0Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_MVEX_Op0Shift) & (unsigned int)EFLAGS_MVEX_OpMask)];
-		(*opcodeInfo)->op1Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_MVEX_Op1Shift) & (unsigned int)EFLAGS_MVEX_OpMask)];
-		(*opcodeInfo)->op2Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_MVEX_Op2Shift) & (unsigned int)EFLAGS_MVEX_OpMask)];
-		(*opcodeInfo)->op3Kind = opKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_MVEX_Op3Shift) & (unsigned int)EFLAGS_MVEX_OpMask)];
+		(*opcodeInfo)->op0Kind = OpCodeOperandKinds_MvexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_MVEX_Op0Shift) & (unsigned int)EFLAGS_MVEX_OpMask)];
+		(*opcodeInfo)->op1Kind = OpCodeOperandKinds_MvexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_MVEX_Op1Shift) & (unsigned int)EFLAGS_MVEX_OpMask)];
+		(*opcodeInfo)->op2Kind = OpCodeOperandKinds_MvexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_MVEX_Op2Shift) & (unsigned int)EFLAGS_MVEX_OpMask)];
+		(*opcodeInfo)->op3Kind = OpCodeOperandKinds_MvexOpKinds[(int)(((unsigned int)encFlags1 >> (int)EFLAGS_MVEX_Op3Shift) & (unsigned int)EFLAGS_MVEX_OpMask)];
 
 		switch ((enum MvexOpCodeTable)(((unsigned int)encFlags2 >> (int)EFLAGS2_TableShift) & (unsigned int)EFLAGS2_TableMask))
 		{
