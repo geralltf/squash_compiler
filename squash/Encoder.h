@@ -337,12 +337,6 @@ struct AssemblerMemoryOperand* ToMemoryOperandFromRegister(enum Register baseReg
 	return memOp;
 }
 
-struct AssemblerMemoryOperand* ToMemoryOperandFromLabel(struct Label* label)
-{
-	struct AssemblerMemoryOperand* memOp = AssemblerMemoryOperand_new(MOS_None, Register_None, Register_RIP, Register_None, 1, label->id, AF_None);
-	return memOp;
-}
-
 /// <summary>
 /// A label that can be created by <see cref="Assembler.CreateLabel"/>.
 /// </summary>
@@ -352,6 +346,8 @@ struct Label
 	unsigned long id;
 	int instruction_index;
 };
+
+struct AssemblerMemoryOperand* ToMemoryOperandFromLabel(struct Label* label);
 
 /// <summary>
 /// High-Level Assembler.

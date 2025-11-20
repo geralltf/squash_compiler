@@ -83,6 +83,12 @@ struct Label* create_label(struct Assembler* assembler, char* name)
 	return label;
 }
 
+struct AssemblerMemoryOperand* ToMemoryOperandFromLabel(struct Label* label)
+{
+	struct AssemblerMemoryOperand* memOp = AssemblerMemoryOperand_new(MOS_None, Register_None, Register_RIP, Register_None, 1, label->id, AF_None);
+	return memOp;
+}
+
 /// <summary>
 /// Use the specified label.
 /// </summary>
@@ -211,7 +217,7 @@ void AddInstruction(struct Assembler* assembler, struct Instruction* instruction
 /// </summary>
 /// <param name="instruction"></param>
 /// <param name="flags">Operand flags passed.</param>
-void AddInstruction(struct Assembler* assembler, struct Instruction* instruction, enum AssemblerOperandFlags flags)
+void AddInstructionWithFlags(struct Assembler* assembler, struct Instruction* instruction, enum AssemblerOperandFlags flags)
 {
 	if (flags != AF_None)
 	{
