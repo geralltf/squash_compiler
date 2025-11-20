@@ -1,6 +1,7 @@
 ﻿#include "Instruction.h"
 #include "sb.h"
 #include "OpCodeInfoData.h"
+#include "InstructionMemorySizes.h"
 
 struct Instruction
 {
@@ -2273,15 +2274,9 @@ struct OpCodeInfo* ToOpCode(enum Code code)
 
 	StringBuilder* sb = sb_create();
 
-	auto encFlags1 = EncoderData_EncFlags1;
-	auto encFlags2 = EncoderData_EncFlags2;
-	auto encFlags3 = EncoderData_EncFlags3;
-	auto opcFlags1 = OpCodeInfoData_OpcFlags1;
-	auto opcFlags2 = OpCodeInfoData_OpcFlags2;
-
 	struct OpCodeInfo* o = OpCodeInfo_new();
 
-	OpCodeInfo_init(o, code, (enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], (enum EncFlags3)encFlags3[i], (enum OpCodeInfoFlags1)opcFlags1[i], (enum OpCodeInfoFlags2)opcFlags2[i], sb);
+	OpCodeInfo_init(o, code, (enum EncFlags1)EncoderData_EncFlags1[i], (enum EncFlags2)EncoderData_EncFlags2[i], (enum EncFlags3)EncoderData_EncFlags3[i], (enum OpCodeInfoFlags1)OpCodeInfoData_OpcFlags1[i], (enum OpCodeInfoFlags2)OpCodeInfoData_OpcFlags2[i], sb);
 
 
 	return o;
