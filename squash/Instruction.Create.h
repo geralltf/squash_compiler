@@ -74,944 +74,162 @@ struct Op
 	enum OpKind(*GetFarBranchOpKind)(struct Op* op);
 };
 
-enum OpKind OpDefault_GetImmediateOpKind(struct Op* op)
-{
-	return (enum OpKind)(-1);
-}
+enum OpKind OpDefault_GetImmediateOpKind(struct Op* op);
 
-enum OpKind OpDefault_GetNearBranchOpKind(struct Op* op)
-{
-	return (enum OpKind)(-1);
-}
+enum OpKind OpDefault_GetNearBranchOpKind(struct Op* op);
 
-enum OpKind OpDefault_GetFarBranchOpKind(struct Op* op)
-{
-	return (enum OpKind)(-1);
-}
+enum OpKind OpDefault_GetFarBranchOpKind(struct Op* op);
 
-void OpA_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	Encoder_AddFarBranch(encoder, instruction, operand, op->size);
-}
-enum OpKind OpA_GetFarBranchOpKind(struct Op* op)
-{
-	//Debug.Assert(size == 2 || size == 4);
-	return op->size == 2 ? OK_FarBranch16 : OK_FarBranch32;
-}
+void OpA_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+enum OpKind OpA_GetFarBranchOpKind(struct Op* op);
 
-void OpO_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	Encoder_AddAbsMem(encoder, instruction, operand);
-}
+void OpO_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpModRM_rm_mem_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	if (op->mustUseSib)
-	{
-		encoder->EncoderFlags |= EncoderFlags_MustUseSib;
-	}
+void OpModRM_rm_mem_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-	Encoder_AddRegOrMem(encoder, instruction, operand, Register_None, Register_None, Register_None, Register_None, true, false); // allowMemOp: true, allowRegOp : false
-}
+void OpModRM_rm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpModRM_rm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	Encoder_AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, Register_None, Register_None, true, true); // allowMemOp: true, allowRegOp : true
-}
+void OpModRM_reg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpModRM_reg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	Encoder_AddModRMRegister(encoder, instruction, operand, op->regLo, op->regHi);
-}
+void OpRegEmbed8_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpRegEmbed8_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	Encoder_AddReg(encoder, instruction, operand, op->regLo, op->regHi);
-}
+void OpModRM_reg_mem_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpModRM_reg_mem_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	Encoder_AddModRMRegister(encoder, instruction, operand, op->regLo, op->regHi);
-	encoder->EncoderFlags |= EncoderFlags_RegIsMemory;
-}
+void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	Encoder_AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, Register_None, Register_None, false, true); // allowMemOp: false, allowRegOp : true
-}
+void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	if (GetBitness(encoder) != 64 && GetOpKind(instruction, operand) == OK_Register && GetOpRegister(instruction, operand) >= op->regLo + 8 && GetOpRegister(instruction, operand) <= op->regLo + 15)
-	{
-		encoder->EncoderFlags |= EncoderFlags_PF0;
-		Encoder_AddModRMRegister(encoder, instruction, operand, op->regLo + 8, op->regLo + 15);
-	}
-	else
-	{
-		Encoder_AddModRMRegister(encoder, instruction, operand, op->regLo, op->regHi);
-	}
-}
+void OpReg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpReg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	Verify(operand, OK_Register, GetOpKind(instruction, operand));
-	VerifyRegisters(operand, op->_register, GetOpRegister(instruction, operand));
-}
+void OpRegSTi_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpRegSTi_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	if (!Verify(encoder, operand, OK_Register, GetOpKind(instruction, operand)))
-	{
-		return;
-	}
-	enum Register reg = GetOpRegister(instruction, operand);
-	if (!VerifyRegister(encoder, operand, reg, Register_ST0, Register_ST7))
-	{
-		return;
-	}
-	//Debug.Assert((encoder.OpCode & 7) == 0);
-	encoder->OpCode |= (unsigned int)(reg - Register_ST0);
-}
+void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	switch (encoder->ImmSize) 
-	{
-	case ImmSize_Size1:
-		if (!Verify(operand, OK_Immediate8_2nd, GetOpKind(instruction, operand)))
-		{
-			return;
-		}
-		encoder->ImmSize = ImmSize_Size1_1;
-		encoder->ImmediateHi = GetImmediate8_2nd(instruction);
-		break;
-	case ImmSize_Size2:
-		if (!Verify(operand, OK_Immediate8_2nd, GetOpKind(instruction, operand)))
-		{
-			return;
-		}
-		encoder->ImmSize = ImmSize_Size2_1;
-		encoder->ImmediateHi = GetImmediate8_2nd(instruction);
-		break;
-	default:
-		enum OpCodeOperandKind opImmKind = GetOpKind(instruction, operand);
-		if (!Verify(operand, op->opKind, opImmKind))
-		{
-			return;
-		}
-		encoder->ImmSize = ImmSize_Size1;
-		encoder->Immediate = GetImmediate8(instruction);
-		break;
-	}
-}
+void OpImm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpImm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	if (!Verify(operand, OK_Immediate8, GetOpKind(instruction, operand)))
-	{
-		return;
-	}
-	if (GetImmediate8(instruction) != op->value)
-	{
-		//encoder.ErrorMessage = $"Operand {operand}: Expected 0x{value:X2}, actual: 0x{instruction.Immediate8:X2}";
-		return;
-	}
-}
+enum OpKind OpImm_GetImmediateOpKind(struct Op* op);
 
-enum OpKind OpImm_GetImmediateOpKind(struct Op* op)
-{
-	return OK_Immediate8;
-}
+void OpIw_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpIw_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	if (!Verify(operand, OK_Immediate16, GetOpKind(instruction, operand)))
-	{
-		return;
-	}
-	encoder->ImmSize = ImmSize_Size2;
-	encoder->Immediate = GetImmediate16(instruction);
-}
+enum OpKind OpIw_GetImmediateOpKind(struct Op* op);
 
-enum OpKind OpIw_GetImmediateOpKind(struct Op* op)
-{
-	return OK_Immediate16;
-}
+void OpId_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpId_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	enum OpKind opImmKind = GetOpKind(instruction, operand);
-	if (!Verify(operand, op->opKind, opImmKind))
-	{
-		return;
-	}
-	encoder->ImmSize = ImmSize_Size4;
-	encoder->Immediate = GetImmediate32(instruction);
-}
+enum OpKind OpId_GetImmediateOpKind(struct Op* op);
 
-enum OpKind OpId_GetImmediateOpKind(struct Op* op)
-{
-	return op->opKind;
-}
+void OpIq_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpIq_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	if (!Verify(operand, OK_Immediate64, GetOpKind(instruction, operand)))
-	{
-		return;
-	}
-	encoder->ImmSize = ImmSize_Size8;
-	unsigned long imm = GetImmediate64(instruction);
-	encoder->Immediate = (unsigned int)imm;
-	encoder->ImmediateHi = (unsigned int)(imm >> 32);
-}
-
-enum OpKind OpIq_GetImmediateOpKind(struct Op* op)
-{
-	return OK_Immediate64;
-}
+enum OpKind OpIq_GetImmediateOpKind(struct Op* op);
  
-int GetXRegSize(enum OpKind opKind) 
-{
-	if (opKind == OK_MemorySegRSI)
-	{
-		return 8;
-	}
-	if (opKind == OK_MemorySegESI)
-	{
-		return 4;
-	}
-	if (opKind == OK_MemorySegSI)
-	{
-		return 2;
-	}
-	return 0;
-}
+int GetXRegSize(enum OpKind opKind);
 
-int GetYRegSize(enum OpKind opKind) 
-{
-	if (opKind == OK_MemoryESRDI)
-	{
-		return 8;
-	}
-	if (opKind == OK_MemoryESEDI)
-	{
-		return 4;
-	}
-	if (opKind == OK_MemoryESDI)
-	{
-		return 2;
-	}
-	return 0;
-}
+int GetYRegSize(enum OpKind opKind);
 
-void OpX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	int regXSize = GetXRegSize(GetOpKind(instruction, operand));
-	if (regXSize == 0) {
-		//encoder.ErrorMessage = $"Operand {operand}: expected OpKind = {nameof(OpKind.MemorySegSI)}, {nameof(OpKind.MemorySegESI)} or {nameof(OpKind.MemorySegRSI)}";
-		return;
-	}
-	switch (GetCode(instruction))
-	{
-	case Movsb_m8_m8:
-	case Movsw_m16_m16:
-	case Movsd_m32_m32:
-	case Movsq_m64_m64:
-		int regYSize = GetYRegSize(GetOp0Kind(instruction));
-		if (regXSize != regYSize) 
-		{
-			//encoder.ErrorMessage = $"Same sized register must be used: reg #1 size = {regYSize * 8}, reg #2 size = {regXSize * 8}";
-			return;
-		}
-		break;
-	}
-	Encoder_SetAddrSize(encoder, regXSize);
-}
+void OpX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpY_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	int regYSize = GetYRegSize(GetOpKind(instruction, operand));
-	if (regYSize == 0) {
-		//encoder.ErrorMessage = $"Operand {operand}: expected OpKind = {nameof(OpKind.MemoryESDI)}, {nameof(OpKind.MemoryESEDI)} or {nameof(OpKind.MemoryESRDI)}";
-		return;
-	}
-	switch (GetCode(instruction)) 
-	{
-	case Cmpsb_m8_m8:
-	case Cmpsw_m16_m16:
-	case Cmpsd_m32_m32:
-	case Cmpsq_m64_m64:
-		int regXSize = GetXRegSize(GetOp0Kind(instruction));
-		if (regXSize != regYSize) 
-		{
-			//encoder.ErrorMessage = $"Same sized register must be used: reg #1 size = {regXSize * 8}, reg #2 size = {regYSize * 8}";
-			return;
-		}
-		break;
-	}
-	Encoder_SetAddrSize(encoder, regYSize);
-}
+void OpY_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-int GetRegSize(enum OpKind opKind) 
-{
-	if (opKind == OK_MemorySegRDI)
-	{
-		return 8;
-	}
-	if (opKind == OK_MemorySegEDI)
-	{
-		return 4;
-	}
-	if (opKind == OK_MemorySegDI)
-	{
-		return 2;
-	}
-	return 0;
-}
+int GetRegSize(enum OpKind opKind);
 
-void OprDI_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	int regSize = GetRegSize(GetOpKind(instruction, operand));
-	if (regSize == 0) {
-		//encoder.ErrorMessage = $"Operand {operand}: expected OpKind = {nameof(OpKind.MemorySegDI)}, {nameof(OpKind.MemorySegEDI)} or {nameof(OpKind.MemorySegRDI)}";
-		return;
-	}
-	Encoder_SetAddrSize(encoder, regSize);
-}
+void OprDI_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpMRBX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	if (!Verify(operand, OK_Memory, GetOpKind(instruction, operand)))
-	{
-		return;
-	}
-	enum Register baseReg = GetMemoryBase(instruction);
-	if (GetMemoryDisplSize(instruction) != 0 || GetMemoryDisplacement64(instruction) != 0 ||
-		GetMemoryIndexScale(instruction) != 1 || GetMemoryIndex(instruction) != Register_AL ||
-		(baseReg != Register_BX && baseReg != Register_EBX && baseReg != Register_RBX)) 
-	{
-		//encoder.ErrorMessage = $"Operand {operand}: Operand must be [bx+al], [ebx+al], or [rbx+al]";
-		return;
-	}
-	int regSize;
-	if (baseReg == Register_RBX)
-	{
-		regSize = 8;
-	}
-	else if (baseReg == Register_EBX)
-	{
-		regSize = 4;
-	}
-	else 
-	{
-		//Debug.Assert(baseReg == Register_BX);
-		regSize = 2;
-	}
-	Encoder_SetAddrSize(encoder, regSize);
-}
+void OpMRBX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpJ_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	Encoder_AddBranch(encoder, instruction, op->opKind, op->immSize, instruction, operand);
-}
+void OpJ_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-enum OpKind OpJ_GetNearBranchOpKind(struct Op* op)
-{
-	return op->opKind;
-}
+enum OpKind OpJ_GetNearBranchOpKind(struct Op* op);
 
-void OpJx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	Encoder_AddBranchX(encoder, op->immSize, instruction, operand);
-}
+void OpJx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-enum OpKind OpJx_GetNearBranchOpKind(struct Op* op)
-{
-	// xbegin is special and doesn't mask the target IP. We need to know the code size to return the correct value.
-	// Instruction.CreateXbegin() should be used to create the instruction and this method should never be called.
-	//Debug.Fail("Call Instruction.CreateXbegin()");
-	return OpDefault_GetNearBranchOpKind(op);
-}
+enum OpKind OpJx_GetNearBranchOpKind(struct Op* op);
 
-void OpJdisp_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	Encoder_AddBranchDisp(encoder, op->displSize, instruction, operand);
-}
+void OpJdisp_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-enum OpKind OpJdisp_GetNearBranchOpKind(struct Op* op)
-{
-	if (op->displSize == 2)
-	{
-		return OK_NearBranch16;
-	}
-	else
-	{
-		return OK_NearBranch32;
-	}
-}
+enum OpKind OpJdisp_GetNearBranchOpKind(struct Op* op);
 
-void OpVsib_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	encoder->EncoderFlags |= EncoderFlags_MustUseSib;
+void OpVsib_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-	bool allowMemOp = true;
-	bool allowRegOp = true;
-	Encoder_AddRegOrMem(encoder, instruction, operand, Register_None, Register_None, op->regLo, op->regHi, allowMemOp, allowRegOp);
-}
+void OpHx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpHx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	if (!Verify(operand, OK_Register, Instruction_GetOpKind(instruction, operand)))
-	{
-		return;
-	}
-	enum Register reg = GetOpRegister(instruction, operand);
-	if (!VerifyRegister(encoder, operand, reg, op->regLo, op->regHi))
-	{
-		return;
-	}
-	encoder->EncoderFlags |= (enum EncoderFlags)((unsigned int)(reg - op->regLo) << (int)EncoderFlags_VvvvvShift);
-}
+void OpIsX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpIsX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	if (!Verify(operand, OK_Register, Instruction_GetOpKind(instruction, operand)))
-	{
-		return;
-	}
-	enum Register reg = GetOpRegister(instruction, operand);
-	if (!VerifyRegister(encoder, operand, reg, op->regLo, op->regHi))
-	{
-		return;
-	}
-	encoder->ImmSize = ImmSize_SizeIbReg;
-	encoder->Immediate = (unsigned int)(reg - op->regLo) << 4;
-}
+enum OpKind OpI4_GetImmediateOpKind(struct Op* op);
 
-enum OpKind OpI4_GetImmediateOpKind(struct Op* op)
-{
-	return OK_Immediate8;
-}
+void OpI4_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpI4_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
-{
-	enum OpKind opImmKind = Instruction_GetOpKind(instruction, operand);
-	if (!Verify(operand, OK_Immediate8, opImmKind))
-	{
-		return;
-	}
-	//Debug.Assert(encoder.ImmSize == ImmSize.SizeIbReg);
-	//Debug.Assert((encoder.Immediate & 0xF) == 0);
-	if (GetImmediate8(instruction) > 0xF)
-	{
-		//encoder.ErrorMessage = $"Operand {operand}: Immediate value must be 0-15, but value is 0x{instruction.Immediate8:X2}";
-		return;
-	}
-	encoder->ImmSize = ImmSize_Size1;
-	encoder->Immediate |= (unsigned int)GetImmediate8(instruction);
-}
+struct Op* Op_new();
 
-struct Op* Op_new()
-{
-	struct Op* op = (struct Op*)malloc(sizeof(struct Op));
-	op->operand_type = OT_UNDEFINED;
-	op->size = 0;
-	op->mustUseSib = false;
-	op->regLo = (enum Register)0;
-	op->regHi = (enum Register)0;
-	op->_register = (enum Register)0;
-	op->immSize = 0;
-	op->displSize = 0;
-	op->Encode = NULL;
-	op->GetImmediateOpKind = &OpDefault_GetImmediateOpKind;
-	op->GetNearBranchOpKind = &OpDefault_GetNearBranchOpKind;
-	op->GetFarBranchOpKind = &OpDefault_GetFarBranchOpKind;
-	return op;
-}
+struct Op* OpA_new(int size);
 
-struct Op* OpA_new(int size)
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpA;
-	op->size = size;
-	op->Encode = &OpA_Encode;
-	op->GetFarBranchOpKind = &OpA_GetFarBranchOpKind;
-	return op;
-}
+struct Op* OpO_new();
 
-struct Op* OpO_new()
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpO;
-	op->Encode = &OpO_Encode;
-	
-	return op;
-}
+struct Op* OpModRM_rm_mem_only_new(bool mustUseSib);
 
-struct Op* OpModRM_rm_mem_only_new(bool mustUseSib)
-{
-	struct Op* op = Op_new();
-	op->mustUseSib = mustUseSib;
-	op->operand_type = OT_OpModRM_rm_mem_only;
-	op->Encode = &OpModRM_rm_mem_only_Encode;
+struct Op* OpModRM_rm_new(enum Register regLo, enum Register regHi);
 
-	return op;
-}
+struct Op* OpModRM_reg_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpModRM_rm_new(enum Register regLo, enum Register regHi)
-{
-	struct Op* op = Op_new();
-	op->regLo = regLo;
-	op->regHi = regHi;
-	op->operand_type = OT_OpModRM_rm;
-	op->Encode = &OpModRM_rm_Encode;
+struct Op* OpRegEmbed8_new(enum Register regLo, enum Register regHi);
 
-	return op;
-}
+struct Op* OpModRM_reg_mem_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpModRM_reg_new(enum Register regLo, enum Register regHi)
-{
-	struct Op* op = Op_new();
-	op->regLo = regLo;
-	op->regHi = regHi;
-	op->operand_type = OT_OpModRM_reg;
-	op->Encode = &OpModRM_reg_Encode;
+struct Op* OpModRM_rm_reg_only_new(enum Register regLo, enum Register regHi);
 
-	return op;
-}
+struct Op* OpModRM_regF0_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpRegEmbed8_new(enum Register regLo, enum Register regHi)
-{
-	struct Op* op = Op_new();
-	op->regLo = regLo;
-	op->regHi = regHi;
-	op->operand_type = OT_OpRegEmbed8;
-	op->Encode = &OpRegEmbed8_Encode;
+struct Op* OpReg_new(enum Register _register);
 
-	return op;
-}
+struct Op* OpRegSTi_new();
 
-struct Op* OpModRM_reg_mem_new(enum Register regLo, enum Register regHi)
-{
-	struct Op* op = Op_new();
-	op->regLo = regLo;
-	op->regHi = regHi;
-	op->operand_type = OT_OpModRM_reg_mem;
-	op->Encode = &OpModRM_reg_mem_Encode;
+struct Op* OpIb_new(enum OpKind opKind);
 
-	return op;
-}
+struct Op* OpImm_new(unsigned char value);
 
-struct Op* OpModRM_rm_reg_only_new(enum Register regLo, enum Register regHi)
-{
-	struct Op* op = Op_new();
-	op->regLo = regLo;
-	op->regHi = regHi;
-	op->operand_type = OT_OpModRM_rm_reg_only;
-	op->Encode = &OpModRM_rm_reg_only_Encode;
+struct Op* OpIw_new();
 
-	return op;
-}
+struct Op* OpId_new();
 
-struct Op* OpModRM_regF0_new(enum Register regLo, enum Register regHi)
-{
-	struct Op* op = Op_new();
-	op->regLo = regLo;
-	op->regHi = regHi;
-	op->operand_type = OT_OpModRM_regF0;
-	op->Encode = &OpModRM_regF0_Encode;
+struct Op* OpIq_new();
 
-	return op;
-}
+struct Op* OpX_new();
 
-struct Op* OpReg_new(enum Register _register)
-{
-	struct Op* op = Op_new();
-	op->_register = _register;
-	op->operand_type = OT_OpReg;
-	op->Encode = &OpReg_Encode;
+struct Op* OpY_new();
 
-	return op;
-}
+struct Op* OprDI_new();
 
-struct Op* OpRegSTi_new()
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpRegSTi;
-	op->Encode = &OpRegSTi_Encode;
+struct Op* OpMRBX_new();
 
-	return op;
-}
+struct Op* OpJ_new(enum OpKind opKind, int immSize);
 
-struct Op* OpIb_new(enum OpKind opKind)
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpIb;
-	op->opKind = opKind;
-	op->Encode = &OpIb_Encode;
+struct Op* OpJx_new(int immSize);
 
-	return op;
-}
+struct Op* OpJdisp_new(int displSize);
 
-struct Op* OpImm_new(unsigned char value)
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpImm;
-	op->value = value;
-	op->Encode = &OpImm_Encode;
-	op->GetImmediateOpKind = &OpImm_GetImmediateOpKind;
-	return op;
-}
+struct Op* OpVsib_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpIw_new()
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpIw;
-	op->Encode = &OpIw_Encode;
-	op->GetImmediateOpKind = &OpIw_GetImmediateOpKind;
-	return op;
-}
+struct Op* OpHx_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpId_new()
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpId;
-	op->Encode = &OpId_Encode;
-	op->GetImmediateOpKind = &OpId_GetImmediateOpKind;
-	return op;
-}
+struct Op* OpIsX_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpIq_new()
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpIq;
-	op->Encode = &OpIq_Encode;
-	op->GetImmediateOpKind = &OpIq_GetImmediateOpKind;
-	return op;
-}
-
-struct Op* OpX_new()
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpX;
-	op->Encode = &OpX_Encode;
-	return op;
-}
-
-struct Op* OpY_new()
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpY;
-	op->Encode = &OpY_Encode;
-	return op;
-}
-
-struct Op* OprDI_new()
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OprDI;
-	op->Encode = &OprDI_Encode;
-	return op;
-}
-
-struct Op* OpMRBX_new()
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpMRBX;
-	op->Encode = &OpMRBX_Encode;
-	return op;
-}
-
-struct Op* OpJ_new(enum OpKind opKind, int immSize)
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpJ;
-	op->opKind = opKind;
-	op->immSize = immSize;
-	op->Encode = &OpJ_Encode;
-	op->GetNearBranchOpKind = &OpJ_GetNearBranchOpKind;
-	return op;
-}
-
-struct Op* OpJx_new(int immSize)
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpJx;
-	op->immSize = immSize;
-	op->Encode = &OpJx_Encode;
-	op->GetNearBranchOpKind = &OpJx_GetNearBranchOpKind;
-	return op;
-}
-
-struct Op* OpJdisp_new(int displSize)
-{
-	struct Op* op = Op_new();
-	op->operand_type = OT_OpJdisp;
-	op->displSize = displSize;
-	op->Encode = &OpJdisp_Encode;
-	op->GetNearBranchOpKind = &OpJdisp_GetNearBranchOpKind;
-	return op;
-}
-
-struct Op* OpVsib_new(enum Register regLo, enum Register regHi)
-{
-	struct Op* op = Op_new();
-	op->regLo = regLo;
-	op->regHi = regHi;
-	op->operand_type = OT_OpVsib;
-	op->Encode = &OpVsib_Encode;
-
-	return op;
-}
-
-struct Op* OpHx_new(enum Register regLo, enum Register regHi)
-{
-	struct Op* op = Op_new();
-	op->regLo = regLo;
-	op->regHi = regHi;
-	op->operand_type = OT_OpHx;
-	op->Encode = &OpHx_Encode;
-
-	return op;
-}
-
-struct Op* OpIsX_new(enum Register regLo, enum Register regHi)
-{
-	struct Op* op = Op_new();
-	op->regLo = regLo;
-	op->regHi = regHi;
-	op->operand_type = OT_OpIsX;
-	op->Encode = &OpIsX_Encode;
-
-	return op;
-}
-
-struct Op* OpI4_new()
-{
-	struct Op* op = Op_new();
-	op->operand_type = OP_OpI4;
-	op->Encode = &OpI4_Encode;
-	op->GetImmediateOpKind = &OpI4_GetImmediateOpKind;
-	return op;
-}
+struct Op* OpI4_new();
 
 // Op Tables.
-struct Op* Operands_LegacyOps()
-{
-	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 75);
-	operands[0] = *OpA_new(2);
-	operands[1] = *OpA_new(4);
-	operands[2] = *OpO_new();
-	operands[3] = *OpModRM_rm_mem_only_new(false);
-	operands[4] = *OpModRM_rm_mem_only_new(false);
-	operands[5] = *OpModRM_rm_mem_only_new(false);
-	operands[6] = *OpModRM_rm_new(Register_AL, Register_R15L);
-	operands[7] = *OpModRM_rm_new(Register_AX, Register_R15W);
-	operands[8] = *OpModRM_rm_new(Register_EAX, Register_R15D);
-	operands[9] = *OpModRM_rm_new(Register_EAX, Register_R15D);
-	operands[10] = *OpModRM_rm_new(Register_RAX, Register_R15);
-	operands[11] = *OpModRM_rm_new(Register_RAX, Register_R15);
-	operands[12] = *OpModRM_rm_new(Register_MM0, Register_MM7);
-	operands[13] = *OpModRM_rm_new(Register_XMM0, Register_XMM15);
-	operands[14] = *OpModRM_rm_new(Register_BND0, Register_BND3);
-	operands[15] = *OpModRM_reg_new(Register_AL, Register_R15L);
-	operands[16] = *OpRegEmbed8_new(Register_AL, Register_R15L);
-	operands[17] = *OpModRM_reg_new(Register_AX, Register_R15W);
-	operands[18] = *OpModRM_reg_mem_new(Register_AX, Register_R15W);
-	operands[19] = *OpModRM_rm_reg_only_new(Register_AX, Register_R15W);
-	operands[20] = *OpRegEmbed8_new(Register_AX, Register_R15W);
-	operands[21] = *OpModRM_reg_new(Register_EAX, Register_R15D);
-	operands[22] = *OpModRM_reg_mem_new(Register_EAX, Register_R15D);
-	operands[23] = *OpModRM_rm_reg_only_new(Register_EAX, Register_R15D);
-	operands[24] = *OpRegEmbed8_new(Register_EAX, Register_R15D);
-	operands[25] = *OpModRM_reg_new(Register_RAX, Register_R15);
-	operands[26] = *OpModRM_reg_mem_new(Register_RAX, Register_R15);
-	operands[27] = *OpModRM_rm_reg_only_new(Register_RAX, Register_R15);
-	operands[28] = *OpRegEmbed8_new(Register_RAX, Register_R15);
-	operands[29] = *OpModRM_reg_new(Register_ES, Register_GS);
-	operands[30] = *OpModRM_reg_new(Register_MM0, Register_MM7);
-	operands[31] = *OpModRM_rm_reg_only_new(Register_MM0, Register_MM7);
-	operands[32] = *OpModRM_reg_new(Register_XMM0, Register_XMM15);
-	operands[33] = *OpModRM_rm_reg_only_new(Register_XMM0, Register_XMM15);
-	operands[34] = *OpModRM_regF0_new(Register_CR0, Register_CR15);
-	operands[35] = *OpModRM_reg_new(Register_DR0, Register_DR15);
-	operands[36] = *OpModRM_reg_new(Register_TR0, Register_TR7);
-	operands[37] = *OpModRM_reg_new(Register_BND0, Register_BND3);
-	operands[38] = *OpReg_new(Register_ES);
-	operands[39] = *OpReg_new(Register_CS);
-	operands[40] = *OpReg_new(Register_SS);
-	operands[41] = *OpReg_new(Register_DS);
-	operands[42] = *OpReg_new(Register_FS);
-	operands[43] = *OpReg_new(Register_GS);
-	operands[44] = *OpReg_new(Register_AL);
-	operands[45] = *OpReg_new(Register_CL);
-	operands[46] = *OpReg_new(Register_AX);
-	operands[47] = *OpReg_new(Register_DX);
-	operands[48] = *OpReg_new(Register_EAX);
-	operands[49] = *OpReg_new(Register_RAX);
-	operands[50] = *OpReg_new(Register_ST0);
-	operands[51] = *OpRegSTi_new();
-	operands[52] = *OpIb_new(OK_Immediate8);
-	operands[53] = *OpImm_new(1);
-	operands[54] = *OpIb_new(OK_Immediate8to16);
-	operands[55] = *OpIb_new(OK_Immediate8to32);
-	operands[56] = *OpIb_new(OK_Immediate8to64);
-	operands[57] = *OpIw_new();
-	operands[58] = *OpId_new(OK_Immediate32);
-	operands[59] = *OpId_new(OK_Immediate32to64);
-	operands[60] = *OpIq_new();
-	operands[61] = *OpX_new();
-	operands[62] = *OpY_new();
-	operands[63] = *OprDI_new();
-	operands[64] = *OpMRBX_new();
-	operands[65] = *OpJ_new(OK_NearBranch16, 1);
-	operands[66] = *OpJ_new(OK_NearBranch32, 1);
-	operands[67] = *OpJ_new(OK_NearBranch64, 1);
-	operands[68] = *OpJ_new(OK_NearBranch16, 2);
-	operands[69] = *OpJ_new(OK_NearBranch32, 4);
-	operands[70] = *OpJ_new(OK_NearBranch64, 4);
-	operands[71] = *OpJx_new(2);
-	operands[72] = *OpJx_new(4);
-	operands[73] = *OpJdisp_new(2);
-	operands[74] = *OpJdisp_new(4);
-
-	return operands;
-}
+struct Op* Operands_LegacyOps();
 
 // Op Tables.
-struct Op* Operands_VexOps()
-{
-	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 38);
-	operands[0] = *OpModRM_rm_mem_only_new(false);
-	operands[1] = *OpVsib_new(Register_XMM0, Register_XMM15);
-	operands[2] = *OpVsib_new(Register_XMM0, Register_XMM15);
-	operands[3] = *OpVsib_new(Register_YMM0, Register_YMM15);
-	operands[4] = *OpVsib_new(Register_YMM0, Register_YMM15);
-	operands[5] = *OpModRM_rm_new(Register_EAX, Register_R15D);
-	operands[6] = *OpModRM_rm_new(Register_RAX, Register_R15);
-	operands[7] = *OpModRM_rm_new(Register_XMM0, Register_XMM15);
-	operands[8] = *OpModRM_rm_new(Register_YMM0, Register_YMM15);
-	operands[9] = *OpModRM_rm_new(Register_K0, Register_K7);
-	operands[10] = *OpModRM_reg_new(Register_EAX, Register_R15D);
-	operands[11] = *OpModRM_rm_reg_only_new(Register_EAX, Register_R15D);
-	operands[12] = *OpHx_new(Register_EAX, Register_R15D);
-	operands[13] = *OpModRM_reg_new(Register_RAX, Register_R15);
-	operands[14] = *OpModRM_rm_reg_only_new(Register_RAX, Register_R15);
-	operands[15] = *OpHx_new(Register_RAX, Register_R15);
-	operands[16] = *OpModRM_reg_new(Register_K0, Register_K7);
-	operands[17] = *OpModRM_rm_reg_only_new(Register_K0, Register_K7);
-	operands[18] = *OpHx_new(Register_K0, Register_K7);
-	operands[19] = *OpModRM_reg_new(Register_XMM0, Register_XMM15);
-	operands[20] = *OpModRM_rm_reg_only_new(Register_XMM0, Register_XMM15);
-	operands[21] = *OpHx_new(Register_XMM0, Register_XMM15);
-	operands[22] = *OpIsX_new(Register_XMM0, Register_XMM15);
-	operands[23] = *OpIsX_new(Register_XMM0, Register_XMM15);
-	operands[24] = *OpModRM_reg_new(Register_YMM0, Register_YMM15);
-	operands[25] = *OpModRM_rm_reg_only_new(Register_YMM0, Register_YMM15);
-	operands[26] = *OpHx_new(Register_YMM0, Register_YMM15);
-	operands[27] = *OpIsX_new(Register_YMM0, Register_YMM15);
-	operands[28] = *OpIsX_new(Register_YMM0, Register_YMM15);
-	operands[29] = *OpI4_new();
-	operands[30] = *OpIb_new(OK_Immediate8);
-	operands[31] = *OprDI_new();
-	operands[32] = *OpJ_new(OK_NearBranch64, 1);
-	operands[33] = *OpJ_new(OK_NearBranch64, 4);
-	operands[34] = *OpModRM_rm_mem_only_new(true);
-	operands[35] = *OpModRM_reg_new(Register_TMM0, Register_TMM7);
-	operands[36] = *OpModRM_rm_reg_only_new(Register_TMM0, Register_TMM7);
-	operands[37] = *OpHx_new(Register_TMM0, Register_TMM7);
-	return operands;
-}
+struct Op* Operands_VexOps();
 
 // Op Tables.
-struct Op* Operands_EVexOps()
-{
-	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 31);
-	operands[0] = *OpModRM_rm_mem_only_new(false);
-	operands[1] = *OpVsib_new(Register_XMM0, Register_XMM31);
-	operands[2] = *OpVsib_new(Register_XMM0, Register_XMM31);
-	operands[3] = *OpVsib_new(Register_YMM0, Register_YMM31);
-	operands[4] = *OpVsib_new(Register_YMM0, Register_YMM31);
-	operands[5] = *OpVsib_new(Register_ZMM0, Register_ZMM31);
-	operands[6] = *OpVsib_new(Register_ZMM0, Register_ZMM31);
-	operands[7] = *OpModRM_rm_new(Register_EAX, Register_R15D);
-	operands[8] = *OpModRM_rm_new(Register_RAX, Register_R15);
-	operands[9] = *OpModRM_rm_new(Register_XMM0, Register_XMM31);
-	operands[10] = *OpModRM_rm_new(Register_YMM0, Register_YMM31);
-	operands[11] = *OpModRM_rm_new(Register_ZMM0, Register_ZMM31);
-	operands[12] = *OpModRM_reg_new(Register_EAX, Register_R15D);
-	operands[13] = *OpModRM_rm_reg_only_new(Register_EAX, Register_R15D);
-	operands[14] = *OpModRM_reg_new(Register_RAX, Register_R15);
-	operands[15] = *OpModRM_rm_reg_only_new(Register_RAX, Register_R15);
-	operands[16] = *OpModRM_reg_new(Register_K0, Register_K7);
-	operands[17] = *OpModRM_reg_new(Register_K0, Register_K7);
-	operands[18] = *OpModRM_rm_reg_only_new(Register_K0, Register_K7);
-	operands[19] = *OpModRM_reg_new(Register_XMM0, Register_XMM31);
-	operands[20] = *OpModRM_rm_reg_only_new(Register_XMM0, Register_XMM31);
-	operands[21] = *OpHx_new(Register_XMM0, Register_XMM31);
-	operands[22] = *OpHx_new(Register_XMM0, Register_XMM31);
-	operands[23] = *OpModRM_reg_new(Register_YMM0, Register_YMM31);
-	operands[24] = *OpModRM_rm_reg_only_new(Register_YMM0, Register_YMM31);
-	operands[25] = *OpHx_new(Register_YMM0, Register_YMM31);
-	operands[26] = *OpModRM_reg_new(Register_ZMM0, Register_ZMM31);
-	operands[27] = *OpModRM_rm_reg_only_new(Register_ZMM0, Register_ZMM31);
-	operands[28] = *OpHx_new(Register_ZMM0, Register_ZMM31);
-	operands[29] = *OpHx_new(Register_ZMM0, Register_ZMM31);
-	operands[30] = *OpIb_new(OK_Immediate8);
-
-	return operands;
-}
+struct Op* Operands_EVexOps();
 
 // Op Tables.
-struct Op* Operands_XopOps()
-{
-	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 18);
-	operands[0] = *OpModRM_rm_new(Register_EAX, Register_R15D);
-	operands[1] = *OpModRM_rm_new(Register_RAX, Register_R15);
-	operands[2] = *OpModRM_rm_new(Register_XMM0, Register_XMM15);
-	operands[3] = *OpModRM_rm_new(Register_YMM0, Register_YMM15);
-	operands[4] = *OpModRM_reg_new(Register_EAX, Register_R15D);
-	operands[5] = *OpModRM_rm_reg_only_new(Register_EAX, Register_R15D);
-	operands[6] = *OpHx_new(Register_EAX, Register_R15D);
-	operands[7] = *OpModRM_reg_new(Register_RAX, Register_R15);
-	operands[8] = *OpModRM_rm_reg_only_new(Register_RAX, Register_R15);
-	operands[9] = *OpHx_new(Register_RAX, Register_R15);
-	operands[10] = *OpModRM_reg_new(Register_XMM0, Register_XMM15);
-	operands[11] = *OpHx_new(Register_XMM0, Register_XMM15);
-	operands[12] = *OpIsX_new(Register_XMM0, Register_XMM15);
-	operands[13] = *OpModRM_reg_new(Register_YMM0, Register_YMM15);
-	operands[14] = *OpHx_new(Register_YMM0, Register_YMM15);
-	operands[15] = *OpIsX_new(Register_YMM0, Register_YMM15);
-	operands[16] = *OpIb_new(OK_Immediate8);
-	operands[17] = *OpId_new(OK_Immediate32);
-	return operands;
-}
+struct Op* Operands_XopOps();
 
 // Op Tables.
-struct Op* Operands_MVEXOps()
-{
-	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 8);
-	operands[0] = *OpModRM_rm_mem_only_new(false);
-	operands[1] = *OpVsib_new(Register_ZMM0, Register_ZMM31);
-	operands[2] = *OpModRM_rm_new(Register_ZMM0, Register_ZMM31);
-	operands[3] = *OpModRM_reg_new(Register_K0, Register_K7);
-	operands[4] = *OpHx_new(Register_K0, Register_K7);
-	operands[5] = *OpModRM_reg_new(Register_ZMM0, Register_ZMM31);
-	operands[6] = *OpHx_new(Register_ZMM0, Register_ZMM31);
-	operands[7] = *OpIb_new(OK_Immediate8);
-	return operands;
-}
+struct Op* Operands_MVEXOps();
 
 // Op Tables.
-struct Op* Operands_D3NowOps()
-{
-	struct Op* operands = (struct Op*)malloc(sizeof(struct Op) * 18);
-	operands[0] = *OpModRM_reg_new(Register_MM0, Register_MM7);
-	operands[1] = *OpModRM_rm_new(Register_MM0, Register_MM7);
-	return operands;
-}
+struct Op* Operands_D3NowOps();
 
 struct OpCodeHandler
 {
