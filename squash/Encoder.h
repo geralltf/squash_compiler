@@ -349,34 +349,7 @@ struct Label
 
 struct AssemblerMemoryOperand* ToMemoryOperandFromLabel(struct Label* label);
 
-/// <summary>
-/// High-Level Assembler.
-/// </summary>
-struct Assembler
-{
-	list_t* instructions;
-	unsigned long currentLabelId;
-	struct Label* currentLabel;
-	struct Label* currentAnonLabel;
-	struct Label* nextAnonLabel;
-	bool definedAnonLabel;
-	enum PrefixFlags prefixFlags;
 
-	/// <summary>
-	/// Gets the bitness defined for this assembler.
-	/// </summary>
-	int Bitness;
-
-	/// <summary>
-	/// <c>true</c> to prefer VEX encoding over EVEX. This is the default. See also <see cref="vex"/> and <see cref="evex"/>.
-	/// </summary>
-	bool PreferVex;
-
-	/// <summary>
-	/// <c>true</c> to prefer short branch encoding. This is the default.
-	/// </summary>
-	bool PreferShortBranch;
-};
 
 /// <summary>
 /// Creates a new instance of this assembler
