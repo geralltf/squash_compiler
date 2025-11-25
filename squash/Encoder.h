@@ -10,7 +10,7 @@
 #include "Instruction.h"
 #include "EncoderInstructionSet.h"
 #include "OpCodeInfo.h"
-
+#include "Assembler.h"
 
 
 enum PrefixFlags
@@ -348,8 +348,6 @@ struct Label
 };
 
 struct AssemblerMemoryOperand* ToMemoryOperandFromLabel(struct Label* label);
-
-
 
 /// <summary>
 /// Creates a new instance of this assembler

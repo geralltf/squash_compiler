@@ -42,7 +42,6 @@ struct Assembler
     bool Is_Windows;
 };
 
-
 struct Assembler* assembler_new();
 
 /// <summary>

@@ -223,7 +223,7 @@ void AddInstructionWithFlags(struct Assembler* assembler, struct Instruction* in
 	{
 		if ((flags & AF_Broadcast) != 0)
 		{
-			IsBroadcast(instruction, true);
+			SetIsBroadcast(instruction, true);
 		}
 		if ((flags & AF_Zeroing) != 0)
 		{
