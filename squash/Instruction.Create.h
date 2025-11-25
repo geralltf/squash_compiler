@@ -374,498 +374,36 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2),
 	void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction));
 
-void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value)
-{
-	//TODO:
-}
+void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value);
 
-unsigned int OpCodeHandler_GetOpCode(struct OpCodeHandler* self, enum EncFlags2 encFlags2)
-{
-	return (unsigned short)((unsigned int)encFlags2 >> (int)EFLAGS2_OpCodeShift);
-}
+void Encoder_AddAbsMem(struct Encoder* encoder, struct Instruction* instruction, int operand);
 
-void InvalidHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
-{
-	//const string ERROR_MESSAGE = "Can't encode an invalid instruction";
-}
+unsigned int OpCodeHandler_GetOpCode(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
 
-void DeclareDataHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
-{
-	enum Code opcode = (enum Code)instruction->code;
+void InvalidHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
 
+void DeclareDataHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
 
-	int declDataCount = GetDeclareDataCount(instruction);
+void ZeroBytesHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
 
-	switch (opcode)
-	{
-	case DeclareByte:
-		self->elemLength = 1;
-		break;
-	case DeclareWord:
-		self->elemLength = 2;
-		break;
-	case DeclareDword:
-		self->elemLength = 4;
-		break;
-	case DeclareQword:
-		self->elemLength = 8;
-		break;
-	default:
-		// throw new InvalidOperationException();
-		break;
-	}
+void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
 
-	self->maxLength = 16 / self->elemLength;
+void VEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
 
-	if (declDataCount < 1 || declDataCount > self->maxLength)
-	{
-		//encoder.ErrorMessage = $"Invalid db/dw/dd/dq data count. Count = {declDataCount}, max count = {maxLength}";
-		return;
-	}
-	int length = declDataCount * self->elemLength;
-	for (int i = 0; i < length; i++)
-	{
-		unsigned char b = GetDeclareByteValue(instruction, i);
+void EVEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
 
-		Encoder_WriteByteInternal(encoder, b);
-	}
-}
+void XopHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
 
-void ZeroBytesHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
-{
-	// Do nothing.
-}
+bool MvexHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
 
-void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
-{
-	unsigned int b = self->mandatoryPrefix;
-	Encoder_WritePrefixes(encoder, instruction, b != 0xF3);
-	if (b != 0)
-	{
-		Encoder_WriteByteInternal(encoder, b);
-	}
-	//Static.Assert((int)EncoderFlags.B == 0x01 ? 0 : -1);
-	//Static.Assert((int)EncoderFlags.X == 0x02 ? 0 : -1);
-	//Static.Assert((int)EncoderFlags.R == 0x04 ? 0 : -1);
-	//Static.Assert((int)EncoderFlags.W == 0x08 ? 0 : -1);
-	//Static.Assert((int)EncoderFlags.REX == 0x40 ? 0 : -1);
-	b = (unsigned int)encoder->EncoderFlags;
-	b &= 0x4F;
-	if (b != 0) {
-		if ((encoder->EncoderFlags & EncoderFlags_HighLegacy8BitRegs) != 0)
-		{
-			//encoder.ErrorMessage = "Registers AH, CH, DH, BH can't be used if there's a REX prefix. Use AL, CL, DL, BL, SPL, BPL, SIL, DIL, R8L-R15L instead.";
-		}
-		b |= 0x40;
-		
-		Encoder_WriteByteInternal(encoder, b);
-	}
+void MvexHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
 
-	if ((b = self->tableByte1) != 0)
-	{
-		Encoder_WriteByteInternal(encoder, b);
-		if ((b = self->tableByte2) != 0)
-		{
-			Encoder_WriteByteInternal(encoder, b);
-		}
-	}
-}
-
-void VEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
-{
-	bool canWriteF3 = true;
-	Encoder_WritePrefixes(encoder, instruction, canWriteF3);
-
-	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
-
-	//Static.Assert((int)MandatoryPrefixByte.None == 0 ? 0 : -1);
-	//Static.Assert((int)MandatoryPrefixByte.P66 == 1 ? 0 : -1);
-	//Static.Assert((int)MandatoryPrefixByte.PF3 == 2 ? 0 : -1);
-	//Static.Assert((int)MandatoryPrefixByte.PF2 == 3 ? 0 : -1);
-	unsigned int b = self->lastByte;
-	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
-
-	unsigned int XBW = (unsigned int)(EncoderFlags_X | EncoderFlags_B | EncoderFlags_W);
-
-	if ((encoder->Internal_PreventVEX2 | self->W1 | (self->table - (unsigned int)VexOpCodeTable_MAP0F) | (encoderFlags & XBW)) != 0)
-	{
-		Encoder_WriteByteInternal(encoder, 0xC4);
-		//Static.Assert((int)VexOpCodeTable.MAP0F == 1 ? 0 : -1);
-		//Static.Assert((int)VexOpCodeTable.MAP0F38 == 2 ? 0 : -1);
-		//Static.Assert((int)VexOpCodeTable.MAP0F3A == 3 ? 0 : -1);
-		unsigned int b2 = self->table;
-		//Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
-		//Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
-		//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
-		b2 |= (~encoderFlags & 7) << 5;
-		Encoder_WriteByteInternal(encoder, b2);
-		b |= self->mask_W_L & encoder->Internal_VEX_WIG_LIG;
-		Encoder_WriteByteInternal(encoder, b);
-	}
-	else
-	{
-		Encoder_WriteByteInternal(encoder, 0xC5);
-		//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
-		b |= (~encoderFlags & 4) << 5;
-		b |= self->mask_L & encoder->Internal_VEX_LIG;
-		Encoder_WriteByteInternal(encoder, b);
-	}
-}
-
-void EVEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
-{
-	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
-
-	Encoder_WriteByteInternal(encoder, 0x62);
-
-	//Static.Assert((int)EvexOpCodeTable_MAP0F == 1 ? 0 : -1);
-	//Static.Assert((int)EvexOpCodeTable_MAP0F38 == 2 ? 0 : -1);
-	//Static.Assert((int)EvexOpCodeTable_MAP0F3A == 3 ? 0 : -1);
-	//Static.Assert((int)EvexOpCodeTable_MAP5 == 5 ? 0 : -1);
-	//Static.Assert((int)EvexOpCodeTable_MAP6 == 6 ? 0 : -1);
-	unsigned int b = self->table;
-	//Static.Assert((int)EncoderFlags_B == 1 ? 0 : -1);
-	//Static.Assert((int)EncoderFlags_X == 2 ? 0 : -1);
-	//Static.Assert((int)EncoderFlags_R == 4 ? 0 : -1);
-	b |= (encoderFlags & 7) << 5;
-	//Static.Assert((int)EncoderFlags_R2 == 0x00000200 ? 0 : -1);
-	b |= (encoderFlags >> (9 - 4)) & 0x10;
-	b ^= ~0xFU;
-	Encoder_WriteByteInternal(encoder, b);
-
-	b = self->p1Bits;
-	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
-	b |= self->mask_W & encoder->Internal_EVEX_WIG;
-	Encoder_WriteByteInternal(encoder, b);
-
-	b = GetInternalOpMask(instruction);
-	if (b != 0) {
-		if ((self->EncFlags3 & EFLAGS3_OpMaskRegister) == 0)
-		{
-			//encoder.ErrorMessage = "The instruction doesn't support opmask registers";
-		}
-	}
-	else {
-		if ((self->EncFlags3 & EFLAGS3_RequireOpMaskRegister) != 0)
-		{
-			//encoder.ErrorMessage = "The instruction must use an opmask register";
-		}
-	}
-	b |= (encoderFlags >> ((int)EncoderFlags_VvvvvShift + 4 - 3)) & 8;
-	if (GetSuppressAllExceptions(instruction))
-	{
-		if ((self->EncFlags3 & EFLAGS3_SuppressAllExceptions) == 0)
-		{
-			//encoder.ErrorMessage = "The instruction doesn't support suppress-all-exceptions";
-		}
-		b |= 0x10;
-	}
-	enum RoundingControl rc = GetRoundingControl(instruction);
-	if (rc != RC_None)
-	{
-		if ((self->EncFlags3 & EFLAGS3_RoundingControl) == 0)
-		{
-			//encoder.ErrorMessage = "The instruction doesn't support rounding control";
-		}
-		b |= 0x10;
-		//Static.Assert((int)RoundingControl.RoundToNearest == 1 ? 0 : -1);
-		//Static.Assert((int)RoundingControl.RoundDown == 2 ? 0 : -1);
-		//Static.Assert((int)RoundingControl.RoundUp == 3 ? 0 : -1);
-		//Static.Assert((int)RoundingControl.RoundTowardZero == 4 ? 0 : -1);
-		b |= (unsigned int)(rc - RC_RoundToNearest) << 5;
-	}
-	else if ((self->EncFlags3 & EFLAGS3_SuppressAllExceptions) == 0 || !GetSuppressAllExceptions(instruction))
-	{
-		b |= self->llBits;
-	}
-	if ((encoderFlags & (unsigned int)EncoderFlags_Broadcast) != 0)
-	{
-		b |= 0x10;
-	}
-	else if (IsBroadcast2(instruction))
-	{
-		//encoder.ErrorMessage = "The instruction doesn't support broadcasting";
-	}
-	if (GetZeroingMasking(instruction))
-	{
-		if ((self->EncFlags3 & EFLAGS3_ZeroingMasking) == 0)
-		{
-			//encoder.ErrorMessage = "The instruction doesn't support zeroing masking";
-		}
-		b |= 0x80;
-	}
-	b ^= 8;
-	b |= self->mask_LL & encoder->Internal_EVEX_LIG;
-	Encoder_WriteByteInternal(encoder, b);
-}
-
-void XopHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
-{
-	Encoder_WritePrefixes(encoder, instruction, true);
-
-	Encoder_WriteByteInternal(encoder, 0x8F);
-
-	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
-	//Static.Assert((int)MandatoryPrefixByte.None == 0 ? 0 : -1);
-	//Static.Assert((int)MandatoryPrefixByte.P66 == 1 ? 0 : -1);
-	//Static.Assert((int)MandatoryPrefixByte.PF3 == 2 ? 0 : -1);
-	//Static.Assert((int)MandatoryPrefixByte.PF2 == 3 ? 0 : -1);
-
-	unsigned int b = self->table;
-	//Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
-	//Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
-	//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
-	b |= (~encoderFlags & 7) << 5;
-	Encoder_WriteByteInternal(encoder, b);
-	b = self->lastByte;
-	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
-	Encoder_WriteByteInternal(encoder, b);
-}
-
-bool MvexHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue)
-{
-	struct MvexInfo* mvex = MvexInfo_new(GetCode(instruction));
-
-	int sss = ((int)GetMvexRegMemConv(instruction) - (int)MRMC_MemConvNone) & 7;
-	enum TupleType tupleType = (enum TupleType)MvexTupleTypeLut_Data[(int)mvex->TupleTypeLutKind * 8 + sss];
-
-	int n = (int)TupleTypeTable_GetDisp8N(tupleType, false);
-	int res = displ / n;
-	if (res * n == displ && SCHAR_MIN <= res && res <= SCHAR_MAX)
-	{
-		compressedValue = (signed char)res;
-		return true;
-	}
-
-	compressedValue = 0;
-	return false;
-}
-
-void MvexHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
-{
-	Encoder_WritePrefixes(encoder, instruction, true);
-
-	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
-
-	Encoder_WriteByteInternal(encoder, 0x62);
-
-	//Static.Assert((int)MvexOpCodeTable.MAP0F == 1 ? 0 : -1);
-	//Static.Assert((int)MvexOpCodeTable.MAP0F38 == 2 ? 0 : -1);
-	//Static.Assert((int)MvexOpCodeTable.MAP0F3A == 3 ? 0 : -1);
-	unsigned int b = self->table;
-	//Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
-	//Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
-	//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
-	b |= (encoderFlags & 7) << 5;
-	//Static.Assert((int)EncoderFlags.R2 == 0x00000200 ? 0 : -1);
-	b |= (encoderFlags >> (9 - 4)) & 0x10;
-	b ^= ~0xFU;
-	Encoder_WriteByteInternal(encoder, b);
-
-	b = self->p1Bits;
-	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
-	b |= self->mask_W & encoder->Internal_MVEX_WIG;
-	Encoder_WriteByteInternal(encoder, b);
-
-	b = GetInternalOpMask(instruction);
-	if (b != 0)
-	{
-		if ((self->EncFlags3 & EFLAGS3_OpMaskRegister) == 0)
-		{
-			//encoder.ErrorMessage = "The instruction doesn't support opmask registers";
-		}
-	}
-	else
-	{
-		if ((self->EncFlags3 & EFLAGS3_RequireOpMaskRegister) != 0)
-		{
-			//encoder.ErrorMessage = "The instruction must use an opmask register";
-		}
-	}
-	b |= (encoderFlags >> ((int)EncoderFlags_VvvvvShift + 4 - 3)) & 8;
-
-	struct MvexInfo* mvex = MvexInfo_new(GetCode(instruction));
-
-	enum MvexRegMemConv conv = GetMvexRegMemConv(instruction);
-	// Memory ops can only be op0-op2, never op3 (imm8)
-	if (GetOp0Kind(instruction) == OK_Memory || GetOp1Kind(instruction) == OK_Memory || GetOp2Kind(instruction) == OK_Memory)
-	{
-		if (conv >= MRMC_MemConvNone && conv <= MRMC_MemConvSint16)
-		{
-			b |= ((unsigned int)conv - (unsigned int)MRMC_MemConvNone) << 4;
-		}
-		else if (conv == MRMC_None)
-		{
-			// Nothing, treat it as MvexRegMemConv.MemConvNone
-		}
-		else
-		{
-			//encoder.ErrorMessage = "Memory operands must use a valid MvexRegMemConv variant, eg. MvexRegMemConv.MemConvNone";
-		}
-		if (GetIsMvexEvictionHint(instruction))
-		{
-			if (mvex->CanUseEvictionHint)
-			{
-				b |= 0x80;
-			}
-			else
-			{
-				//encoder.ErrorMessage = "This instruction doesn't support eviction hint (`{eh}`)";
-			}
-		}
-	}
-	else
-	{
-		if (GetIsMvexEvictionHint(instruction))
-		{
-			//encoder.ErrorMessage = "Only memory operands can enable eviction hint (`{eh}`)";
-		}
-		if (conv == MRMC_None)
-		{
-			b |= 0x80;
-			if (GetSuppressAllExceptions(instruction))
-			{
-				b |= 0x40;
-				if ((self->EncFlags3 & EFLAGS3_SuppressAllExceptions) == 0)
-				{
-					//encoder.ErrorMessage = "The instruction doesn't support suppress-all-exceptions";
-				}
-			}
-			enum RoundingCongtrol rc = GetRoundingControl(instruction);
-			if (rc == RC_None) {
-				// Nothing
-			}
-			else {
-				if ((self->EncFlags3 & EFLAGS3_RoundingControl) == 0)
-				{
-					//encoder.ErrorMessage = "The instruction doesn't support rounding control";
-				}
-				else
-				{
-					//Static.Assert((int)RoundingControl.RoundToNearest == 1 ? 0 : -1);
-					//Static.Assert((int)RoundingControl.RoundDown == 2 ? 0 : -1);
-					//Static.Assert((int)RoundingControl.RoundUp == 3 ? 0 : -1);
-					//Static.Assert((int)RoundingControl.RoundTowardZero == 4 ? 0 : -1);
-					b |= ((unsigned int)rc - (unsigned int)RC_RoundToNearest) << 4;
-				}
-			}
-		}
-		else if (conv >= MRMC_RegSwizzleNone && conv <= MRMC_RegSwizzleDddd)
-		{
-			if (GetSuppressAllExceptions(instruction))
-			{
-				//encoder.ErrorMessage = "Can't use {sae} with register swizzles";
-			}
-			else if (GetRoundingControl(instruction) != RC_None)
-			{
-				//encoder.ErrorMessage = "Can't use rounding control with register swizzles";
-			}
-			b |= (((unsigned int)conv - (unsigned int)MRMC_RegSwizzleNone) & 7) << 4;
-		}
-		else
-		{
-			//encoder.ErrorMessage = "Register operands can't use memory up/down conversions";
-		}
-	}
-	if (mvex->EHBit == MEHB_EH1)
-	{
-		b |= 0x80;
-	}
-	b ^= 8;
-	Encoder_WriteByteInternal(encoder, b);
-}
-
-void D3nowHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
-{
-	Encoder_WritePrefixes(encoder, instruction, true);
-	Encoder_WriteByteInternal(encoder, 0x0F);
-	encoder->ImmSize = ImmSize_Size1OpCode;
-	encoder->Immediate = self->immediate;
-}
+void D3nowHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
 
 
-unsigned int TupleTypeTable_GetDisp8N(enum TupleType tupleType, bool bcst)
-{
-	unsigned char tupleTypeData[38] =
-	{
-		// TupleType.N1
-		0x01,// N
-		0x01,// Nbcst
-		// TupleType.N2
-		0x02,// N
-		0x02,// Nbcst
-		// TupleType.N4
-		0x04,// N
-		0x04,// Nbcst
-		// TupleType.N8
-		0x08,// N
-		0x08,// Nbcst
-		// TupleType.N16
-		0x10,// N
-		0x10,// Nbcst
-		// TupleType.N32
-		0x20,// N
-		0x20,// Nbcst
-		// TupleType.N64
-		0x40,// N
-		0x40,// Nbcst
-		// TupleType.N8b4
-		0x08,// N
-		0x04,// Nbcst
-		// TupleType.N16b4
-		0x10,// N
-		0x04,// Nbcst
-		// TupleType.N32b4
-		0x20,// N
-		0x04,// Nbcst
-		// TupleType.N64b4
-		0x40,// N
-		0x04,// Nbcst
-		// TupleType.N16b8
-		0x10,// N
-		0x08,// Nbcst
-		// TupleType.N32b8
-		0x20,// N
-		0x08,// Nbcst
-		// TupleType.N64b8
-		0x40,// N
-		0x08,// Nbcst
-		// TupleType.N4b2
-		0x04,// N
-		0x02,// Nbcst
-		// TupleType.N8b2
-		0x08,// N
-		0x02,// Nbcst
-		// TupleType.N16b2
-		0x10,// N
-		0x02,// Nbcst
-		// TupleType.N32b2
-		0x20,// N
-		0x02,// Nbcst
-		// TupleType.N64b2
-		0x40,// N
-		0x02,// Nbcst
-		// GENERATOR-END: TupleTypeTable
-	};
+unsigned int TupleTypeTable_GetDisp8N(enum TupleType tupleType, bool bcst);
 
-	int index = ((int)tupleType << 1) | (bcst ? 1 : 0);
-	//Debug.Assert((uint)index < (uint)tupleTypeData.Length);
-	return tupleTypeData[index];
-}
-
-bool EVEXHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue)
-{
-	int n = (int)TupleTypeTable_GetDisp8N(handler->tupleType, (encoder->EncoderFlags & EncoderFlags_Broadcast) != 0);
-	int res = displ / n;
-	if (res * n == displ && SCHAR_MIN <= res && res <= SCHAR_MAX)
-	{
-		compressedValue = (signed char)res;
-		return true;
-	}
-
-	compressedValue = 0;
-	return false;
-}
+bool EVEXHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
 
 void OpCodeHandlers_init();
 struct OpCodeHandler* GetOpCodeHandlers();
@@ -1150,149 +688,27 @@ struct Instruction* Instruction_CreateStosd(int addressSize, enum RepPrefixKind 
 /// <param name="memory">op2: Memory operand</param>
 struct Instruction* Instruction_Create(enum Code code, enum Register register1, enum Register register2, struct MemoryOperand* memory);
 
-struct Encoder* Encoder_new()
-{
-	struct Encoder* encoder = (struct Encoder*)malloc(sizeof(struct Encoder));
-	encoder->Internal_PreventVEX2 = 0;
-	encoder->Internal_VEX_WIG_LIG = 0;
-	encoder->Internal_VEX_LIG = 0;
-	encoder->Internal_EVEX_WIG = 0;
-	encoder->Internal_EVEX_LIG = 0;
-	encoder->Internal_MVEX_WIG = 0;
-	encoder->bitness = 0;
-	encoder->currentRip = 0;
-	encoder->errorMessage = NULL;
-	encoder->handler = NULL;
-	encoder->eip = 0;
-	encoder->displAddr = 0;
-	encoder->immAddr = 0;
-	encoder->Immediate = 0;
-	encoder->ImmediateHi = 0;
-	encoder->Displ = 0;
-	encoder->DisplHi = 0;
-	encoder->opSize16Flags = EncoderFlags_None;
-	encoder->opSize32Flags = EncoderFlags_None;
-	encoder->adrSize16Flags = EncoderFlags_None;
-	encoder->adrSize32Flags = EncoderFlags_None;
-	encoder->OpCode = 0;
-	encoder->EncoderFlags = EncoderFlags_None;
-	encoder->DisplSize = 0;
-	encoder->ImmSize = 0;
-	encoder->ModRM = 0;
-	encoder->Sib = 0;
-	return encoder;
-}
+struct Encoder* Encoder_new();
 
-void Encoder_init(struct Encoder* encoder, int bitness)
-{
-	//Debug.Assert(bitness == 16 || bitness == 32 || bitness == 64);
-	//encoder->immSizes = s_immSizes;
-	//encoder->writer = writer;
-	encoder->bitness = bitness;
-	//encoder->handlers = OpCodeHandlers.Handlers;
-	encoder->handler = NULL;// It's initialized by TryEncode
-
-	if (bitness != 16)
-	{
-		encoder->opSize16Flags = EncoderFlags_P66;
-	}
-	else
-	{
-		encoder->opSize16Flags = 0;
-	}
-
-	if (bitness == 16)
-	{
-		encoder->opSize32Flags = EncoderFlags_P66;
-	}
-	else
-	{
-		encoder->opSize32Flags = 0;
-	}
-
-	if (bitness != 16)
-	{
-		encoder->adrSize16Flags = EncoderFlags_P67;
-	}
-	else
-	{
-		encoder->adrSize16Flags = 0;
-	}
-
-	if (bitness != 32)
-	{
-		encoder->adrSize32Flags = EncoderFlags_P67;
-	}
-	else
-	{
-		encoder->adrSize32Flags = 0;
-	}
-}
+void Encoder_init(struct Encoder* encoder, int bitness);
 
 /// <summary>
 /// Gets the bitness (16, 32 or 64)
 /// </summary>
-int GetBitness(struct Encoder* encoder)
-{
-	return encoder->bitness;
-}
+int GetBitness(struct Encoder* encoder);
 
 /// <summary>
 /// Creates an encoder
 /// </summary>
 /// <param name="bitness">16, 32 or 64</param>
 /// <returns></returns>
-struct Encoder* Create(int bitness)
-{
-	struct Encoder* encoder = NULL;
-	switch (bitness)
-	{
-	case 16:
-	case 32:
-	case 64:
-		encoder = Encoder_new();
-		Encoder_init(encoder, bitness);
-		break;
-	default:
-		// throw new ArgumentOutOfRangeException(nameof(bitness))
-		break;
-	}
-	return encoder;
-}
+struct Encoder* Create(int bitness);
 
-bool Verify(int operand, enum OpKind expected, enum OpKind actual)
-{
-	if (expected == actual)
-	{
-		return true;
-	}
-	//ErrorMessage = $"Operand {operand}: Expected: {expected}, actual: {actual}";
-	return false;
-}
+bool Verify(int operand, enum OpKind expected, enum OpKind actual);
 
-bool VerifyRegisters(int operand, enum Register expected, enum Register actual)
-{
-	if (expected == actual)
-	{
-		return true;
-	}
-	//ErrorMessage = $"Operand {operand}: Expected: {expected}, actual: {actual}";
-	return false;
-}
+bool VerifyRegisters(int operand, enum Register expected, enum Register actual);
 
-bool VerifyRegister(struct Encoder* encoder, int operand, enum Register registerValue, enum Register regLo, enum Register regHi)
-{
-	if (encoder->bitness != 64 && regHi > regLo + 7)
-	{
-		regHi = regLo + 7;
-	}
-	if (regLo <= registerValue && registerValue <= regHi)
-	{
-		return true;
-	}
-	//ErrorMessage = $"Operand {operand}: Register {register} is not between {regLo} and {regHi} (inclusive)";
-	return false;
-}
+bool VerifyRegister(struct Encoder* encoder, int operand, enum Register registerValue, enum Register regLo, enum Register regHi);
 
 void Encoder_AddBranch(struct Encoder* encoder, struct Instruction* instruction, enum OpKind opKind, int immSize, int operand);
 
@@ -1315,14 +731,6 @@ bool Encoder_TryEncode(struct Encoder* encoder, struct Instruction* instruction,
 /// <returns>
 /// Encoded length.
 /// </returns>
-unsigned int Encode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip)
-{
-	unsigned int encoded_length = 0;
-	if (!Encoder_TryEncode(encoder, instruction, rip, &encoded_length))
-	{
-		//ThrowEncoderException(instruction, errorMessage);
-	}
-	return encoded_length;
-}
+unsigned int Encode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip);
 
 #endif

@@ -729,7 +729,7 @@ void OpReg_Encode(struct Encoder* encoder, struct Instruction* instruction, int 
 
 void OpRegSTi_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	if (!Verify(encoder, operand, OK_Register, GetOpKind(instruction, operand)))
+	if (!Verify(operand, OK_Register, GetOpKind(instruction, operand)))
 	{
 		return;
 	}
@@ -1760,7 +1760,7 @@ struct Instruction* Instruction_CreateDeclareByte_imm1(unsigned char b0)
 	SetCode(instruction, DeclareByte);
 
 	SetInternalDeclareDataCount(instruction, 1);
-	SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -1782,8 +1782,8 @@ struct Instruction* Instruction_CreateDeclareByte_imm2(unsigned char b0, unsigne
 
 	SetInternalDeclareDataCount(instruction, 2);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -1806,9 +1806,9 @@ struct Instruction* Instruction_CreateDeclareByte_imm3(unsigned char b0, unsigne
 
 	SetInternalDeclareDataCount(instruction, 3);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -1832,10 +1832,10 @@ struct Instruction* Instruction_CreateDeclareByte_imm4(unsigned char b0, unsigne
 
 	SetInternalDeclareDataCount(instruction, 4);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -1860,11 +1860,11 @@ struct Instruction* Instruction_CreateDeclareByte_imm5(unsigned char b0, unsigne
 
 	SetInternalDeclareDataCount(instruction, 5);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
-	SetDeclareByteValue(instruction, 4, b4);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 4, b4);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -1890,12 +1890,12 @@ struct Instruction* Instruction_CreateDeclareByte_imm6(unsigned char b0, unsigne
 
 	SetInternalDeclareDataCount(instruction, 6);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
-	SetDeclareByteValue(instruction, 4, b4);
-	SetDeclareByteValue(instruction, 5, b5);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 4, b4);
+	Instruction_SetDeclareByteValue(instruction, 5, b5);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -1922,13 +1922,13 @@ struct Instruction* Instruction_CreateDeclareByte_imm7(unsigned char b0, unsigne
 
 	SetInternalDeclareDataCount(instruction, 7);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
-	SetDeclareByteValue(instruction, 4, b4);
-	SetDeclareByteValue(instruction, 5, b5);
-	SetDeclareByteValue(instruction, 6, b6);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 4, b4);
+	Instruction_SetDeclareByteValue(instruction, 5, b5);
+	Instruction_SetDeclareByteValue(instruction, 6, b6);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -1956,14 +1956,14 @@ struct Instruction* Instruction_CreateDeclareByte_imm8(unsigned char b0, unsigne
 
 	SetInternalDeclareDataCount(instruction, 8);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
-	SetDeclareByteValue(instruction, 4, b4);
-	SetDeclareByteValue(instruction, 5, b5);
-	SetDeclareByteValue(instruction, 6, b6);
-	SetDeclareByteValue(instruction, 7, b7);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 4, b4);
+	Instruction_SetDeclareByteValue(instruction, 5, b5);
+	Instruction_SetDeclareByteValue(instruction, 6, b6);
+	Instruction_SetDeclareByteValue(instruction, 7, b7);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -1992,15 +1992,15 @@ struct Instruction* Instruction_CreateDeclareByte_imm9(unsigned char b0, unsigne
 
 	SetInternalDeclareDataCount(instruction, 9);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
-	SetDeclareByteValue(instruction, 4, b4);
-	SetDeclareByteValue(instruction, 5, b5);
-	SetDeclareByteValue(instruction, 6, b6);
-	SetDeclareByteValue(instruction, 7, b7);
-	SetDeclareByteValue(instruction, 8, b8);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 4, b4);
+	Instruction_SetDeclareByteValue(instruction, 5, b5);
+	Instruction_SetDeclareByteValue(instruction, 6, b6);
+	Instruction_SetDeclareByteValue(instruction, 7, b7);
+	Instruction_SetDeclareByteValue(instruction, 8, b8);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -2030,16 +2030,16 @@ struct Instruction* Instruction_CreateDeclareByte_imm10(unsigned char b0, unsign
 
 	SetInternalDeclareDataCount(instruction, 10);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
-	SetDeclareByteValue(instruction, 4, b4);
-	SetDeclareByteValue(instruction, 5, b5);
-	SetDeclareByteValue(instruction, 6, b6);
-	SetDeclareByteValue(instruction, 7, b7);
-	SetDeclareByteValue(instruction, 8, b8);
-	SetDeclareByteValue(instruction, 9, b9);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 4, b4);
+	Instruction_SetDeclareByteValue(instruction, 5, b5);
+	Instruction_SetDeclareByteValue(instruction, 6, b6);
+	Instruction_SetDeclareByteValue(instruction, 7, b7);
+	Instruction_SetDeclareByteValue(instruction, 8, b8);
+	Instruction_SetDeclareByteValue(instruction, 9, b9);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -2070,17 +2070,17 @@ struct Instruction* Instruction_CreateDeclareByte_imm11(unsigned char b0, unsign
 
 	SetInternalDeclareDataCount(instruction, 11);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
-	SetDeclareByteValue(instruction, 4, b4);
-	SetDeclareByteValue(instruction, 5, b5);
-	SetDeclareByteValue(instruction, 6, b6);
-	SetDeclareByteValue(instruction, 7, b7);
-	SetDeclareByteValue(instruction, 8, b8);
-	SetDeclareByteValue(instruction, 9, b9);
-	SetDeclareByteValue(instruction, 10, b10);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 4, b4);
+	Instruction_SetDeclareByteValue(instruction, 5, b5);
+	Instruction_SetDeclareByteValue(instruction, 6, b6);
+	Instruction_SetDeclareByteValue(instruction, 7, b7);
+	Instruction_SetDeclareByteValue(instruction, 8, b8);
+	Instruction_SetDeclareByteValue(instruction, 9, b9);
+	Instruction_SetDeclareByteValue(instruction, 10, b10);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -2112,18 +2112,18 @@ struct Instruction* Instruction_CreateDeclareByte_imm12(unsigned char b0, unsign
 
 	SetInternalDeclareDataCount(instruction, 12);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
-	SetDeclareByteValue(instruction, 4, b4);
-	SetDeclareByteValue(instruction, 5, b5);
-	SetDeclareByteValue(instruction, 6, b6);
-	SetDeclareByteValue(instruction, 7, b7);
-	SetDeclareByteValue(instruction, 8, b8);
-	SetDeclareByteValue(instruction, 9, b9);
-	SetDeclareByteValue(instruction, 10, b10);
-	SetDeclareByteValue(instruction, 11, b11);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 4, b4);
+	Instruction_SetDeclareByteValue(instruction, 5, b5);
+	Instruction_SetDeclareByteValue(instruction, 6, b6);
+	Instruction_SetDeclareByteValue(instruction, 7, b7);
+	Instruction_SetDeclareByteValue(instruction, 8, b8);
+	Instruction_SetDeclareByteValue(instruction, 9, b9);
+	Instruction_SetDeclareByteValue(instruction, 10, b10);
+	Instruction_SetDeclareByteValue(instruction, 11, b11);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -2156,19 +2156,19 @@ struct Instruction* Instruction_CreateDeclareByte_imm13(unsigned char b0, unsign
 
 	SetInternalDeclareDataCount(instruction, 13);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
-	SetDeclareByteValue(instruction, 4, b4);
-	SetDeclareByteValue(instruction, 5, b5);
-	SetDeclareByteValue(instruction, 6, b6);
-	SetDeclareByteValue(instruction, 7, b7);
-	SetDeclareByteValue(instruction, 8, b8);
-	SetDeclareByteValue(instruction, 9, b9);
-	SetDeclareByteValue(instruction, 10, b10);
-	SetDeclareByteValue(instruction, 11, b11);
-	SetDeclareByteValue(instruction, 12, b12);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 4, b4);
+	Instruction_SetDeclareByteValue(instruction, 5, b5);
+	Instruction_SetDeclareByteValue(instruction, 6, b6);
+	Instruction_SetDeclareByteValue(instruction, 7, b7);
+	Instruction_SetDeclareByteValue(instruction, 8, b8);
+	Instruction_SetDeclareByteValue(instruction, 9, b9);
+	Instruction_SetDeclareByteValue(instruction, 10, b10);
+	Instruction_SetDeclareByteValue(instruction, 11, b11);
+	Instruction_SetDeclareByteValue(instruction, 12, b12);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -2202,20 +2202,20 @@ struct Instruction* Instruction_CreateDeclareByte_imm14(unsigned char b0, unsign
 
 	SetInternalDeclareDataCount(instruction, 14);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
-	SetDeclareByteValue(instruction, 4, b4);
-	SetDeclareByteValue(instruction, 5, b5);
-	SetDeclareByteValue(instruction, 6, b6);
-	SetDeclareByteValue(instruction, 7, b7);
-	SetDeclareByteValue(instruction, 8, b8);
-	SetDeclareByteValue(instruction, 9, b9);
-	SetDeclareByteValue(instruction, 10, b10);
-	SetDeclareByteValue(instruction, 11, b11);
-	SetDeclareByteValue(instruction, 12, b12);
-	SetDeclareByteValue(instruction, 13, b13);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 4, b4);
+	Instruction_SetDeclareByteValue(instruction, 5, b5);
+	Instruction_SetDeclareByteValue(instruction, 6, b6);
+	Instruction_SetDeclareByteValue(instruction, 7, b7);
+	Instruction_SetDeclareByteValue(instruction, 8, b8);
+	Instruction_SetDeclareByteValue(instruction, 9, b9);
+	Instruction_SetDeclareByteValue(instruction, 10, b10);
+	Instruction_SetDeclareByteValue(instruction, 11, b11);
+	Instruction_SetDeclareByteValue(instruction, 12, b12);
+	Instruction_SetDeclareByteValue(instruction, 13, b13);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -2250,21 +2250,21 @@ struct Instruction* Instruction_CreateDeclareByte_imm15(unsigned char b0, unsign
 
 	SetInternalDeclareDataCount(instruction, 15);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
-	SetDeclareByteValue(instruction, 4, b4);
-	SetDeclareByteValue(instruction, 5, b5);
-	SetDeclareByteValue(instruction, 6, b6);
-	SetDeclareByteValue(instruction, 7, b7);
-	SetDeclareByteValue(instruction, 8, b8);
-	SetDeclareByteValue(instruction, 9, b9);
-	SetDeclareByteValue(instruction, 10, b10);
-	SetDeclareByteValue(instruction, 11, b11);
-	SetDeclareByteValue(instruction, 12, b12);
-	SetDeclareByteValue(instruction, 13, b13);
-	SetDeclareByteValue(instruction, 14, b14);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 4, b4);
+	Instruction_SetDeclareByteValue(instruction, 5, b5);
+	Instruction_SetDeclareByteValue(instruction, 6, b6);
+	Instruction_SetDeclareByteValue(instruction, 7, b7);
+	Instruction_SetDeclareByteValue(instruction, 8, b8);
+	Instruction_SetDeclareByteValue(instruction, 9, b9);
+	Instruction_SetDeclareByteValue(instruction, 10, b10);
+	Instruction_SetDeclareByteValue(instruction, 11, b11);
+	Instruction_SetDeclareByteValue(instruction, 12, b12);
+	Instruction_SetDeclareByteValue(instruction, 13, b13);
+	Instruction_SetDeclareByteValue(instruction, 14, b14);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -2299,22 +2299,22 @@ struct Instruction* Instruction_CreateDeclareByte_imm16(unsigned char b0, unsign
 
 	SetInternalDeclareDataCount(instruction, 16);
 
-	SetDeclareByteValue(instruction, 0, b0);
-	SetDeclareByteValue(instruction, 1, b1);
-	SetDeclareByteValue(instruction, 2, b2);
-	SetDeclareByteValue(instruction, 3, b3);
-	SetDeclareByteValue(instruction, 4, b4);
-	SetDeclareByteValue(instruction, 5, b5);
-	SetDeclareByteValue(instruction, 6, b6);
-	SetDeclareByteValue(instruction, 7, b7);
-	SetDeclareByteValue(instruction, 8, b8);
-	SetDeclareByteValue(instruction, 9, b9);
-	SetDeclareByteValue(instruction, 10, b10);
-	SetDeclareByteValue(instruction, 11, b11);
-	SetDeclareByteValue(instruction, 12, b12);
-	SetDeclareByteValue(instruction, 13, b13);
-	SetDeclareByteValue(instruction, 14, b14);
-	SetDeclareByteValue(instruction, 15, b15);
+	Instruction_SetDeclareByteValue(instruction, 0, b0);
+	Instruction_SetDeclareByteValue(instruction, 1, b1);
+	Instruction_SetDeclareByteValue(instruction, 2, b2);
+	Instruction_SetDeclareByteValue(instruction, 3, b3);
+	Instruction_SetDeclareByteValue(instruction, 4, b4);
+	Instruction_SetDeclareByteValue(instruction, 5, b5);
+	Instruction_SetDeclareByteValue(instruction, 6, b6);
+	Instruction_SetDeclareByteValue(instruction, 7, b7);
+	Instruction_SetDeclareByteValue(instruction, 8, b8);
+	Instruction_SetDeclareByteValue(instruction, 9, b9);
+	Instruction_SetDeclareByteValue(instruction, 10, b10);
+	Instruction_SetDeclareByteValue(instruction, 11, b11);
+	Instruction_SetDeclareByteValue(instruction, 12, b12);
+	Instruction_SetDeclareByteValue(instruction, 13, b13);
+	Instruction_SetDeclareByteValue(instruction, 14, b14);
+	Instruction_SetDeclareByteValue(instruction, 15, b15);
 
 	//Debug.Assert(instruction.OpCount == 0);
 	return instruction;
@@ -2855,7 +2855,7 @@ void Encoder_AddModRMRegister(struct Encoder* encoder, struct Instruction* instr
 		return;
 	}
 	enum Register reg = GetOpRegister(instruction, operand);
-	if (!Verify(operand, reg, regLo, regHi))
+	if (!VerifyRegister(encoder, operand, reg, regLo, regHi))
 	{
 		return;
 	}
@@ -2888,7 +2888,7 @@ void Encoder_AddReg(struct Encoder* encoder, struct Instruction* instruction, in
 		return;
 	}
 	enum Register reg = GetOpRegister(instruction, operand);
-	if (!Verify(operand, reg, regLo, regHi))
+	if (!VerifyRegister(encoder, operand, reg, regLo, regHi))
 	{
 		return;
 	}
@@ -3006,6 +3006,956 @@ int Encoder_GetRegisterOpSize(struct Instruction* instruction)
 	return 0;
 }
 
+void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value)
+{
+	//TODO:
+}
+unsigned int OpCodeHandler_GetOpCode(struct OpCodeHandler* self, enum EncFlags2 encFlags2)
+{
+	return (unsigned short)((unsigned int)encFlags2 >> (int)EFLAGS2_OpCodeShift);
+}
+
+void InvalidHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	//const string ERROR_MESSAGE = "Can't encode an invalid instruction";
+}
+
+void DeclareDataHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	enum Code opcode = (enum Code)instruction->code;
+
+
+	int declDataCount = GetDeclareDataCount(instruction);
+
+	switch (opcode)
+	{
+	case DeclareByte:
+		self->elemLength = 1;
+		break;
+	case DeclareWord:
+		self->elemLength = 2;
+		break;
+	case DeclareDword:
+		self->elemLength = 4;
+		break;
+	case DeclareQword:
+		self->elemLength = 8;
+		break;
+	default:
+		// throw new InvalidOperationException();
+		break;
+	}
+
+	self->maxLength = 16 / self->elemLength;
+
+	if (declDataCount < 1 || declDataCount > self->maxLength)
+	{
+		//encoder.ErrorMessage = $"Invalid db/dw/dd/dq data count. Count = {declDataCount}, max count = {maxLength}";
+		return;
+	}
+	int length = declDataCount * self->elemLength;
+	for (int i = 0; i < length; i++)
+	{
+		unsigned char b = GetDeclareByteValue(instruction, i);
+
+		Encoder_WriteByteInternal(encoder, b);
+	}
+}
+
+void ZeroBytesHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	// Do nothing.
+}
+
+void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	unsigned int b = self->mandatoryPrefix;
+	Encoder_WritePrefixes(encoder, instruction, b != 0xF3);
+	if (b != 0)
+	{
+		Encoder_WriteByteInternal(encoder, b);
+	}
+	//Static.Assert((int)EncoderFlags.B == 0x01 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags.X == 0x02 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags.R == 0x04 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags.W == 0x08 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags.REX == 0x40 ? 0 : -1);
+	b = (unsigned int)encoder->EncoderFlags;
+	b &= 0x4F;
+	if (b != 0) {
+		if ((encoder->EncoderFlags & EncoderFlags_HighLegacy8BitRegs) != 0)
+		{
+			//encoder.ErrorMessage = "Registers AH, CH, DH, BH can't be used if there's a REX prefix. Use AL, CL, DL, BL, SPL, BPL, SIL, DIL, R8L-R15L instead.";
+		}
+		b |= 0x40;
+
+		Encoder_WriteByteInternal(encoder, b);
+	}
+
+	if ((b = self->tableByte1) != 0)
+	{
+		Encoder_WriteByteInternal(encoder, b);
+		if ((b = self->tableByte2) != 0)
+		{
+			Encoder_WriteByteInternal(encoder, b);
+		}
+	}
+}
+
+void VEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	bool canWriteF3 = true;
+	Encoder_WritePrefixes(encoder, instruction, canWriteF3);
+
+	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
+
+	//Static.Assert((int)MandatoryPrefixByte.None == 0 ? 0 : -1);
+	//Static.Assert((int)MandatoryPrefixByte.P66 == 1 ? 0 : -1);
+	//Static.Assert((int)MandatoryPrefixByte.PF3 == 2 ? 0 : -1);
+	//Static.Assert((int)MandatoryPrefixByte.PF2 == 3 ? 0 : -1);
+	unsigned int b = self->lastByte;
+	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
+
+	unsigned int XBW = (unsigned int)(EncoderFlags_X | EncoderFlags_B | EncoderFlags_W);
+
+	if ((encoder->Internal_PreventVEX2 | self->W1 | (self->table - (unsigned int)VexOpCodeTable_MAP0F) | (encoderFlags & XBW)) != 0)
+	{
+		Encoder_WriteByteInternal(encoder, 0xC4);
+		//Static.Assert((int)VexOpCodeTable.MAP0F == 1 ? 0 : -1);
+		//Static.Assert((int)VexOpCodeTable.MAP0F38 == 2 ? 0 : -1);
+		//Static.Assert((int)VexOpCodeTable.MAP0F3A == 3 ? 0 : -1);
+		unsigned int b2 = self->table;
+		//Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
+		//Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
+		//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
+		b2 |= (~encoderFlags & 7) << 5;
+		Encoder_WriteByteInternal(encoder, b2);
+		b |= self->mask_W_L & encoder->Internal_VEX_WIG_LIG;
+		Encoder_WriteByteInternal(encoder, b);
+	}
+	else
+	{
+		Encoder_WriteByteInternal(encoder, 0xC5);
+		//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
+		b |= (~encoderFlags & 4) << 5;
+		b |= self->mask_L & encoder->Internal_VEX_LIG;
+		Encoder_WriteByteInternal(encoder, b);
+	}
+}
+
+void EVEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
+
+	Encoder_WriteByteInternal(encoder, 0x62);
+
+	//Static.Assert((int)EvexOpCodeTable_MAP0F == 1 ? 0 : -1);
+	//Static.Assert((int)EvexOpCodeTable_MAP0F38 == 2 ? 0 : -1);
+	//Static.Assert((int)EvexOpCodeTable_MAP0F3A == 3 ? 0 : -1);
+	//Static.Assert((int)EvexOpCodeTable_MAP5 == 5 ? 0 : -1);
+	//Static.Assert((int)EvexOpCodeTable_MAP6 == 6 ? 0 : -1);
+	unsigned int b = self->table;
+	//Static.Assert((int)EncoderFlags_B == 1 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags_X == 2 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags_R == 4 ? 0 : -1);
+	b |= (encoderFlags & 7) << 5;
+	//Static.Assert((int)EncoderFlags_R2 == 0x00000200 ? 0 : -1);
+	b |= (encoderFlags >> (9 - 4)) & 0x10;
+	b ^= ~0xFU;
+	Encoder_WriteByteInternal(encoder, b);
+
+	b = self->p1Bits;
+	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
+	b |= self->mask_W & encoder->Internal_EVEX_WIG;
+	Encoder_WriteByteInternal(encoder, b);
+
+	b = GetInternalOpMask(instruction);
+	if (b != 0) {
+		if ((self->EncFlags3 & EFLAGS3_OpMaskRegister) == 0)
+		{
+			//encoder.ErrorMessage = "The instruction doesn't support opmask registers";
+		}
+	}
+	else {
+		if ((self->EncFlags3 & EFLAGS3_RequireOpMaskRegister) != 0)
+		{
+			//encoder.ErrorMessage = "The instruction must use an opmask register";
+		}
+	}
+	b |= (encoderFlags >> ((int)EncoderFlags_VvvvvShift + 4 - 3)) & 8;
+	if (GetSuppressAllExceptions(instruction))
+	{
+		if ((self->EncFlags3 & EFLAGS3_SuppressAllExceptions) == 0)
+		{
+			//encoder.ErrorMessage = "The instruction doesn't support suppress-all-exceptions";
+		}
+		b |= 0x10;
+	}
+	enum RoundingControl rc = GetRoundingControl(instruction);
+	if (rc != RC_None)
+	{
+		if ((self->EncFlags3 & EFLAGS3_RoundingControl) == 0)
+		{
+			//encoder.ErrorMessage = "The instruction doesn't support rounding control";
+		}
+		b |= 0x10;
+		//Static.Assert((int)RoundingControl.RoundToNearest == 1 ? 0 : -1);
+		//Static.Assert((int)RoundingControl.RoundDown == 2 ? 0 : -1);
+		//Static.Assert((int)RoundingControl.RoundUp == 3 ? 0 : -1);
+		//Static.Assert((int)RoundingControl.RoundTowardZero == 4 ? 0 : -1);
+		b |= (unsigned int)(rc - RC_RoundToNearest) << 5;
+	}
+	else if ((self->EncFlags3 & EFLAGS3_SuppressAllExceptions) == 0 || !GetSuppressAllExceptions(instruction))
+	{
+		b |= self->llBits;
+	}
+	if ((encoderFlags & (unsigned int)EncoderFlags_Broadcast) != 0)
+	{
+		b |= 0x10;
+	}
+	else if (IsBroadcast2(instruction))
+	{
+		//encoder.ErrorMessage = "The instruction doesn't support broadcasting";
+	}
+	if (GetZeroingMasking(instruction))
+	{
+		if ((self->EncFlags3 & EFLAGS3_ZeroingMasking) == 0)
+		{
+			//encoder.ErrorMessage = "The instruction doesn't support zeroing masking";
+		}
+		b |= 0x80;
+	}
+	b ^= 8;
+	b |= self->mask_LL & encoder->Internal_EVEX_LIG;
+	Encoder_WriteByteInternal(encoder, b);
+}
+
+void XopHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	Encoder_WritePrefixes(encoder, instruction, true);
+
+	Encoder_WriteByteInternal(encoder, 0x8F);
+
+	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
+	//Static.Assert((int)MandatoryPrefixByte.None == 0 ? 0 : -1);
+	//Static.Assert((int)MandatoryPrefixByte.P66 == 1 ? 0 : -1);
+	//Static.Assert((int)MandatoryPrefixByte.PF3 == 2 ? 0 : -1);
+	//Static.Assert((int)MandatoryPrefixByte.PF2 == 3 ? 0 : -1);
+
+	unsigned int b = self->table;
+	//Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
+	b |= (~encoderFlags & 7) << 5;
+	Encoder_WriteByteInternal(encoder, b);
+	b = self->lastByte;
+	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
+	Encoder_WriteByteInternal(encoder, b);
+}
+
+bool MvexHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue)
+{
+	struct MvexInfo* mvex = MvexInfo_new(GetCode(instruction));
+
+	int sss = ((int)GetMvexRegMemConv(instruction) - (int)MRMC_MemConvNone) & 7;
+	enum TupleType tupleType = (enum TupleType)MvexTupleTypeLut_Data[(int)mvex->TupleTypeLutKind * 8 + sss];
+
+	int n = (int)TupleTypeTable_GetDisp8N(tupleType, false);
+	int res = displ / n;
+	if (res * n == displ && SCHAR_MIN <= res && res <= SCHAR_MAX)
+	{
+		compressedValue = (signed char)res;
+		return true;
+	}
+
+	compressedValue = 0;
+	return false;
+}
+
+void MvexHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	Encoder_WritePrefixes(encoder, instruction, true);
+
+	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
+
+	Encoder_WriteByteInternal(encoder, 0x62);
+
+	//Static.Assert((int)MvexOpCodeTable.MAP0F == 1 ? 0 : -1);
+	//Static.Assert((int)MvexOpCodeTable.MAP0F38 == 2 ? 0 : -1);
+	//Static.Assert((int)MvexOpCodeTable.MAP0F3A == 3 ? 0 : -1);
+	unsigned int b = self->table;
+	//Static.Assert((int)EncoderFlags.B == 1 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags.X == 2 ? 0 : -1);
+	//Static.Assert((int)EncoderFlags.R == 4 ? 0 : -1);
+	b |= (encoderFlags & 7) << 5;
+	//Static.Assert((int)EncoderFlags.R2 == 0x00000200 ? 0 : -1);
+	b |= (encoderFlags >> (9 - 4)) & 0x10;
+	b ^= ~0xFU;
+	Encoder_WriteByteInternal(encoder, b);
+
+	b = self->p1Bits;
+	b |= (~encoderFlags >> ((int)EncoderFlags_VvvvvShift - 3)) & 0x78;
+	b |= self->mask_W & encoder->Internal_MVEX_WIG;
+	Encoder_WriteByteInternal(encoder, b);
+
+	b = GetInternalOpMask(instruction);
+	if (b != 0)
+	{
+		if ((self->EncFlags3 & EFLAGS3_OpMaskRegister) == 0)
+		{
+			//encoder.ErrorMessage = "The instruction doesn't support opmask registers";
+		}
+	}
+	else
+	{
+		if ((self->EncFlags3 & EFLAGS3_RequireOpMaskRegister) != 0)
+		{
+			//encoder.ErrorMessage = "The instruction must use an opmask register";
+		}
+	}
+	b |= (encoderFlags >> ((int)EncoderFlags_VvvvvShift + 4 - 3)) & 8;
+
+	struct MvexInfo* mvex = MvexInfo_new(GetCode(instruction));
+
+	enum MvexRegMemConv conv = GetMvexRegMemConv(instruction);
+	// Memory ops can only be op0-op2, never op3 (imm8)
+	if (GetOp0Kind(instruction) == OK_Memory || GetOp1Kind(instruction) == OK_Memory || GetOp2Kind(instruction) == OK_Memory)
+	{
+		if (conv >= MRMC_MemConvNone && conv <= MRMC_MemConvSint16)
+		{
+			b |= ((unsigned int)conv - (unsigned int)MRMC_MemConvNone) << 4;
+		}
+		else if (conv == MRMC_None)
+		{
+			// Nothing, treat it as MvexRegMemConv.MemConvNone
+		}
+		else
+		{
+			//encoder.ErrorMessage = "Memory operands must use a valid MvexRegMemConv variant, eg. MvexRegMemConv.MemConvNone";
+		}
+		if (GetIsMvexEvictionHint(instruction))
+		{
+			if (mvex->CanUseEvictionHint)
+			{
+				b |= 0x80;
+			}
+			else
+			{
+				//encoder.ErrorMessage = "This instruction doesn't support eviction hint (`{eh}`)";
+			}
+		}
+	}
+	else
+	{
+		if (GetIsMvexEvictionHint(instruction))
+		{
+			//encoder.ErrorMessage = "Only memory operands can enable eviction hint (`{eh}`)";
+		}
+		if (conv == MRMC_None)
+		{
+			b |= 0x80;
+			if (GetSuppressAllExceptions(instruction))
+			{
+				b |= 0x40;
+				if ((self->EncFlags3 & EFLAGS3_SuppressAllExceptions) == 0)
+				{
+					//encoder.ErrorMessage = "The instruction doesn't support suppress-all-exceptions";
+				}
+			}
+			enum RoundingCongtrol rc = GetRoundingControl(instruction);
+			if (rc == RC_None) {
+				// Nothing
+			}
+			else {
+				if ((self->EncFlags3 & EFLAGS3_RoundingControl) == 0)
+				{
+					//encoder.ErrorMessage = "The instruction doesn't support rounding control";
+				}
+				else
+				{
+					//Static.Assert((int)RoundingControl.RoundToNearest == 1 ? 0 : -1);
+					//Static.Assert((int)RoundingControl.RoundDown == 2 ? 0 : -1);
+					//Static.Assert((int)RoundingControl.RoundUp == 3 ? 0 : -1);
+					//Static.Assert((int)RoundingControl.RoundTowardZero == 4 ? 0 : -1);
+					b |= ((unsigned int)rc - (unsigned int)RC_RoundToNearest) << 4;
+				}
+			}
+		}
+		else if (conv >= MRMC_RegSwizzleNone && conv <= MRMC_RegSwizzleDddd)
+		{
+			if (GetSuppressAllExceptions(instruction))
+			{
+				//encoder.ErrorMessage = "Can't use {sae} with register swizzles";
+			}
+			else if (GetRoundingControl(instruction) != RC_None)
+			{
+				//encoder.ErrorMessage = "Can't use rounding control with register swizzles";
+			}
+			b |= (((unsigned int)conv - (unsigned int)MRMC_RegSwizzleNone) & 7) << 4;
+		}
+		else
+		{
+			//encoder.ErrorMessage = "Register operands can't use memory up/down conversions";
+		}
+	}
+	if (mvex->EHBit == MEHB_EH1)
+	{
+		b |= 0x80;
+	}
+	b ^= 8;
+	Encoder_WriteByteInternal(encoder, b);
+}
+
+void D3nowHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+{
+	Encoder_WritePrefixes(encoder, instruction, true);
+	Encoder_WriteByteInternal(encoder, 0x0F);
+	encoder->ImmSize = ImmSize_Size1OpCode;
+	encoder->Immediate = self->immediate;
+}
+
+
+unsigned int TupleTypeTable_GetDisp8N(enum TupleType tupleType, bool bcst)
+{
+	unsigned char tupleTypeData[38] =
+	{
+		// TupleType.N1
+		0x01,// N
+		0x01,// Nbcst
+		// TupleType.N2
+		0x02,// N
+		0x02,// Nbcst
+		// TupleType.N4
+		0x04,// N
+		0x04,// Nbcst
+		// TupleType.N8
+		0x08,// N
+		0x08,// Nbcst
+		// TupleType.N16
+		0x10,// N
+		0x10,// Nbcst
+		// TupleType.N32
+		0x20,// N
+		0x20,// Nbcst
+		// TupleType.N64
+		0x40,// N
+		0x40,// Nbcst
+		// TupleType.N8b4
+		0x08,// N
+		0x04,// Nbcst
+		// TupleType.N16b4
+		0x10,// N
+		0x04,// Nbcst
+		// TupleType.N32b4
+		0x20,// N
+		0x04,// Nbcst
+		// TupleType.N64b4
+		0x40,// N
+		0x04,// Nbcst
+		// TupleType.N16b8
+		0x10,// N
+		0x08,// Nbcst
+		// TupleType.N32b8
+		0x20,// N
+		0x08,// Nbcst
+		// TupleType.N64b8
+		0x40,// N
+		0x08,// Nbcst
+		// TupleType.N4b2
+		0x04,// N
+		0x02,// Nbcst
+		// TupleType.N8b2
+		0x08,// N
+		0x02,// Nbcst
+		// TupleType.N16b2
+		0x10,// N
+		0x02,// Nbcst
+		// TupleType.N32b2
+		0x20,// N
+		0x02,// Nbcst
+		// TupleType.N64b2
+		0x40,// N
+		0x02,// Nbcst
+		// GENERATOR-END: TupleTypeTable
+	};
+
+	int index = ((int)tupleType << 1) | (bcst ? 1 : 0);
+	//Debug.Assert((uint)index < (uint)tupleTypeData.Length);
+	return tupleTypeData[index];
+}
+
+bool EVEXHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue)
+{
+	int n = (int)TupleTypeTable_GetDisp8N(handler->tupleType, (encoder->EncoderFlags & EncoderFlags_Broadcast) != 0);
+	int res = displ / n;
+	if (res * n == displ && SCHAR_MIN <= res && res <= SCHAR_MAX)
+	{
+		compressedValue = (signed char)res;
+		return true;
+	}
+
+	compressedValue = 0;
+	return false;
+}
+
+void OpCodeHandlers_init();
+struct OpCodeHandler* GetOpCodeHandlers();
+struct OpCodeHandler* GetOpCodeHandler(enum Code opcode);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+struct Instruction* Instruction_CreateDeclareByte_imm1(unsigned char b0);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+struct Instruction* Instruction_CreateDeclareByte_imm2(unsigned char b0, unsigned char b1);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+struct Instruction* Instruction_CreateDeclareByte_imm3(unsigned char b0, unsigned char b1, unsigned char b2);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+struct Instruction* Instruction_CreateDeclareByte_imm4(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+struct Instruction* Instruction_CreateDeclareByte_imm5(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+struct Instruction* Instruction_CreateDeclareByte_imm6(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+struct Instruction* Instruction_CreateDeclareByte_imm7(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+struct Instruction* Instruction_CreateDeclareByte_imm8(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+struct Instruction* Instruction_CreateDeclareByte_imm9(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+struct Instruction* Instruction_CreateDeclareByte_imm10(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+struct Instruction* Instruction_CreateDeclareByte_imm11(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+struct Instruction* Instruction_CreateDeclareByte_imm12(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+/// <param name="b12">Byte 12</param>
+struct Instruction* Instruction_CreateDeclareByte_imm13(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11, unsigned char b12);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+/// <param name="b12">Byte 12</param>
+/// <param name="b13">Byte 13</param>
+struct Instruction* Instruction_CreateDeclareByte_imm14(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11, unsigned char b12, unsigned char b13);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+/// <param name="b12">Byte 12</param>
+/// <param name="b13">Byte 13</param>
+/// <param name="b14">Byte 14</param>
+struct Instruction* Instruction_CreateDeclareByte_imm15(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11, unsigned char b12, unsigned char b13, unsigned char b14);
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="b0">Byte 0</param>
+/// <param name="b1">Byte 1</param>
+/// <param name="b2">Byte 2</param>
+/// <param name="b3">Byte 3</param>
+/// <param name="b4">Byte 4</param>
+/// <param name="b5">Byte 5</param>
+/// <param name="b6">Byte 6</param>
+/// <param name="b7">Byte 7</param>
+/// <param name="b8">Byte 8</param>
+/// <param name="b9">Byte 9</param>
+/// <param name="b10">Byte 10</param>
+/// <param name="b11">Byte 11</param>
+/// <param name="b12">Byte 12</param>
+/// <param name="b13">Byte 13</param>
+/// <param name="b14">Byte 14</param>
+struct Instruction* Instruction_CreateDeclareByte_imm16(unsigned char b0, unsigned char b1, unsigned char b2, unsigned char b3, unsigned char b4, unsigned char b5, unsigned char b6, unsigned char b7, unsigned char b8, unsigned char b9, unsigned char b10, unsigned char b11, unsigned char b12, unsigned char b13, unsigned char b14, unsigned char b15);
+
+/// <summary>
+/// Creates a new near/short branch instruction
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="target">Target address</param>
+struct Instruction* Instruction_CreateBranch(enum Code code, unsigned long target);
+
+/// <summary>
+/// Creates a new far branch instruction
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="selector">Selector/segment value</param>
+/// <param name="offset">Offset</param>
+struct Instruction* Instruction_CreateBranch(enum Code code, unsigned short selector, unsigned int offset);
+
+/// <summary>
+/// Creates an instruction with 2 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register">op0: Register</param>
+/// <param name="immediate">op1: Immediate value</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register _register, int immediate);
+
+/// <summary>
+/// Creates an instruction with 1 operand
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register">op0: Register</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register _register);
+
+/// <summary>
+/// Creates an instruction with 2 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register1">op0: Register</param>
+/// <param name="register2">op1: Register</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register register1, enum Register register2);
+
+/// <summary>
+/// Creates an instruction with 2 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register">op0: Register</param>
+/// <param name="memory">op1: Memory operand</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register register1, struct MemoryOperand* memory);
+
+struct Instruction* CreateString_ESRDI_Reg(enum Code code, int addressSize, enum Register register1, enum RepPrefixKind repPrefix);
+
+/// <summary>
+/// Creates a <c>STOSD</c> instruction
+/// </summary>
+/// <param name="addressSize">16, 32, or 64</param>
+/// <param name="repPrefix">Rep prefix or <see cref="RepPrefixKind.None"/></param>
+struct Instruction* Instruction_CreateStosd(int addressSize, enum RepPrefixKind repPrefix);
+
+/// <summary>
+/// Creates an instruction with 3 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register1">op0: Register</param>
+/// <param name="register2">op1: Register</param>
+/// <param name="memory">op2: Memory operand</param>
+struct Instruction* Instruction_Create(enum Code code, enum Register register1, enum Register register2, struct MemoryOperand* memory);
+
+struct Encoder* Encoder_new()
+{
+	struct Encoder* encoder = (struct Encoder*)malloc(sizeof(struct Encoder));
+	encoder->Internal_PreventVEX2 = 0;
+	encoder->Internal_VEX_WIG_LIG = 0;
+	encoder->Internal_VEX_LIG = 0;
+	encoder->Internal_EVEX_WIG = 0;
+	encoder->Internal_EVEX_LIG = 0;
+	encoder->Internal_MVEX_WIG = 0;
+	encoder->bitness = 0;
+	encoder->currentRip = 0;
+	encoder->errorMessage = NULL;
+	encoder->handler = NULL;
+	encoder->eip = 0;
+	encoder->displAddr = 0;
+	encoder->immAddr = 0;
+	encoder->Immediate = 0;
+	encoder->ImmediateHi = 0;
+	encoder->Displ = 0;
+	encoder->DisplHi = 0;
+	encoder->opSize16Flags = EncoderFlags_None;
+	encoder->opSize32Flags = EncoderFlags_None;
+	encoder->adrSize16Flags = EncoderFlags_None;
+	encoder->adrSize32Flags = EncoderFlags_None;
+	encoder->OpCode = 0;
+	encoder->EncoderFlags = EncoderFlags_None;
+	encoder->DisplSize = 0;
+	encoder->ImmSize = 0;
+	encoder->ModRM = 0;
+	encoder->Sib = 0;
+	return encoder;
+}
+
+void Encoder_init(struct Encoder* encoder, int bitness)
+{
+	//Debug.Assert(bitness == 16 || bitness == 32 || bitness == 64);
+	//encoder->immSizes = s_immSizes;
+	//encoder->writer = writer;
+	encoder->bitness = bitness;
+	//encoder->handlers = OpCodeHandlers.Handlers;
+	encoder->handler = NULL;// It's initialized by TryEncode
+
+	if (bitness != 16)
+	{
+		encoder->opSize16Flags = EncoderFlags_P66;
+	}
+	else
+	{
+		encoder->opSize16Flags = 0;
+	}
+
+	if (bitness == 16)
+	{
+		encoder->opSize32Flags = EncoderFlags_P66;
+	}
+	else
+	{
+		encoder->opSize32Flags = 0;
+	}
+
+	if (bitness != 16)
+	{
+		encoder->adrSize16Flags = EncoderFlags_P67;
+	}
+	else
+	{
+		encoder->adrSize16Flags = 0;
+	}
+
+	if (bitness != 32)
+	{
+		encoder->adrSize32Flags = EncoderFlags_P67;
+	}
+	else
+	{
+		encoder->adrSize32Flags = 0;
+	}
+}
+
+/// <summary>
+/// Gets the bitness (16, 32 or 64)
+/// </summary>
+int GetBitness(struct Encoder* encoder)
+{
+	return encoder->bitness;
+}
+
+/// <summary>
+/// Creates an encoder
+/// </summary>
+/// <param name="bitness">16, 32 or 64</param>
+/// <returns></returns>
+struct Encoder* Create(int bitness)
+{
+	struct Encoder* encoder = NULL;
+	switch (bitness)
+	{
+	case 16:
+	case 32:
+	case 64:
+		encoder = Encoder_new();
+		Encoder_init(encoder, bitness);
+		break;
+	default:
+		// throw new ArgumentOutOfRangeException(nameof(bitness))
+		break;
+	}
+	return encoder;
+}
+
+bool Verify(int operand, enum OpKind expected, enum OpKind actual)
+{
+	if (expected == actual)
+	{
+		return true;
+	}
+	//ErrorMessage = $"Operand {operand}: Expected: {expected}, actual: {actual}";
+	return false;
+}
+
+bool VerifyRegisters(int operand, enum Register expected, enum Register actual)
+{
+	if (expected == actual)
+	{
+		return true;
+	}
+	//ErrorMessage = $"Operand {operand}: Expected: {expected}, actual: {actual}";
+	return false;
+}
+
+bool VerifyRegister(struct Encoder* encoder, int operand, enum Register registerValue, enum Register regLo, enum Register regHi)
+{
+	if (encoder->bitness != 64 && regHi > regLo + 7)
+	{
+		regHi = regLo + 7;
+	}
+	if (regLo <= registerValue && registerValue <= regHi)
+	{
+		return true;
+	}
+	//ErrorMessage = $"Operand {operand}: Register {register} is not between {regLo} and {regHi} (inclusive)";
+	return false;
+}
+
+void Encoder_AddBranch(struct Encoder* encoder, struct Instruction* instruction, enum OpKind opKind, int immSize, int operand);
+
+/// <summary>
+/// Encodes an instruction
+/// </summary>
+/// <param name="instruction">Instruction to encode</param>
+/// <param name="rip"><c>RIP</c> of the encoded instruction</param>
+/// <param name="encodedLength">Updated with length of encoded instruction if successful</param>
+/// <param name="errorMessage">Set to the error message if we couldn't encode the instruction</param>
+/// <returns></returns>
+bool Encoder_TryEncode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip, unsigned int* encodedLength);
+
+/// <summary>
+/// Encodes an instruction and returns the size of the encoded instruction.
+/// A <see cref="EncoderException"/> is thrown if it failed to encode the instruction.
+/// </summary>
+/// <param name="instruction">Instruction to encode</param>
+/// <param name="rip">RIP of the encoded instruction</param>
+/// <returns>
+/// Encoded length.
+/// </returns>
+unsigned int Encode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip)
+{
+	unsigned int encoded_length = 0;
+	if (!Encoder_TryEncode(encoder, instruction, rip, &encoded_length))
+	{
+		//ThrowEncoderException(instruction, errorMessage);
+	}
+	return encoded_length;
+}
+
 void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instruction, int operand, enum Register regLo, enum Register regHi, enum Register vsibIndexRegLo, enum Register vsibIndexRegHi, bool allowMemOp, bool allowRegOp)
 {
 	enum OpKind opKind = Instruction_GetOpKind(instruction, operand);
@@ -3018,7 +3968,7 @@ void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instructio
 			return;
 		}
 		enum Register reg = GetOpRegister(instruction, operand);
-		if (!Verify(operand, reg, regLo, regHi))
+		if (!VerifyRegister(encoder, operand, reg, regLo, regHi))
 		{
 			return;
 		}
@@ -3286,11 +4236,11 @@ void Encoder_AddMemOp(struct Encoder* encoder, struct Instruction* instruction, 
 		indexRegLo = baseRegLo;
 		indexRegHi = baseRegHi;
 	}
-	if (baseReg != Register_None && baseReg != Register_RIP && baseReg != Register_EIP && !Verify(operand, baseReg, baseRegLo, baseRegHi))
+	if (baseReg != Register_None && baseReg != Register_RIP && baseReg != Register_EIP && !VerifyRegister(encoder, operand, baseReg, baseRegLo, baseRegHi))
 	{
 		return;
 	}
-	if (indexReg != Register_None && !Verify(operand, indexReg, indexRegLo, indexRegHi))
+	if (indexReg != Register_None && !VerifyRegister(encoder, operand, indexReg, indexRegLo, indexRegHi))
 	{
 		return;
 	}
