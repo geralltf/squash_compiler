@@ -275,7 +275,7 @@ struct OpCodeHandler
 	unsigned int mask_LL;
 
 	// XopHandler
-	unsigned int lastByte;
+	//unsigned int lastByte;
 
 	// MvexHandler
 	//enum WBit wbit;
@@ -376,7 +376,29 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 
 void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value);
 
+void Encoder_WritePrefixes(struct Encoder* encoder, struct Instruction* instruction, bool canWriteF3);
+
 void Encoder_AddAbsMem(struct Encoder* encoder, struct Instruction* instruction, int operand);
+
+void Encoder_SetAddrSize(struct Encoder* encoder, int regSize);
+
+void Encoder_AddRegOrMemAll(struct Encoder* encoder, struct Instruction* instruction, int operand, enum Register regLo, enum Register regHi, enum Register vsibIndexRegLo, enum Register vsibIndexRegHi, bool allowMemOp, bool allowRegOp);
+
+void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instruction, int operand, enum Register regLo, enum Register regHi, bool allowMemOp, bool allowRegOp);
+
+void Encoder_AddReg(struct Encoder* encoder, struct Instruction* instruction, int operand, enum Register regLo, enum Register regHi);
+
+void Encoder_AddModRMRegister(struct Encoder* encoder, struct Instruction* instruction, int operand, enum Register regLo, enum Register regHi);
+
+void Encoder_AddMemOp16(struct Encoder* encoder, struct Instruction* instruction, int operand);
+
+void Encoder_AddMemOp(struct Encoder* encoder, struct Instruction* instruction, int operand, int addrSize, enum Register vsibIndexRegLo, enum Register vsibIndexRegHi);
+
+void Encoder_AddFarBranch(struct Encoder* encoder, struct Instruction* instruction, int operand, int size);
+
+void Encoder_AddBranchX(struct Encoder* encoder, int immSize, struct Instruction* instruction, int operand);
+
+void Encoder_AddBranchDisp(struct Encoder* encoder, int displSize, struct Instruction* instruction, int operand);
 
 unsigned int OpCodeHandler_GetOpCode(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
 

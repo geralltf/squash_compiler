@@ -363,6 +363,8 @@ void OpCodeHandlers_init()
 	enum MandatoryPrefixByte mpb_value;
 	unsigned int operands_length = 0;
 	struct Op* operands = NULL;
+	enum WBit wbit;
+	enum LBit lbit;
 
 	//auto handlers = new OpCodeHandler[IcedConstants.CodeEnumCount];
 	
@@ -466,10 +468,9 @@ void OpCodeHandlers_init()
 			break;
 		case EncodingKind_VEX:
 			handler->Operands_Length = 38;
-
 			handler->table = ((unsigned int)encFlags2 >> (int)EFLAGS2_TableShift) & (unsigned int)EFLAGS2_TableMask;
-			enum WBit wbit = (enum WBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_WBitShift) & (unsigned int)EFLAGS2_WBitMask);
-			enum LBit lbit = (enum LBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_LBitShift) & (int)EFLAGS2_LBitMask);
+			wbit = (enum WBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_WBitShift) & (unsigned int)EFLAGS2_WBitMask);
+			lbit = (enum LBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_LBitShift) & (int)EFLAGS2_LBitMask);
 
 			if (wbit == WBit_W1)
 			{
@@ -575,7 +576,7 @@ void OpCodeHandlers_init()
 				handler->lastByte = 4;
 				break;
 			}
-			enum WBit wbit = (enum WBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_WBitShift) & (unsigned int)EFLAGS2_WBitMask);
+			wbit = (enum WBit)(((unsigned int)encFlags2 >> (int)EFLAGS2_WBitShift) & (unsigned int)EFLAGS2_WBitMask);
 			if (wbit == WBit_W1)
 			{
 				handler->lastByte |= 0x80;
@@ -679,12 +680,12 @@ void OpModRM_rm_mem_only_Encode(struct Encoder* encoder, struct Instruction* ins
 		encoder->EncoderFlags |= EncoderFlags_MustUseSib;
 	}
 
-	Encoder_AddRegOrMem(encoder, instruction, operand, Register_None, Register_None, Register_None, Register_None, true, false); // allowMemOp: true, allowRegOp : false
+	Encoder_AddRegOrMemAll(encoder, instruction, operand, Register_None, Register_None, Register_None, Register_None, true, false); // allowMemOp: true, allowRegOp : false
 }
 
 void OpModRM_rm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	Encoder_AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, Register_None, Register_None, true, true); // allowMemOp: true, allowRegOp : true
+	Encoder_AddRegOrMemAll(encoder, instruction, operand, op->regLo, op->regHi, Register_None, Register_None, true, true); // allowMemOp: true, allowRegOp : true
 }
 
 void OpModRM_reg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
@@ -705,7 +706,7 @@ void OpModRM_reg_mem_Encode(struct Encoder* encoder, struct Instruction* instruc
 
 void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	Encoder_AddRegOrMem(encoder, instruction, operand, op->regLo, op->regHi, Register_None, Register_None, false, true); // allowMemOp: false, allowRegOp : true
+	Encoder_AddRegOrMemAll(encoder, instruction, operand, op->regLo, op->regHi, Register_None, Register_None, false, true); // allowMemOp: false, allowRegOp : true
 }
 
 void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
@@ -982,7 +983,7 @@ void OpMRBX_Encode(struct Encoder* encoder, struct Instruction* instruction, int
 
 void OpJ_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	Encoder_AddBranch(encoder, instruction, op->opKind, op->immSize, instruction, operand);
+	Encoder_AddBranch(encoder, instruction, op->opKind, op->immSize, operand);
 }
 
 enum OpKind OpJ_GetNearBranchOpKind(struct Op* op)
@@ -1026,7 +1027,7 @@ void OpVsib_Encode(struct Encoder* encoder, struct Instruction* instruction, int
 
 	bool allowMemOp = true;
 	bool allowRegOp = true;
-	Encoder_AddRegOrMem(encoder, instruction, operand, Register_None, Register_None, op->regLo, op->regHi, allowMemOp, allowRegOp);
+	Encoder_AddRegOrMemAll(encoder, instruction, operand, Register_None, Register_None, op->regLo, op->regHi, allowMemOp, allowRegOp);
 }
 
 void OpHx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
@@ -2347,7 +2348,7 @@ struct Instruction* Instruction_CreateBranch(enum Code code, unsigned long targe
 /// <param name="code">Code value</param>
 /// <param name="selector">Selector/segment value</param>
 /// <param name="offset">Offset</param>
-struct Instruction* Instruction_CreateBranch(enum Code code, unsigned short selector, unsigned int offset)
+struct Instruction* Instruction_CreateBranchFar(enum Code code, unsigned short selector, unsigned int offset)
 {
 	struct Instruction* instruction;
 
@@ -2370,7 +2371,7 @@ struct Instruction* Instruction_CreateBranch(enum Code code, unsigned short sele
 /// <param name="code">Code value</param>
 /// <param name="register">op0: Register</param>
 /// <param name="immediate">op1: Immediate value</param>
-struct Instruction* Instruction_Create(enum Code code, enum Register _register, int immediate)
+struct Instruction* Instruction_Create2(enum Code code, enum Register _register, int immediate)
 {
 	struct Instruction* instruction;
 
@@ -2395,7 +2396,7 @@ struct Instruction* Instruction_Create(enum Code code, enum Register _register, 
 /// </summary>
 /// <param name="code">Code value</param>
 /// <param name="register">op0: Register</param>
-struct Instruction* Instruction_Create(enum Code code, enum Register _register)
+struct Instruction* Instruction_Create1(enum Code code, enum Register _register)
 {
 	struct Instruction* instruction;
 
@@ -2419,7 +2420,7 @@ struct Instruction* Instruction_Create(enum Code code, enum Register _register)
 /// <param name="code">Code value</param>
 /// <param name="register1">op0: Register</param>
 /// <param name="register2">op1: Register</param>
-struct Instruction* Instruction_Create(enum Code code, enum Register register1, enum Register register2)
+struct Instruction* Instruction_Create2Reg(enum Code code, enum Register register1, enum Register register2)
 {
 	struct Instruction* instruction;
 
@@ -2448,7 +2449,7 @@ struct Instruction* Instruction_Create(enum Code code, enum Register register1, 
 /// <param name="code">Code value</param>
 /// <param name="register">op0: Register</param>
 /// <param name="memory">op1: Memory operand</param>
-struct Instruction* Instruction_Create(enum Code code, enum Register register1, struct MemoryOperand* memory)
+struct Instruction* Instruction_Create2Mem(enum Code code, enum Register register1, struct MemoryOperand* memory)
 {
 	struct Instruction* instruction;
 
@@ -3730,8 +3731,7 @@ struct Instruction* Instruction_CreateBranch(enum Code code, unsigned long targe
 /// <param name="code">Code value</param>
 /// <param name="selector">Selector/segment value</param>
 /// <param name="offset">Offset</param>
-struct Instruction* Instruction_CreateBranch(enum Code code, unsigned short selector, unsigned int offset);
-
+struct Instruction* Instruction_CreateBranchFar(enum Code code, unsigned short selector, unsigned int offset);
 /// <summary>
 /// Creates an instruction with 2 operands
 /// </summary>
@@ -3956,7 +3956,7 @@ unsigned int Encode(struct Encoder* encoder, struct Instruction* instruction, un
 	return encoded_length;
 }
 
-void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instruction, int operand, enum Register regLo, enum Register regHi, enum Register vsibIndexRegLo, enum Register vsibIndexRegHi, bool allowMemOp, bool allowRegOp)
+void Encoder_AddRegOrMemAll(struct Encoder* encoder, struct Instruction* instruction, int operand, enum Register regLo, enum Register regHi, enum Register vsibIndexRegLo, enum Register vsibIndexRegHi, bool allowMemOp, bool allowRegOp)
 {
 	enum OpKind opKind = Instruction_GetOpKind(instruction, operand);
 	encoder->EncoderFlags |= EncoderFlags_ModRM;
@@ -4061,7 +4061,7 @@ void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instructio
 
 void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instruction, int operand, enum Register regLo, enum Register regHi, bool allowMemOp, bool allowRegOp)
 {
-	Encoder_AddRegOrMem(encoder, instruction, operand, regLo, regHi, Register_None, Register_None, allowMemOp, allowRegOp);
+	Encoder_AddRegOrMemAll(encoder, instruction, operand, regLo, regHi, Register_None, Register_None, allowMemOp, allowRegOp);
 }
 
 bool Encoder_TryConvertToDisp8N(struct Encoder* encoder, struct Instruction* instruction, int displ, signed char* compressedValue)
