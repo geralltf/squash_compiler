@@ -3,23 +3,6 @@
 #include "OpCodeInfoData.h"
 #include "InstructionMemorySizes.h"
 
-struct Instruction
-{
-	unsigned long nextRip;
-	unsigned long memDispl;
-	unsigned int flags1;// InstrFlags1
-	unsigned int immediate;
-	unsigned short code;
-	unsigned char memBaseReg;// Register
-	unsigned char memIndexReg;// Register
-	unsigned char reg0, reg1, reg2, reg3;// Register
-	unsigned char opKind0, opKind1, opKind2, opKind3;// OpKind
-	unsigned char scale;
-	unsigned char displSize;
-	unsigned char len;
-	unsigned char pad;
-};
-
 struct Instruction* instruction_new()
 {
 	struct Instruction* o = (struct Instruction*)malloc(sizeof(struct Instruction));
@@ -1266,9 +1249,9 @@ unsigned long GetImmediate(struct Instruction* i, int operand)
 /// <param name="operand">Operand number, 0-4</param>
 /// <param name="immediate">New immediate</param>
 /// <returns></returns>
-void SetImmediate(struct Instruction* i, int operand, int immediate)
+void SetImmediateInt(struct Instruction* i, int operand, int immediate)
 {
-	SetImmediate(i, operand, (unsigned long)immediate);
+	Instruction_SetImmediate(i, operand, (unsigned long)immediate);
 }
 
 /// <summary>
@@ -1277,9 +1260,9 @@ void SetImmediate(struct Instruction* i, int operand, int immediate)
 /// <param name="operand">Operand number, 0-4</param>
 /// <param name="immediate">New immediate</param>
 /// <returns></returns>
-void SetImmediate(struct Instruction* i, int operand, unsigned int immediate)
+void SetImmediateUInt(struct Instruction* i, int operand, unsigned int immediate)
 {
-	SetImmediate(i, operand, (unsigned long)immediate);
+	Instruction_SetImmediate(i, operand, (unsigned long)immediate);
 }
 
 /// <summary>
@@ -1288,9 +1271,9 @@ void SetImmediate(struct Instruction* i, int operand, unsigned int immediate)
 /// <param name="operand">Operand number, 0-4</param>
 /// <param name="immediate">New immediate</param>
 /// <returns></returns>
-void SetImmediate(struct Instruction* i, int operand, long immediate)
+void SetImmediateLong(struct Instruction* i, int operand, long immediate)
 {
-	SetImmediate(i, operand, (unsigned long)immediate);
+	Instruction_SetImmediate(i, operand, (unsigned long)immediate);
 }
 
 /// <summary>
@@ -1299,7 +1282,7 @@ void SetImmediate(struct Instruction* i, int operand, long immediate)
 /// <param name="operand">Operand number, 0-4</param>
 /// <param name="immediate">New immediate</param>
 /// <returns></returns>
-void SetImmediate(struct Instruction* i, int operand, unsigned long immediate) 
+void Instruction_SetImmediate(struct Instruction* i, int operand, unsigned long immediate)
 {
 	switch (GetOpKind(i, operand)) 
 	{
@@ -1780,7 +1763,7 @@ void SetDeclareByteValue(struct Instruction* i, int index, signed char value)
 /// </summary>
 /// <param name="index">Index (0-15)</param>
 /// <param name="value">New value</param>
-void SetDeclareByteValue(struct Instruction* i, int index, unsigned char value)
+void Instruction_SetDeclareByteValue(struct Instruction* i, int index, unsigned char value)
 {
 	switch (index) {
 	case 0:
@@ -1877,7 +1860,7 @@ unsigned char GetDeclareByteValue(struct Instruction* i, int index)
 /// <param name="value">New value</param>
 void SetDeclareWordValue(struct Instruction* i, int index, short value)
 {
-	SetDeclareWordValue(i, index, (unsigned short)value);
+	Instruction_SetDeclareWordValue(i, index, (unsigned short)value);
 }
 
 /// <summary>
@@ -1886,7 +1869,7 @@ void SetDeclareWordValue(struct Instruction* i, int index, short value)
 /// </summary>
 /// <param name="index">Index (0-7)</param>
 /// <param name="value">New value</param>
-void SetDeclareWordValue(struct Instruction* i, int index, unsigned short value) 
+void Instruction_SetDeclareWordValue(struct Instruction* i, int index, unsigned short value)
 {
 	switch (index) 
 	{
@@ -1954,7 +1937,7 @@ unsigned short GetDeclareWordValue(struct Instruction* i, int index)
 /// <param name="value">New value</param>
 void SetDeclareDwordValue(struct Instruction* i, int index, int value)
 {
-	SetDeclareDwordValue(i, index, (unsigned int)value);
+	Instruction_SetDeclareDwordValue(i, index, (unsigned int)value);
 }
 
 /// <summary>
@@ -1963,7 +1946,7 @@ void SetDeclareDwordValue(struct Instruction* i, int index, int value)
 /// </summary>
 /// <param name="index">Index (0-3)</param>
 /// <param name="value">New value</param>
-void SetDeclareDwordValue(struct Instruction* i, int index, unsigned int value) 
+void Instruction_SetDeclareDwordValue(struct Instruction* i, int index, unsigned int value)
 {
 	switch (index) 
 	{
@@ -2016,7 +1999,7 @@ unsigned int GetDeclareDwordValue(struct Instruction* i, int index)
 /// <param name="value">New value</param>
 void SetDeclareQwordValue(struct Instruction* i, int index, long value)
 {
-	SetDeclareQwordValue(i, index, (unsigned long)value);
+	Instruction_SetDeclareQwordValue(i, index, (unsigned long)value);
 }
 
 /// <summary>
@@ -2025,7 +2008,7 @@ void SetDeclareQwordValue(struct Instruction* i, int index, long value)
 /// </summary>
 /// <param name="index">Index (0-1)</param>
 /// <param name="value">New value</param>
-void SetDeclareQwordValue(struct Instruction* i, int index, unsigned long value) 
+void Instruction_SetDeclareQwordValue(struct Instruction* i, int index, unsigned long value)
 {
 	unsigned int v;
 	switch (index) 

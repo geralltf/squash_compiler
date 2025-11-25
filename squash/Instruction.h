@@ -1449,7 +1449,16 @@ void InternalSetHasRepePrefix(struct Instruction* i);
 void InternalSetHasRepnePrefix(struct Instruction* i);
 
 void SetInternalDeclareDataCount(struct Instruction* i, unsigned int value);
-void SetDeclareByteValue(struct Instruction* i, int index, unsigned char value);
+void Instruction_SetDeclareByteValue(struct Instruction* i, int index, unsigned char value);
+void Instruction_SetDeclareDwordValue(struct Instruction* i, int index, unsigned int value);
+void Instruction_SetDeclareQwordValue(struct Instruction* i, int index, unsigned long value);
+void Instruction_SetDeclareWordValue(struct Instruction* i, int index, unsigned short value);
+
+void Instruction_SetImmediate(struct Instruction* i, int operand, unsigned long immediate);
+void SetImmediateLong(struct Instruction* i, int operand, long immediate);
+void SetImmediateUInt(struct Instruction* i, int operand, unsigned int immediate);
+void SetImmediateInt(struct Instruction* i, int operand, int immediate);
+
 int GetDeclareDataCount(struct Instruction* i);
 unsigned char GetDeclareByteValue(struct Instruction* i, int index);
 enum Register GetMemoryBase(struct Instruction* i);
@@ -1608,5 +1617,7 @@ enum OpKind GetOp2Kind(struct Instruction* i);
 bool GetIsMvexEvictionHint(struct Instruction* i);
 
 bool IsMvexEvictionHint(struct Instruction* i);
+
+bool TryGetVsib64(struct Instruction* i, bool* vsib64);
 
 #endif

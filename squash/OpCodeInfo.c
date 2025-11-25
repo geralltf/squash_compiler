@@ -471,27 +471,6 @@ enum TupleType GetTupleType(struct OpCodeInfo* o)
 	return (enum TupleType)o->tupleType;
 }
 
-struct MvexInfo
-{
-	int index;
-	enum MvexTupleTypeLutKind TupleTypeLutKind;
-	enum MvexEHBit EHBit;
-	enum MvexConvFn ConvFn;
-	unsigned int InvalidConvFns;
-	unsigned int InvalidSwizzleFns;
-	bool IsNDD;
-	bool IsNDS;
-	bool CanUseEvictionHint;
-	bool CanUseImmRoundingControl;
-	bool CanUseRoundingControl;
-	bool CanUseSuppressAllExceptions;
-	bool IgnoresOpMaskRegister;
-	bool RequireOpMaskRegister;
-	bool NoSaeRc;
-	bool IsConvFn32;
-	bool IgnoresEvictionHint;
-};
-
 struct MvexInfo* MvexInfo_new(enum Code code)
 {
 	struct MvexInfo* o = (struct MvexInfo*)malloc(sizeof(struct MvexInfo));
@@ -1271,84 +1250,6 @@ bool GetAmdDecoder64(struct OpCodeInfo* o)
 {
 	return (o->opcFlags2 & OCIF2_AmdDecoder64) != 0;
 }
-
-enum DecoderOptions // : uint 
-{
-	/// <summary>No option is enabled</summary>
-	DecoderOptions_None = 0x00000000,
-	/// <summary>Disable some checks for invalid encodings of instructions, eg. most instructions can&apos;t use a <c>LOCK</c> prefix so if one is found, they&apos;re decoded as <see cref="Code.INVALID"/> unless this option is enabled.</summary>
-	DecoderOptions_NoInvalidCheck = 0x00000001,
-	/// <summary>AMD decoder: allow 16-bit branch/ret instructions in 64-bit mode, no <c>o64 CALL/JMP FAR [mem], o64 LSS/LFS/LGS</c>, <c>UD0</c> has no modr/m byte, decode <c>LOCK MOV CR</c>. The AMD decoder can still decode Intel instructions.</summary>
-	DecoderOptions_AMD = 0x00000002,
-	/// <summary>Decode opcodes <c>0F0D</c> and <c>0F18-0F1F</c> as reserved-nop instructions (eg. <see cref="Code.Reservednop_rm32_r32_0F1D"/>)</summary>
-	DecoderOptions_ForceReservedNop = 0x00000004,
-	/// <summary>Decode <c>UMOV</c> instructions</summary>
-	DecoderOptions_Umov = 0x00000008,
-	/// <summary>Decode <c>XBTS</c>/<c>IBTS</c></summary>
-	DecoderOptions_Xbts = 0x00000010,
-	/// <summary>Decode <c>0FA6</c>/<c>0FA7</c> as <c>CMPXCHG</c></summary>
-	DecoderOptions_Cmpxchg486A = 0x00000020,
-	/// <summary>Decode some old removed FPU instructions (eg. <c>FRSTPM</c>)</summary>
-	DecoderOptions_OldFpu = 0x00000040,
-	/// <summary>Decode <c>PCOMMIT</c></summary>
-	DecoderOptions_Pcommit = 0x00000080,
-	/// <summary>Decode 286 <c>STOREALL</c>/<c>LOADALL</c> (<c>0F04</c> and <c>0F05</c>)</summary>
-	DecoderOptions_Loadall286 = 0x00000100,
-	/// <summary>Decode 386 <c>LOADALL</c></summary>
-	DecoderOptions_Loadall386 = 0x00000200,
-	/// <summary>Decode <c>CL1INVMB</c></summary>
-	DecoderOptions_Cl1invmb = 0x00000400,
-	/// <summary>Decode <c>MOV r32,tr</c> and <c>MOV tr,r32</c></summary>
-	DecoderOptions_MovTr = 0x00000800,
-	/// <summary>Decode <c>JMPE</c> instructions</summary>
-	DecoderOptions_Jmpe = 0x00001000,
-	/// <summary>Don&apos;t decode <c>PAUSE</c>, decode <c>NOP</c> instead</summary>
-	DecoderOptions_NoPause = 0x00002000,
-	/// <summary>Don&apos;t decode <c>WBNOINVD</c>, decode <c>WBINVD</c> instead</summary>
-	DecoderOptions_NoWbnoinvd = 0x00004000,
-	/// <summary>Decode undocumented Intel <c>RDUDBG</c> and <c>WRUDBG</c> instructions</summary>
-	DecoderOptions_Udbg = 0x00008000,
-	/// <summary>Don&apos;t decode <c>TZCNT</c>, decode <c>BSF</c> instead</summary>
-	DecoderOptions_NoMPFX_0FBC = 0x00010000,
-	/// <summary>Don&apos;t decode <c>LZCNT</c>, decode <c>BSR</c> instead</summary>
-	DecoderOptions_NoMPFX_0FBD = 0x00020000,
-	/// <summary>Don&apos;t decode <c>LAHF</c> and <c>SAHF</c> in 64-bit mode</summary>
-	DecoderOptions_NoLahfSahf64 = 0x00040000,
-	/// <summary>Decode <c>MPX</c> instructions</summary>
-	DecoderOptions_MPX = 0x00080000,
-	/// <summary>Decode most Cyrix instructions: <c>FPU</c>, <c>EMMI</c>, <c>SMM</c>, <c>DDI</c></summary>
-	DecoderOptions_Cyrix = 0x00100000,
-	/// <summary>Decode Cyrix <c>SMINT 0F7E</c> (Cyrix 6x86 or earlier)</summary>
-	DecoderOptions_Cyrix_SMINT_0F7E = 0x00200000,
-	/// <summary>Decode Cyrix <c>DMI</c> instructions (AMD Geode GX/LX)</summary>
-	DecoderOptions_Cyrix_DMI = 0x00400000,
-	/// <summary>Decode Centaur <c>ALTINST</c></summary>
-	DecoderOptions_ALTINST = 0x00800000,
-	/// <summary>Decode Intel Knights Corner instructions</summary>
-	DecoderOptions_KNC = 0x01000000,
-};
-
-enum DecoderOptions toDecoderOptions[18] =
-{
-	DecoderOptions_None,
-	DecoderOptions_ALTINST,
-	DecoderOptions_Cl1invmb,
-	DecoderOptions_Cmpxchg486A,
-	DecoderOptions_Cyrix,
-	DecoderOptions_Cyrix_DMI,
-	DecoderOptions_Cyrix_SMINT_0F7E,
-	DecoderOptions_Jmpe,
-	DecoderOptions_Loadall286,
-	DecoderOptions_Loadall386,
-	DecoderOptions_MovTr,
-	DecoderOptions_MPX,
-	DecoderOptions_OldFpu,
-	DecoderOptions_Pcommit,
-	DecoderOptions_Umov,
-	DecoderOptions_Xbts,
-	DecoderOptions_Udbg,
-	DecoderOptions_KNC,
-};
 
 /// <summary>
 /// Gets the decoder option that's needed to decode the instruction or <see cref="DecoderOptions.None"/>
