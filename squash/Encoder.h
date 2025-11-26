@@ -199,20 +199,7 @@ struct MemoryOperand
 	bool IsBroadcast;
 };
 
-struct MemoryOperand* MemoryOperand_new(enum Register segmentPrefix, enum Register baseRegister, enum Register indexRegister, int scale, long displacement, int displSize, bool isBroadcast)
-{
-	struct MemoryOperand* o = (struct MemoryOperand*)malloc(sizeof(struct MemoryOperand));
-
-	o->SegmentPrefix = segmentPrefix;
-	o->Base = baseRegister;
-	o->Index = indexRegister;
-	o->Scale = scale;
-	o->Displacement = displacement;
-	o->DisplSize = displSize;
-	o->IsBroadcast = isBroadcast;
-
-	return o;
-}
+struct MemoryOperand* MemoryOperand_new(enum Register segmentPrefix, enum Register baseRegister, enum Register indexRegister, int scale, long displacement, int displSize, bool isBroadcast);
 
 struct AssemblerMemoryOperand* AssemblerMemoryOperand_new(enum MemoryOperandSize size, enum Register segmentRegister, enum Register baseRegister, enum Register indexRegister, int scale, long displacement, enum AssemblerOperandFlags flags);
 
@@ -220,113 +207,55 @@ struct AssemblerMemoryOperand* AssemblerMemoryOperand_new(enum MemoryOperandSize
 /// <summary>
 /// Gets a boolean indicating if this memory operand is a broadcast.
 /// </summary>
-bool IsBroadcast(struct AssemblerMemoryOperand* operand)
-{
-	return (operand->Flags & AF_Broadcast) != 0;
-}
+bool IsBroadcast(struct AssemblerMemoryOperand* operand);
 
 /// <summary>
 /// Gets a boolean indicating if this memory operand is a memory access using displacement only (no base and index registers are used).
 /// </summary>
-bool IsDisplacementOnly(struct AssemblerMemoryOperand* operand)
-{
-	return operand->Base == Register_None && operand->Index == Register_None;
-}
+bool IsDisplacementOnly(struct AssemblerMemoryOperand* operand);
 
 /// <summary>
 /// Apply mask Register K1.
 /// </summary>
-struct AssemblerMemoryOperand* k1(struct AssemblerMemoryOperand* operand)
-{
-	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K1);
-	return o;
-}
+struct AssemblerMemoryOperand* k1(struct AssemblerMemoryOperand* operand);
 
 /// <summary>
 /// Apply mask Register K2.
 /// </summary>
-struct AssemblerMemoryOperand* k2(struct AssemblerMemoryOperand* operand)
-{
-	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K2);
-	return o;
-}
+struct AssemblerMemoryOperand* k2(struct AssemblerMemoryOperand* operand);
 
 /// <summary>
 /// Apply mask Register K3.
 /// </summary>
-struct AssemblerMemoryOperand* k3(struct AssemblerMemoryOperand* operand)
-{
-	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K3);
-	return o;
-}
+struct AssemblerMemoryOperand* k3(struct AssemblerMemoryOperand* operand);
 
 /// <summary>
 /// Apply mask Register K4.
 /// </summary>
-struct AssemblerMemoryOperand* k4(struct AssemblerMemoryOperand* operand)
-{
-	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K4);
-	return o;
-}
+struct AssemblerMemoryOperand* k4(struct AssemblerMemoryOperand* operand);
 
 /// <summary>
 /// Apply mask Register K5.
 /// </summary>
-struct AssemblerMemoryOperand* k5(struct AssemblerMemoryOperand* operand)
-{
-	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K5);
-	return o;
-}
+struct AssemblerMemoryOperand* k5(struct AssemblerMemoryOperand* operand);
 
 /// <summary>
 /// Apply mask Register K6.
 /// </summary>
-struct AssemblerMemoryOperand* k6(struct AssemblerMemoryOperand* operand)
-{
-	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K6);
-	return o;
-}
+struct AssemblerMemoryOperand* k6(struct AssemblerMemoryOperand* operand);
 
 /// <summary>
 /// Apply mask Register K7.
 /// </summary>
-struct AssemblerMemoryOperand* k7(struct AssemblerMemoryOperand* operand)
-{
-	struct AssemblerMemoryOperand* o = AssemblerMemoryOperand_new(operand->Size, operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, (operand->Flags & ~AF_RegisterMask) | AF_K7);
-	return o;
-}
+struct AssemblerMemoryOperand* k7(struct AssemblerMemoryOperand* operand);
 
 /// <summary>
 /// Gets a memory operand for the specified bitness.
 /// </summary>
 /// <param name="bitness">The bitness</param>
-struct MemoryOperand* ToMemoryOperand(struct AssemblerMemoryOperand* operand, int bitness)
-{
-	struct MemoryOperand* memoryOperand;
-	int displSize = 1;
-	bool flagsIsBroadcast;
+struct MemoryOperand* ToMemoryOperand(struct AssemblerMemoryOperand* operand, int bitness);
 
-	if (IsDisplacementOnly(operand)) 
-	{
-		displSize = bitness / 8;
-	}
-	else if (operand->Displacement == 0)
-	{
-		displSize = 0;
-	}
-
-	flagsIsBroadcast = (operand->Flags & AF_Broadcast) != 0;
-
-	memoryOperand = MemoryOperand_new(operand->Segment, operand->Base, operand->Index, operand->Scale, operand->Displacement, displSize, flagsIsBroadcast);
-
-	return memoryOperand;
-}
-
-struct AssemblerMemoryOperand* ToMemoryOperandFromRegister(enum Register baseRegister)
-{
-	struct AssemblerMemoryOperand* memOp = AssemblerMemoryOperand_new(MOS_None, Register_None, baseRegister, Register_None, 1, 0, AF_None);
-	return memOp;
-}
+struct AssemblerMemoryOperand* ToMemoryOperandFromRegister(enum Register baseRegister);
 
 /// <summary>
 /// A label that can be created by <see cref="Assembler.CreateLabel"/>.
