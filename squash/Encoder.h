@@ -214,17 +214,8 @@ struct MemoryOperand* MemoryOperand_new(enum Register segmentPrefix, enum Regist
 	return o;
 }
 
-struct AssemblerMemoryOperand* AssemblerMemoryOperand_new(enum MemoryOperandSize size, enum Register segmentRegister, enum Register baseRegister, enum Register indexRegister, int scale, long displacement, enum AssemblerOperandFlags flags)
-{
-	struct AssemblerMemoryOperand* o = (struct AssemblerMemoryOperand*)malloc(sizeof(struct AssemblerMemoryOperand));
-	o->Size = size;
-	o->Segment = segmentRegister;
-	o->Base = baseRegister;
-	o->Index = indexRegister;
-	o->Scale = scale;
-	o->Flags = flags;
-	return o;
-}
+struct AssemblerMemoryOperand* AssemblerMemoryOperand_new(enum MemoryOperandSize size, enum Register segmentRegister, enum Register baseRegister, enum Register indexRegister, int scale, long displacement, enum AssemblerOperandFlags flags);
+
 
 /// <summary>
 /// Gets a boolean indicating if this memory operand is a broadcast.
