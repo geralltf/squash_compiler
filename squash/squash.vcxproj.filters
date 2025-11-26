@@ -78,6 +78,9 @@
     <ClCompile Include="Encoder.c">
       <Filter>Source Files\Iced</Filter>
     </ClCompile>
+    <ClCompile Include="Mnemonic.c">
+      <Filter>Source Files\Iced</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h">

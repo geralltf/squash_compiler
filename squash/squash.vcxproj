@@ -142,6 +142,7 @@
     <ClCompile Include="Logger.c" />
     <ClCompile Include="Minifier.c" />
     <ClCompile Include="Encoder.c" />
+    <ClCompile Include="Mnemonic.c" />
     <ClCompile Include="OpCodeInfo.c" />
     <ClCompile Include="Optimiser.c" />
     <ClCompile Include="sb.c" />
