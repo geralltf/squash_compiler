@@ -1,6 +1,4 @@
 #include "Assembler.h"
-#include "AST.h"
-#include "sb.h"
 
 struct Assembler* assembler_new()
 {
