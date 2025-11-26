@@ -6,6 +6,8 @@
 #include "Enums.h"
 #include "Mnemonic.h"
 #include "InstructionOpCounts.h"
+#include "sb.h"
+#include "OpCodeInfoData.h"
 //#include "InstructionMemorySizes.h"
 
 enum InstrFlags1 // : uint
@@ -1339,64 +1341,63 @@ struct Instruction
 	unsigned char pad;
 };
 
-const int TOTAL_SIZE = 40;
-
-const int MaxOpCount = 5;
-const int MaxInstructionLength = 15;
-const int RegisterBits = 8;
-const enum Register VMM_first = Register_ZMM0;
-const enum Register VMM_last = Register_ZMM31;
-const int VMM_count = 32;
-const enum Register XMM_last = Register_XMM31;
-const enum Register YMM_last = Register_YMM31;
-const enum Register ZMM_last = Register_ZMM31;
-const enum Register TMM_last = Register_TMM7;
-const int MaxCpuidFeatureInternalValues = 199;
-const enum MemorySize FirstBroadcastMemorySize = MS_Broadcast32_Float16;
-const unsigned int MvexStart = 4611;
-const unsigned int MvexLength = 207;
-const int CC_a_EnumCount = 2;
-const int CC_ae_EnumCount = 3;
-const int CC_b_EnumCount = 3;
-const int CC_be_EnumCount = 2;
-const int CC_e_EnumCount = 2;
-const int CC_g_EnumCount = 2;
-const int CC_ge_EnumCount = 2;
-const int CC_l_EnumCount = 2;
-const int CC_le_EnumCount = 2;
-const int CC_ne_EnumCount = 2;
-const int CC_np_EnumCount = 2;
-const int CC_p_EnumCount = 2;
-const int CodeEnumCount = 4936;
-const int CodeSizeEnumCount = 4;
-const int ConditionCodeEnumCount = 17;
-const int CpuidFeatureEnumCount = 178;
-const int DecoderErrorEnumCount = 3;
-const int DecoratorKindEnumCount = 6;
-const int EncodingKindEnumCount = 6;
-const int FlowControlEnumCount = 10;
-const int FormatterSyntaxEnumCount = 4;
-const int FormatterTextKindEnumCount = 16;
-const int MandatoryPrefixEnumCount = 5;
-const int MemorySizeEnumCount = 162;
-const int MemorySizeOptionsEnumCount = 4;
-const int MnemonicEnumCount = 1894;
-const int MvexConvFnEnumCount = 13;
-const int MvexEHBitEnumCount = 3;
-const int MvexRegMemConvEnumCount = 17;
-const int MvexTupleTypeLutKindEnumCount = 14;
-const int NumberBaseEnumCount = 4;
-const int NumberKindEnumCount = 8;
-const int OpAccessEnumCount = 8;
-const int OpCodeOperandKindEnumCount = 109;
-const int OpCodeTableKindEnumCount = 9;
-const int OpKindEnumCount = 25;
-const int PrefixKindEnumCount = 18;
-const int RegisterEnumCount = 256;
-const int RelocKindEnumCount = 1;
-const int RepPrefixKindEnumCount = 3;
-const int RoundingControlEnumCount = 5;
-const int TupleTypeEnumCount = 19;
+extern const int TOTAL_SIZE;
+extern const int MaxOpCount;
+extern const int MaxInstructionLength;
+extern const int RegisterBits;
+extern const enum Register VMM_first;
+extern const enum Register VMM_last;
+extern const int VMM_count;
+extern const enum Register XMM_last;
+extern const enum Register YMM_last;
+extern const enum Register ZMM_last;
+extern const enum Register TMM_last;
+extern const int MaxCpuidFeatureInternalValues;
+extern const enum MemorySize FirstBroadcastMemorySize;
+extern const unsigned int MvexStart;
+extern const unsigned int MvexLength;
+extern const int CC_a_EnumCount;
+extern const int CC_ae_EnumCount;
+extern const int CC_b_EnumCount;
+extern const int CC_be_EnumCount;
+extern const int CC_e_EnumCount;
+extern const int CC_g_EnumCount;
+extern const int CC_ge_EnumCount;
+extern const int CC_l_EnumCount;
+extern const int CC_le_EnumCount;
+extern const int CC_ne_EnumCount;
+extern const int CC_np_EnumCount;
+extern const int CC_p_EnumCount;
+extern const int CodeEnumCount;
+extern const int CodeSizeEnumCount;
+extern const int ConditionCodeEnumCount;
+extern const int CpuidFeatureEnumCount;
+extern const int DecoderErrorEnumCount;
+extern const int DecoratorKindEnumCount;
+extern const int EncodingKindEnumCount;
+extern const int FlowControlEnumCount;
+extern const int FormatterSyntaxEnumCount;
+extern const int FormatterTextKindEnumCount;
+extern const int MandatoryPrefixEnumCount;
+extern const int MemorySizeEnumCount;
+extern const int MemorySizeOptionsEnumCount;
+extern const int MnemonicEnumCount;
+extern const int MvexConvFnEnumCount;
+extern const int MvexEHBitEnumCount;
+extern const int MvexRegMemConvEnumCount;
+extern const int MvexTupleTypeLutKindEnumCount;
+extern const int NumberBaseEnumCount;
+extern const int NumberKindEnumCount;
+extern const int OpAccessEnumCount;
+extern const int OpCodeOperandKindEnumCount;
+extern const int OpCodeTableKindEnumCount;
+extern const int OpKindEnumCount;
+extern const int PrefixKindEnumCount;
+extern const int RegisterEnumCount;
+extern const int RelocKindEnumCount;
+extern const int RepPrefixKindEnumCount;
+extern const int RoundingControlEnumCount;
+extern const int TupleTypeEnumCount;
 
 struct Instruction* instruction_new();
 void instruction_init(struct Instruction** o);
