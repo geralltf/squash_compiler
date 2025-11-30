@@ -84,6 +84,9 @@
     <ClCompile Include="InstructionOpCounts.c">
       <Filter>Source Files\Iced</Filter>
     </ClCompile>
+    <ClCompile Include="OpCodeInfoData.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h">

@@ -145,6 +145,7 @@
     <ClCompile Include="Encoder.c" />
     <ClCompile Include="Mnemonic.c" />
     <ClCompile Include="OpCodeInfo.c" />
+    <ClCompile Include="OpCodeInfoData.c" />
     <ClCompile Include="Optimiser.c" />
     <ClCompile Include="sb.c" />
     <ClCompile Include="SquashCompiler.c" />
