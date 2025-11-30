@@ -81,6 +81,9 @@
     <ClCompile Include="Mnemonic.c">
       <Filter>Source Files\Iced</Filter>
     </ClCompile>
+    <ClCompile Include="InstructionOpCounts.c">
+      <Filter>Source Files\Iced</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h">

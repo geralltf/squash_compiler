@@ -137,6 +137,7 @@
     <ClCompile Include="FileIO.c" />
     <ClCompile Include="Instruction.c" />
     <ClCompile Include="Instruction.Create.c" />
+    <ClCompile Include="InstructionOpCounts.c" />
     <ClCompile Include="Lexer.c" />
     <ClCompile Include="List.c" />
     <ClCompile Include="Logger.c" />
