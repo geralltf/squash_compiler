@@ -667,6 +667,11 @@ enum TupleType GetTupleType(struct OpCodeInfo* o)
 	return (enum TupleType)o->tupleType;
 }
 
+enum TupleType Instruction_GetTupleType(struct Instruction* i, int sss)
+{
+	return (enum TupleType)MvexTupleTypeLut_Data[(int)TupleTypeLutKind(i) * 8 + sss];
+}
+
 struct MvexInfo* MvexInfo_new(enum Code code)
 {
 	struct MvexInfo* o = (struct MvexInfo*)malloc(sizeof(struct MvexInfo));
@@ -1450,10 +1455,10 @@ bool GetAmdDecoder64(struct OpCodeInfo* o)
 /// <summary>
 /// Gets the decoder option that's needed to decode the instruction or <see cref="DecoderOptions.None"/>
 /// </summary>
-enum DecoderOptions GetDecoderOption(struct OpCodeInfo* o)
-{
-	return toDecoderOptions[(int)(((unsigned int)o->opcFlags1 >> (int)OCIF1_DecOptionValueShift) & (unsigned int)OCIF1_DecOptionValueMask)];
-}
+//enum DecoderOptions GetDecoderOption(struct OpCodeInfo* o)
+//{
+//	return toDecoderOptions[(int)(((unsigned int)o->opcFlags1 >> (int)OCIF1_DecOptionValueShift) & (unsigned int)OCIF1_DecOptionValueMask)];
+//}
 
 /// <summary>
 /// Gets the opcode table

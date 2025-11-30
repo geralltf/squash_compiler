@@ -678,27 +678,27 @@ enum DecoderOptions // : uint
 	DecoderOptions_KNC = 0x01000000,
 };
 
-enum DecoderOptions toDecoderOptions[18] =
-{
-	DecoderOptions_None,
-	DecoderOptions_ALTINST,
-	DecoderOptions_Cl1invmb,
-	DecoderOptions_Cmpxchg486A,
-	DecoderOptions_Cyrix,
-	DecoderOptions_Cyrix_DMI,
-	DecoderOptions_Cyrix_SMINT_0F7E,
-	DecoderOptions_Jmpe,
-	DecoderOptions_Loadall286,
-	DecoderOptions_Loadall386,
-	DecoderOptions_MovTr,
-	DecoderOptions_MPX,
-	DecoderOptions_OldFpu,
-	DecoderOptions_Pcommit,
-	DecoderOptions_Umov,
-	DecoderOptions_Xbts,
-	DecoderOptions_Udbg,
-	DecoderOptions_KNC,
-};
+//enum DecoderOptions toDecoderOptions =
+//{
+//	DecoderOptions_None,
+//	DecoderOptions_ALTINST,
+//	DecoderOptions_Cl1invmb,
+//	DecoderOptions_Cmpxchg486A,
+//	DecoderOptions_Cyrix,
+//	DecoderOptions_Cyrix_DMI,
+//	DecoderOptions_Cyrix_SMINT_0F7E,
+//	DecoderOptions_Jmpe,
+//	DecoderOptions_Loadall286,
+//	DecoderOptions_Loadall386,
+//	DecoderOptions_MovTr,
+//	DecoderOptions_MPX,
+//	DecoderOptions_OldFpu,
+//	DecoderOptions_Pcommit,
+//	DecoderOptions_Umov,
+//	DecoderOptions_Xbts,
+//	DecoderOptions_Udbg,
+//	DecoderOptions_KNC,
+//};
 
 struct OpCodeInfo 
 {
@@ -833,7 +833,7 @@ bool IsWIG32(struct OpCodeInfo* o);
 /// </summary>
 enum TupleType GetTupleType(struct OpCodeInfo* o);
 
-
+enum TupleType Instruction_GetTupleType(struct Instruction* i, int sss);
 
 struct MvexInfo* MvexInfo_new(enum Code code);
 
@@ -1278,7 +1278,7 @@ bool GetAmdDecoder64(struct OpCodeInfo* o);
 /// <summary>
 /// Gets the decoder option that's needed to decode the instruction or <see cref="DecoderOptions.None"/>
 /// </summary>
-enum DecoderOptions GetDecoderOption(struct OpCodeInfo* o);
+//enum DecoderOptions GetDecoderOption(struct OpCodeInfo* o);
 
 /// <summary>
 /// Gets the opcode table
