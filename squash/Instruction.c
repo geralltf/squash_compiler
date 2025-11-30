@@ -1039,7 +1039,7 @@ bool IsXreleaseInstr(struct Instruction* i)
 	{
 		return false;
 	}
-	if (GetHasLockPrefix(i))
+	if (Get_HasLockPrefix(i))
 	{
 		return GetCode(i) != Cmpxchg16b_m128;
 	}
@@ -1502,10 +1502,10 @@ bool IgnoresEvictionHint(struct Instruction* i)
 //	Debug.Assert((uint)index < IcedConstants.MvexLength);
 //}
 
-enum TupleType GetTupleType(struct Instruction* i, int sss)
-{
-	return (enum TupleType)MvexTupleTypeLut_Data[(int)TupleTypeLutKind(i) * 8 + sss];
-}
+//enum TupleType GetTupleType(struct Instruction* i, int sss)
+//{
+//	return (enum TupleType)MvexTupleTypeLut_Data[(int)TupleTypeLutKind(i) * 8 + sss];
+//}
 
 
 /// <summary>
