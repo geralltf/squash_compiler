@@ -4842,7 +4842,7 @@ bool Encoder_TryEncode(struct Encoder* encoder, struct Instruction* instruction,
 
 		if ((encoder->handler->EncFlags3 & EFLAGS3_Fwait) != 0)
 		{
-			WriteByteInternal(0x9B);
+			Encoder_WriteByteInternal(encoder, 0x9B);
 		}
 
 		encoder->handler->Encode(encoder->handler, encoder, instruction);
@@ -4850,22 +4850,22 @@ bool Encoder_TryEncode(struct Encoder* encoder, struct Instruction* instruction,
 		unsigned int opCode = encoder->OpCode;
 		if (!encoder->handler->Is2ByteOpCode)
 		{
-			WriteByteInternal(opCode);
+			Encoder_WriteByteInternal(encoder, opCode);
 		}
 		else
 		{
-			WriteByteInternal(opCode >> 8);
-			WriteByteInternal(opCode);
+			Encoder_WriteByteInternal(encoder, opCode >> 8);
+			Encoder_WriteByteInternal(encoder, opCode);
 		}
 
 		if ((encoder->EncoderFlags & (EncoderFlags_ModRM | EncoderFlags_Displ)) != 0)
 		{
-			WriteModRM();
+			Encoder_WriteModRM(encoder);
 		}
 
 		if (encoder->ImmSize != ImmSize_None)
 		{
-			WriteImmediate();
+			Encoder_WriteImmediate(encoder);
 		}
 	}
 	else

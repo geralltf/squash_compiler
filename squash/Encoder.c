@@ -129,7 +129,7 @@ void anonymous_label(struct Assembler* assembler)
 	}
 	if (assembler->nextAnonLabel == NULL) // assembler->nextAnonLabel.IsEmpty
 	{
-		assembler->currentAnonLabel = CreateLabel();
+		assembler->currentAnonLabel = create_label(assembler, "AnonLabel");
 	}
 	else 
 	{
@@ -158,7 +158,7 @@ struct Label* F(struct Assembler* assembler) // @F
 {
 	if (assembler->nextAnonLabel == NULL)
 	{
-		assembler->nextAnonLabel = CreateLabel();
+		assembler->nextAnonLabel = create_label(assembler, "AnonLabel");
 	}
 	return assembler->nextAnonLabel;
 }
@@ -517,6 +517,43 @@ struct Assembler* evex(struct Assembler* assembler)
 //		ThrowHelper.ThrowArgumentNullException_array();
 //	db(array, 0, array.Length);
 //}
+
+/// <summary>
+/// Creates a <c>db</c>/<c>.byte</c> asm directive
+/// </summary>
+/// <param name="data">Data</param>
+/// <param name="index">Start index</param>
+/// <param name="length">Number of bytes</param>
+struct Instruction* Instruction_CreateDeclareByte(unsigned char* data, int index, int length)
+{
+	struct Instruction* instruction;
+
+	if (data == NULL)
+	{
+		return NULL;
+	}
+	if ((unsigned int)length - 1 > 16 - 1)
+	{
+		return NULL;
+	}
+	//if ((unsigned long)(unsigned int)index + (unsigned int)length > (unsigned int)length) // data.Length
+	//	ThrowHelper.ThrowArgumentOutOfRangeException_index();
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, DeclareByte);
+
+	SetInternalDeclareDataCount(instruction, (unsigned int)length);
+
+	for (int i = 0; i < length; i++)
+	{
+		Instruction_SetDeclareByteValue(instruction, i, data[index + i]);
+	}
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
 
 /// <summary>
 /// Adds data
@@ -1000,10 +1037,10 @@ void nop(struct Assembler* assembler, int sizeInBytes)
 /// Writes the next byte
 /// </summary>
 /// <param name="value">Value</param>
-void WriteByte(unsigned char* buffer, unsigned char value)
-{
-
-}
+//void WriteByte(unsigned char* buffer, unsigned char value)
+//{
+//
+//}
 
 /// <summary>mov instruction.<br/>
 /// <br/>
@@ -1593,8 +1630,8 @@ void test_assembler()
 	struct Assembler* c = (struct Assembler*)malloc(sizeof(struct Assembler));
 	assembler(c, Bitness);
 	
-	struct Label* label1 = CreateLabel(c);
-	struct Label* data1 = CreateLabel(c);
+	struct Label* label1 = create_label(c, "label1");
+	struct Label* data1 = create_label(c, "data1");
 
 	struct Instruction* inst;
 
