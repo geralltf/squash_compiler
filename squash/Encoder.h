@@ -494,7 +494,7 @@ unsigned char* squash_assemble(struct Assembler* assembler, unsigned long RIP_pr
 /// Writes the next byte
 /// </summary>
 /// <param name="value">Value</param>
-void WriteByte(unsigned char* buffer, unsigned char value);
+//void WriteByte(unsigned char* buffer, unsigned char value);
 
 void test_assembler();
 
