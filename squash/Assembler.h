@@ -67,6 +67,6 @@ void GenerateCode(struct Assembler* assembler, astnode_t* astNode, char* output_
 /// </exception>
 char* Assemble(struct Assembler* assembler, astnode_t* node);
 
-void squash_assembler(struct Assembler* assembler, char* source_asm, int source_size, char* output_binary_file_name);
+//void squash_assembler(struct Assembler* assembler, char* source_asm, int source_size, char* output_binary_file_name);
 
 #endif

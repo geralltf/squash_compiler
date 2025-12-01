@@ -89,7 +89,13 @@ void GenerateCode(struct Assembler* assembler, astnode_t* astNode, char* output_
             LogCritical("*-*-*-*-*- output assembly (.s) failed to compile here '%s' -*-*-*-*-*", output_file_name);
         }
 
-        squash_assembler(assembler, outputAssembly, source_length, output_binary_file_name);
+
+        unsigned long RIP_program_start_addr = 1400000; // TEST: Test address.
+        squash_assemble(assembler, RIP_program_start_addr);
+
+        //squash_assembler(assembler, outputAssembly, source_length, output_binary_file_name);
+
+        //unsigned char* squash_assemble(struct Assembler* assembler, unsigned long RIP_program_start_addr);
     }
     else
     {
@@ -450,80 +456,80 @@ char* Assemble(struct Assembler* assembler, astnode_t* node)
     return sb_concat(sb);
 }
 
-void asm_encode_instruction(unsigned char* mnumonic, unsigned char* register_name, unsigned char* operands)
-{
-   
+//void asm_encode_instruction(unsigned char* mnumonic, unsigned char* register_name, unsigned char* operands)
+//{
+//   
+//
+//}
 
-}
+//void asm_parse_instruction(char* carr_line)
+//{
+//    char* token;
+//    const char* delimiter = ", ";
+//
+//    token = strtok(carr_line, delimiter);
+//    printf("%s\n", token);
+//
+//    while (token != NULL)
+//    {
+//        printf("%s\n", token);
+//        token = strtok(NULL, delimiter);
+//    }
+//
+//    unsigned char* mnumonic = "SUB";
+//    unsigned char* operands = "RSP, 0x28"; // right operand is of type 'O_IMM' because it is a constant value obtained immediately after the register.
+//    unsigned char* register_name = "RSP"; // left operand is of type 'O_REG'
+//    
+//    asm_encode_instruction(mnumonic, register_name, operands); // should encode to the following hex sequence: 4883ec28
+//}
 
-void asm_parse_instruction(char* carr_line)
-{
-    char* token;
-    const char* delimiter = ", ";
+//void asm_parse_line(char* carr_line)
+//{
+//    if (strcmp(carr_line, "section .text") == 0)
+//    {
+//
+//    }
+//    else if (strcmp(carr_line, "global main") == 0)
+//    {
+//
+//    }
+//    else
+//    {
+//        // instruction.
+//        asm_parse_instruction(carr_line);
+//    }
+//}
 
-    token = strtok(carr_line, delimiter);
-    printf("%s\n", token);
-
-    while (token != NULL)
-    {
-        printf("%s\n", token);
-        token = strtok(NULL, delimiter);
-    }
-
-    unsigned char* mnumonic = "SUB";
-    unsigned char* operands = "RSP, 0x28"; // right operand is of type 'O_IMM' because it is a constant value obtained immediately after the register.
-    unsigned char* register_name = "RSP"; // left operand is of type 'O_REG'
-    
-    asm_encode_instruction(mnumonic, register_name, operands); // should encode to the following hex sequence: 4883ec28
-}
-
-void asm_parse_line(char* carr_line)
-{
-    if (strcmp(carr_line, "section .text") == 0)
-    {
-
-    }
-    else if (strcmp(carr_line, "global main") == 0)
-    {
-
-    }
-    else
-    {
-        // instruction.
-        asm_parse_instruction(carr_line);
-    }
-}
-
-void squash_assembler(struct Assembler* assembler, char* source_asm, int source_size, char* output_binary_file_name)
-{
-    int index;
-    char currentChar = '\0';
-    index = 0;
-    StringBuilder* sb = sb_create();
-    char* carr_line;
-    char* mem = (char*)malloc(sizeof(char) * 2);
-
-    while (index < source_size)
-    {
-        currentChar = (source_asm + index)[0];
-
-        if (currentChar == '\n' || currentChar == '\r')
-        {
-            carr_line = sb_concat(sb);
-            
-            asm_parse_line(carr_line);
-
-            sb_reset(sb);
-        }
-        else
-        {
-            mem[0] = currentChar;
-            mem[1] = '\0';
-
-            sb_append(sb, mem);
-        }
-        index++;
-    }
-
-    LogInformation("*-*-*-*-*- output assemble portable executable (.exe) created '%s' -*-*-*-*-*", output_binary_file_name);
-}
+//void squash_assembler(struct Assembler* assembler, char* source_asm, int source_size, char* output_binary_file_name)
+//{
+//    int index;
+//    char currentChar = '\0';
+//    index = 0;
+//    StringBuilder* sb = sb_create();
+//    char* carr_line;
+//    char* mem = (char*)malloc(sizeof(char) * 2);
+//
+//    while (index < source_size)
+//    {
+//        currentChar = (source_asm + index)[0];
+//
+//        if (currentChar == '\n' || currentChar == '\r')
+//        {
+//            carr_line = sb_concat(sb);
+//            
+//            asm_parse_line(carr_line);
+//
+//            sb_reset(sb);
+//        }
+//        else
+//        {
+//            mem[0] = currentChar;
+//            mem[1] = '\0';
+//
+//            sb_append(sb, mem);
+//        }
+//        index++;
+//    }
+//
+//    LogInformation("*-*-*-*-*- output assemble portable executable (.exe) created '%s' -*-*-*-*-*", output_binary_file_name);
+//}
