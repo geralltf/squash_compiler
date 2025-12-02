@@ -542,6 +542,25 @@ unsigned char MvexMemorySizeLut_Data[112] =
 struct Instruction* instruction_new()
 {
 	struct Instruction* o = (struct Instruction*)malloc(sizeof(struct Instruction));
+	o->code = 0;
+	o->displSize = 0;
+	o->flags1 = 0;
+	o->immediate = 0;
+	o->len = 0;
+	o->memBaseReg = 0;
+	o->memDispl = 0;
+	o->memIndexReg = 0;
+	o->nextRip = 0;
+	o->opKind0 = 0;
+	o->opKind1 = 0;
+	o->opKind2 = 0;
+	o->opKind3 = 0;
+	o->pad = 0;
+	o->reg0 = 0;
+	o->reg1 = 0;
+	o->reg2 = 0;
+	o->reg3 = 0;
+	o->scale = 0;
 	return o;
 }
 
