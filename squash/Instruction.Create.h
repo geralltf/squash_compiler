@@ -325,6 +325,7 @@ const char* ERROR_ONLY_64_BIT_MODE = "The instruction can only be used in 64-bit
 
 struct Encoder
 {
+	struct Asselbler* assembler;
 	unsigned int Internal_PreventVEX2;
 	unsigned int Internal_VEX_WIG_LIG;
 	unsigned int Internal_VEX_LIG;
@@ -712,7 +713,7 @@ struct Instruction* Instruction_Create(enum Code code, enum Register register1, 
 
 struct Encoder* Encoder_new();
 
-void Encoder_init(struct Encoder* encoder, int bitness);
+void Encoder_init(struct Assembler* assembler, struct Encoder* encoder, int bitness);
 
 /// <summary>
 /// Gets the bitness (16, 32 or 64)
@@ -724,7 +725,7 @@ int GetBitness(struct Encoder* encoder);
 /// </summary>
 /// <param name="bitness">16, 32 or 64</param>
 /// <returns></returns>
-struct Encoder* Create(int bitness);
+struct Encoder* Create(struct Assembler* assembler, int bitness);
 
 bool Verify(int operand, enum OpKind expected, enum OpKind actual);
 

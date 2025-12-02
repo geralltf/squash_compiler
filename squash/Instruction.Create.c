@@ -3010,6 +3010,27 @@ int Encoder_GetRegisterOpSize(struct Instruction* instruction)
 void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value)
 {
 	//TODO:
+	struct Assembler* assembler = encoder->assembler;
+
+	list_t* stream = assembler->stream_bytes;
+	list_t* n;
+	void* data = (void*)byte_value;
+
+	if (stream == NULL)
+	{
+		stream = list_new();
+	}
+
+	n = list_new();
+	n->data = data;
+	n->next = NULL;
+	n->prev = stream;
+
+	// Append to end of stream linked list.
+	stream->next = n;
+	stream = n;
+
+	// stream_bytes now is a linked list of bytes.
 }
 unsigned int OpCodeHandler_GetOpCode(struct OpCodeHandler* self, enum EncFlags2 encFlags2)
 {
@@ -3784,6 +3805,7 @@ struct Instruction* Instruction_Create(enum Code code, enum Register register1, 
 struct Encoder* Encoder_new()
 {
 	struct Encoder* encoder = (struct Encoder*)malloc(sizeof(struct Encoder));
+	encoder->assembler = NULL;
 	encoder->Internal_PreventVEX2 = 0;
 	encoder->Internal_VEX_WIG_LIG = 0;
 	encoder->Internal_VEX_LIG = 0;
@@ -3814,8 +3836,9 @@ struct Encoder* Encoder_new()
 	return encoder;
 }
 
-void Encoder_init(struct Encoder* encoder, int bitness)
+void Encoder_init(struct Assembler* assembler, struct Encoder* encoder, int bitness)
 {
+	encoder->assembler = assembler;
 	//Debug.Assert(bitness == 16 || bitness == 32 || bitness == 64);
 	//encoder->immSizes = s_immSizes;
 	//encoder->writer = writer;
@@ -3873,7 +3896,7 @@ int GetBitness(struct Encoder* encoder)
 /// </summary>
 /// <param name="bitness">16, 32 or 64</param>
 /// <returns></returns>
-struct Encoder* Create(int bitness)
+struct Encoder* Create(struct Assembler* assembler, int bitness)
 {
 	struct Encoder* encoder = NULL;
 	switch (bitness)
@@ -3882,7 +3905,7 @@ struct Encoder* Create(int bitness)
 	case 32:
 	case 64:
 		encoder = Encoder_new();
-		Encoder_init(encoder, bitness);
+		Encoder_init(assembler, encoder, bitness);
 		break;
 	default:
 		// throw new ArgumentOutOfRangeException(nameof(bitness))
