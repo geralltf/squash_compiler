@@ -2,6 +2,7 @@
 #define INSTRUCTION_H
 
 #include <stdbool.h>
+#include <stdlib.h> 
 
 #include "Enums.h"
 #include "Mnemonic.h"
