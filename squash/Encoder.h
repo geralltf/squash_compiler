@@ -325,7 +325,7 @@ void AddInstruction(struct Assembler* assembler, struct Instruction* instruction
 /// </summary>
 /// <param name="instruction"></param>
 /// <param name="flags">Operand flags passed.</param>
-void AddInstruction(struct Assembler* assembler, struct Instruction* instruction, enum AssemblerOperandFlags flags);
+void AddInstructionWithFlags(struct Assembler* assembler, struct Instruction* instruction, enum AssemblerOperandFlags flags);
 
 /// <summary>
 /// Add lock prefix before the next instruction.
@@ -481,7 +481,5 @@ void nop(int sizeInBytes);
 /// </summary>
 /// <param name="value">Value</param>
 //void WriteByte(unsigned char* buffer, unsigned char value);
-
-void test_assembler();
 
 #endif
