@@ -518,7 +518,10 @@ unsigned char* squash_assemble(struct Assembler* assembler, unsigned long RIP_pr
     {
         stream_byte = *(unsigned char*)n->data;
 
-        sq_program_image[stream_index] = stream_byte;
+        if (sq_program_image != NULL)
+        {
+            sq_program_image[stream_index] = stream_byte;
+        }
 
         stream_index++;
         n = n->next;
