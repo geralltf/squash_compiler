@@ -630,7 +630,8 @@ struct Instruction* Instruction_CreateBranch(enum Code code, unsigned long targe
 /// <param name="code">Code value</param>
 /// <param name="selector">Selector/segment value</param>
 /// <param name="offset">Offset</param>
-struct Instruction* Instruction_CreateBranch(enum Code code, unsigned short selector, unsigned int offset);
+struct Instruction* Instruction_CreateBranchFar(enum Code code, unsigned short selector, unsigned int offset);
+
 
 /// <summary>
 /// Creates an instruction with 2 operands
@@ -638,14 +639,14 @@ struct Instruction* Instruction_CreateBranch(enum Code code, unsigned short sele
 /// <param name="code">Code value</param>
 /// <param name="register">op0: Register</param>
 /// <param name="immediate">op1: Immediate value</param>
-struct Instruction* Instruction_Create(enum Code code, enum Register _register, int immediate);
+struct Instruction* Instruction_Create2(enum Code code, enum Register _register, int immediate);
 
 /// <summary>
 /// Creates an instruction with 1 operand
 /// </summary>
 /// <param name="code">Code value</param>
 /// <param name="register">op0: Register</param>
-struct Instruction* Instruction_Create(enum Code code, enum Register _register);
+struct Instruction* Instruction_Create1(enum Code code, enum Register _register);
 
 /// <summary>
 /// Creates an instruction with 2 operands
@@ -653,7 +654,7 @@ struct Instruction* Instruction_Create(enum Code code, enum Register _register);
 /// <param name="code">Code value</param>
 /// <param name="register1">op0: Register</param>
 /// <param name="register2">op1: Register</param>
-struct Instruction* Instruction_Create(enum Code code, enum Register register1, enum Register register2);
+struct Instruction* Instruction_Create2Reg(enum Code code, enum Register register1, enum Register register2);
 
 /// <summary>
 /// Creates an instruction with 2 operands
@@ -661,7 +662,7 @@ struct Instruction* Instruction_Create(enum Code code, enum Register register1, 
 /// <param name="code">Code value</param>
 /// <param name="register">op0: Register</param>
 /// <param name="memory">op1: Memory operand</param>
-struct Instruction* Instruction_Create(enum Code code, enum Register register1, struct MemoryOperand* memory);
+struct Instruction* Instruction_Create2Mem(enum Code code, enum Register register1, struct MemoryOperand* memory);
 
 struct Instruction* CreateString_ESRDI_Reg(enum Code code, int addressSize, enum Register register1, enum RepPrefixKind repPrefix);
 
