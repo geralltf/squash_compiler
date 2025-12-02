@@ -287,41 +287,11 @@ struct OpCodeHandler
 	unsigned int immediate;
 };
 
-unsigned char SegmentOverrides[6] =
-{
-	0x26,
-	0x2E,
-	0x36,
-	0x3E,
-	0x64,
-	0x65
-};
+extern unsigned char SegmentOverrides[6];
+extern unsigned int s_immSizes[19];
 
-unsigned int s_immSizes[19] =
-{
-	0,// None
-	1,// Size1
-	2,// Size2
-	4,// Size4
-	8,// Size8
-	3,// Size2_1
-	2,// Size1_1
-	4,// Size2_2
-	6,// Size4_2
-	1,// RipRelSize1_Target16
-	1,// RipRelSize1_Target32
-	1,// RipRelSize1_Target64
-	2,// RipRelSize2_Target16
-	2,// RipRelSize2_Target32
-	2,// RipRelSize2_Target64
-	4,// RipRelSize4_Target32
-	4,// RipRelSize4_Target64
-	1,// SizeIbReg
-	1,// Size1OpCode
-};
-
-const char* ERROR_ONLY_1632_BIT_MODE = "The instruction can only be used in 16/32-bit mode";
-const char* ERROR_ONLY_64_BIT_MODE = "The instruction can only be used in 64-bit mode";
+extern const char* ERROR_ONLY_1632_BIT_MODE;
+extern const char* ERROR_ONLY_64_BIT_MODE;
 
 struct Encoder
 {
