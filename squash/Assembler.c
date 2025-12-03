@@ -1297,7 +1297,7 @@ struct Instruction* vaddpd(struct Assembler* assembler,
     struct Instruction* inst = NULL;
     inst = Instruction_Create3Reg(EVEX_Vaddpd_zmm_k1z_zmm_zmmm512b64_er, zmm_dst, zmm_src1, zmm_src2);
 
-    AddInstruction(inst, dst_flags | src2_flags);
+    AddInstructionWithFlags(assembler, inst, dst_flags | src2_flags);
 
     return inst;
 }
@@ -1347,7 +1347,7 @@ struct Instruction* vunpcklps(
         }
     }
     inst = Instruction_Create(code, xmm_dst, xmm_src1, ToMemoryOperand(src2, Bitness));
-    AddInstruction(inst, xmm_dst_flags | src2_flags);
+    AddInstructionWithFlags(assembler, inst, xmm_dst_flags | src2_flags);
 }
 
 /// <summary>inc instruction.<br/>
@@ -1739,12 +1739,12 @@ void test_assembler()
     nop2(c);
 
     // Emit label1:
-    label(c, &label1);
+    label(c, label1);
     // If needed, a zero-bytes instruction can be used as a label but this is optional
     zero_bytes(c);
     pop(c, Register_R15);
     ret(c);
-    label(c, &data1);
+    label(c, data1);
     db_imm2(c, 0xF3, 0x90); // pause
 
     int encoded_length;
