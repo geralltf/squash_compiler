@@ -11,6 +11,8 @@ struct Assembler* assembler_new()
         assembler->instructions->prev = NULL;
         assembler->instructions->data = NULL;
 
+        assembler->stream_bytes = NULL;
+
         assembler->currentAnonLabel = NULL;
         assembler->currentLabel = NULL;
         assembler->definedAnonLabel = false;
@@ -1633,7 +1635,6 @@ void test_assembler()
     const unsigned long RIP = 0x1234567810000000;
     int Bitness = 64;
     // The assembler supports all modes: 16-bit, 32-bit and 64-bit.
-    //struct Assembler* c = (struct Assembler*)malloc(sizeof(struct Assembler));
     struct Assembler* c = assembler_new();
     assembler(c, Bitness);
 
@@ -1719,18 +1720,18 @@ void test_assembler()
     dst_flags_xmm2_k5_z = (dst_flags_xmm2_k5_z & ~AF_RegisterMask) | AF_K5;
 
     //c.vunpcklps(xmm2.k5.z, xmm6, dword_operand);
-    vunpcklps(assembler, Register_XMM2, dst_flags_xmm2_k5_z, Register_XMM6, dword_bcst_operand, src2_flags, Bitness);
+    vunpcklps(c, Register_XMM2, dst_flags_xmm2_k5_z, Register_XMM6, dword_bcst_operand, src2_flags, Bitness);
 
     // You can create anonymous labels, just like in eg. masm, @@, @F and @B
     anonymous_label(c); // same as @@: in masm
 
     inst = inc(Register_RAX);
-    AddInstruction(assembler, inst);
+    AddInstruction(c, inst);
 
     je(c, B(c)); // reference the previous anonymous label
 
     inst = inc(Register_RCX);
-    AddInstruction(assembler, inst);
+    AddInstruction(c, inst);
 
     je(c, F(c)); // reference the next anonymous label
 
