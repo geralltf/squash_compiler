@@ -632,6 +632,26 @@ struct Instruction* Instruction_CreateBranch(enum Code code, unsigned long targe
 /// <param name="offset">Offset</param>
 struct Instruction* Instruction_CreateBranchFar(enum Code code, unsigned short selector, unsigned int offset);
 
+/// <summary>
+/// Creates an instruction with no operands
+/// </summary>
+/// <param name="code">Code value</param>
+struct Instruction* Instruction_CreateNoOperands(enum Code code);
+
+/// <summary>
+/// Creates an instruction with 1 operand
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="memory">op0: Memory operand</param>
+struct Instruction* Instruction_Create1Mem(enum Code code, struct MemoryOperand* memory);
+
+/// <summary>
+/// Creates an instruction with 2 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="memory">op0: Memory operand</param>
+/// <param name="immediate">op1: Immediate value</param>
+struct Instruction* Instruction_Create2Mem1Imm(enum Code code, struct MemoryOperand* memory, int immediate);
 
 /// <summary>
 /// Creates an instruction with 2 operands
@@ -663,6 +683,15 @@ struct Instruction* Instruction_Create2Reg(enum Code code, enum Register registe
 /// <param name="register">op0: Register</param>
 /// <param name="memory">op1: Memory operand</param>
 struct Instruction* Instruction_Create2Mem(enum Code code, enum Register register1, struct MemoryOperand* memory);
+
+/// <summary>
+/// Creates an instruction with 3 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register1">op0: Register</param>
+/// <param name="register2">op1: Register</param>
+/// <param name="register3">op2: Register</param>
+struct Instruction* Instruction_Create3Reg(enum Code code, enum Register register1, enum Register register2, enum Register register3);
 
 struct Instruction* CreateString_ESRDI_Reg(enum Code code, int addressSize, enum Register register1, enum RepPrefixKind repPrefix);
 

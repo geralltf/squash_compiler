@@ -2407,6 +2407,68 @@ struct Instruction* Instruction_CreateBranchFar(enum Code code, unsigned short s
 }
 
 /// <summary>
+/// Creates an instruction with no operands
+/// </summary>
+/// <param name="code">Code value</param>
+struct Instruction* Instruction_CreateNoOperands(enum Code code)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, code);
+
+	//Debug.Assert(instruction.OpCount == 0);
+	return instruction;
+}
+
+/// <summary>
+/// Creates an instruction with 1 operand
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="memory">op0: Memory operand</param>
+struct Instruction* Instruction_Create1Mem(enum Code code, struct MemoryOperand* memory)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, code);
+
+	SetOp0Kind(instruction, OK_Memory);
+	InitMemoryOperand(instruction, memory);
+
+	//Debug.Assert(instruction.OpCount == 1);
+	return instruction;
+}
+
+/// <summary>
+/// Creates an instruction with 2 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="memory">op0: Memory operand</param>
+/// <param name="immediate">op1: Immediate value</param>
+struct Instruction* Instruction_Create2Mem1Imm(enum Code code, struct MemoryOperand* memory, int immediate)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, code);
+
+	SetOp0Kind(instruction, OK_Memory);
+	InitMemoryOperand(instruction, memory);
+
+	InitializeSignedImmediate(&instruction, 1, immediate);		;
+
+	//Debug.Assert(instruction.OpCount == 2);
+	return instruction;
+}
+
+/// <summary>
 /// Creates an instruction with 2 operands
 /// </summary>
 /// <param name="code">Code value</param>
@@ -2508,6 +2570,38 @@ struct Instruction* Instruction_Create2Mem(enum Code code, enum Register registe
 	InitMemoryOperand(instruction, memory);
 
 	//Debug.Assert(instruction.OpCount == 2);
+	return instruction;
+}
+
+/// <summary>
+/// Creates an instruction with 3 operands
+/// </summary>
+/// <param name="code">Code value</param>
+/// <param name="register1">op0: Register</param>
+/// <param name="register2">op1: Register</param>
+/// <param name="register3">op2: Register</param>
+struct Instruction* Instruction_Create3Reg(enum Code code, enum Register register1, enum Register register2, enum Register register3)
+{
+	struct Instruction* instruction;
+
+	instruction = instruction_new();
+	instruction_init(&instruction);
+
+	SetCode(instruction, code);
+
+	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
+	//instruction.Op0Kind = OpKind.Register;
+	SetOp0Register(instruction, register1);
+
+	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
+	//instruction.Op1Kind = OpKind.Register;
+	SetOp1Register(instruction, register2);
+
+	//Static.Assert(OpKind.Register == 0 ? 0 : -1);
+	//instruction.Op2Kind = OpKind.Register;
+	SetOp2Register(instruction, register3);
+
+	//Debug.Assert(instruction.OpCount == 3);
 	return instruction;
 }
 
