@@ -7,9 +7,12 @@
 list_t* list_new()
 {
 	list_t* n = (list_t*)malloc(sizeof(list_t));
-	n->next = NULL;
-	n->prev = NULL;
-	n->data = NULL;
+	if (n)
+	{
+		n->next = NULL;
+		n->prev = NULL;
+		n->data = NULL;
+	}
 	return n;
 }
 
