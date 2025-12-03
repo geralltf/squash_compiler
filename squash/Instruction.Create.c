@@ -3154,17 +3154,23 @@ void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value
 	if (stream == NULL)
 	{
 		stream = list_new();
+		stream->data = data;
+		stream->next = NULL;
+		stream->prev = NULL;
+	}
+	else
+	{
+		n = list_new();
+		n->data = data;
+		n->next = NULL;
+		n->prev = stream;
+
+		// Append to end of stream linked list.
+		stream->next = n;
+		stream = n;
 	}
 
-	n = list_new();
-	n->data = data;
-	n->next = NULL;
-	n->prev = stream;
-
-	// Append to end of stream linked list.
-	stream->next = n;
-	stream = n;
-
+	assembler->stream_bytes = stream;
 	// stream_bytes now is a linked list of bytes.
 }
 unsigned int OpCodeHandler_GetOpCode(struct OpCodeHandler* self, enum EncFlags2 encFlags2)
