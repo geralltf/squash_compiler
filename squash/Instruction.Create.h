@@ -295,7 +295,7 @@ extern const char* ERROR_ONLY_64_BIT_MODE;
 
 struct Encoder
 {
-	struct Asselbler* assembler;
+	struct Assembler* assembler;
 	unsigned int Internal_PreventVEX2;
 	unsigned int Internal_VEX_WIG_LIG;
 	unsigned int Internal_VEX_LIG;
