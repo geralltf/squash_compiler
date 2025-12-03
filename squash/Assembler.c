@@ -11,6 +11,11 @@ struct Assembler* assembler_new()
         assembler->instructions->prev = NULL;
         assembler->instructions->data = NULL;
 
+        assembler->currentAnonLabel = NULL;
+        assembler->currentLabel = NULL;
+        assembler->definedAnonLabel = false;
+        assembler->currentLabelId = -1;
+
         assembler->Is_Windows = true;
         assembler->Is_macOS = false;
         assembler->Is_Linux = false;
