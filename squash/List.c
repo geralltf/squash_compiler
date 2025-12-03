@@ -154,6 +154,11 @@ void list_enqueue(list_t* list_front, void* data)
 	//char c = *pC;
 	//printf("DATA: %s", pC);
 
+	if (list_front == NULL)
+	{
+		list_front = list_new();
+	}
+
 	if (list_front->prev == NULL && list_front->data == NULL)
 	{
 		list_front->data = data;
