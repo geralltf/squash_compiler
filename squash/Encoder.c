@@ -180,11 +180,11 @@ void AddInstruction(struct Assembler* assembler, struct Instruction* instruction
 		
 	if (assembler->currentLabel != NULL)
 	{
-		SetIP(assembler, assembler->currentLabel->id);
+		SetIP(instruction, assembler->currentLabel->id);
 	}
 	else if (assembler->definedAnonLabel)
 	{
-		SetIP(assembler, assembler->currentAnonLabel->id);
+		SetIP(instruction, assembler->currentAnonLabel->id);
 	}
 
 	// Setup prefixes
