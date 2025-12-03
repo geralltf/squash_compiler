@@ -400,35 +400,6 @@ struct Assembler* vex(struct Assembler* assembler);
 struct Assembler* evex(struct Assembler* assembler);
 
 /// <summary>
-/// Adds data
-/// </summary>
-/// <param name="array">Data</param>
-void db(unsigned char* array);
-
-/// <summary>
-/// Adds data
-/// </summary>
-/// <param name="array">Data</param>
-/// <param name="index">Start index</param>
-/// <param name="length">Length in bytes</param>
-void db(unsigned char* array, int index, int length);
-
-/// <summary>call selector:offset instruction.</summary>
-void call(unsigned short selector, unsigned int offset);
-
-/// <summary>jmp selector:offset instruction.</summary>
-void jmp(unsigned short selector, unsigned int offset);
-
-/// <summary>xlatb instruction.</summary>
-void xlatb(struct Assembler* assembler);
-
-/// <summary>
-/// Generates multibyte NOP instructions
-/// </summary>
-/// <param name="sizeInBytes">Size in bytes of all nops</param>
-void nop(int sizeInBytes);
-
-/// <summary>
 /// Encodes instructions. Any number of branches can be part of this block.
 /// You can use this function to move instructions from one location to another location.
 /// If the target of a branch is too far away, it'll be rewritten to a longer branch.
