@@ -72,7 +72,7 @@ char* Assemble(struct Assembler* assembler, astnode_t* node);
 /// Adds data
 /// </summary>
 /// <param name="array">Data</param>
-void db(unsigned char* array);
+//void db(unsigned char* array);
 
 /// <summary>
 /// Adds data
@@ -80,7 +80,7 @@ void db(unsigned char* array);
 /// <param name="array">Data</param>
 /// <param name="index">Start index</param>
 /// <param name="length">Length in bytes</param>
-void db(unsigned char* array, int index, int length);
+void db(struct Assembler* assembler, unsigned char* array, int index, int length);
 
 /// <summary>call selector:offset instruction.</summary>
 void call(unsigned short selector, unsigned int offset);
