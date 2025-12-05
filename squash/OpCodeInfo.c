@@ -687,7 +687,7 @@ struct MvexInfo* MvexInfo_new(enum Code code)
 void MvexInfo_init(struct MvexInfo** o)
 {
 	(*o)->TupleTypeLutKind = (enum MvexTupleTypeLutKind)MvexInfoData_Data[(*o)->index * MvexInfoData_StructSize + MvexInfoData_TupleTypeLutKindIndex];
-	(*o)->EHBit = (enum MvexEHBit)MvexInfoData_Data[(*o)->index * MvexInfoData_StructSize + MvexInfoData_EHBitIndex];
+	(*o)->ehbit = (enum MvexEHBit)MvexInfoData_Data[(*o)->index * MvexInfoData_StructSize + MvexInfoData_EHBitIndex];
 	(*o)->ConvFn = (enum MvexConvFn)MvexInfoData_Data[(*o)->index * MvexInfoData_StructSize + MvexInfoData_ConvFnIndex];
 	(*o)->InvalidConvFns = MvexInfoData_Data[(*o)->index * MvexInfoData_StructSize + MvexInfoData_InvalidConvFnsIndex];
 	(*o)->InvalidSwizzleFns = MvexInfoData_Data[(*o)->index * MvexInfoData_StructSize + MvexInfoData_InvalidSwizzleFnsIndex];
@@ -721,7 +721,7 @@ enum MvexEHBit GetMvexEHBit(struct OpCodeInfo* o)
 	{
 		struct MvexInfo* mvex_info = MvexInfo_new(code);
 
-		return mvex_info->EHBit;
+		return mvex_info->ehbit;
 	}
 	return  (enum MvexEHBit)MEHB_None;
 }

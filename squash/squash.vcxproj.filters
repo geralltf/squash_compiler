@@ -161,5 +161,8 @@
     <ClInclude Include="Enums.h">
       <Filter>Iced</Filter>
     </ClInclude>
+    <ClInclude Include="MvexEHBit.h">
+      <Filter>Iced</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

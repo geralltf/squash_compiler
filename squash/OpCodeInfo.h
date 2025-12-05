@@ -2,10 +2,11 @@
 #define OPCODE_INFO_H
 
 #include <stdio.h>
-
-#include "sb.h"
-#include "Instruction.h"
 #include <stdlib.h>
+
+#include "MvexEHBit.h"
+#include "Instruction.h"
+#include "sb.h"
 
 enum Flags // : uint 
 {
@@ -730,7 +731,7 @@ struct MvexInfo
 {
 	int index;
 	enum MvexTupleTypeLutKind TupleTypeLutKind;
-	enum MvexEHBit EHBit;
+	enum MvexEHBit ehbit;
 	enum MvexConvFn ConvFn;
 	unsigned int InvalidConvFns;
 	unsigned int InvalidSwizzleFns;

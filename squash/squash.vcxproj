@@ -170,6 +170,7 @@
     <ClInclude Include="Minifier.h" />
     <ClInclude Include="Encoder.h" />
     <ClInclude Include="Mnemonic.h" />
+    <ClInclude Include="MvexEHBit.h" />
     <ClInclude Include="OpCodeInfo.h" />
     <ClInclude Include="OpCodeInfoData.h" />
     <ClInclude Include="Optimiser.h" />

@@ -976,9 +976,9 @@ enum OpKind Instruction_GetOpKind(struct Instruction* i, int operand)
 /// <returns></returns>
 bool HasOpKind(struct Instruction* ins, enum OpKind opKind)
 {
-	for (int i = 0; i < GetOpCount(i); i++) 
+	for (int i = 0; i < GetOpCount(ins); i++) 
 	{
-		if (GetOpKind(ins, i) == opKind)
+		if (Instruction_GetOpKind(ins, i) == opKind)
 		{
 			return true;
 		}
@@ -1441,7 +1441,7 @@ enum MvexTupleTypeLutKind TupleTypeLutKind(struct Instruction* i)
 	int index = GetIndexFromInstruction(i);
 	return (enum MvexTupleTypeLutKind)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_TupleTypeLutKindIndex];
 }
-enum MvexEHBit EHBit(struct Instruction* i)
+enum MvexEHBit GetEHBit(struct Instruction* i)
 {
 	int index = GetIndexFromInstruction(i);
 	return (enum MvexEHBit)MvexInfoData_Data[index * MvexInfoData_StructSize + MvexInfoData_EHBitIndex];
@@ -1543,7 +1543,7 @@ enum MemorySize Instruction_GetMemorySize(struct Instruction* i)
 		int sss = ((int)GetMvexRegMemConv(i) - (int)MRMC_MemConvNone) & 7;
 		return (enum MemorySize)MvexMemorySizeLut_Data[(int)TupleTypeLutKind(i) * 8 + sss];
 	}
-	if (IsBroadcast(i))
+	if (IsBroadcast2(i))
 	{
 		return (enum MemorySize)InstructionMemorySizes_SizesBcst[index];
 	}
@@ -1775,7 +1775,7 @@ void SetImmediate32to64(struct Instruction* i, long value)
 /// <returns></returns>
 unsigned long GetImmediate(struct Instruction* i, int operand)
 {
-	switch (GetOpKind(i, operand))
+	switch (Instruction_GetOpKind(i, operand))
 	{
 	case OK_Immediate8:
 		return GetImmediate8(i);
@@ -1840,7 +1840,7 @@ void SetImmediateLong(struct Instruction* i, int operand, long immediate)
 /// <returns></returns>
 void Instruction_SetImmediate(struct Instruction* i, int operand, unsigned long immediate)
 {
-	switch (GetOpKind(i, operand)) 
+	switch (Instruction_GetOpKind(i, operand))
 	{
 	case OK_Immediate8:
 		SetImmediate8(i, (unsigned char)immediate);
@@ -2702,7 +2702,7 @@ bool TryGetVsib64(struct Instruction* i, bool* vsib64)
 	case MVEX_Vscatterpf0hintdpd_mvt_k1:
 	case MVEX_Vscatterpf0dps_mvt_k1:
 	case MVEX_Vscatterpf1dps_mvt_k1:
-		vsib64 = false;
+		*vsib64 = false;
 		return true;
 		// GENERATOR-END: Vsib32
 
@@ -2748,12 +2748,12 @@ bool TryGetVsib64(struct Instruction* i, bool* vsib64)
 	case EVEX_Vscatterpf0qpd_vm64z_k1:
 	case EVEX_Vscatterpf1qps_vm64z_k1:
 	case EVEX_Vscatterpf1qpd_vm64z_k1:
-		vsib64 = true;
+		*vsib64 = true;
 		return true;
 		// GENERATOR-END: Vsib64
 
 	default:
-		vsib64 = false;
+		*vsib64 = false;
 		return false;
 	}
 }
@@ -2815,7 +2815,7 @@ struct OpCodeInfo* ToOpCode(enum Code code)
 
 	struct OpCodeInfo* o = OpCodeInfo_new();
 
-	OpCodeInfo_init(o, code, (enum EncFlags1)EncoderData_EncFlags1[i], (enum EncFlags2)EncoderData_EncFlags2[i], (enum EncFlags3)EncoderData_EncFlags3[i], (enum OpCodeInfoFlags1)OpCodeInfoData_OpcFlags1[i], (enum OpCodeInfoFlags2)OpCodeInfoData_OpcFlags2[i], sb);
+	OpCodeInfo_init(&o, code, (enum EncFlags1)EncoderData_EncFlags1[i], (enum EncFlags2)EncoderData_EncFlags2[i], (enum EncFlags3)EncoderData_EncFlags3[i], (enum OpCodeInfoFlags1)OpCodeInfoData_OpcFlags1[i], (enum OpCodeInfoFlags2)OpCodeInfoData_OpcFlags2[i], sb);
 
 
 	return o;
