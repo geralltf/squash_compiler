@@ -658,7 +658,8 @@ int gethashcode(struct Instruction* i)
 /// </summary>
 unsigned short GetIP16(struct Instruction* i)
 {
-	return (unsigned short)((unsigned int)i->nextRip - (unsigned int)GetLength(i));
+	unsigned int len = (unsigned int)GetLength(i);
+	return (unsigned short)((unsigned int)i->nextRip - len);
 }
 
 /// <summary>

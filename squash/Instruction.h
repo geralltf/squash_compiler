@@ -1010,6 +1010,12 @@ unsigned short GetNearBranch16(struct Instruction* i);
 /// </summary>
 enum Code GetCode(struct Instruction* i);
 
+/// <summary>
+/// Gets the length of the instruction, 0-15 bytes. This is just informational. If you modify the instruction
+/// or create a new one, this property could return the wrong value.
+/// </summary>
+int GetLength(struct Instruction* i);
+
 enum Register GetMemoryIndex(struct Instruction* i);
 unsigned char GetImmediate8(struct Instruction* i);
 unsigned short GetImmediate16(struct Instruction* i);
