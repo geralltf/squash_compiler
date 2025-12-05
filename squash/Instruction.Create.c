@@ -84,7 +84,7 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 	unsigned int operands_length,
 	bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue),
 	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2),
-	void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction))
+	void (*EncodeParam)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction))
 {
 	(*o)->EncFlags2 = encFlags2;
 	(*o)->EncFlags3 = encFlags3;
@@ -92,7 +92,7 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 	(*o)->Operands = operands;
 	(*o)->Operands_Length = operands_length;
 	(*o)->GetOpCode = GetOpCode;
-	(*o)->Encode = Encode;
+	(*o)->Encode = EncodeParam;
 }
 
 struct Op* LegacyHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length) 
@@ -497,7 +497,7 @@ void OpCodeHandlers_init()
 				operands = LegacyHandler_CreateOps(encFlags1, &operands_length);
 
 				OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, &LegacyHandler_Encode);
-
+				handler->Encode = &LegacyHandler_Encode;
 				handler->handler_conf = LegacyHandler;
 				//handler = new LegacyHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
 			}
@@ -3561,7 +3561,7 @@ void MvexHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, str
 			//encoder.ErrorMessage = "Register operands can't use memory up/down conversions";
 		}
 	}
-	if (mvex->EHBit == MEHB_EH1)
+	if (mvex->ehbit == MEHB_EH1)
 	{
 		b |= 0x80;
 	}
@@ -3949,6 +3949,21 @@ void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instructio
 bool Encoder_TryConvertToDisp8N(struct Encoder* encoder, struct Instruction* instruction, int displ, signed char* compressedValue)
 {
 	bool(*tryConvertToDisp8N)(struct Encoder*, struct OpCodeHandler*, struct Instruction*, int, signed char*) = encoder->handler->TryConvertToDisp8N;
+
+	if (encoder->handler->handler_conf == EvexHandler)
+	{
+		encoder->handler->TryConvertToDisp8N = &EVEXHandler_TryConvertToDisp8N;
+	}
+	else if (encoder->handler->handler_conf == MvexHandler)
+	{
+		encoder->handler->TryConvertToDisp8N = &MvexHandler_TryConvertToDisp8N;
+	}
+	else 
+	{
+		encoder->handler->TryConvertToDisp8N = NULL;
+	}
+	tryConvertToDisp8N = encoder->handler->TryConvertToDisp8N;
+
 	if (tryConvertToDisp8N != NULL)
 	{
 		return tryConvertToDisp8N(encoder, encoder->handler, instruction, displ, compressedValue);
@@ -4717,9 +4732,11 @@ bool Encoder_TryEncode(struct Encoder* encoder, struct Instruction* instruction,
 	if (!encoder->handler->IsSpecialInstr)
 	{
 		struct Op* ops = encoder->handler->Operands;
+		struct Op op;
 		for (int i = 0; i < encoder->handler->Operands_Length; i++)
 		{
-			ops[i].Encode(encoder, instruction, i, (ops + i));
+			op = ops[i];
+			op.Encode(encoder, instruction, i, &op);
 		}
 
 		if ((encoder->handler->EncFlags3 & EFLAGS3_Fwait) != 0)
@@ -4727,6 +4744,12 @@ bool Encoder_TryEncode(struct Encoder* encoder, struct Instruction* instruction,
 			Encoder_WriteByteInternal(encoder, 0x9B);
 		}
 
+		if (encoder->handler->handler_conf == LegacyHandler)
+		{
+			encoder->handler->Encode = &LegacyHandler_Encode;//HACK: change this to avoid bug
+		}
+
+		
 		encoder->handler->Encode(encoder->handler, encoder, instruction);
 
 		unsigned int opCode = encoder->OpCode;
