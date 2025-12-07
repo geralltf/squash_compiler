@@ -155,6 +155,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h" />
+    <ClInclude Include="Assembly.h" />
     <ClInclude Include="AST.h" />
     <ClInclude Include="Dictionary.h" />
     <ClInclude Include="EncoderInstructionSet.h" />
@@ -174,6 +175,7 @@
     <ClInclude Include="OpCodeInfo.h" />
     <ClInclude Include="OpCodeInfoData.h" />
     <ClInclude Include="Optimiser.h" />
+    <ClInclude Include="PrefixFlags.h" />
     <ClInclude Include="sb.h" />
     <ClInclude Include="SquashCompiler.h" />
     <ClInclude Include="Symbols.h" />

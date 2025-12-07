@@ -1,5 +1,5 @@
 #include "Assembler.h"
-#include "Instruction.Create.h"
+//#include "Instruction.Create.h"
 
 struct Assembler* assembler_new()
 {
@@ -536,15 +536,19 @@ void db(struct Assembler* assembler, unsigned char* array, int index, int length
     int cycles = length / maxLength;
     int rest = length % maxLength;
 
+    struct Instruction* inst;
+
     int currentPosition = index;
     for (int i = 0; i < cycles; i++)
     {
-        AddInstruction(assembler, Instruction_CreateDeclareByte(array, currentPosition, maxLength));
+        inst = Instruction_CreateDeclareByte(array, currentPosition, maxLength);
+        AddInstruction(assembler, inst);
         currentPosition += maxLength;
     }
     if (rest > 0)
     {
-        AddInstruction(assembler, Instruction_CreateDeclareByte(array, currentPosition, rest));
+        inst = Instruction_CreateDeclareByte(array, currentPosition, rest);
+        AddInstruction(assembler, inst);
     }
 }
 

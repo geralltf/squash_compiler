@@ -164,5 +164,11 @@
     <ClInclude Include="MvexEHBit.h">
       <Filter>Iced</Filter>
     </ClInclude>
+    <ClInclude Include="Assembly.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PrefixFlags.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

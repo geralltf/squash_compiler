@@ -3,26 +3,18 @@
 
 // Ported to C language from the C# version of Iced found here: https://github.com/icedland/iced/blob/master/src/csharp/Intel/README.md
 
+struct Assembler;
+
 #include <limits.h>
 
 #include "List.h"
+#include "Assembly.h"
+#include "PrefixFlags.h"
 #include "Logger.h"
 #include "Instruction.h"
 #include "EncoderInstructionSet.h"
 #include "OpCodeInfo.h"
 #include "Assembler.h"
-
-
-enum PrefixFlags
-{
-	PF_None = 0,
-	PF_Lock = 0x01,
-	PF_Repe = 0x02,
-	PF_Repne = 0x04,
-	PF_Notrack = 0x08,
-	PF_PreferVex = 0x10,
-	PF_PreferEvex = 0x20,
-};
 
 enum AssemblerOperandFlags 
 {
@@ -318,7 +310,7 @@ struct Label* F(struct Assembler* assembler); // @F
 /// Add an instruction directly to the flow of instructions.
 /// </summary>
 /// <param name="instruction"></param>
-void AddInstruction(struct Assembler* assembler, struct Instruction* instruction);
+extern void AddInstruction(struct Assembler* assembler, struct Instruction* instruction);
 
 /// <summary>
 /// Add an instruction directly to the flow of instructions.
