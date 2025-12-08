@@ -1,5 +1,5 @@
 #include "Assembler.h"
-//#include "Instruction.Create.h"
+#include "Instruction.Create.h"
 
 struct Assembler* assembler_new()
 {
@@ -1669,7 +1669,7 @@ void test_assembler()
     // The assembler must know the memory size to pick the correct instruction
     // (Base + Index * Scale + Displacement)
     qword_operand2 = AssemblerMemoryOperand_new(MOS_Dword, Register_None, Register_RAX, Register_RCX, 8, 0x10, AF_None);
-    inst = cmp(assembler, qword_operand2, -1); // c.cmp(__dword_ptr[rax + rcx * 8 + 0x10], -1);
+    inst = cmp(c, qword_operand2, -1); // c.cmp(__dword_ptr[rax + rcx * 8 + 0x10], -1);
     AddInstruction(c, inst);
 
     inst = jne(label1, c->PreferShortBranch, Bitness); // c.jne(label1); // Jump to Label1
