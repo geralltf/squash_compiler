@@ -84,11 +84,11 @@
     <ClCompile Include="InstructionOpCounts.c">
       <Filter>Source Files\Iced</Filter>
     </ClCompile>
-    <ClCompile Include="OpCodeInfoData.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="InstructionMemorySizes.c">
-      <Filter>Source Files</Filter>
+      <Filter>Source Files\Iced</Filter>
+    </ClCompile>
+    <ClCompile Include="OpCodeInfoData.c">
+      <Filter>Source Files\Iced</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -164,11 +164,11 @@
     <ClInclude Include="MvexEHBit.h">
       <Filter>Iced</Filter>
     </ClInclude>
-    <ClInclude Include="Assembly.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="PrefixFlags.h">
-      <Filter>Header Files</Filter>
+      <Filter>Iced</Filter>
+    </ClInclude>
+    <ClInclude Include="Assembly.h">
+      <Filter>Iced</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
