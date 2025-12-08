@@ -930,6 +930,9 @@ void OpX_Encode(struct Encoder* encoder, struct Instruction* instruction, int op
 			//encoder.ErrorMessage = $"Same sized register must be used: reg #1 size = {regYSize * 8}, reg #2 size = {regXSize * 8}";
 			return;
 		}
+		break;	
+	default:
+
 		break;
 	}
 	Encoder_SetAddrSize(encoder, regXSize);
@@ -954,6 +957,9 @@ void OpY_Encode(struct Encoder* encoder, struct Instruction* instruction, int op
 			//encoder.ErrorMessage = $"Same sized register must be used: reg #1 size = {regXSize * 8}, reg #2 size = {regYSize * 8}";
 			return;
 		}
+		break;
+	default:
+
 		break;
 	}
 	Encoder_SetAddrSize(encoder, regYSize);
