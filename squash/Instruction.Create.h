@@ -55,6 +55,7 @@ enum OperandType
 };
 
 typedef void (*EncodeFunction)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+typedef void (*OpEncodeFunction)(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
 struct Op 
 {
@@ -70,7 +71,7 @@ struct Op
 	int immSize;				// OpJ
 	int displSize;				// OpJdisp
 
-	void (*Encode)(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+	OpEncodeFunction Encode;
 	enum OpKind(*GetImmediateOpKind)(struct Op* op);
 	enum OpKind(*GetNearBranchOpKind)(struct Op* op);
 	enum OpKind(*GetFarBranchOpKind)(struct Op* op);
@@ -139,7 +140,7 @@ enum OpKind OpDefault_GetNearBranchOpKind(struct Op* op);
 
 enum OpKind OpDefault_GetFarBranchOpKind(struct Op* op);
 
-void OpA_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+extern void OpA_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 enum OpKind OpA_GetFarBranchOpKind(struct Op* op);
 
 void OpO_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);

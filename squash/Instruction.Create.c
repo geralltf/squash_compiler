@@ -1146,7 +1146,7 @@ struct Op* OpA_new(int size)
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpA;
 	op->size = size;
-	op->Encode = &OpA_Encode;
+	op->Encode = (OpEncodeFunction)&OpA_Encode;
 	op->GetFarBranchOpKind = &OpA_GetFarBranchOpKind;
 	return op;
 }
@@ -1155,7 +1155,7 @@ struct Op* OpO_new()
 {
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpO;
-	op->Encode = &OpO_Encode;
+	op->Encode = (OpEncodeFunction)&OpO_Encode;
 
 	return op;
 }
@@ -1165,7 +1165,7 @@ struct Op* OpModRM_rm_mem_only_new(bool mustUseSib)
 	struct Op* op = Op_new();
 	op->mustUseSib = mustUseSib;
 	op->operand_type = OT_OpModRM_rm_mem_only;
-	op->Encode = &OpModRM_rm_mem_only_Encode;
+	op->Encode = (OpEncodeFunction)&OpModRM_rm_mem_only_Encode;
 
 	return op;
 }
@@ -1176,7 +1176,7 @@ struct Op* OpModRM_rm_new(enum Register regLo, enum Register regHi)
 	op->regLo = regLo;
 	op->regHi = regHi;
 	op->operand_type = OT_OpModRM_rm;
-	op->Encode = &OpModRM_rm_Encode;
+	op->Encode = (OpEncodeFunction)&OpModRM_rm_Encode;
 
 	return op;
 }
@@ -1187,7 +1187,7 @@ struct Op* OpModRM_reg_new(enum Register regLo, enum Register regHi)
 	op->regLo = regLo;
 	op->regHi = regHi;
 	op->operand_type = OT_OpModRM_reg;
-	op->Encode = &OpModRM_reg_Encode;
+	op->Encode = (OpEncodeFunction)&OpModRM_reg_Encode;
 
 	return op;
 }
@@ -1198,7 +1198,7 @@ struct Op* OpRegEmbed8_new(enum Register regLo, enum Register regHi)
 	op->regLo = regLo;
 	op->regHi = regHi;
 	op->operand_type = OT_OpRegEmbed8;
-	op->Encode = &OpRegEmbed8_Encode;
+	op->Encode = (OpEncodeFunction)&OpRegEmbed8_Encode;
 
 	return op;
 }
@@ -1209,7 +1209,7 @@ struct Op* OpModRM_reg_mem_new(enum Register regLo, enum Register regHi)
 	op->regLo = regLo;
 	op->regHi = regHi;
 	op->operand_type = OT_OpModRM_reg_mem;
-	op->Encode = &OpModRM_reg_mem_Encode;
+	op->Encode = (OpEncodeFunction)&OpModRM_reg_mem_Encode;
 
 	return op;
 }
@@ -1220,7 +1220,7 @@ struct Op* OpModRM_rm_reg_only_new(enum Register regLo, enum Register regHi)
 	op->regLo = regLo;
 	op->regHi = regHi;
 	op->operand_type = OT_OpModRM_rm_reg_only;
-	op->Encode = &OpModRM_rm_reg_only_Encode;
+	op->Encode = (OpEncodeFunction)&OpModRM_rm_reg_only_Encode;
 
 	return op;
 }
@@ -1231,7 +1231,7 @@ struct Op* OpModRM_regF0_new(enum Register regLo, enum Register regHi)
 	op->regLo = regLo;
 	op->regHi = regHi;
 	op->operand_type = OT_OpModRM_regF0;
-	op->Encode = &OpModRM_regF0_Encode;
+	op->Encode = (OpEncodeFunction)&OpModRM_regF0_Encode;
 
 	return op;
 }
@@ -1241,7 +1241,7 @@ struct Op* OpReg_new(enum Register _register)
 	struct Op* op = Op_new();
 	op->_register = _register;
 	op->operand_type = OT_OpReg;
-	op->Encode = &OpReg_Encode;
+	op->Encode = (OpEncodeFunction)&OpReg_Encode;
 
 	return op;
 }
@@ -1250,7 +1250,7 @@ struct Op* OpRegSTi_new()
 {
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpRegSTi;
-	op->Encode = &OpRegSTi_Encode;
+	op->Encode = (OpEncodeFunction)&OpRegSTi_Encode;
 
 	return op;
 }
@@ -1260,7 +1260,7 @@ struct Op* OpIb_new(enum OpKind opKind)
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpIb;
 	op->opKind = opKind;
-	op->Encode = &OpIb_Encode;
+	op->Encode = (OpEncodeFunction)&OpIb_Encode;
 
 	return op;
 }
@@ -1270,7 +1270,7 @@ struct Op* OpImm_new(unsigned char value)
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpImm;
 	op->value = value;
-	op->Encode = &OpImm_Encode;
+	op->Encode = (OpEncodeFunction)&OpImm_Encode;
 	op->GetImmediateOpKind = &OpImm_GetImmediateOpKind;
 	return op;
 }
@@ -1279,7 +1279,7 @@ struct Op* OpIw_new()
 {
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpIw;
-	op->Encode = &OpIw_Encode;
+	op->Encode = (OpEncodeFunction)&OpIw_Encode;
 	op->GetImmediateOpKind = &OpIw_GetImmediateOpKind;
 	return op;
 }
@@ -1288,7 +1288,7 @@ struct Op* OpId_new()
 {
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpId;
-	op->Encode = &OpId_Encode;
+	op->Encode = (OpEncodeFunction)&OpId_Encode;
 	op->GetImmediateOpKind = &OpId_GetImmediateOpKind;
 	return op;
 }
@@ -1297,7 +1297,7 @@ struct Op* OpIq_new()
 {
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpIq;
-	op->Encode = &OpIq_Encode;
+	op->Encode = (OpEncodeFunction)&OpIq_Encode;
 	op->GetImmediateOpKind = &OpIq_GetImmediateOpKind;
 	return op;
 }
@@ -1306,7 +1306,7 @@ struct Op* OpX_new()
 {
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpX;
-	op->Encode = &OpX_Encode;
+	op->Encode = (OpEncodeFunction)&OpX_Encode;
 	return op;
 }
 
@@ -1314,7 +1314,7 @@ struct Op* OpY_new()
 {
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpY;
-	op->Encode = &OpY_Encode;
+	op->Encode = (OpEncodeFunction)&OpY_Encode;
 	return op;
 }
 
@@ -1322,7 +1322,7 @@ struct Op* OprDI_new()
 {
 	struct Op* op = Op_new();
 	op->operand_type = OT_OprDI;
-	op->Encode = &OprDI_Encode;
+	op->Encode = (OpEncodeFunction)&OprDI_Encode;
 	return op;
 }
 
@@ -1330,7 +1330,7 @@ struct Op* OpMRBX_new()
 {
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpMRBX;
-	op->Encode = &OpMRBX_Encode;
+	op->Encode = (OpEncodeFunction)&OpMRBX_Encode;
 	return op;
 }
 
@@ -1340,7 +1340,7 @@ struct Op* OpJ_new(enum OpKind opKind, int immSize)
 	op->operand_type = OT_OpJ;
 	op->opKind = opKind;
 	op->immSize = immSize;
-	op->Encode = &OpJ_Encode;
+	op->Encode = (OpEncodeFunction)&OpJ_Encode;
 	op->GetNearBranchOpKind = &OpJ_GetNearBranchOpKind;
 	return op;
 }
@@ -1350,7 +1350,7 @@ struct Op* OpJx_new(int immSize)
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpJx;
 	op->immSize = immSize;
-	op->Encode = &OpJx_Encode;
+	op->Encode = (OpEncodeFunction)&OpJx_Encode;
 	op->GetNearBranchOpKind = &OpJx_GetNearBranchOpKind;
 	return op;
 }
@@ -1360,7 +1360,7 @@ struct Op* OpJdisp_new(int displSize)
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpJdisp;
 	op->displSize = displSize;
-	op->Encode = &OpJdisp_Encode;
+	op->Encode = (OpEncodeFunction)&OpJdisp_Encode;
 	op->GetNearBranchOpKind = &OpJdisp_GetNearBranchOpKind;
 	return op;
 }
@@ -1371,7 +1371,7 @@ struct Op* OpVsib_new(enum Register regLo, enum Register regHi)
 	op->regLo = regLo;
 	op->regHi = regHi;
 	op->operand_type = OT_OpVsib;
-	op->Encode = &OpVsib_Encode;
+	op->Encode = (OpEncodeFunction)&OpVsib_Encode;
 
 	return op;
 }
@@ -1382,7 +1382,7 @@ struct Op* OpHx_new(enum Register regLo, enum Register regHi)
 	op->regLo = regLo;
 	op->regHi = regHi;
 	op->operand_type = OT_OpHx;
-	op->Encode = &OpHx_Encode;
+	op->Encode = (OpEncodeFunction)&OpHx_Encode;
 
 	return op;
 }
@@ -1393,7 +1393,7 @@ struct Op* OpIsX_new(enum Register regLo, enum Register regHi)
 	op->regLo = regLo;
 	op->regHi = regHi;
 	op->operand_type = OT_OpIsX;
-	op->Encode = &OpIsX_Encode;
+	op->Encode = (OpEncodeFunction)&OpIsX_Encode;
 
 	return op;
 }
@@ -1402,7 +1402,7 @@ struct Op* OpI4_new()
 {
 	struct Op* op = Op_new();
 	op->operand_type = OP_OpI4;
-	op->Encode = &OpI4_Encode;
+	op->Encode = (OpEncodeFunction)&OpI4_Encode;
 	op->GetImmediateOpKind = &OpI4_GetImmediateOpKind;
 	return op;
 }
