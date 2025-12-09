@@ -54,6 +54,8 @@ enum OperandType
 	OP_OprDI
 };
 
+typedef void (*EncodeFunction)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+
 struct Op 
 {
 	enum OperandType operand_type;
@@ -72,6 +74,63 @@ struct Op
 	enum OpKind(*GetImmediateOpKind)(struct Op* op);
 	enum OpKind(*GetNearBranchOpKind)(struct Op* op);
 	enum OpKind(*GetFarBranchOpKind)(struct Op* op);
+};
+
+struct OpCodeHandler
+{
+	enum HandlerTypeConfig handler_conf;
+	unsigned int OpCode;
+	bool Is2ByteOpCode;
+	int GroupIndex;
+	int RmGroupIndex;
+	bool IsSpecialInstr;
+	enum EncFlags2 EncFlags2;
+	enum EncFlags3 EncFlags3;
+	enum CodeSize OpSize;
+	enum CodeSize AddrSize;
+	struct Op* Operands;
+	unsigned int Operands_Length;
+
+	bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
+	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
+	//void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+	EncodeFunction Encode;
+
+	// DeclareDataHandler
+	int elemLength;
+	int maxLength;
+
+	// LegacyHandler
+	unsigned int tableByte1;
+	unsigned int tableByte2;
+	unsigned int mandatoryPrefix;
+
+	// VexHandler
+	unsigned int table;
+	unsigned int lastByte;
+	unsigned int mask_W_L;
+	unsigned int mask_L;
+	unsigned int W1;
+
+	// EvexHandler
+	enum WBit wbit;
+	enum TupleType tupleType;
+	unsigned int p1Bits;
+	unsigned int llBits;
+	unsigned int mask_W;
+	unsigned int mask_LL;
+
+	// XopHandler
+	//unsigned int lastByte;
+
+	// MvexHandler
+	//enum WBit wbit;
+	//unsigned int table;
+	//unsigned int p1Bits;
+	//unsigned int mask_W;
+
+	// D3nowHandler
+	unsigned int immediate;
 };
 
 enum OpKind OpDefault_GetImmediateOpKind(struct Op* op);
@@ -231,62 +290,6 @@ struct Op* Operands_MVEXOps();
 // Op Tables.
 struct Op* Operands_D3NowOps();
 
-struct OpCodeHandler
-{
-	enum HandlerTypeConfig handler_conf;
-	unsigned int OpCode;
-	bool Is2ByteOpCode;
-	int GroupIndex;
-	int RmGroupIndex;
-	bool IsSpecialInstr;
-	enum EncFlags2 EncFlags2;
-	enum EncFlags3 EncFlags3;
-	enum CodeSize OpSize;
-	enum CodeSize AddrSize;
-	struct Op* Operands;
-	unsigned int Operands_Length;
-
-	bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
-	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
-	void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
-
-	// DeclareDataHandler
-	int elemLength;
-	int maxLength;
-
-	// LegacyHandler
-	unsigned int tableByte1;
-	unsigned int tableByte2;
-	unsigned int mandatoryPrefix;
-
-	// VexHandler
-	unsigned int table;
-	unsigned int lastByte;
-	unsigned int mask_W_L;
-	unsigned int mask_L;
-	unsigned int W1;
-
-	// EvexHandler
-	enum WBit wbit;
-	enum TupleType tupleType;
-	unsigned int p1Bits;
-	unsigned int llBits;
-	unsigned int mask_W;
-	unsigned int mask_LL;
-
-	// XopHandler
-	//unsigned int lastByte;
-
-	// MvexHandler
-	//enum WBit wbit;
-	//unsigned int table;
-	//unsigned int p1Bits;
-	//unsigned int mask_W;
-
-	// D3nowHandler
-	unsigned int immediate;
-};
-
 extern unsigned char SegmentOverrides[6];
 extern unsigned int s_immSizes[19];
 
@@ -343,7 +346,9 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 	unsigned int operands_length,
 	bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue),
 	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2),
-	void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction));
+	//void (*EncodeParam)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+	EncodeFunction EncodeParam
+);
 
 void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value);
 

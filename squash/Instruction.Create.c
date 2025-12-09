@@ -84,7 +84,7 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 	unsigned int operands_length,
 	bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue),
 	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2),
-	void (*EncodeParam)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction))
+	EncodeFunction EncodeParam)
 {
 	(*o)->EncFlags2 = encFlags2;
 	(*o)->EncFlags3 = encFlags3;
@@ -425,23 +425,22 @@ void OpCodeHandlers_init()
 
 			if (code == INVALID)
 			{
-				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, false, NULL, 0, NULL, &OpCodeHandler_GetOpCode, &InvalidHandler_Encode);
-
+				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, false, NULL, 0, NULL, &OpCodeHandler_GetOpCode, (EncodeFunction)&InvalidHandler_Encode);
 				handler->handler_conf = InvalidHandler;
-				handler->Encode = InvalidHandler_Encode;
+				handler->Encode = (EncodeFunction)&InvalidHandler_Encode;
 				//handler = invalidHandler;
 			}
 			else if (code <= DeclareQword)
 			{
-				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, 0, NULL, &OpCodeHandler_GetOpCode, &DeclareDataHandler_Encode);
+				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, 0, NULL, &OpCodeHandler_GetOpCode, (EncodeFunction)&DeclareDataHandler_Encode);
 
 				handler->handler_conf = DeclareDataHandler;
-				handler->Encode = DeclareDataHandler_Encode;
+				handler->Encode = (EncodeFunction)&DeclareDataHandler_Encode;
 				//handler = new DeclareDataHandler(code);
 			}
 			else if (code == Zero_bytes)
 			{
-				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, 0, NULL, &OpCodeHandler_GetOpCode, &ZeroBytesHandler_Encode);
+				OpCodeHandler_init(&handler, EFLAGS2_None, EFLAGS3_Bit16or32 | EFLAGS3_Bit64, true, NULL, 0, NULL, &OpCodeHandler_GetOpCode, (EncodeFunction)&ZeroBytesHandler_Encode);
 
 				handler->handler_conf = ZeroBytesHandler;
 				//handler = new ZeroBytesHandler(code);
@@ -496,8 +495,8 @@ void OpCodeHandlers_init()
 				
 				operands = LegacyHandler_CreateOps(encFlags1, &operands_length);
 
-				OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, &LegacyHandler_Encode);
-				handler->Encode = &LegacyHandler_Encode;
+				OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, (EncodeFunction)&LegacyHandler_Encode);
+				handler->Encode = (EncodeFunction)&LegacyHandler_Encode;
 				handler->handler_conf = LegacyHandler;
 				//handler = new LegacyHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
 			}
@@ -541,7 +540,7 @@ void OpCodeHandlers_init()
 
 			operands = VEXHandler_CreateOps(encFlags1, &operands_length);
 
-			OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, &VEXHandler_Encode);
+			OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, (EncodeFunction)&VEXHandler_Encode);
 
 			handler->handler_conf = VexHandler;
 			//handler = new VexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
@@ -591,7 +590,7 @@ void OpCodeHandlers_init()
 
 			operands = EVEXHandler_CreateOps(encFlags1, &operands_length);
 
-			OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, &EVEXHandler_TryConvertToDisp8N, &OpCodeHandler_GetOpCode, &EVEXHandler_Encode);
+			OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, &EVEXHandler_TryConvertToDisp8N, &OpCodeHandler_GetOpCode, (EncodeFunction)&EVEXHandler_Encode);
 
 			handler->handler_conf = EvexHandler;
 			//handler = new EvexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
@@ -621,7 +620,7 @@ void OpCodeHandlers_init()
 
 			operands = XopHandler_CreateOps(encFlags1, &operands_length);
 
-			OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, &XopHandler_Encode);
+			OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, (EncodeFunction)&XopHandler_Encode);
 
 			handler->handler_conf = XopHandler;
 			//handler = new XopHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
@@ -636,7 +635,7 @@ void OpCodeHandlers_init()
 
 			operands = D3nowHandler_CreateOps(encFlags1, &operands_length);
 
-			OpCodeHandler_init(&handler, (enum EncFlags2)(((unsigned int)encFlags2 & ~(0xFFFF << (int)EFLAGS2_OpCodeShift)) | (0x000F << (int)EFLAGS2_OpCodeShift)), encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, &D3nowHandler_Encode);
+			OpCodeHandler_init(&handler, (enum EncFlags2)(((unsigned int)encFlags2 & ~(0xFFFF << (int)EFLAGS2_OpCodeShift)) | (0x000F << (int)EFLAGS2_OpCodeShift)), encFlags3Data, false, operands, operands_length, NULL, &OpCodeHandler_GetOpCode, (EncodeFunction)&D3nowHandler_Encode);
 
 			handler->handler_conf = D3nowHandler;
 			//handler = new D3nowHandler((enum EncFlags2)encFlags2[i], encFlags3);
@@ -663,7 +662,7 @@ void OpCodeHandlers_init()
 			
 			operands = MvexHandler_CreateOps(encFlags1, &operands_length);
 
-			OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, &MvexHandler_TryConvertToDisp8N, &OpCodeHandler_GetOpCode, &MvexHandler_Encode);
+			OpCodeHandler_init(&handler, encFlags2, encFlags3Data, false, operands, operands_length, &MvexHandler_TryConvertToDisp8N, &OpCodeHandler_GetOpCode, (EncodeFunction)&MvexHandler_Encode);
 
 			handler->handler_conf = MvexHandler;
 			//handler = new MvexHandler((enum EncFlags1)encFlags1[i], (enum EncFlags2)encFlags2[i], encFlags3);
