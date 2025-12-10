@@ -349,9 +349,8 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 	bool isSpecialInstr,
 	struct Op* operands,
 	unsigned int operands_length,
-	bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue),
-	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2),
-	//void (*EncodeParam)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+	TryConvertToDisp8NFunction tryConvertToDisp8N,
+	GetOpCodeFunction GetOpCode,
 	EncodeFunction EncodeParam
 );
 
