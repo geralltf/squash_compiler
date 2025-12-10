@@ -1,6 +1,7 @@
 #ifndef INSTRUCTION_CREATE
 #define INSTRUCTION_CREATE
 
+#include "RoundingControl.h"
 #include "OpCodeInfo.h"
 #include "Instruction.h"
 #include "OpCodeInfoData.h"
@@ -56,6 +57,8 @@ enum OperandType
 
 typedef void (*EncodeFunction)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
 typedef void (*OpEncodeFunction)(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+typedef bool(*TryConvertToDisp8NFunction)(struct Encoder*, struct OpCodeHandler*, struct Instruction*, int, signed char*);
+typedef unsigned int (*GetOpCodeFunction)(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
 
 struct Op 
 {
@@ -92,8 +95,8 @@ struct OpCodeHandler
 	struct Op* Operands;
 	unsigned int Operands_Length;
 
-	bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
-	unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
+	TryConvertToDisp8NFunction TryConvertToDisp8N; //bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
+	GetOpCodeFunction GetOpCode; //unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
 	//void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
 	EncodeFunction Encode;
 
@@ -140,44 +143,45 @@ enum OpKind OpDefault_GetNearBranchOpKind(struct Op* op);
 
 enum OpKind OpDefault_GetFarBranchOpKind(struct Op* op);
 
-extern void OpA_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//extern void OpA_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+
 enum OpKind OpA_GetFarBranchOpKind(struct Op* op);
 
-void OpO_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpO_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpModRM_rm_mem_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpModRM_rm_mem_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpModRM_rm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpModRM_rm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpModRM_reg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpModRM_reg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpRegEmbed8_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpRegEmbed8_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpModRM_reg_mem_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpModRM_reg_mem_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpReg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpReg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpRegSTi_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpRegSTi_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpImm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpImm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
 enum OpKind OpImm_GetImmediateOpKind(struct Op* op);
 
-void OpIw_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpIw_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
 enum OpKind OpIw_GetImmediateOpKind(struct Op* op);
 
-void OpId_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpId_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
 enum OpKind OpId_GetImmediateOpKind(struct Op* op);
 
-void OpIq_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpIq_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
 enum OpKind OpIq_GetImmediateOpKind(struct Op* op);
  
@@ -185,37 +189,37 @@ int GetXRegSize(enum OpKind opKind);
 
 int GetYRegSize(enum OpKind opKind);
 
-void OpX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpY_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpY_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
 int GetRegSize(enum OpKind opKind);
 
-void OprDI_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OprDI_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpMRBX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpMRBX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpJ_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpJ_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
 enum OpKind OpJ_GetNearBranchOpKind(struct Op* op);
 
-void OpJx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpJx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
 enum OpKind OpJx_GetNearBranchOpKind(struct Op* op);
 
-void OpJdisp_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpJdisp_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
 enum OpKind OpJdisp_GetNearBranchOpKind(struct Op* op);
 
-void OpVsib_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpVsib_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpHx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpHx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
-void OpIsX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpIsX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
 enum OpKind OpI4_GetImmediateOpKind(struct Op* op);
 
-void OpI4_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpI4_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
 
 struct Op* Op_new();
 

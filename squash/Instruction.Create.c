@@ -746,7 +746,7 @@ void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* ins
 
 void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	if (GetBitness(encoder) != 64 && GetOpKind(instruction, operand) == OK_Register && GetOpRegister(instruction, operand) >= op->regLo + 8 && GetOpRegister(instruction, operand) <= op->regLo + 15)
+	if (GetBitness(encoder) != 64 && Instruction_GetOpKind(instruction, operand) == OK_Register && GetOpRegister(instruction, operand) >= op->regLo + 8 && GetOpRegister(instruction, operand) <= op->regLo + 15)
 	{
 		encoder->EncoderFlags |= EncoderFlags_PF0;
 		Encoder_AddModRMRegister(encoder, instruction, operand, op->regLo + 8, op->regLo + 15);
@@ -759,13 +759,13 @@ void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instructi
 
 void OpReg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	Verify(operand, OK_Register, GetOpKind(instruction, operand));
+	Verify(operand, OK_Register, Instruction_GetOpKind(instruction, operand));
 	VerifyRegisters(operand, op->_register, GetOpRegister(instruction, operand));
 }
 
 void OpRegSTi_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	if (!Verify(operand, OK_Register, GetOpKind(instruction, operand)))
+	if (!Verify(operand, OK_Register, Instruction_GetOpKind(instruction, operand)))
 	{
 		return;
 	}
@@ -783,7 +783,7 @@ void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int o
 	switch (encoder->ImmSize)
 	{
 	case ImmSize_Size1:
-		if (!Verify(operand, OK_Immediate8_2nd, GetOpKind(instruction, operand)))
+		if (!Verify(operand, OK_Immediate8_2nd, Instruction_GetOpKind(instruction, operand)))
 		{
 			return;
 		}
@@ -791,7 +791,7 @@ void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int o
 		encoder->ImmediateHi = GetImmediate8_2nd(instruction);
 		break;
 	case ImmSize_Size2:
-		if (!Verify(operand, OK_Immediate8_2nd, GetOpKind(instruction, operand)))
+		if (!Verify(operand, OK_Immediate8_2nd, Instruction_GetOpKind(instruction, operand)))
 		{
 			return;
 		}
@@ -799,7 +799,7 @@ void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int o
 		encoder->ImmediateHi = GetImmediate8_2nd(instruction);
 		break;
 	default:
-		enum OpCodeOperandKind opImmKind = GetOpKind(instruction, operand);
+		enum OpCodeOperandKind opImmKind = Instruction_GetOpKind(instruction, operand);
 		if (!Verify(operand, op->opKind, opImmKind))
 		{
 			return;
@@ -812,7 +812,7 @@ void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int o
 
 void OpImm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	if (!Verify(operand, OK_Immediate8, GetOpKind(instruction, operand)))
+	if (!Verify(operand, OK_Immediate8, Instruction_GetOpKind(instruction, operand)))
 	{
 		return;
 	}
@@ -830,7 +830,7 @@ enum OpKind OpImm_GetImmediateOpKind(struct Op* op)
 
 void OpIw_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	if (!Verify(operand, OK_Immediate16, GetOpKind(instruction, operand)))
+	if (!Verify(operand, OK_Immediate16, Instruction_GetOpKind(instruction, operand)))
 	{
 		return;
 	}
@@ -845,7 +845,7 @@ enum OpKind OpIw_GetImmediateOpKind(struct Op* op)
 
 void OpId_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	enum OpKind opImmKind = GetOpKind(instruction, operand);
+	enum OpKind opImmKind = Instruction_GetOpKind(instruction, operand);
 	if (!Verify(operand, op->opKind, opImmKind))
 	{
 		return;
@@ -861,7 +861,7 @@ enum OpKind OpId_GetImmediateOpKind(struct Op* op)
 
 void OpIq_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	if (!Verify(operand, OK_Immediate64, GetOpKind(instruction, operand)))
+	if (!Verify(operand, OK_Immediate64, Instruction_GetOpKind(instruction, operand)))
 	{
 		return;
 	}
@@ -912,7 +912,7 @@ int GetYRegSize(enum OpKind opKind)
 
 void OpX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	int regXSize = GetXRegSize(GetOpKind(instruction, operand));
+	int regXSize = GetXRegSize(Instruction_GetOpKind(instruction, operand));
 	if (regXSize == 0) {
 		//encoder.ErrorMessage = $"Operand {operand}: expected OpKind = {nameof(OpKind.MemorySegSI)}, {nameof(OpKind.MemorySegESI)} or {nameof(OpKind.MemorySegRSI)}";
 		return;
@@ -939,7 +939,7 @@ void OpX_Encode(struct Encoder* encoder, struct Instruction* instruction, int op
 
 void OpY_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	int regYSize = GetYRegSize(GetOpKind(instruction, operand));
+	int regYSize = GetYRegSize(Instruction_GetOpKind(instruction, operand));
 	if (regYSize == 0) {
 		//encoder.ErrorMessage = $"Operand {operand}: expected OpKind = {nameof(OpKind.MemoryESDI)}, {nameof(OpKind.MemoryESEDI)} or {nameof(OpKind.MemoryESRDI)}";
 		return;
@@ -983,7 +983,7 @@ int GetRegSize(enum OpKind opKind)
 
 void OprDI_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	int regSize = GetRegSize(GetOpKind(instruction, operand));
+	int regSize = GetRegSize(Instruction_GetOpKind(instruction, operand));
 	if (regSize == 0) {
 		//encoder.ErrorMessage = $"Operand {operand}: expected OpKind = {nameof(OpKind.MemorySegDI)}, {nameof(OpKind.MemorySegEDI)} or {nameof(OpKind.MemorySegRDI)}";
 		return;
@@ -993,7 +993,7 @@ void OprDI_Encode(struct Encoder* encoder, struct Instruction* instruction, int 
 
 void OpMRBX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op)
 {
-	if (!Verify(operand, OK_Memory, GetOpKind(instruction, operand)))
+	if (!Verify(operand, OK_Memory, Instruction_GetOpKind(instruction, operand)))
 	{
 		return;
 	}
@@ -2467,7 +2467,7 @@ struct Instruction* Instruction_Create2Mem1Imm(enum Code code, struct MemoryOper
 	SetOp0Kind(instruction, OK_Memory);
 	InitMemoryOperand(instruction, memory);
 
-	InitializeSignedImmediate(&instruction, 1, immediate);		;
+	InitializeSignedImmediate(instruction, 1, immediate);		;
 
 	//Debug.Assert(instruction.OpCount == 2);
 	return instruction;
@@ -2493,7 +2493,7 @@ struct Instruction* Instruction_Create2(enum Code code, enum Register _register,
 	SetOp0Kind(instruction, OK_Register);
 	SetOp0Register(instruction, _register);
 
-	InitializeSignedImmediate(&instruction, 1, immediate);
+	InitializeSignedImmediate(instruction, 1, immediate);
 
 	//Debug.Assert(instruction.OpCount == 2);
 	return instruction;
@@ -3432,16 +3432,18 @@ bool MvexHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandle
 	int res = displ / n;
 	if (res * n == displ && SCHAR_MIN <= res && res <= SCHAR_MAX)
 	{
-		compressedValue = (signed char)res;
+		(*compressedValue) = (signed char)res;
 		return true;
 	}
 
-	compressedValue = 0;
+	(*compressedValue) = 0;
 	return false;
 }
 
 void MvexHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
 {
+	enum RoundingCongtrol rc;
+
 	Encoder_WritePrefixes(encoder, instruction, true);
 
 	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
@@ -3530,7 +3532,7 @@ void MvexHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, str
 					//encoder.ErrorMessage = "The instruction doesn't support suppress-all-exceptions";
 				}
 			}
-			enum RoundingCongtrol rc = GetRoundingControl(instruction);
+			rc = GetRoundingControl(instruction);
 			if (rc == RC_None) {
 				// Nothing
 			}
@@ -3658,11 +3660,11 @@ bool EVEXHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandle
 	int res = displ / n;
 	if (res * n == displ && SCHAR_MIN <= res && res <= SCHAR_MAX)
 	{
-		compressedValue = (signed char)res;
+		(*compressedValue) = (signed char)res;
 		return true;
 	}
 
-	compressedValue = 0;
+	(*compressedValue) = 0;
 	return false;
 }
 
@@ -3953,15 +3955,15 @@ void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instructio
 
 bool Encoder_TryConvertToDisp8N(struct Encoder* encoder, struct Instruction* instruction, int displ, signed char* compressedValue)
 {
-	bool(*tryConvertToDisp8N)(struct Encoder*, struct OpCodeHandler*, struct Instruction*, int, signed char*) = encoder->handler->TryConvertToDisp8N;
+	TryConvertToDisp8NFunction tryConvertToDisp8N = encoder->handler->TryConvertToDisp8N;
 
 	if (encoder->handler->handler_conf == EvexHandler)
 	{
-		encoder->handler->TryConvertToDisp8N = &EVEXHandler_TryConvertToDisp8N;
+		encoder->handler->TryConvertToDisp8N = (TryConvertToDisp8NFunction)&EVEXHandler_TryConvertToDisp8N;
 	}
 	else if (encoder->handler->handler_conf == MvexHandler)
 	{
-		encoder->handler->TryConvertToDisp8N = &MvexHandler_TryConvertToDisp8N;
+		encoder->handler->TryConvertToDisp8N = (TryConvertToDisp8NFunction)&MvexHandler_TryConvertToDisp8N;
 	}
 	else 
 	{
