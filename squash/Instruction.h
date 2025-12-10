@@ -1113,4 +1113,6 @@ bool IsMvexEvictionHint(struct Instruction* i);
 
 bool TryGetVsib64(struct Instruction* i, bool* vsib64);
 
+enum MvexTupleTypeLutKind TupleTypeLutKind(struct Instruction* i);
+
 #endif
