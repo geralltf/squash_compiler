@@ -11,6 +11,7 @@
 #include "OpCodeInfo.h"
 #include "OpCodeInfoData.h"
 #include "MvexEHBit.h"
+#include "RoundingControl.h"
 //#include "InstructionMemorySizes.h"
 
 enum InstrFlags1 // : uint
@@ -807,20 +808,6 @@ extern unsigned char MvexInfoData_Data[207 * 8];
 extern unsigned char MvexTupleTypeLut_Data[112];
 extern unsigned char MvexMemorySizeLut_Data[112];
 
-enum RoundingControl 
-{
-	/// <summary>No rounding mode</summary>
-	RC_None = 0,
-	/// <summary>Round to nearest (even)</summary>
-	RC_RoundToNearest = 1,
-	/// <summary>Round down (toward -inf)</summary>
-	RC_RoundDown = 2,
-	/// <summary>Round up (toward +inf)</summary>
-	RC_RoundUp = 3,
-	/// <summary>Round toward zero (truncate)</summary>
-	RC_RoundTowardZero = 4,
-};
-
 struct Instruction
 {
 	unsigned long nextRip;
@@ -931,6 +918,8 @@ void SetFarBranch32(struct Instruction* i, unsigned int value);
 void SetNearBranch64(struct Instruction* i, unsigned long value);
 void SetOp0Register(struct Instruction* i, enum Register value);
 void SetOp1Register(struct Instruction* i, enum Register value);
+void SetOp2Register(struct Instruction* i, enum Register value);
+void SetOp3Register(struct Instruction* i, enum Register value);
 void SetInternalImmediate8(struct Instruction* i, unsigned int value);
 void SetInternalImmediate8_2nd(struct Instruction* i, unsigned int value);
 void SetInternalImmediate16(struct Instruction* i, unsigned int value);
