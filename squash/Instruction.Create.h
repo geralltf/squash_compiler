@@ -55,9 +55,15 @@ enum OperandType
 	OP_OprDI
 };
 
-typedef void (*EncodeFunction)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
-typedef void (*OpEncodeFunction)(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
-typedef bool(*TryConvertToDisp8NFunction)(struct Encoder*, struct OpCodeHandler*, struct Instruction*, int, signed char*);
+struct Op;
+struct OpCodeHandler;
+struct Encoder;
+
+typedef struct Encoder encoder_t;
+
+typedef void (*EncodeFunction)(struct OpCodeHandler* self, encoder_t* encoder, struct Instruction* instruction);
+typedef void (*OpEncodeFunction)(encoder_t* encoder, struct Instruction* instruction, int operand, struct Op* op);
+typedef bool(*TryConvertToDisp8NFunction)(encoder_t*, struct OpCodeHandler*, struct Instruction*, int, signed char*);
 typedef unsigned int (*GetOpCodeFunction)(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
 
 struct Op 
@@ -251,7 +257,7 @@ struct Op* OpImm_new(unsigned char value);
 
 struct Op* OpIw_new();
 
-struct Op* OpId_new();
+struct Op* OpId_new(enum OpKind opKind);
 
 struct Op* OpIq_new();
 
