@@ -1285,10 +1285,11 @@ struct Op* OpIw_new()
 	return op;
 }
 
-struct Op* OpId_new()
+struct Op* OpId_new(enum OpKind opKind)
 {
 	struct Op* op = Op_new();
 	op->operand_type = OT_OpId;
+	op->opKind = opKind;
 	op->Encode = (OpEncodeFunction)&OpId_Encode;
 	op->GetImmediateOpKind = &OpId_GetImmediateOpKind;
 	return op;
@@ -1635,7 +1636,7 @@ enum OpKind GetImmediateOpKind(enum Code code, int operand)
 		return (enum OpKind)0;
 	}
 
-	OpCodeHandlers_init(code);
+	OpCodeHandlers_init();
 	struct OpCodeHandler handler = EncoderInternal_OpCodeHandlers_Handlers[index];
 
 	//auto handlers = EncoderInternal_OpCodeHandlers_Handlers;
@@ -1675,7 +1676,7 @@ enum OpKind GetImmediateOpKind(enum Code code, int operand)
 enum OpKind GetNearBranchOpKind(enum Code code, int operand) 
 {
 	int index = (int)code;
-	OpCodeHandlers_init(code);
+	OpCodeHandlers_init();
 	struct OpCodeHandler handler = EncoderInternal_OpCodeHandlers_Handlers[index];
 
 
@@ -1700,7 +1701,7 @@ enum OpKind GetNearBranchOpKind(enum Code code, int operand)
 enum OpKind GetFarBranchOpKind(enum Code code, int operand) 
 {
 	int index = (int)code;
-	OpCodeHandlers_init(code);
+	OpCodeHandlers_init();
 	struct OpCodeHandler handler = EncoderInternal_OpCodeHandlers_Handlers[index];
 
 
@@ -3443,7 +3444,7 @@ bool MvexHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandle
 
 void MvexHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
 {
-	enum RoundingCongtrol rc;
+	enum RoundingControl rc;
 
 	Encoder_WritePrefixes(encoder, instruction, true);
 
@@ -3954,7 +3955,7 @@ void Encoder_AddRegOrMem(struct Encoder* encoder, struct Instruction* instructio
 	Encoder_AddRegOrMemAll(encoder, instruction, operand, regLo, regHi, Register_None, Register_None, allowMemOp, allowRegOp);
 }
 
-bool Encoder_TryConvertToDisp8N(struct Encoder* encoder, struct Instruction* instruction, int displ, signed char* compressedValue)
+bool Encoder_TryConvertToDisp8N(encoder_t* encoder, struct Instruction* instruction, int displ, signed char* compressedValue)
 {
 	TryConvertToDisp8NFunction tryConvertToDisp8N = encoder->handler->TryConvertToDisp8N;
 
@@ -4642,6 +4643,7 @@ void Encoder_WriteImmediate(struct Encoder* encoder)
 /// <returns></returns>
 bool Encoder_TryEncode(struct Encoder* encoder, struct Instruction* instruction, unsigned long rip, unsigned int* encodedLength)
 {
+	enum Code code;
 	encoder->currentRip = rip;
 	encoder->eip = (unsigned int)rip;
 
@@ -4654,7 +4656,7 @@ bool Encoder_TryEncode(struct Encoder* encoder, struct Instruction* instruction,
 	//this.handler = handler;
 
 	encoder->handler = GetOpCodeHandler(GetCode(instruction));
-	enum OpCode code = encoder->handler->OpCode;
+	code = (enum Code)encoder->handler->OpCode;
 	encoder->OpCode = (unsigned int)code;
 
 	if (encoder->handler->GroupIndex >= 0)
