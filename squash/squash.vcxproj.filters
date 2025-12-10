@@ -170,5 +170,8 @@
     <ClInclude Include="Assembly.h">
       <Filter>Iced</Filter>
     </ClInclude>
+    <ClInclude Include="RoundingControl.h">
+      <Filter>Iced</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

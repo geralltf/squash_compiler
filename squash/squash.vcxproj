@@ -176,6 +176,7 @@
     <ClInclude Include="OpCodeInfoData.h" />
     <ClInclude Include="Optimiser.h" />
     <ClInclude Include="PrefixFlags.h" />
+    <ClInclude Include="RoundingControl.h" />
     <ClInclude Include="sb.h" />
     <ClInclude Include="SquashCompiler.h" />
     <ClInclude Include="Symbols.h" />
