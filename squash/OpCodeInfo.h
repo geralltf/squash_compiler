@@ -495,11 +495,11 @@ enum OpCodeOperandKind {
 	OpCodeOperandKind_tmm_vvvv = 108,
 };
 
-unsigned char OpCodeOperandKinds_LegacyOpKinds[76];
-unsigned char OpCodeOperandKinds_VexOpKinds[39];
-unsigned char OpCodeOperandKinds_XopOpKinds[19];
-unsigned char OpCodeOperandKinds_EvexOpKinds[32];
-unsigned char OpCodeOperandKinds_MvexOpKinds[9];
+extern unsigned char OpCodeOperandKinds_LegacyOpKinds[76];
+extern unsigned char OpCodeOperandKinds_VexOpKinds[39];
+extern unsigned char OpCodeOperandKinds_XopOpKinds[19];
+extern unsigned char OpCodeOperandKinds_EvexOpKinds[32];
+extern unsigned char OpCodeOperandKinds_MvexOpKinds[9];
 
 enum DisplSize 
 {
