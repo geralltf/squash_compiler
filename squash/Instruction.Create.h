@@ -58,11 +58,13 @@ enum OperandType
 struct Op;
 struct OpCodeHandler;
 struct Encoder;
+struct Op;
 
 typedef struct Encoder encoder_t;
+typedef struct Op opt_t;
 
 typedef void (*EncodeFunction)(struct OpCodeHandler* self, encoder_t* encoder, struct Instruction* instruction);
-typedef void (*OpEncodeFunction)(encoder_t* encoder, struct Instruction* instruction, int operand, struct Op* op);
+typedef void (*OpEncodeFunction)(encoder_t* encoder, struct Instruction* instruction, int operand, opt_t* op);
 typedef bool(*TryConvertToDisp8NFunction)(encoder_t*, struct OpCodeHandler*, struct Instruction*, int, signed char*);
 typedef unsigned int (*GetOpCodeFunction)(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
 
@@ -81,9 +83,9 @@ struct Op
 	int displSize;				// OpJdisp
 
 	OpEncodeFunction Encode;
-	enum OpKind(*GetImmediateOpKind)(struct Op* op);
-	enum OpKind(*GetNearBranchOpKind)(struct Op* op);
-	enum OpKind(*GetFarBranchOpKind)(struct Op* op);
+	enum OpKind(*GetImmediateOpKind)(opt_t* op);
+	enum OpKind(*GetNearBranchOpKind)(opt_t* op);
+	enum OpKind(*GetFarBranchOpKind)(opt_t* op);
 };
 
 struct OpCodeHandler
@@ -98,7 +100,7 @@ struct OpCodeHandler
 	enum EncFlags3 EncFlags3;
 	enum CodeSize OpSize;
 	enum CodeSize AddrSize;
-	struct Op* Operands;
+	opt_t* Operands;
 	unsigned int Operands_Length;
 
 	TryConvertToDisp8NFunction TryConvertToDisp8N; //bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
@@ -143,163 +145,163 @@ struct OpCodeHandler
 	unsigned int immediate;
 };
 
-enum OpKind OpDefault_GetImmediateOpKind(struct Op* op);
+enum OpKind OpDefault_GetImmediateOpKind(opt_t* op);
 
-enum OpKind OpDefault_GetNearBranchOpKind(struct Op* op);
+enum OpKind OpDefault_GetNearBranchOpKind(opt_t* op);
 
-enum OpKind OpDefault_GetFarBranchOpKind(struct Op* op);
+enum OpKind OpDefault_GetFarBranchOpKind(opt_t* op);
 
-//extern void OpA_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//extern void OpA_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-enum OpKind OpA_GetFarBranchOpKind(struct Op* op);
+enum OpKind OpA_GetFarBranchOpKind(opt_t* op);
 
-//void OpO_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpO_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpModRM_rm_mem_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpModRM_rm_mem_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpModRM_rm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpModRM_rm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpModRM_reg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpModRM_reg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpRegEmbed8_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpRegEmbed8_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpModRM_reg_mem_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpModRM_reg_mem_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpModRM_rm_reg_only_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpModRM_regF0_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpReg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpReg_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpRegSTi_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpRegSTi_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpIb_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpImm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpImm_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-enum OpKind OpImm_GetImmediateOpKind(struct Op* op);
+enum OpKind OpImm_GetImmediateOpKind(opt_t* op);
 
-//void OpIw_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpIw_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-enum OpKind OpIw_GetImmediateOpKind(struct Op* op);
+enum OpKind OpIw_GetImmediateOpKind(opt_t* op);
 
-//void OpId_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpId_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-enum OpKind OpId_GetImmediateOpKind(struct Op* op);
+enum OpKind OpId_GetImmediateOpKind(opt_t* op);
 
-//void OpIq_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpIq_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-enum OpKind OpIq_GetImmediateOpKind(struct Op* op);
+enum OpKind OpIq_GetImmediateOpKind(opt_t* op);
  
 int GetXRegSize(enum OpKind opKind);
 
 int GetYRegSize(enum OpKind opKind);
 
-//void OpX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpY_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpY_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
 int GetRegSize(enum OpKind opKind);
 
-//void OprDI_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OprDI_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpMRBX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpMRBX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpJ_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpJ_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-enum OpKind OpJ_GetNearBranchOpKind(struct Op* op);
+enum OpKind OpJ_GetNearBranchOpKind(opt_t* op);
 
-//void OpJx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpJx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-enum OpKind OpJx_GetNearBranchOpKind(struct Op* op);
+enum OpKind OpJx_GetNearBranchOpKind(opt_t* op);
 
-//void OpJdisp_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpJdisp_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-enum OpKind OpJdisp_GetNearBranchOpKind(struct Op* op);
+enum OpKind OpJdisp_GetNearBranchOpKind(opt_t* op);
 
-//void OpVsib_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpVsib_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpHx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpHx_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-//void OpIsX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpIsX_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-enum OpKind OpI4_GetImmediateOpKind(struct Op* op);
+enum OpKind OpI4_GetImmediateOpKind(opt_t* op);
 
-//void OpI4_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, struct Op* op);
+//void OpI4_Encode(struct Encoder* encoder, struct Instruction* instruction, int operand, opt_t* op);
 
-struct Op* Op_new();
+opt_t* Op_new();
 
-struct Op* OpA_new(int size);
+opt_t* OpA_new(int size);
 
-struct Op* OpO_new();
+opt_t* OpO_new();
 
-struct Op* OpModRM_rm_mem_only_new(bool mustUseSib);
+opt_t* OpModRM_rm_mem_only_new(bool mustUseSib);
 
-struct Op* OpModRM_rm_new(enum Register regLo, enum Register regHi);
+opt_t* OpModRM_rm_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpModRM_reg_new(enum Register regLo, enum Register regHi);
+opt_t* OpModRM_reg_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpRegEmbed8_new(enum Register regLo, enum Register regHi);
+opt_t* OpRegEmbed8_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpModRM_reg_mem_new(enum Register regLo, enum Register regHi);
+opt_t* OpModRM_reg_mem_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpModRM_rm_reg_only_new(enum Register regLo, enum Register regHi);
+opt_t* OpModRM_rm_reg_only_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpModRM_regF0_new(enum Register regLo, enum Register regHi);
+opt_t* OpModRM_regF0_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpReg_new(enum Register _register);
+opt_t* OpReg_new(enum Register _register);
 
-struct Op* OpRegSTi_new();
+opt_t* OpRegSTi_new();
 
-struct Op* OpIb_new(enum OpKind opKind);
+opt_t* OpIb_new(enum OpKind opKind);
 
-struct Op* OpImm_new(unsigned char value);
+opt_t* OpImm_new(unsigned char value);
 
-struct Op* OpIw_new();
+opt_t* OpIw_new();
 
-struct Op* OpId_new(enum OpKind opKind);
+opt_t* OpId_new(enum OpKind opKind);
 
-struct Op* OpIq_new();
+opt_t* OpIq_new();
 
-struct Op* OpX_new();
+opt_t* OpX_new();
 
-struct Op* OpY_new();
+opt_t* OpY_new();
 
-struct Op* OprDI_new();
+opt_t* OprDI_new();
 
-struct Op* OpMRBX_new();
+opt_t* OpMRBX_new();
 
-struct Op* OpJ_new(enum OpKind opKind, int immSize);
+opt_t* OpJ_new(enum OpKind opKind, int immSize);
 
-struct Op* OpJx_new(int immSize);
+opt_t* OpJx_new(int immSize);
 
-struct Op* OpJdisp_new(int displSize);
+opt_t* OpJdisp_new(int displSize);
 
-struct Op* OpVsib_new(enum Register regLo, enum Register regHi);
+opt_t* OpVsib_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpHx_new(enum Register regLo, enum Register regHi);
+opt_t* OpHx_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpIsX_new(enum Register regLo, enum Register regHi);
+opt_t* OpIsX_new(enum Register regLo, enum Register regHi);
 
-struct Op* OpI4_new();
-
-// Op Tables.
-struct Op* Operands_LegacyOps();
+opt_t* OpI4_new();
 
 // Op Tables.
-struct Op* Operands_VexOps();
+opt_t* Operands_LegacyOps();
 
 // Op Tables.
-struct Op* Operands_EVexOps();
+opt_t* Operands_VexOps();
 
 // Op Tables.
-struct Op* Operands_XopOps();
+opt_t* Operands_EVexOps();
 
 // Op Tables.
-struct Op* Operands_MVEXOps();
+opt_t* Operands_XopOps();
 
 // Op Tables.
-struct Op* Operands_D3NowOps();
+opt_t* Operands_MVEXOps();
+
+// Op Tables.
+opt_t* Operands_D3NowOps();
 
 extern unsigned char SegmentOverrides[6];
 extern unsigned int s_immSizes[19];
@@ -353,7 +355,7 @@ void OpCodeHandler_init(struct OpCodeHandler** o,
 	enum EncFlags2 encFlags2,
 	enum EncFlags3 encFlags3,
 	bool isSpecialInstr,
-	struct Op* operands,
+	opt_t* operands,
 	unsigned int operands_length,
 	TryConvertToDisp8NFunction tryConvertToDisp8N,
 	GetOpCodeFunction GetOpCode,
