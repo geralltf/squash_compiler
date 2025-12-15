@@ -3199,7 +3199,12 @@ void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value
 	list_t* next;
 	list_t* end = NULL;
 
-	unsigned char* p_byte = &byte_value;
+	unsigned char* m = (unsigned char*)malloc(sizeof(unsigned char));
+	*m = byte_value;
+
+	unsigned char* p_byte = m;
+
+	//printf("%02X ", (unsigned int)byte_value);
 
 	void* data = (void*)p_byte;
 

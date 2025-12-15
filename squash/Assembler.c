@@ -99,10 +99,17 @@ void GenerateCode(struct Assembler* assembler, astnode_t* astNode, char* output_
         }
         else 
         {
-            LogCritical("*-*-*-*-*- output assembly (.s) failed to compile here '%s' -*-*-*-*-*", output_file_name);
-        }
+            //LogCritical("*-*-*-*-*- output assembly (.s) failed to compile here '%s' -*-*-*-*-*", output_file_name);
 
-        test_assembler();
+            if (output_binary_file_name != NULL)
+            {
+                test_assembler();
+            }
+            else
+            {
+                LogCritical("*-*-*-*-*- output assembly (.s) failed to compile here '%s' -*-*-*-*-*", output_file_name);
+            }
+        }
 
         //unsigned long RIP_program_start_addr = 1400000; // TEST: Test address.
         //squash_assemble(assembler, RIP_program_start_addr);
@@ -1582,7 +1589,7 @@ unsigned char* squash_assemble(struct Assembler* assembler, unsigned long RIP_pr
     list_t* n;
     struct Instruction* inst;
     int encoded_length;
-    unsigned char stream_byte;
+    unsigned char* stream_byte;
     long stream_length = 0;
     long stream_index;
 
@@ -1625,11 +1632,11 @@ unsigned char* squash_assemble(struct Assembler* assembler, unsigned long RIP_pr
 
     while (n != NULL)
     {
-        stream_byte = *(unsigned char*)n->data;
+        stream_byte = (unsigned char*)n->data;
 
         if (sq_program_image != NULL)
         {
-            sq_program_image[stream_index] = stream_byte;
+            *(sq_program_image + stream_index) = *stream_byte;
         }
 
         stream_index++;
@@ -1761,10 +1768,20 @@ void test_assembler()
     unsigned char* sq_program_image = squash_assemble(c, RIP, &encoded_length);
     //Assemble(c, new StreamCodeWriter(stream), RIP);
 
+    // Print out program buffer machine code:
+    printf("Machine code by assembler:\n");
+    //printf("\n\n");
     for (int buffer_index = 0; buffer_index < encoded_length; buffer_index++)
     {
-        printf("%02X", (unsigned int)sq_program_image[buffer_index]);
+        unsigned char* p_byte = (sq_program_image + buffer_index);
+        unsigned char byte_value = *p_byte;
+
+        //printf("%02X ", (unsigned int)byte_value);
+
+        printf("%02X ", (unsigned int)sq_program_image[buffer_index]);
     }
+
+    //printf("\n");
 }
 
 //void asm_encode_instruction(unsigned char* mnumonic, unsigned char* register_name, unsigned char* operands)
