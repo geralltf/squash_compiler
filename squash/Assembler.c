@@ -1616,7 +1616,12 @@ unsigned char* squash_assemble(struct Assembler* assembler, unsigned long RIP_pr
     n = stream_bytes;
     stream_index = 0;
     *encoder_length = stream_length;
-    sq_program_image = (unsigned char*)malloc(sizeof(unsigned char) * stream_length);
+    sq_program_image = (unsigned char*)malloc(sizeof(unsigned char) * stream_length + 1);
+
+    for (int a = 0; a < stream_length + 1; a++)
+    {
+        sq_program_image[a] = 0x00;
+    }
 
     while (n != NULL)
     {
@@ -1755,6 +1760,11 @@ void test_assembler()
     int encoded_length;
     unsigned char* sq_program_image = squash_assemble(c, RIP, &encoded_length);
     //Assemble(c, new StreamCodeWriter(stream), RIP);
+
+    for (int buffer_index = 0; buffer_index < encoded_length; buffer_index++)
+    {
+        printf("%02X", (unsigned int)sq_program_image[buffer_index]);
+    }
 }
 
 //void asm_encode_instruction(unsigned char* mnumonic, unsigned char* register_name, unsigned char* operands)
