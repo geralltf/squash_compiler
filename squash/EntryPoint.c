@@ -180,5 +180,18 @@ int main(int argc, char* argv[])
         LogCritical("Compile .s file into specified executable or object file not implemented.");
     }
 
+    if (inputted_csource && output_binary)
+    {
+        if (FileReadString(input_file_name, &buffer, &length) && buffer)
+        {
+            LogInformation("\t begin compilation.");
+
+            squash_compiler = squash_compiler_new();
+            squash_compiler_init(squash_compiler, (char*)buffer, length);
+
+            CompileExpression(squash_compiler, output_file_name, output_bin_file_name, enable_tracing);
+        }
+    }
+
     return EXIT_SUCCESS;
 }
