@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 #include "Assembler.h"
 #include "Instruction.Create.h"
 
@@ -142,6 +144,7 @@ void GenerateCode(struct Assembler* assembler, astnode_t* astNode, char* output_
 /// </exception>
 char* Assemble(struct Assembler* assembler, astnode_t* node)
 {
+	struct Instruction* inst;
     StringBuilder* sb = sb_create();
 
     if (node != NULL)
@@ -255,6 +258,14 @@ char* Assemble(struct Assembler* assembler, astnode_t* node)
             sb_append(sb, "\n");
 
             //Console.WriteLine($"mov\trax,\t{node.Value}");
+			
+            long number_value = atol(node->Value);
+
+			struct AssemblerMemoryOperand* qword_operand2;
+			qword_operand2 = AssemblerMemoryOperand_new(MOS_Qword, Register_None, Register_RAX, Register_None, 1, number_value, AF_None);
+			
+			inst = mov64(Register_RAX, qword_operand2, assembler->Bitness); //inst = mov(rax, __qword_ptr[rax], Bitness); // c.mov(rax, __qword_ptr[rax]);
+			AddInstruction(assembler, inst);
         }
         else if (node->Type == AST_Variable)
         {
@@ -1769,7 +1780,9 @@ void test_assembler()
     //Assemble(c, new StreamCodeWriter(stream), RIP);
 
     // Print out program buffer machine code:
-    printf("Machine code by assembler:\n");
+    printf("Machine code by assembler: ");
+    printf("(Encoded length: %d)\n", encoded_length);
+
     //printf("\n\n");
     for (int buffer_index = 0; buffer_index < encoded_length; buffer_index++)
     {

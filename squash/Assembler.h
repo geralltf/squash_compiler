@@ -42,6 +42,8 @@ char* Assemble(struct Assembler* assembler, astnode_t* node);
 /// <param name="array">Data</param>
 //void db(unsigned char* array);
 
+struct Instruction* mov64(enum Register dst, struct AssemblerMemoryOperand* src, int Bitness);
+
 /// <summary>
 /// Adds data
 /// </summary>
