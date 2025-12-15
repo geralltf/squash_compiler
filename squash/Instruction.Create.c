@@ -3196,7 +3196,12 @@ void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value
 
 	list_t* stream = assembler->stream_bytes;
 	list_t* n;
-	void* data = (void*)byte_value;
+	list_t* next;
+	list_t* end = NULL;
+
+	unsigned char* p_byte = &byte_value;
+
+	void* data = (void*)p_byte;
 
 	if (stream == NULL)
 	{
@@ -3212,9 +3217,20 @@ void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value
 		n->next = NULL;
 		n->prev = stream;
 
-		// Append to end of stream linked list.
-		stream->next = n;
-		stream = n;
+		next = stream;
+		while (next != NULL)
+		{
+			end = next;
+			next = next->next;
+		}
+
+		if (end != NULL)
+		{
+			// Append to end of stream linked list.
+			end->next = n;
+			n->prev = end;
+		}
+		//stream = n;
 	}
 
 	assembler->stream_bytes = stream;
