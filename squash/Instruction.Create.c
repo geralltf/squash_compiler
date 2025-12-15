@@ -1,6 +1,6 @@
 #include "Instruction.Create.h"
 
-struct OpCodeHandler* EncoderInternal_OpCodeHandlers_Handlers = (struct OpCodeHandler*)NULL; // CodeEnumCount
+OpCodeHandler_t* EncoderInternal_OpCodeHandlers_Handlers = (OpCodeHandler_t*)NULL; // CodeEnumCount
 opt_t* ops_legacy = NULL;
 opt_t* ops_vex = NULL;
 opt_t* ops_evex = NULL;
@@ -44,7 +44,7 @@ unsigned int s_immSizes[19] =
 const char* ERROR_ONLY_1632_BIT_MODE = "The instruction can only be used in 16/32-bit mode";
 const char* ERROR_ONLY_64_BIT_MODE = "The instruction can only be used in 64-bit mode";
 
-struct OpCodeHandler* GetOpCodeHandlers()
+OpCodeHandler_t* GetOpCodeHandlers()
 {
 	if (EncoderInternal_OpCodeHandlers_Handlers == NULL)
 	{
@@ -54,15 +54,15 @@ struct OpCodeHandler* GetOpCodeHandlers()
 	return EncoderInternal_OpCodeHandlers_Handlers;
 }
 
-struct OpCodeHandler* GetOpCodeHandler(enum Code opcode)
+OpCodeHandler_t* GetOpCodeHandler(enum Code opcode)
 {
 	int index = (int)opcode;
 
-	struct OpCodeHandler* handlers = GetOpCodeHandlers();
+	OpCodeHandler_t* handlers = GetOpCodeHandlers();
 
-	struct OpCodeHandler handler =  handlers[index];
+	OpCodeHandler_t* handler =  (handlers + index);
 
-	return &handler;
+	return handler;
 }
 
 enum EncodingKind GetEncodingKindByOpcode(enum Code opcode)
@@ -76,7 +76,7 @@ enum EncodingKind GetEncodingKindByOpcode(enum Code opcode)
 	return ekind;
 }
 
-void OpCodeHandler_init(struct OpCodeHandler** o,
+void OpCodeHandler_init(OpCodeHandler_t** o,
 	enum EncFlags2 encFlags2,
 	enum EncFlags3 encFlags3,
 	bool isSpecialInstr,
@@ -111,7 +111,7 @@ opt_t* LegacyHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
 	if (op3 != 0) 
 	{
 		//Debug.Assert(op0 != 0 && op1 != 0 && op2 != 0);
-		opt_t* w = (opt_t*)malloc(sizeof(struct Op) * 4);
+		opt_t* w = (opt_t*)malloc(sizeof(opt_t) * 4);
 		w[0] = ops_legacy[op0 - 1];
 		w[1] = ops_legacy[op1 - 1];
 		w[2] = ops_legacy[op2 - 1];
@@ -122,7 +122,7 @@ opt_t* LegacyHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
 	if (op2 != 0) 
 	{
 		//Debug.Assert(op0 != 0 && op1 != 0);
-		opt_t* w = (opt_t*)malloc(sizeof(struct Op) * 3);
+		opt_t* w = (opt_t*)malloc(sizeof(opt_t) * 3);
 		w[0] = ops_legacy[op0 - 1];
 		w[1] = ops_legacy[op1 - 1];
 		w[2] = ops_legacy[op2 - 1];
@@ -132,7 +132,7 @@ opt_t* LegacyHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
 	if (op1 != 0) 
 	{
 		//Debug.Assert(op0 != 0);
-		opt_t* w = (opt_t*)malloc(sizeof(struct Op) * 2);
+		opt_t* w = (opt_t*)malloc(sizeof(opt_t) * 2);
 		w[0] = ops_legacy[op0 - 1];
 		w[1] = ops_legacy[op1 - 1];
 		*operands_length = 2;
@@ -140,12 +140,14 @@ opt_t* LegacyHandler_CreateOps(enum EncFlags1 encFlags1, int* operands_length)
 	}
 	if (op0 != 0)
 	{
-		opt_t* w = (opt_t*)malloc(sizeof(struct Op) * 1);
+		opt_t* w = (opt_t*)malloc(sizeof(opt_t) * 1);
 		w[0] = ops_legacy[op0 - 1];
 		*operands_length = 1;
 		return w;
 	}
-		
+	
+	*operands_length = 0;
+
 	return NULL;
 }
 
@@ -391,7 +393,7 @@ void OpCodeHandlers_init()
 {
 	enum Code code;
 	enum EncodingKind ekind;
-	struct OpCodeHandler* handler;
+	OpCodeHandler_t* handler;
 	int i;
 	enum LegacyOpCodeTable tbl_type;
 	unsigned int encFlags1;
@@ -405,7 +407,7 @@ void OpCodeHandlers_init()
 
 	//auto handlers = new OpCodeHandler[IcedConstants.CodeEnumCount];
 	
-	EncoderInternal_OpCodeHandlers_Handlers = (struct OpCodeHandler*)malloc(sizeof(struct OpCodeHandler) * CodeEnumCount);
+	EncoderInternal_OpCodeHandlers_Handlers = (OpCodeHandler_t*)malloc(sizeof(OpCodeHandler_t) * CodeEnumCount);
 
 	for (i = 0; i < CodeEnumCount; i++) // 4936.
 	{
@@ -413,7 +415,7 @@ void OpCodeHandlers_init()
 		encFlags2 = EncoderData_EncFlags2[i];
 		encFlags3Data = EncoderData_EncFlags3[i];
 		code = (enum Code)i;
-		//handler = (struct OpCodeHandler*)malloc(sizeof(struct OpCodeHandler));
+		//handler = (OpCodeHandler_t*)malloc(sizeof(struct OpCodeHandler));
 		handler = (EncoderInternal_OpCodeHandlers_Handlers + i);
 
 		// Defaults.
@@ -3218,17 +3220,17 @@ void Encoder_WriteByteInternal(struct Encoder* encoder, unsigned char byte_value
 	assembler->stream_bytes = stream;
 	// stream_bytes now is a linked list of bytes.
 }
-unsigned int OpCodeHandler_GetOpCode(struct OpCodeHandler* self, enum EncFlags2 encFlags2)
+unsigned int OpCodeHandler_GetOpCode(OpCodeHandler_t* self, enum EncFlags2 encFlags2)
 {
 	return (unsigned short)((unsigned int)encFlags2 >> (int)EFLAGS2_OpCodeShift);
 }
 
-void InvalidHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+void InvalidHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction)
 {
 	//const string ERROR_MESSAGE = "Can't encode an invalid instruction";
 }
 
-void DeclareDataHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+void DeclareDataHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction)
 {
 	enum Code opcode = (enum Code)instruction->code;
 
@@ -3270,12 +3272,12 @@ void DeclareDataHandler_Encode(struct OpCodeHandler* self, struct Encoder* encod
 	}
 }
 
-void ZeroBytesHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+void ZeroBytesHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction)
 {
 	// Do nothing.
 }
 
-void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+void LegacyHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction)
 {
 	unsigned int b = self->mandatoryPrefix;
 	Encoder_WritePrefixes(encoder, instruction, b != 0xF3);
@@ -3310,7 +3312,7 @@ void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, s
 	}
 }
 
-void VEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+void VEXHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction)
 {
 	bool canWriteF3 = true;
 	Encoder_WritePrefixes(encoder, instruction, canWriteF3);
@@ -3351,7 +3353,7 @@ void VEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, stru
 	}
 }
 
-void EVEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+void EVEXHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction)
 {
 	unsigned int encoderFlags = (unsigned int)encoder->EncoderFlags;
 
@@ -3438,7 +3440,7 @@ void EVEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, str
 	Encoder_WriteByteInternal(encoder, b);
 }
 
-void XopHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+void XopHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction)
 {
 	Encoder_WritePrefixes(encoder, instruction, true);
 
@@ -3461,7 +3463,7 @@ void XopHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, stru
 	Encoder_WriteByteInternal(encoder, b);
 }
 
-bool MvexHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue)
+bool MvexHandler_TryConvertToDisp8N(struct Encoder* encoder, OpCodeHandler_t* handler, struct Instruction* instruction, int displ, signed char* compressedValue)
 {
 	struct MvexInfo* mvex = MvexInfo_new(GetCode(instruction));
 
@@ -3480,7 +3482,7 @@ bool MvexHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandle
 	return false;
 }
 
-void MvexHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+void MvexHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction)
 {
 	enum RoundingControl rc;
 
@@ -3616,7 +3618,7 @@ void MvexHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, str
 	Encoder_WriteByteInternal(encoder, b);
 }
 
-void D3nowHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction)
+void D3nowHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction)
 {
 	Encoder_WritePrefixes(encoder, instruction, true);
 	Encoder_WriteByteInternal(encoder, 0x0F);
@@ -3694,7 +3696,7 @@ unsigned int TupleTypeTable_GetDisp8N(enum TupleType tupleType, bool bcst)
 	return tupleTypeData[index];
 }
 
-bool EVEXHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue)
+bool EVEXHandler_TryConvertToDisp8N(struct Encoder* encoder, OpCodeHandler_t* handler, struct Instruction* instruction, int displ, signed char* compressedValue)
 {
 	int n = (int)TupleTypeTable_GetDisp8N(handler->tupleType, (encoder->EncoderFlags & EncoderFlags_Broadcast) != 0);
 	int res = displ / n;

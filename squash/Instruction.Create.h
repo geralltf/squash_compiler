@@ -59,14 +59,16 @@ struct Op;
 struct OpCodeHandler;
 struct Encoder;
 struct Op;
+struct OpCodeHandler;
 
 typedef struct Encoder encoder_t;
 typedef struct Op opt_t;
+typedef struct OpCodeHandler OpCodeHandler_t;
 
-typedef void (*EncodeFunction)(struct OpCodeHandler* self, encoder_t* encoder, struct Instruction* instruction);
+typedef void (*EncodeFunction)(OpCodeHandler_t* self, encoder_t* encoder, struct Instruction* instruction);
 typedef void (*OpEncodeFunction)(encoder_t* encoder, struct Instruction* instruction, int operand, opt_t* op);
-typedef bool(*TryConvertToDisp8NFunction)(encoder_t*, struct OpCodeHandler*, struct Instruction*, int, signed char*);
-typedef unsigned int (*GetOpCodeFunction)(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
+typedef bool(*TryConvertToDisp8NFunction)(encoder_t*, OpCodeHandler_t*, struct Instruction*, int, signed char*);
+typedef unsigned int (*GetOpCodeFunction)(OpCodeHandler_t* self, enum EncFlags2 encFlags2);
 
 struct Op 
 {
@@ -103,9 +105,9 @@ struct OpCodeHandler
 	opt_t* Operands;
 	unsigned int Operands_Length;
 
-	TryConvertToDisp8NFunction TryConvertToDisp8N; //bool(*TryConvertToDisp8N)(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
-	GetOpCodeFunction GetOpCode; //unsigned int (*GetOpCode)(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
-	//void (*Encode)(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+	TryConvertToDisp8NFunction TryConvertToDisp8N; //bool(*TryConvertToDisp8N)(struct Encoder* encoder, OpCodeHandler_t* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
+	GetOpCodeFunction GetOpCode; //unsigned int (*GetOpCode)(OpCodeHandler_t* self, enum EncFlags2 encFlags2);
+	//void (*Encode)(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction);
 	EncodeFunction Encode;
 
 	// DeclareDataHandler
@@ -325,7 +327,7 @@ struct Encoder
 	//unsigned int immSizes[19];
 	unsigned long currentRip;
 	char* errorMessage;
-	struct OpCodeHandler* handler;
+	OpCodeHandler_t* handler;
 	unsigned int eip;
 	unsigned int displAddr;
 	unsigned int immAddr;
@@ -351,7 +353,7 @@ struct Encoder
 
 enum EncodingKind GetEncodingKindByOpcode(enum Code opcode);
 
-void OpCodeHandler_init(struct OpCodeHandler** o,
+void OpCodeHandler_init(OpCodeHandler_t** o,
 	enum EncFlags2 encFlags2,
 	enum EncFlags3 encFlags3,
 	bool isSpecialInstr,
@@ -388,36 +390,36 @@ void Encoder_AddBranchX(struct Encoder* encoder, int immSize, struct Instruction
 
 void Encoder_AddBranchDisp(struct Encoder* encoder, int displSize, struct Instruction* instruction, int operand);
 
-unsigned int OpCodeHandler_GetOpCode(struct OpCodeHandler* self, enum EncFlags2 encFlags2);
+unsigned int OpCodeHandler_GetOpCode(OpCodeHandler_t* self, enum EncFlags2 encFlags2);
 
-void InvalidHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+void InvalidHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction);
 
-void DeclareDataHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+void DeclareDataHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction);
 
-void ZeroBytesHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+void ZeroBytesHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction);
 
-void LegacyHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+void LegacyHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction);
 
-void VEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+void VEXHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction);
 
-void EVEXHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+void EVEXHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction);
 
-void XopHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+void XopHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction);
 
-bool MvexHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
+bool MvexHandler_TryConvertToDisp8N(struct Encoder* encoder, OpCodeHandler_t* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
 
-void MvexHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+void MvexHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction);
 
-void D3nowHandler_Encode(struct OpCodeHandler* self, struct Encoder* encoder, struct Instruction* instruction);
+void D3nowHandler_Encode(OpCodeHandler_t* self, struct Encoder* encoder, struct Instruction* instruction);
 
 
 unsigned int TupleTypeTable_GetDisp8N(enum TupleType tupleType, bool bcst);
 
-bool EVEXHandler_TryConvertToDisp8N(struct Encoder* encoder, struct OpCodeHandler* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
+bool EVEXHandler_TryConvertToDisp8N(struct Encoder* encoder, OpCodeHandler_t* handler, struct Instruction* instruction, int displ, signed char* compressedValue);
 
 void OpCodeHandlers_init();
-struct OpCodeHandler* GetOpCodeHandlers();
-struct OpCodeHandler* GetOpCodeHandler(enum Code opcode);
+OpCodeHandler_t* GetOpCodeHandlers();
+OpCodeHandler_t* GetOpCodeHandler(enum Code opcode);
 
 /// <summary>
 /// Creates a <c>db</c>/<c>.byte</c> asm directive
