@@ -279,6 +279,12 @@ char* Assemble(struct Assembler* assembler, astnode_t* node)
             //Console.WriteLine($"mov\trax,\t[{node.VarSymbol.Name}]");
             //Console.WriteLine($"mov [{node.VarSymbol.Name}], rax");
 
+            struct Label* data_var_location = create_label(assembler, node->VarSymbol->Name); //TODO: check lookup for variable by name and use its instance when found otherwise create a new label instance and use that.
+
+			// Labels can be referenced by memory operands (64-bit only) and call/jmp/jcc/loopcc instructions
+			inst = Instruction_Create2Mem(Lea_r64_m, Register_RAX, ToMemoryOperand(ToMemoryOperandFromLabel(data_var_location), assembler->Bitness)); // c.lea(rcx, __[data1]); // mov rcx, data1
+			AddInstruction(assembler, inst);
+
             sb_append(sb, Assemble(assembler, node->Left));
             sb_append(sb, Assemble(assembler, node->Right));
         }
@@ -1702,7 +1708,7 @@ void test_assembler()
     AddInstruction(c, inst);
 
     // Labels can be referenced by memory operands (64-bit only) and call/jmp/jcc/loopcc instructions
-    inst = Instruction_Create2Mem(Lea_r64_m, Register_RCX, ToMemoryOperand(ToMemoryOperandFromLabel(data1), Bitness)); // c.lea(rcx, __[data1]);
+    inst = Instruction_Create2Mem(Lea_r64_m, Register_RCX, ToMemoryOperand(ToMemoryOperandFromLabel(data1), Bitness)); // c.lea(rcx, __[data1]); // mov rcx, data1
     AddInstruction(c, inst);
 
     // The assembler has prefix properties that will be added to the following instruction
