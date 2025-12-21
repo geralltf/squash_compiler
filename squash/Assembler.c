@@ -1,9 +1,12 @@
 #include <stdlib.h>
+#include <string.h>
 
 #include "Assembler.h"
 #include "Instruction.Create.h"
 #include "Dictionary.h"
 //#include "Symbols.h"
+
+Dictionary* dict_symbols_variables = NULL;
 
 struct Assembler* assembler_new()
 {
@@ -27,6 +30,74 @@ struct Assembler* assembler_new()
         assembler->Is_Linux = false;
     }
     return assembler;
+}
+
+int symbol_var_compararatorfunc(void* left, void* right)
+{
+    int compareResult = 0;
+    char* leftc = (char*)left;
+    char* rightc = (char*)right;
+
+    compareResult = strcmp(leftc, rightc);
+
+    return compareResult;
+}
+
+Dictionary* dict_symbol_var()
+{
+    if (dict_symbols_variables == NULL)
+    {
+        dict_symbols_variables = DictionaryNew(&symbol_var_compararatorfunc);
+    }
+    return dict_symbols_variables;
+}
+
+struct Label* localsymbols_define(
+    //enum VarSymbolType type,
+    char* name, 
+    struct Label* variable
+)
+{
+    DictionaryPair* variable_pair_out = (DictionaryPair*)malloc(sizeof(DictionaryPair));
+    DictionaryPair* variable_pair = DictionaryPairNew();
+    variable_pair->key = (void*)name;
+    variable_pair->value = (void*)variable;
+    //variable_pair->type = type;
+    variable_pair->type = VAR_Undefined;
+
+    if (DictionaryInsertPair(dict_symbol_var(), variable_pair, &variable_pair_out))
+    {
+
+    }
+
+    return variable;
+}
+
+bool localsymbols_variablehaskey(char* name)
+{
+    DictionaryPair* found;
+
+    found = DictionaryGetPair(dict_symbol_var(), (void*)name);
+
+    if (found != NULL)
+    {
+        return true;
+    }
+    return false;
+}
+
+struct Label* localsymbols_lookupvariable(char* name)
+{
+    DictionaryPair* found;
+
+    found = DictionaryGetPair(dict_symbol_var(), (void*)name);
+
+    if (found != NULL)
+    {
+        struct Label* symbol_label = (struct Label*)found->value;
+        return symbol_label;
+    }
+    return NULL;
 }
 
 /// <summary>
@@ -283,10 +354,26 @@ char* Assemble(struct Assembler* assembler, astnode_t* node)
 
             //SymbolTable_LookupVariable()
 
-            struct Label* data_var_location = create_label(assembler, node->VarSymbol->Name); //TODO: check lookup for variable by name and use its instance when found otherwise create a new label instance and use that.
+            //DictionaryGetPair
+            struct Label* data_var_location = NULL;
+
+            if (localsymbols_variablehaskey(node->VarSymbol->Name))
+            {
+
+            }
+            else
+            {
+                data_var_location = create_label(assembler, node->VarSymbol->Name);
+
+                localsymbols_define(node->VarSymbol->Name, data_var_location);
+            }
+
+            struct Label* data_var_location = localsymbols_lookupvariable(node->VarSymbol->Name);
+
+            //struct Label* data_var_location = create_label(assembler, node->VarSymbol->Name); //TODO: check lookup for variable by name and use its instance when found otherwise create a new label instance and use that.
 
 			// Labels can be referenced by memory operands (64-bit only) and call/jmp/jcc/loopcc instructions
-			inst = Instruction_Create2Mem(Lea_r64_m, Register_RAX, ToMemoryOperand(ToMemoryOperandFromLabel(data_var_location), assembler->Bitness)); // c.lea(rcx, __[data1]); // mov rcx, data1
+			inst = Instruction_Create2Mem(Lea_r64_m, Register_RAX, ToMemoryOperand(ToMemoryOperandFromLabel(data_var_location), assembler->Bitness)); // c.lea(rax, __[data1]); // mov rax, data1
 			AddInstruction(assembler, inst);
 
             sb_append(sb, Assemble(assembler, node->Left));
