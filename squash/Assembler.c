@@ -2,6 +2,8 @@
 
 #include "Assembler.h"
 #include "Instruction.Create.h"
+#include "Dictionary.h"
+//#include "Symbols.h"
 
 struct Assembler* assembler_new()
 {
@@ -278,6 +280,8 @@ char* Assemble(struct Assembler* assembler, astnode_t* node)
 
             //Console.WriteLine($"mov\trax,\t[{node.VarSymbol.Name}]");
             //Console.WriteLine($"mov [{node.VarSymbol.Name}], rax");
+
+            //SymbolTable_LookupVariable()
 
             struct Label* data_var_location = create_label(assembler, node->VarSymbol->Name); //TODO: check lookup for variable by name and use its instance when found otherwise create a new label instance and use that.
 
