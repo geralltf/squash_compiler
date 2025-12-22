@@ -21,6 +21,32 @@ struct Assembler* assembler_new();
 /// </exception>
 void GenerateCode(struct Assembler* assembler, astnode_t* astNode, char* output_file_name, char* output_binary_file_name, bool enable_tracing);
 
+void functionbody_assemble(astnode_t* node, StringBuilder* sb, struct Assembler* assembler);
+
+void functionargs_extract_assemble(astnode_t* node, StringBuilder* sb, struct Assembler* assembler);
+
+void functionreturn_assemble(StringBuilder* sb, struct Assembler* assembler, astnode_t* node);
+
+void variableassignment_assemble(StringBuilder* sb, struct Assembler* assembler, astnode_t* node);
+
+void number_assemble(StringBuilder* sb, astnode_t* node, struct Assembler* assembler);
+
+void variable_assemble(StringBuilder* sb, astnode_t* node, struct Assembler* assembler);
+
+void functioncall_assemble(astnode_t* node, StringBuilder* sb, struct Assembler* assembler);
+
+void binop_assemble(StringBuilder* sb, struct Assembler* assembler, astnode_t* node);
+
+void unaryop_assemble(StringBuilder* sb, struct Assembler* assembler, astnode_t* node);
+
+void functionarg_assemble(StringBuilder* sb, struct Assembler* assembler, astnode_t* node);
+
+void functiondefinition_assemble(struct Assembler* assembler, StringBuilder* sb, astnode_t* node);
+
+void variabledefine_assemble(StringBuilder* sb, struct Assembler* assembler, astnode_t* node);
+
+void functionbody_assemble2(astnode_t* node, StringBuilder* sb, struct Assembler* assembler);
+
 /// <summary>
 /// Assembles the specified ASTNode into assembly language instructions.
 /// This is the compiler backend.
