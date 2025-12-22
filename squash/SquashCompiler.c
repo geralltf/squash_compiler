@@ -343,6 +343,592 @@ bool tryParseFloat(const char* str, float* result)
     return true; // Indicate success
 }
 
+astnode_t* returnkeyword_parse(struct SquashCompiler* squash_compiler)
+{
+    squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Skip past return keyword.
+
+    if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_SemiColon)
+    {
+        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Skip past whitespace.
+        //astnode_t* left = ParseExpression(0, rootAST);
+        astnode_t* left = NULL;
+
+        LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST with left=null");
+
+        //ASTNode? left = null;
+        astnode_t* returnNode = ast_node_new();
+        ast_node_init_bt(&returnNode, AST_FunctionReturn, "", AST_VALUE_UNDEFINED, left, NULL);
+        //ASTNode returnNode = new ASTNode(ASTNodeType.FunctionReturn, "", left, null);
+
+        //TODO: Check for curley brace to find out the end of a function definition
+        return returnNode;
+    }
+    else
+    {
+        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Skip past whitespace.
+        astnode_t* left = ParseExpression(squash_compiler, 0);
+
+        if (left == NULL)
+        {
+            LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST with lhs=null");
+        }
+        else
+        {
+            LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST");
+        }
+
+        astnode_t* returnNode = ast_node_new();
+        ast_node_init_bt(&returnNode, AST_FunctionReturn, "", AST_VALUE_UNDEFINED, left, NULL);
+        //ASTNode returnNode = new ASTNode(ASTNodeType.FunctionReturn, "", left, null);
+
+        //TODO: Check for curley brace to find out the end of a function definition
+        return returnNode;
+    }
+}
+
+astnode_t* varkeyword_parse(struct SquashCompiler* squash_compiler)
+{
+    LogInformation("ParsePrimaryExpression(): made a var variable of some inferred type AST");
+    astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_VarAutomatic);
+    astnode_t* left = ParseExpression(squash_compiler, 0);
+    varDefineNode->Left = left;
+    parseEndStatement(squash_compiler, varDefineNode);
+    return varDefineNode;
+}
+
+astnode_t* doublekeyword_parse(struct SquashCompiler* squash_compiler, int* retFlag)
+{
+    (*retFlag) = 1;
+    LogInformation("ParsePrimaryExpression(): double keyword");
+    int pos = lexer_getposition(squash_compiler->lexer);
+    squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+    if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Whitespace)
+    {
+        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Identifier)
+        {
+            int pos2 = lexer_getposition(squash_compiler->lexer);
+            char* functIdentifierName = squash_compiler->currentToken->Value;
+
+            squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+            if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Parenthesis
+                && strcmp(squash_compiler->currentToken->Value, "(") == 0)
+            {
+                LogInformation("ParsePrimaryExpression(): double keyword parse function definition '%s'", functIdentifierName);
+
+                astnode_t* functDefNode = ParseFunctionDefinition(squash_compiler, AST_Double, functIdentifierName);
+
+                if (functDefNode != NULL)
+                {
+                    return functDefNode;
+                }
+            }
+        }
+    }
+    lexer_setposition(squash_compiler->lexer, pos);
+
+    astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_Double);
+    if (varDefineNode != NULL)
+    {
+        astnode_t* left = ParseExpression(squash_compiler, 0);
+        char* ast_str = ast_tostring(varDefineNode);
+        char* ast_strB = ast_tostring(left);
+        LogInformation("ParsePrimaryExpression(): var define node: %s, left expr: %s", ast_str, ast_strB);
+        varDefineNode->Left = left;
+        parseEndStatement(squash_compiler, varDefineNode);
+        return varDefineNode;
+    }
+    else
+    {
+        lexer_setposition(squash_compiler->lexer, pos);
+        astnode_t* varDecla = ParseVariableDeclaration(squash_compiler, AST_Double);
+
+        if (varDecla != NULL)
+        {
+            return varDecla;
+        }
+    }
+    (*retFlag) = 0;
+    return NULL;
+}
+
+astnode_t* identifier_parse(struct SquashCompiler* squash_compiler, bool rememberLocation, int pos, int* retFlag)
+{
+    (*retFlag) = 1;
+    int pos2 = lexer_getposition(squash_compiler->lexer);
+    char* functIdentifierName = squash_compiler->currentToken->Value;
+    if (strcmp(functIdentifierName, "main") == 0)
+    {
+        // Parse entry point main() function.
+        astnode_t* mainFunct = ParseEntryPoint(squash_compiler, functIdentifierName);
+
+        if (mainFunct != NULL)
+        {
+            return mainFunct;
+        }
+    }
+    else
+    {
+        int pos3 = lexer_getposition(squash_compiler->lexer);
+        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+
+        if (squash_compiler->currentToken->Type == AST_Parenthesis && strcmp(squash_compiler->currentToken->Value, "(") == 0)
+        {
+            //currentToken = token1;
+
+            LogInformation("ParsePrimaryExpression(): ParseFunctionDefinition int keyword function is: %s", functIdentifierName);
+
+            //lexer.SetPosition(pos2);
+            astnode_t* functDefNode = ParseFunctionDefinition(squash_compiler, AST_Int, functIdentifierName);
+            if (functDefNode != NULL)
+            {
+                return functDefNode;
+            }
+        }
+        else
+        {
+            lexer_setposition(squash_compiler->lexer, pos3);
+        }
+
+        if (!rememberLocation)
+        {
+            //lexer.SetPosition(pos);
+            lexer_setposition(squash_compiler->lexer, pos2);
+            token_t* tok = squash_compiler->currentToken;
+
+            astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_Int);
+            if (varDefineNode != NULL)
+            {
+                astnode_t* left = ParseExpression(squash_compiler, 0);
+                varDefineNode->Left = left;
+                parseEndStatement(squash_compiler, varDefineNode);
+                return varDefineNode;
+            }
+            else
+            {
+                lexer_setposition(squash_compiler->lexer, pos);
+                astnode_t* varDecla = ParseVariableDeclaration(squash_compiler, AST_Int);
+
+                if (varDecla != NULL)
+                {
+                    return varDecla;
+                }
+            }
+            //return null;
+        }
+        // functIdentifierName
+    }
+    (*retFlag) = 0;
+    return NULL;
+}
+
+astnode_t* number_parse(struct SquashCompiler* squash_compiler)
+{
+    astnode_t* left = NULL;
+    astnode_t* right = NULL;
+    astnode_t* numASTNode = ast_node_new();
+
+    char* input_str = squash_compiler->currentToken->Value;
+    int num;
+    double double_num;
+    float floating_num;
+    enum ASTNodeValueType value_type = AST_VALUE_UNDEFINED;
+
+    // Attempt to parse as an integer.
+    if (sscanf(input_str, "%d", &num) == 1)
+    {
+        value_type = AST_VALUE_INT;
+    }
+    else
+    {
+        // Attempt to parse as a double.
+        if (sscanf(input_str, "%lf", &double_num) == 1)
+        {
+            value_type = AST_VALUE_DOUBLE;
+        }
+        else
+        {
+            if (tryParseFloat(input_str, &floating_num))
+            {
+                value_type = AST_VALUE_FLOAT;
+            }
+        }
+    }
+
+    //TODO: detect primative type for current token value and specify it directly so AST_Number ASTs can correctly parse type as needed.
+    ast_node_init_bt(&numASTNode, AST_Number, squash_compiler->currentToken->Value, value_type, left, right);
+    //numASTNode = new ASTNode(ASTNodeType.Number, currentToken.Value, left, right);
+
+    squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+    ParseEndOfFunction(squash_compiler);
+
+    return numASTNode;
+}
+
+astnode_t* int_define_parse(struct SquashCompiler* squash_compiler, int pos, int* retFlag)
+{
+    (*retFlag) = 1;
+    //lexer.SetPosition(pos);
+    token_t* tok = squash_compiler->currentToken;
+
+    astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_Int);
+    if (varDefineNode != NULL)
+    {
+        astnode_t* left = ParseExpression(squash_compiler, 0);
+        varDefineNode->Left = left;
+        parseEndStatement(squash_compiler, varDefineNode);
+        return varDefineNode;
+    }
+    else
+    {
+        lexer_setposition(squash_compiler->lexer, pos);
+        astnode_t* varDecla = ParseVariableDeclaration(squash_compiler, AST_Int);
+
+        if (varDecla != NULL)
+        {
+            return varDecla;
+        }
+    }
+    (*retFlag) = 0;
+    return NULL;
+}
+
+astnode_t* int_define2_parse(struct SquashCompiler* squash_compiler)
+{
+    //lexer.SetPosition(pos);
+    token_t* tok = squash_compiler->currentToken;
+
+    astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_Int);
+    if (varDefineNode != NULL)
+    {
+        astnode_t* left = ParseExpression(squash_compiler, 0);
+        if (left != NULL)
+        {
+            varDefineNode->Left = left;
+        }
+
+        parseEndStatement(squash_compiler, varDefineNode);
+        return varDefineNode;
+    }
+    else
+    {
+        //lexer.SetPosition(pos);
+
+        astnode_t* varDecla = ParseVariableDeclaration(squash_compiler, AST_Int);
+
+        if (varDecla != NULL)
+        {
+            return varDecla;
+        }
+    }
+    return NULL;
+}
+
+astnode_t* intkeyword_parse(struct SquashCompiler* squash_compiler, int* retFlag2)
+{
+    (*retFlag2) = 1;
+    bool rememberLocation = false;
+    int pos = lexer_getposition(squash_compiler->lexer);
+    //Token token1 = lexer.GetNextToken();
+    squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+
+    if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Whitespace)
+    {
+        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Identifier)
+        {
+            int retFlag;
+            astnode_t* retVal = identifier_parse(squash_compiler, rememberLocation, pos, &retFlag);
+            if (retFlag == 1) return retVal;
+        }
+        else if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_NumberEntry)
+        {
+            return number_parse(squash_compiler);
+        }
+        else
+        {
+            if (!rememberLocation)
+            {
+                int retFlag;
+                astnode_t* retVal = int_define_parse(squash_compiler, pos, &retFlag);
+                if (retFlag == 1) return retVal;
+            }
+        }
+    }
+    else
+    {
+
+    }
+    if (!rememberLocation)
+    {
+        return int_define2_parse(squash_compiler);
+    }
+    (*retFlag2) = 0;
+    return NULL;
+}
+
+astnode_t* stringkeyword_parse(struct SquashCompiler* squash_compiler, int* retFlag)
+{
+    (*retFlag) = 1;
+    int pos = lexer_getposition(squash_compiler->lexer);
+    token_t* token1 = GetNextToken(squash_compiler->lexer);
+    if (token1 != NULL && token1->Type == AST_Whitespace)
+    {
+        token1 = GetNextToken(squash_compiler->lexer);
+        if (token1 != NULL && token1->Type == AST_Identifier)
+        {
+            int pos2 = lexer_getposition(squash_compiler->lexer);
+            char* functIdentifierName = token1->Value;
+
+            astnode_t* functDefNode = ParseFunctionDefinition(squash_compiler, AST_String, functIdentifierName);
+
+            if (functDefNode != NULL)
+            {
+                return functDefNode;
+            }
+        }
+    }
+    lexer_setposition(squash_compiler->lexer, pos);
+
+    astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_String);
+    if (varDefineNode != NULL)
+    {
+        astnode_t* left = ParseExpression(squash_compiler, 0);
+        varDefineNode->Left = left;
+        parseEndStatement(squash_compiler, varDefineNode);
+        return varDefineNode;
+    }
+    else
+    {
+        lexer_setposition(squash_compiler->lexer, pos);
+
+        astnode_t* varDecla = ParseVariableDeclaration(squash_compiler, AST_String);
+
+        if (varDecla != NULL)
+        {
+            return varDecla;
+        }
+    }
+    (*retFlag) = 0;
+    return NULL;
+}
+
+astnode_t* voidkeyword_parse(struct SquashCompiler* squash_compiler, int* retFlag)
+{
+    (*retFlag) = 1;
+    int pos = lexer_getposition(squash_compiler->lexer);
+    squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+    if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Whitespace)
+    {
+        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Identifier)
+        {
+            int pos2 = lexer_getposition(squash_compiler->lexer);
+            char* functIdentifierName = squash_compiler->currentToken->Value;
+
+            astnode_t* functDefNode = ParseFunctionDefinition(squash_compiler, AST_Void, functIdentifierName);
+
+            if (functDefNode != NULL)
+            {
+                return functDefNode;
+            }
+        }
+    }
+    lexer_setposition(squash_compiler->lexer, pos);
+
+    astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_Void);
+    if (varDefineNode != NULL)
+    {
+        astnode_t* left = ParseExpression(squash_compiler, 0);
+        varDefineNode->Left = left;
+        parseEndStatement(squash_compiler, varDefineNode);
+        return varDefineNode;
+    }
+    else
+    {
+        lexer_setposition(squash_compiler->lexer, pos);
+
+        astnode_t* varDecla = ParseVariableDeclaration(squash_compiler, AST_Void);
+
+        if (varDecla != NULL)
+        {
+            return varDecla;
+        }
+    }
+    (*retFlag) = 0;
+    return NULL;
+}
+
+astnode_t* numberentry_parse(struct SquashCompiler* squash_compiler, token_t* token)
+{
+    astnode_t* left = NULL;
+    astnode_t* right = NULL;
+
+    char* input_str = squash_compiler->currentToken->Value;
+    int num;
+    double double_num;
+    float floating_num;
+    enum ASTNodeValueType value_type = AST_VALUE_UNDEFINED;
+
+    // Attempt to parse as an integer.
+    if (sscanf(input_str, "%d", &num) == 1)
+    {
+        value_type = AST_VALUE_INT;
+    }
+    else
+    {
+        // Attempt to parse as a double.
+        if (sscanf(input_str, "%lf", &double_num) == 1)
+        {
+            value_type = AST_VALUE_DOUBLE;
+        }
+        else
+        {
+            if (tryParseFloat(input_str, &floating_num))
+            {
+                value_type = AST_VALUE_FLOAT;
+            }
+        }
+    }
+
+    astnode_t* numNode = ast_node_new();
+    ast_node_init_bt(&numNode, AST_Number, token->Value, value_type, left, right);
+
+    //ASTNode numNode = new ASTNode(ASTNodeType.Number, token.Value, left, right);
+    char* ast_str_num = ast_tostring(numNode);
+
+    LogInformation("ParsePrimaryExpression(): AST Number node created. %s", ast_str_num);
+
+    squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+    return numNode;
+}
+
+astnode_t* identifier2_parse(token_t* token, struct SquashCompiler* squash_compiler)
+{
+    char* identifierName = token->Value;
+
+    LogInformation("ParsePrimaryExpression(): Identifier found '%s'", identifierName);
+
+    squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+
+    if (squash_compiler->currentToken->Type == AST_Parenthesis && strcmp(squash_compiler->currentToken->Value, "(") == 0)
+    {
+        LogInformation("ParsePrimaryExpression(): Parsing function call for identifier '%s'", identifierName);
+
+        // Handle function call
+        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "("
+        list_t* arguments = ParseFunctionArguments(squash_compiler); // List<ASTNode>
+
+        //foreach(ASTNode arg in arguments)
+        //{
+        //    Logger.Log.LogInformation("ParsePrimaryExpression(): function argument for function call: " + arg.ToString());
+        //}
+
+        // Lookup function in symbol table and generate corresponding ASTNode
+        if (!SymbolTable_FunctionHasKey(squash_compiler->symbolTable, identifierName))
+        {
+            SymbolTable_DefineFunction(squash_compiler->symbolTable, identifierName, NULL);
+        }
+        FunctionSymbol_t* functionSymbol = SymbolTable_LookupFunction(squash_compiler->symbolTable, identifierName);
+        astnode_t* functNode = ast_node_new();
+
+        ast_node_init_funct(&functNode, AST_FunctionCall, identifierName, functionSymbol, arguments);
+
+        //return new ASTNode(ASTNodeType.FunctionCall, identifierName, functionSymbol, arguments);
+
+        return functNode;
+    }
+    else
+    {
+        LogInformation("ParsePrimaryExpression(): Parsing variable given identifier: '%s'", identifierName);
+
+        // Handle variable
+        if (!SymbolTable_VariableHasKey(squash_compiler->symbolTable, identifierName))
+        {
+            SymbolTable_DefineVariableC(squash_compiler->symbolTable, AST_VarAutomatic, identifierName, NULL);
+        }
+        VariableSymbol_t* variableSymbol = SymbolTable_LookupVariable(squash_compiler->symbolTable, identifierName);
+
+        astnode_t* varNode = ast_node_new();
+
+        // void ast_node_init_var(astnode_t** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, VariableSymbol_t* variableSymbol);
+        ast_node_init_var(&varNode, AST_Variable, identifierName, AST_VALUE_STRING, variableSymbol);
+        //ASTNode varNode = new ASTNode(ASTNodeType.Variable, identifierName, variableSymbol);
+
+        token_t* before = squash_compiler->currentToken;
+        //currentToken = lexer.GetNextToken(); // Skip past identifier token.
+        if (squash_compiler->currentToken->Type == AST_Assignment && strcmp(squash_compiler->currentToken->Value, "=") == 0)
+        {
+            squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+
+            astnode_t* left = ParseExpression(squash_compiler, 0);
+
+            astnode_t* right = ast_node_new();
+
+            ast_node_init_bt(&right, AST_VariableAssignment, before->Value, AST_VALUE_STRING, left, varNode);
+
+            //astnode_t* right = new ASTNode(ASTNodeType.VariableAssignment, before.Value, left, varNode);
+
+            char* ast_str_left = ast_tostring(left);
+            char* ast_str_right = ast_tostring(right);
+
+            LogInformation("ParsePrimaryExpression(): variable assignment lhs: '%s' rhs: '%s'", ast_str_left, ast_str_right);
+
+            return right;
+        }
+        else if (varNode != NULL && squash_compiler->currentToken->Type == AST_Operator)
+        {
+            LogInformation("ParsePrimaryExpression(): variable usage in expression or statement #1.");
+            return varNode;
+        }
+        else if (varNode != NULL)
+        {
+            LogInformation("ParsePrimaryExpression(): variable usage in expression or statement #2.");
+            return varNode;
+        }
+        else
+        {
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
+astnode_t* parenthesis_parse(struct SquashCompiler* squash_compiler)
+{
+    LogInformation("ParsePrimaryExpression(): Handling parenthesis");
+    squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "("
+    astnode_t* node = ParseExpression(squash_compiler, 0);
+    if (squash_compiler->currentToken != NULL && strcmp(squash_compiler->currentToken->Value, ")") == 0)
+    {
+        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past ")"
+    }
+    else
+    {
+        //throw new Exception("Missing closing parenthesis.");
+    }
+    return node;
+}
+
+void variable_parse(struct SquashCompiler* squash_compiler)
+{
+    char* identifierName = squash_compiler->currentToken->Value;
+    squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past variable.
+
+    // TODO: Check if there is a variable assignment unary operator, 
+    //       otherwise skip over past potential variable assignment or skip past token.
+}
+
+void whitespace_parse(struct SquashCompiler* squash_compiler)
+{
+    squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past whitespace character.
+}
+
+void semicolon_parse(struct SquashCompiler* squash_compiler)
+{
+    squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past semicolon character.
+}
+
 astnode_t* ParsePrimaryExpression(struct SquashCompiler* squash_compiler)
 {
     token_t* token = squash_compiler->currentToken;
@@ -357,534 +943,59 @@ astnode_t* ParsePrimaryExpression(struct SquashCompiler* squash_compiler)
 
     if (squash_compiler->currentToken->Type == AST_ReturnKeyword)
     {
-        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Skip past return keyword.
-
-        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_SemiColon)
-        {
-            squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Skip past whitespace.
-            //astnode_t* left = ParseExpression(0, rootAST);
-            astnode_t* left = NULL;
-
-            LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST with left=null");
-
-            //ASTNode? left = null;
-            astnode_t* returnNode = ast_node_new();
-            ast_node_init_bt(&returnNode, AST_FunctionReturn, "", AST_VALUE_UNDEFINED, left, NULL);
-            //ASTNode returnNode = new ASTNode(ASTNodeType.FunctionReturn, "", left, null);
-
-            //TODO: Check for curley brace to find out the end of a function definition
-            return returnNode;
-        }
-        else
-        {
-            squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Skip past whitespace.
-            astnode_t* left = ParseExpression(squash_compiler, 0);
-
-            if (left == NULL)
-            {
-                LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST with lhs=null");
-            }
-            else
-            {
-                LogInformation("ParsePrimaryExpression(): made a ASTNodeType.FunctionReturn AST");
-            }
-
-            astnode_t* returnNode = ast_node_new();
-            ast_node_init_bt(&returnNode, AST_FunctionReturn, "", AST_VALUE_UNDEFINED, left, NULL);
-            //ASTNode returnNode = new ASTNode(ASTNodeType.FunctionReturn, "", left, null);
-
-            //TODO: Check for curley brace to find out the end of a function definition
-            return returnNode;
-        }
+        return returnkeyword_parse(squash_compiler);
     }
     else if (squash_compiler->currentToken->Type == AST_VarKeyword)
     {
-        LogInformation("ParsePrimaryExpression(): made a var variable of some inferred type AST");
-        astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_VarAutomatic);
-        astnode_t* left = ParseExpression(squash_compiler, 0);
-        varDefineNode->Left = left;
-        parseEndStatement(squash_compiler, varDefineNode);
-        return varDefineNode;
+        return varkeyword_parse(squash_compiler);
     }
     else if (squash_compiler->currentToken->Type == AST_DoubleKeyword)
     {
-        LogInformation("ParsePrimaryExpression(): double keyword");
-        int pos = lexer_getposition(squash_compiler->lexer);
-        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Whitespace)
-        {
-            squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-            if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Identifier)
-            {
-                int pos2 = lexer_getposition(squash_compiler->lexer);
-                char* functIdentifierName = squash_compiler->currentToken->Value;
-
-                squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-                if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Parenthesis
-                    && strcmp(squash_compiler->currentToken->Value, "(") == 0)
-                {
-                    LogInformation("ParsePrimaryExpression(): double keyword parse function definition '%s'", functIdentifierName);
-
-                    astnode_t* functDefNode = ParseFunctionDefinition(squash_compiler, AST_Double, functIdentifierName);
-
-                    if (functDefNode != NULL)
-                    {
-                        return functDefNode;
-                    }
-                }
-            }
-        }
-        lexer_setposition(squash_compiler->lexer, pos);
-
-        astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_Double);
-        if (varDefineNode != NULL)
-        {
-            astnode_t* left = ParseExpression(squash_compiler, 0);
-            char* ast_str = ast_tostring(varDefineNode);
-            char* ast_strB = ast_tostring(left);
-            LogInformation("ParsePrimaryExpression(): var define node: %s, left expr: %s", ast_str, ast_strB);
-            varDefineNode->Left = left;
-            parseEndStatement(squash_compiler, varDefineNode);
-            return varDefineNode;
-        }
-        else
-        {
-            lexer_setposition(squash_compiler->lexer, pos);
-            astnode_t* varDecla = ParseVariableDeclaration(squash_compiler, AST_Double);
-
-            if (varDecla != NULL)
-            {
-                return varDecla;
-            }
-        }
+        int retFlag;
+        astnode_t* retVal = doublekeyword_parse(squash_compiler, &retFlag);
+        if (retFlag == 1) return retVal;
     }
     else if (squash_compiler->currentToken->Type == AST_IntKeyword)
     {
-        bool rememberLocation = false;
-        int pos = lexer_getposition(squash_compiler->lexer);
-        //Token token1 = lexer.GetNextToken();
-        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-
-        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Whitespace)
-        {
-            squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-            if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Identifier)
-            {
-                int pos2 = lexer_getposition(squash_compiler->lexer);
-                char* functIdentifierName = squash_compiler->currentToken->Value;
-                if (strcmp(functIdentifierName, "main") == 0)
-                {
-                    // Parse entry point main() function.
-                    astnode_t* mainFunct = ParseEntryPoint(squash_compiler, functIdentifierName);
-
-                    if (mainFunct != NULL)
-                    {
-                        return mainFunct;
-                    }
-                }
-                else
-                {
-                    int pos3 = lexer_getposition(squash_compiler->lexer);
-                    squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-
-                    if (squash_compiler->currentToken->Type == AST_Parenthesis && strcmp(squash_compiler->currentToken->Value, "(") == 0)
-                    {
-                        //currentToken = token1;
-
-                        LogInformation("ParsePrimaryExpression(): ParseFunctionDefinition int keyword function is: %s", functIdentifierName);
-
-                        //lexer.SetPosition(pos2);
-                        astnode_t* functDefNode = ParseFunctionDefinition(squash_compiler, AST_Int, functIdentifierName);
-                        if (functDefNode != NULL)
-                        {
-                            return functDefNode;
-                        }
-                    }
-                    else
-                    {
-                        lexer_setposition(squash_compiler->lexer, pos3);
-                    }
-
-                    if (!rememberLocation)
-                    {
-                        //lexer.SetPosition(pos);
-                        lexer_setposition(squash_compiler->lexer, pos2);
-                        token_t* tok = squash_compiler->currentToken;
-
-                        astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_Int);
-                        if (varDefineNode != NULL)
-                        {
-                            astnode_t* left = ParseExpression(squash_compiler, 0);
-                            varDefineNode->Left = left;
-                            parseEndStatement(squash_compiler, varDefineNode);
-                            return varDefineNode;
-                        }
-                        else
-                        {
-                            lexer_setposition(squash_compiler->lexer, pos);
-                            astnode_t* varDecla = ParseVariableDeclaration(squash_compiler, AST_Int);
-
-                            if (varDecla != NULL)
-                            {
-                                return varDecla;
-                            }
-                        }
-                        //return null;
-                    }
-                    // functIdentifierName
-                }
-            }
-            else if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_NumberEntry)
-            {
-                astnode_t* left = NULL;
-                astnode_t* right = NULL;
-                astnode_t* numASTNode = ast_node_new();
-
-                char* input_str = squash_compiler->currentToken->Value;
-                int num;
-                double double_num;
-                float floating_num;
-                enum ASTNodeValueType value_type = AST_VALUE_UNDEFINED;
-
-                // Attempt to parse as an integer.
-                if (sscanf(input_str, "%d", &num) == 1)
-                {
-                    value_type = AST_VALUE_INT;
-                }
-                else
-                {
-                    // Attempt to parse as a double.
-                    if (sscanf(input_str, "%lf", &double_num) == 1)
-                    {
-                        value_type = AST_VALUE_DOUBLE;
-                    }
-                    else
-                    {
-                        if (tryParseFloat(input_str, &floating_num))
-                        {
-                            value_type = AST_VALUE_FLOAT;
-                        }
-                    }
-                }
-
-                //TODO: detect primative type for current token value and specify it directly so AST_Number ASTs can correctly parse type as needed.
-                ast_node_init_bt(&numASTNode, AST_Number, squash_compiler->currentToken->Value, value_type, left, right);
-                //numASTNode = new ASTNode(ASTNodeType.Number, currentToken.Value, left, right);
-
-                squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-                ParseEndOfFunction(squash_compiler);
-
-                return numASTNode;
-            }
-            else
-            {
-                if (!rememberLocation)
-                {
-                    //lexer.SetPosition(pos);
-                    token_t* tok = squash_compiler->currentToken;
-
-                    astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_Int);
-                    if (varDefineNode != NULL)
-                    {
-                        astnode_t* left = ParseExpression(squash_compiler, 0);
-                        varDefineNode->Left = left;
-                        parseEndStatement(squash_compiler, varDefineNode);
-                        return varDefineNode;
-                    }
-                    else
-                    {
-                        lexer_setposition(squash_compiler->lexer, pos);
-                        astnode_t* varDecla = ParseVariableDeclaration(squash_compiler, AST_Int);
-
-                        if (varDecla != NULL)
-                        {
-                            return varDecla;
-                        }
-                    }
-                }
-            }
-        }
-        else
-        {
-
-        }
-        if (!rememberLocation)
-        {
-            //lexer.SetPosition(pos);
-            token_t* tok = squash_compiler->currentToken;
-
-            astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_Int);
-            if (varDefineNode != NULL)
-            {
-                astnode_t* left = ParseExpression(squash_compiler, 0);
-                if (left != NULL)
-                {
-                    varDefineNode->Left = left;
-                }
-
-                parseEndStatement(squash_compiler, varDefineNode);
-                return varDefineNode;
-            }
-            else
-            {
-                //lexer.SetPosition(pos);
-
-                astnode_t* varDecla = ParseVariableDeclaration(squash_compiler, AST_Int);
-
-                if (varDecla != NULL)
-                {
-                    return varDecla;
-                }
-            }
-            return NULL;
-        }
+        int retFlag;
+        astnode_t* retVal = intkeyword_parse(squash_compiler, &retFlag);
+        if (retFlag == 1) return retVal;
     }
     else if (squash_compiler->currentToken->Type == AST_StringKeyword)
     {
-        int pos = lexer_getposition(squash_compiler->lexer);
-        token_t* token1 = GetNextToken(squash_compiler->lexer);
-        if (token1 != NULL && token1->Type == AST_Whitespace)
-        {
-            token1 = GetNextToken(squash_compiler->lexer);
-            if (token1 != NULL && token1->Type == AST_Identifier)
-            {
-                int pos2 = lexer_getposition(squash_compiler->lexer);
-                char* functIdentifierName = token1->Value;
-
-                astnode_t* functDefNode = ParseFunctionDefinition(squash_compiler, AST_String, functIdentifierName);
-
-                if (functDefNode != NULL)
-                {
-                    return functDefNode;
-                }
-            }
-        }
-        lexer_setposition(squash_compiler->lexer, pos);
-
-        astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_String);
-        if (varDefineNode != NULL)
-        {
-            astnode_t* left = ParseExpression(squash_compiler, 0);
-            varDefineNode->Left = left;
-            parseEndStatement(squash_compiler, varDefineNode);
-            return varDefineNode;
-        }
-        else
-        {
-            lexer_setposition(squash_compiler->lexer, pos);
-
-            astnode_t* varDecla = ParseVariableDeclaration(squash_compiler, AST_String);
-
-            if (varDecla != NULL)
-            {
-                return varDecla;
-            }
-        }
+        int retFlag;
+        astnode_t* retVal = stringkeyword_parse(squash_compiler, &retFlag);
+        if (retFlag == 1) return retVal;
     }
     else if (squash_compiler->currentToken->Type == AST_VoidKeyword)
     {
-        int pos = lexer_getposition(squash_compiler->lexer);
-        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-        if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Whitespace)
-        {
-            squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-            if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_Identifier)
-            {
-                int pos2 = lexer_getposition(squash_compiler->lexer);
-                char* functIdentifierName = squash_compiler->currentToken->Value;
-
-                astnode_t* functDefNode = ParseFunctionDefinition(squash_compiler, AST_Void, functIdentifierName);
-
-                if (functDefNode != NULL)
-                {
-                    return functDefNode;
-                }
-            }
-        }
-        lexer_setposition(squash_compiler->lexer, pos);
-
-        astnode_t* varDefineNode = ParseVariableDefine(squash_compiler, AST_Void);
-        if (varDefineNode != NULL)
-        {
-            astnode_t* left = ParseExpression(squash_compiler, 0);
-            varDefineNode->Left = left;
-            parseEndStatement(squash_compiler, varDefineNode);
-            return varDefineNode;
-        }
-        else
-        {
-            lexer_setposition(squash_compiler->lexer, pos);
-
-            astnode_t* varDecla = ParseVariableDeclaration(squash_compiler, AST_Void);
-
-            if (varDecla != NULL)
-            {
-                return varDecla;
-            }
-        }
+        int retFlag;
+        astnode_t* retVal = voidkeyword_parse(squash_compiler, &retFlag);
+        if (retFlag == 1) return retVal;
     }
     else if (squash_compiler->currentToken->Type == AST_NumberEntry)
     {
-        astnode_t* left = NULL;
-        astnode_t* right = NULL;
-
-        char* input_str = squash_compiler->currentToken->Value;
-        int num;
-        double double_num;
-        float floating_num;
-        enum ASTNodeValueType value_type = AST_VALUE_UNDEFINED;
-
-        // Attempt to parse as an integer.
-        if (sscanf(input_str, "%d", &num) == 1)
-        {
-            value_type = AST_VALUE_INT;
-        }
-        else
-        {
-            // Attempt to parse as a double.
-            if (sscanf(input_str, "%lf", &double_num) == 1)
-            {
-                value_type = AST_VALUE_DOUBLE;
-            }
-            else
-            {
-                if (tryParseFloat(input_str, &floating_num))
-                {
-                    value_type = AST_VALUE_FLOAT;
-                }
-            }
-        }
-
-        astnode_t* numNode = ast_node_new();
-        ast_node_init_bt(&numNode, AST_Number, token->Value, value_type, left, right);
-
-        //ASTNode numNode = new ASTNode(ASTNodeType.Number, token.Value, left, right);
-        char* ast_str_num = ast_tostring(numNode);
-
-        LogInformation("ParsePrimaryExpression(): AST Number node created. %s", ast_str_num);
-
-        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-        return numNode;
+        return numberentry_parse(squash_compiler, token);
     }
     else if (squash_compiler->currentToken->Type == AST_Identifier)
     {
-        char* identifierName = token->Value;
-
-        LogInformation("ParsePrimaryExpression(): Identifier found '%s'", identifierName);
-
-        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-
-        if (squash_compiler->currentToken->Type == AST_Parenthesis && strcmp(squash_compiler->currentToken->Value, "(") == 0)
-        {
-            LogInformation("ParsePrimaryExpression(): Parsing function call for identifier '%s'", identifierName);
-
-            // Handle function call
-            squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "("
-            list_t* arguments = ParseFunctionArguments(squash_compiler); // List<ASTNode>
-
-            //foreach(ASTNode arg in arguments)
-            //{
-            //    Logger.Log.LogInformation("ParsePrimaryExpression(): function argument for function call: " + arg.ToString());
-            //}
-
-            // Lookup function in symbol table and generate corresponding ASTNode
-            if (!SymbolTable_FunctionHasKey(squash_compiler->symbolTable, identifierName))
-            {
-                SymbolTable_DefineFunction(squash_compiler->symbolTable, identifierName, NULL);
-            }
-            FunctionSymbol_t* functionSymbol = SymbolTable_LookupFunction(squash_compiler->symbolTable, identifierName);
-            astnode_t* functNode = ast_node_new();
-
-            ast_node_init_funct(&functNode, AST_FunctionCall, identifierName, functionSymbol, arguments);
-
-            //return new ASTNode(ASTNodeType.FunctionCall, identifierName, functionSymbol, arguments);
-
-            return functNode;
-        }
-        else
-        {
-            LogInformation("ParsePrimaryExpression(): Parsing variable given identifier: '%s'", identifierName);
-
-            // Handle variable
-            if (!SymbolTable_VariableHasKey(squash_compiler->symbolTable, identifierName))
-            {
-                SymbolTable_DefineVariableC(squash_compiler->symbolTable, AST_VarAutomatic, identifierName, NULL);
-            }
-            VariableSymbol_t* variableSymbol = SymbolTable_LookupVariable(squash_compiler->symbolTable, identifierName);
-
-            astnode_t* varNode = ast_node_new();
-
-            // void ast_node_init_var(astnode_t** node, enum ASTNodeType type, char* value, enum ASTNodeValueType value_type, VariableSymbol_t* variableSymbol);
-            ast_node_init_var(&varNode, AST_Variable, identifierName, AST_VALUE_STRING, variableSymbol);
-            //ASTNode varNode = new ASTNode(ASTNodeType.Variable, identifierName, variableSymbol);
-
-            token_t* before = squash_compiler->currentToken;
-            //currentToken = lexer.GetNextToken(); // Skip past identifier token.
-            if (squash_compiler->currentToken->Type == AST_Assignment && strcmp(squash_compiler->currentToken->Value, "=") == 0)
-            {
-                squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
-
-                astnode_t* left = ParseExpression(squash_compiler, 0);
-
-                astnode_t* right = ast_node_new();
-
-                ast_node_init_bt(&right, AST_VariableAssignment, before->Value, AST_VALUE_STRING, left, varNode);
-
-                //astnode_t* right = new ASTNode(ASTNodeType.VariableAssignment, before.Value, left, varNode);
-
-                char* ast_str_left = ast_tostring(left);
-                char* ast_str_right = ast_tostring(right);
-
-                LogInformation("ParsePrimaryExpression(): variable assignment lhs: '%s' rhs: '%s'", ast_str_left, ast_str_right);
-
-                return right;
-            }
-            else if (varNode != NULL && squash_compiler->currentToken->Type == AST_Operator)
-            {
-                LogInformation("ParsePrimaryExpression(): variable usage in expression or statement #1.");
-                return varNode;
-            }
-            else if (varNode != NULL)
-            {
-                LogInformation("ParsePrimaryExpression(): variable usage in expression or statement #2.");
-                return varNode;
-            }
-            else
-            {
-                return NULL;
-            }
-        }
+        return identifier2_parse(token, squash_compiler);
     }
     else if (squash_compiler->currentToken->Type == AST_Parenthesis && strcmp(squash_compiler->currentToken->Value, "(") == 0)
     {
-        LogInformation("ParsePrimaryExpression(): Handling parenthesis");
-        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past "("
-        astnode_t* node = ParseExpression(squash_compiler, 0);
-        if (squash_compiler->currentToken != NULL && strcmp(squash_compiler->currentToken->Value, ")") == 0)
-        {
-            squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past ")"
-        }
-        else
-        {
-            //throw new Exception("Missing closing parenthesis.");
-        }
-        return node;
+        return parenthesis_parse(squash_compiler);
     }
     else if (squash_compiler->currentToken->Type == AST_Variable)
     {
-        char* identifierName = squash_compiler->currentToken->Value;
-        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past variable.
-
-        // TODO: Check if there is a variable assignment unary operator, 
-        //       otherwise skip over past potential variable assignment or skip past token.
+        variable_parse(squash_compiler);
     }
     else if (squash_compiler->currentToken->Type == AST_Whitespace)
     {
-        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past whitespace character.
+        whitespace_parse(squash_compiler);
     }
     else if (squash_compiler->currentToken->Type == AST_SemiColon)
     {
-        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past semicolon character.
+        semicolon_parse(squash_compiler);
     }
     if (squash_compiler->currentToken == NULL)
     {
@@ -892,7 +1003,8 @@ astnode_t* ParsePrimaryExpression(struct SquashCompiler* squash_compiler)
     }
     if (squash_compiler->currentToken->Type == AST_SemiColon)
     {
-        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past semicolon character.
+        semicolon_parse(squash_compiler);
+
         return NULL;
     }
 
@@ -924,7 +1036,7 @@ astnode_t* ParsePrimaryExpression(struct SquashCompiler* squash_compiler)
 
     if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_SemiColon)
     {
-        squash_compiler->currentToken = GetNextToken(squash_compiler->lexer);
+        semicolon_parse(squash_compiler);
     }
 
     if (squash_compiler->currentToken != NULL && squash_compiler->currentToken->Type == AST_ReturnKeyword)

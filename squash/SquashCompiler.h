@@ -32,6 +32,23 @@ astnode_t* parseAssignmentOperator(struct SquashCompiler* squash_compiler, enum 
 void parseEndStatement(struct SquashCompiler* squash_compiler, astnode_t* varDefineNode);
 bool tryParseFloat(const char* str, float* result);
 
+astnode_t* returnkeyword_parse(struct SquashCompiler* squash_compiler);
+astnode_t* varkeyword_parse(struct SquashCompiler* squash_compiler);
+astnode_t* doublekeyword_parse(struct SquashCompiler* squash_compiler, int* retFlag);
+astnode_t* identifier_parse(struct SquashCompiler* squash_compiler, bool rememberLocation, int pos, int* retFlag);
+astnode_t* number_parse(struct SquashCompiler* squash_compiler);
+astnode_t* int_define_parse(struct SquashCompiler* squash_compiler, int pos, int* retFlag);
+astnode_t* int_define2_parse(struct SquashCompiler* squash_compiler);
+astnode_t* intkeyword_parse(struct SquashCompiler* squash_compiler, int* retFlag);
+astnode_t* stringkeyword_parse(struct SquashCompiler* squash_compiler, int* retFlag);
+astnode_t* voidkeyword_parse(struct SquashCompiler* squash_compiler, int* retFlag);
+astnode_t* numberentry_parse(struct SquashCompiler* squash_compiler, token_t* token);
+astnode_t* identifier2_parse(token_t* token, struct SquashCompiler* squash_compiler);
+astnode_t* parenthesis_parse(struct SquashCompiler* squash_compiler);
+void variable_parse(struct SquashCompiler* squash_compiler);
+void whitespace_parse(struct SquashCompiler* squash_compiler);
+void semicolon_parse(struct SquashCompiler* squash_compiler);
+
 astnode_t* ParsePrimaryExpression(struct SquashCompiler* squash_compiler);
 void ParseEndOfFunction(struct SquashCompiler* squash_compiler);
 astnode_t* ParseEntryPoint(struct SquashCompiler* squash_compiler, char* functIdentifierName);
