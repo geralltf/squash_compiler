@@ -471,49 +471,13 @@ void functionarg_assemble(StringBuilder* sb, struct Assembler* assembler, astnod
     sb_append(sb, Assemble(assembler, node->Left));
     sb_append(sb, Assemble(assembler, node->Right));
 
-    if (node->FunctionArguments != NULL)
-    {
-        list_t* n = node->FunctionArguments;
-        astnode_t* ast_funct_arg;
-        while (n != NULL)
-        {
-            ast_funct_arg = (astnode_t*)n->data;
-
-            if (ast_funct_arg != NULL)
-            {
-                sb_append(sb, Assemble(assembler, ast_funct_arg));
-            }
-
-            n = n->next;
-        }
-    }
+    functionargs_extract_assemble(node, sb, assembler);
 
     // Function definition has node.IsFunctionDefinition set to true
     // and has node.FunctionBody set to a list of ASTNode typed statements.
     if (node->IsFunctionDefinition == true && (node->FunctionBody != NULL))
     {
-        list_t* n = node->FunctionBody;
-        astnode_t* body_node;
-
-        while (n != NULL)
-        {
-            body_node = (astnode_t*)n->data;
-            if (body_node != NULL)
-            {
-                if (body_node->Type == AST_FunctionReturn)
-                {
-                    //Console.WriteLine("return");
-                }
-
-                char* body_node_str = ast_tostring(body_node);
-
-                LogInformation("Assemble(): -* function body node: %s", body_node_str);
-                sb_append(sb, Assemble(assembler, body_node));
-            }
-
-            n = n->next;
-        }
-        //Console.WriteLine("ret back");
+        functionbody_assemble2(node, sb, assembler);
     }
 }
 
@@ -537,49 +501,13 @@ void functiondefinition_assemble(struct Assembler* assembler, StringBuilder* sb,
         //Console.Write(node.Value + ": \n");
     }
 
-    if (node->FunctionArguments != NULL)
-    {
-        list_t* n = node->FunctionArguments;
-        astnode_t* ast_funct_arg;
-        while (n != NULL)
-        {
-            ast_funct_arg = (astnode_t*)n->data;
-
-            if (ast_funct_arg != NULL)
-            {
-                sb_append(sb, Assemble(assembler, ast_funct_arg));
-            }
-
-            n = n->next;
-        }
-    }
+    functionargs_extract_assemble(node, sb, assembler);
 
     // Function definition has node.IsFunctionDefinition set to true
     // and has node.FunctionBody set to a list of ASTNode typed statements.
     if (node->IsFunctionDefinition == true && (node->FunctionBody != NULL))
     {
-        list_t* n = node->FunctionBody;
-        astnode_t* body_node;
-
-        while (n != NULL)
-        {
-            body_node = (astnode_t*)n->data;
-            if (body_node != NULL)
-            {
-                if (body_node->Type == AST_FunctionReturn)
-                {
-                    //Console.WriteLine("return");
-                }
-
-                char* body_node_str = ast_tostring(body_node);
-
-                LogInformation("Assemble(): -* function body node: %s", body_node_str);
-                sb_append(sb, Assemble(assembler, body_node));
-            }
-
-            n = n->next;
-        }
-        //Console.WriteLine("ret back");
+        functionbody_assemble2(node, sb, assembler);
     }
     else
     {
