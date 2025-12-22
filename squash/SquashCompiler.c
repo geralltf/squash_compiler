@@ -929,18 +929,9 @@ void semicolon_parse(struct SquashCompiler* squash_compiler)
     squash_compiler->currentToken = GetNextToken(squash_compiler->lexer); // Move past semicolon character.
 }
 
-astnode_t* ParsePrimaryExpression(struct SquashCompiler* squash_compiler)
+astnode_t* artifacts_parse(struct SquashCompiler* squash_compiler, token_t* token, int* retFlag)
 {
-    token_t* token = squash_compiler->currentToken;
-
-    if (squash_compiler->currentToken == NULL)
-    {
-        //LogError("ParsePrimaryExpression(): currentToken is null");
-        return NULL;
-    }
-
-    LogInformation("ParsePrimaryExpression(): handle token types prior to handling");
-
+    (*retFlag) = 1;
     if (squash_compiler->currentToken->Type == AST_ReturnKeyword)
     {
         return returnkeyword_parse(squash_compiler);
@@ -997,6 +988,26 @@ astnode_t* ParsePrimaryExpression(struct SquashCompiler* squash_compiler)
     {
         semicolon_parse(squash_compiler);
     }
+    (*retFlag) = 0;
+    return NULL;
+}
+
+astnode_t* ParsePrimaryExpression(struct SquashCompiler* squash_compiler)
+{
+    token_t* token = squash_compiler->currentToken;
+
+    if (squash_compiler->currentToken == NULL)
+    {
+        //LogError("ParsePrimaryExpression(): currentToken is null");
+        return NULL;
+    }
+
+    LogInformation("ParsePrimaryExpression(): handle token types prior to handling");
+
+    int retFlag;
+    astnode_t* retVal = artifacts_parse(squash_compiler, token, &retFlag);
+    if (retFlag == 1) return retVal;
+
     if (squash_compiler->currentToken == NULL)
     {
         return NULL;

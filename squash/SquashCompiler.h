@@ -49,6 +49,8 @@ void variable_parse(struct SquashCompiler* squash_compiler);
 void whitespace_parse(struct SquashCompiler* squash_compiler);
 void semicolon_parse(struct SquashCompiler* squash_compiler);
 
+astnode_t* artifacts_parse(struct SquashCompiler* squash_compiler, token_t* token, int* retFlag);
+
 astnode_t* ParsePrimaryExpression(struct SquashCompiler* squash_compiler);
 void ParseEndOfFunction(struct SquashCompiler* squash_compiler);
 astnode_t* ParseEntryPoint(struct SquashCompiler* squash_compiler, char* functIdentifierName);
