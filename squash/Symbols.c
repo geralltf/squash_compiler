@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "Symbols.h"
 
 FunctionSymbol_t* FunctionSymbol_init(FunctionSymbol_t** symbol, char* name, list_t* parameters)
@@ -150,7 +152,7 @@ char* VariableSymbol_to_string(VariableSymbol_t* symbol)
     return result;
 }
 
-int SymbolTable_RevervedKeyword_CompararatorFunc(void* left, void* right)
+int SymbolTable_RevervedKeyword_ComparatorFunc(DictionaryPair* left, DictionaryPair* right)
 {
     // DictionaryPair* left, DictionaryPair* right
     int compareResult = 0;
@@ -158,16 +160,48 @@ int SymbolTable_RevervedKeyword_CompararatorFunc(void* left, void* right)
     return compareResult;
 }
 
-int SymbolTable_Variable_CompararatorFunc(void* left, void* right)
+int SymbolTable_Variable_ComparatorFunc(DictionaryPair* left, DictionaryPair* right)
 {
     int compareResult = 0;
+
+    //VariableSymbol_t* left_var = (VariableSymbol_t*)left->value;
+    //VariableSymbol_t* right_var = (VariableSymbol_t*)right->value;
+
+    //if (left_var->Name == NULL && right_var->Name == NULL)
+    //{
+    //    return 0;
+    //}
+    //if (left_var->Name == NULL && right_var->Name != NULL)
+    //{
+    //    return -1;
+    //}
+    //if (left_var->Name != NULL && right_var->Name == NULL)
+    //{
+    //    return 1;
+    //}
+
+    //compareResult = strcmp(left_var->Name, right_var->Name);
+
+    //compareResult = strcmp(left->key, right->key);
 
     return compareResult;
 }
 
-int SymbolTable_Function_CompararatorFunc(void* left, void* right)
+int SymbolTable_Function_ComparatorFunc(DictionaryPair* left, DictionaryPair* right)
 {
     int compareResult = 0;
+    
+    //FunctionSymbol_t* left_var = (FunctionSymbol_t*)left->value;
+    //FunctionSymbol_t* right_var = (FunctionSymbol_t*)right->value;
+
+    //if (left_var->Name == NULL || right_var->Name == NULL)
+    //{
+    //    return -1;
+    //}
+
+    //compareResult = strcmp(left_var->Name, right_var->Name);
+
+    //compareResult = strcmp(left->key, right->key);
 
     return compareResult;
 }
@@ -182,33 +216,36 @@ void SymbolTable_init(SymbolTable_t** symbols)
 {
     SymbolTable_t* symbolTable = *symbols; // SymbolTable_new();
 
-    symbolTable->keywordDict = DictionaryNew(SymbolTable_RevervedKeyword_CompararatorFunc);
+    symbolTable->keywordDict = DictionaryNew((DictionaryPairCompare)&SymbolTable_RevervedKeyword_ComparatorFunc);
 
     DictionaryPair* pairOut_sin = (DictionaryPair*)malloc(sizeof(DictionaryPair));
     DictionaryPair* pairOut_cos = (DictionaryPair*)malloc(sizeof(DictionaryPair));
     DictionaryPair* pairOut_tan = (DictionaryPair*)malloc(sizeof(DictionaryPair));
 
     DictionaryPair* pair_sin = DictionaryPairNew();
-    char* key_sin = (char*)malloc(sizeof(char) * 3);
+    char* key_sin = (char*)malloc(sizeof(char) * 4);
     key_sin[0] = 's';
     key_sin[1] = 'i';
     key_sin[2] = 'n';
+    key_sin[3] = 0x00;
     pair_sin->key = (void*)key_sin;
     //DictionaryInsertPair(symbolTable->keywordDict, pair_sin, &pairOut_sin);
 
     DictionaryPair* pair_cos = DictionaryPairNew();
-    char* key_cos = (char*)malloc(sizeof(char) * 3);
+    char* key_cos = (char*)malloc(sizeof(char) * 4);
     key_cos[0] = 'c';
     key_cos[1] = 'o';
     key_cos[2] = 's';
+    key_cos[3] = 0x00;
     pair_cos->key = (void*)key_cos;
     //DictionaryInsertPair(symbolTable->keywordDict, pair_cos, &pairOut_cos);
 
     DictionaryPair* pair_tan = DictionaryPairNew();
-    char* key_tan = (char*)malloc(sizeof(char) * 3);
+    char* key_tan = (char*)malloc(sizeof(char) * 4);
     key_tan[0] = 'c';
     key_tan[1] = 'o';
     key_tan[2] = 's';
+    key_tan[3] = 0x00;
     pair_tan->key = (void*)key_tan;
     //DictionaryInsertPair(symbolTable->keywordDict, pair_tan, &pairOut_tan);
 
@@ -216,8 +253,8 @@ void SymbolTable_init(SymbolTable_t** symbols)
     //{ "cos", TokenType.Function },
     //{ "tan", TokenType.Function }
 
-    symbolTable->variables = DictionaryNew(SymbolTable_Variable_CompararatorFunc);
-    symbolTable->functions = DictionaryNew(SymbolTable_Function_CompararatorFunc);
+    symbolTable->variables = DictionaryNew((DictionaryPairCompare)&SymbolTable_Variable_ComparatorFunc);
+    symbolTable->functions = DictionaryNew((DictionaryPairCompare)&SymbolTable_Function_ComparatorFunc);
 
     //variables = new Dictionary<string, VariableSymbol>();
     //functions = new Dictionary<string, FunctionSymbol>();

@@ -334,8 +334,7 @@ void DictionaryInsertCase5(DictionaryNode* node)
 
 
 
-static DictionaryNode* DictionaryGetNode(Dictionary* dictionary,
-	DictionaryNode** treeNode, DictionaryNode* findNode)
+static DictionaryNode* DictionaryGetNode(Dictionary* dictionary, DictionaryNode** treeNode, DictionaryNode* findNode)
 {
 	if (*treeNode == NULL || findNode == NULL || findNode->pair->key == NULL)
 	{
@@ -345,23 +344,24 @@ static DictionaryNode* DictionaryGetNode(Dictionary* dictionary,
 	int result = dictionary->compareFunc(findNode->pair, (*treeNode)->pair);
 	if (result < 0)
 	{
-		DictionaryGetNode(dictionary, &(*treeNode)->left, findNode);
+		return DictionaryGetNode(dictionary, &(*treeNode)->left, findNode);
 	}
 	else if (result > 0)
 	{
-		DictionaryGetNode(dictionary, &(*treeNode)->right, findNode);
+		return DictionaryGetNode(dictionary, &(*treeNode)->right, findNode);
 	}
 	else if (result == 0)
 	{
 		return *treeNode;
 	}
+	return NULL;
 }
 
 DictionaryPair* DictionaryGetPair(Dictionary* dictionary, void* key)
 {
 	DictionaryPair* pair = DictionaryPairNew();
 	pair->key = key;
-	DictionaryNode* node = DictionaryNodeNew(pair);
+	struct DictionaryNode* node = DictionaryNodeNew(pair);
 
 	struct DictionaryNode* root = dictionary->rootNode;
 
@@ -370,5 +370,11 @@ DictionaryPair* DictionaryGetPair(Dictionary* dictionary, void* key)
 		return NULL;
 	}
 
-	return DictionaryGetNode(dictionary, &root, node)->pair;
+	struct DictionaryNode* node_result = DictionaryGetNode(dictionary, &root, node);
+	
+	if (node_result == NULL)
+	{
+		return NULL;
+	}
+	return node_result->pair;
 }
