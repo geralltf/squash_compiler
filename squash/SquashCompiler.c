@@ -846,6 +846,16 @@ astnode_t* identifier2_parse(token_t* token, struct SquashCompiler* squash_compi
         if (!SymbolTable_VariableHasKey(squash_compiler->symbolTable, identifierName))
         {
             SymbolTable_DefineVariableC(squash_compiler->symbolTable, AST_VarAutomatic, identifierName, NULL);
+
+            if (SymbolTable_VariableHasKey(squash_compiler->symbolTable, identifierName))
+            {
+                LogInformation("ParsePrimaryExpression(): symbol has key");
+            }
+            else
+            {
+                LogInformation("ParsePrimaryExpression(): symbol does not have key");
+            }
+
         }
         VariableSymbol_t* variableSymbol = SymbolTable_LookupVariable(squash_compiler->symbolTable, identifierName);
 

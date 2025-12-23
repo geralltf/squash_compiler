@@ -3,10 +3,11 @@
 
 #include "Assembler.h"
 #include "Instruction.Create.h"
-#include "Dictionary.h"
+#include "rb_tree.h"
+//#include "Dictionary.h"
 //#include "Symbols.h"
 
-Dictionary* dict_symbols_variables = NULL;
+struct rb_tree* dict_symbols_variables = NULL;
 
 struct Assembler* assembler_new()
 {
@@ -32,22 +33,39 @@ struct Assembler* assembler_new()
     return assembler;
 }
 
-int symbol_var_compararatorfunc(void* left, void* right)
+//int symbol_var_compararatorfunc(void* left, void* right)
+//{
+//    int compareResult = 0;
+//    char* leftc = (char*)left;
+//    char* rightc = (char*)right;
+//
+//    compareResult = strcmp(leftc, rightc);
+//
+//    return compareResult;
+//}
+
+static int rb_node_cmp2(const struct rb_node* a, const struct rb_node* b)
 {
-    int compareResult = 0;
-    char* leftc = (char*)left;
-    char* rightc = (char*)right;
-
-    compareResult = strcmp(leftc, rightc);
-
-    return compareResult;
+    return strcmp((char*)b->key, (char*)a->key);
 }
 
-Dictionary* dict_symbol_var()
+static int rb_node_search_cmp2(const struct rb_node* a, const void* key)
+{
+    if (a->key == NULL)
+    {
+        return -1;
+    }
+    return strcmp((char*)key, (char*)a->key);
+}
+
+struct rb_tree* dict_symbol_var()
 {
     if (dict_symbols_variables == NULL)
     {
-        dict_symbols_variables = DictionaryNew(&symbol_var_compararatorfunc);
+        dict_symbols_variables = (struct rb_tree*)malloc(sizeof(struct rb_tree));
+        dict_symbols_variables->root = NULL;
+
+        rb_tree_init(dict_symbols_variables);
     }
     return dict_symbols_variables;
 }
@@ -58,26 +76,22 @@ struct Label* localsymbols_define(
     struct Label* variable
 )
 {
-    DictionaryPair* variable_pair_out = (DictionaryPair*)malloc(sizeof(DictionaryPair));
-    DictionaryPair* variable_pair = DictionaryPairNew();
-    variable_pair->key = (void*)name;
-    variable_pair->value = (void*)variable;
-    //variable_pair->type = type;
-    variable_pair->type = VAR_Undefined;
+    struct rb_node* variable_node = (struct rb_node*)malloc(sizeof(struct rb_node));
+    variable_node->key = name;
+    variable_node->right = NULL;
+    variable_node->left = NULL;
+    variable_node->parent = 0;
+    variable_node->variable_symbol = (void*)variable;
 
-    if (DictionaryInsertPair(dict_symbol_var(), variable_pair, &variable_pair_out))
-    {
-
-    }
+    rb_tree_insert(dict_symbols_variables, variable_node, rb_node_cmp2);
 
     return variable;
 }
 
 bool localsymbols_variablehaskey(char* name)
 {
-    DictionaryPair* found;
-
-    found = DictionaryGetPair(dict_symbol_var(), (void*)name);
+    // Do a search in the tree for the current key ('name')
+    struct rb_node* found = rb_tree_search(dict_symbol_var(), (void*)name, rb_node_search_cmp2);
 
     if (found != NULL)
     {
@@ -88,13 +102,13 @@ bool localsymbols_variablehaskey(char* name)
 
 struct Label* localsymbols_lookupvariable(char* name)
 {
-    DictionaryPair* found;
-
-    found = DictionaryGetPair(dict_symbol_var(), (void*)name);
+    // Do a search in the tree for the current key ('name')
+    struct rb_node* found = rb_tree_search(dict_symbol_var(), (void*)name, rb_node_search_cmp2);
 
     if (found != NULL)
     {
-        struct Label* symbol_label = (struct Label*)found->value;
+        struct Label* symbol_label = (struct Label*)found->variable_symbol;
+
         return symbol_label;
     }
     return NULL;

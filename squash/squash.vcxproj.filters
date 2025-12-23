@@ -27,9 +27,6 @@
     <ClCompile Include="EntryPoint.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Dictionary.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="Symbols.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -90,6 +87,9 @@
     <ClCompile Include="OpCodeInfoData.c">
       <Filter>Source Files\Iced</Filter>
     </ClCompile>
+    <ClCompile Include="rb_tree.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h">
@@ -105,9 +105,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="List.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Dictionary.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Minifier.h">
@@ -172,6 +169,9 @@
     </ClInclude>
     <ClInclude Include="RoundingControl.h">
       <Filter>Iced</Filter>
+    </ClInclude>
+    <ClInclude Include="rb_tree.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

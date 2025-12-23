@@ -131,7 +131,6 @@
   <ItemGroup>
     <ClCompile Include="Assembler.c" />
     <ClCompile Include="AST.c" />
-    <ClCompile Include="Dictionary.c" />
     <ClCompile Include="EncoderInstructionSet.c" />
     <ClCompile Include="EntryPoint.c" />
     <ClCompile Include="FileIO.c" />
@@ -148,6 +147,7 @@
     <ClCompile Include="OpCodeInfo.c" />
     <ClCompile Include="OpCodeInfoData.c" />
     <ClCompile Include="Optimiser.c" />
+    <ClCompile Include="rb_tree.c" />
     <ClCompile Include="sb.c" />
     <ClCompile Include="SquashCompiler.c" />
     <ClCompile Include="Symbols.c" />
@@ -157,7 +157,6 @@
     <ClInclude Include="Assembler.h" />
     <ClInclude Include="Assembly.h" />
     <ClInclude Include="AST.h" />
-    <ClInclude Include="Dictionary.h" />
     <ClInclude Include="EncoderInstructionSet.h" />
     <ClInclude Include="Enums.h" />
     <ClInclude Include="FileIO.h" />
@@ -176,6 +175,7 @@
     <ClInclude Include="OpCodeInfoData.h" />
     <ClInclude Include="Optimiser.h" />
     <ClInclude Include="PrefixFlags.h" />
+    <ClInclude Include="rb_tree.h" />
     <ClInclude Include="RoundingControl.h" />
     <ClInclude Include="sb.h" />
     <ClInclude Include="SquashCompiler.h" />

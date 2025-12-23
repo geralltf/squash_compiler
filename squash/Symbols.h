@@ -2,10 +2,21 @@
 #define SYMBOLS_H
 
 #include "List.h"
-#include "Dictionary.h"
+//#include "Dictionary.h"
+#include "rb_tree.h"
 #include "Token.h"
 #include "AST.h"
 #include <stdio.h>
+
+enum VarSymbolType 
+{
+    VAR_Long = 5,
+    VAR_Char = 4,
+    VAR_Int = 3,
+    VAR_Double = 2,
+    VAR_Float = 1,
+    VAR_Undefined = 0
+};
 
 typedef struct FunctionSymbol
 {
@@ -33,14 +44,10 @@ char* VariableSymbol_to_string(VariableSymbol_t* symbol);
 
 typedef struct SymbolTable
 {
-    Dictionary* keywordDict; // Dictionary<string, TokenType>
-    Dictionary* variables; // Dictionary<string, VariableSymbol>
-    Dictionary* functions; // Dictionary<string, FunctionSymbol>
+    //struct rb_tree* keywordDict;
+    struct rb_tree* variables;
+    struct rb_tree* functions;
 } SymbolTable_t;
-
-int SymbolTable_RevervedKeyword_CompararatorFunc(void* left, void* right);
-int SymbolTable_Variable_CompararatorFunc(void* left, void* right);
-int SymbolTable_Function_CompararatorFunc(void* left, void* right);
 
 SymbolTable_t* SymbolTable_new();
 void SymbolTable_init(SymbolTable_t** symbols);
