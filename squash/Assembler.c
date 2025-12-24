@@ -355,13 +355,21 @@ void number_assemble(StringBuilder* sb, astnode_t* node, struct Assembler* assem
     struct Instruction* inst = NULL;
     LogInformation("Assemble(): ASTNodeType.Number");
 
+    StringBuilder* sb2 = sb_create();
+
     // Load the number value into a register
-    sb_append(sb, "mov rax, ");
-    sb_append(sb, node->Value);
-    sb_append(sb, "\n");
+    sb_append(sb2, "mov rax, ");
+    sb_append(sb2, node->Value);
+    sb_append(sb2, "\n");
+
+    char* var_asm = sb_concat(sb2);
+
+    LogInformation("<CODE>\n%s\n", var_asm);
+    
+    sb_append(sb, var_asm);
 
     //Console.WriteLine($"mov\trax,\t{node.Value}");
-
+    
     long number_value = atol(node->Value);
 
     struct AssemblerMemoryOperand* qword_operand2;
@@ -377,10 +385,18 @@ void variable_assemble(StringBuilder* sb, astnode_t* node, struct Assembler* ass
     struct Label* data_var_location = NULL;
     LogInformation("Assemble(): ASTNodeType.Variable");
 
+    StringBuilder* sb2 = sb_create();
+
     // Load the variable value into a register
-    sb_append(sb, "mov rax, [");
-    sb_append(sb, node->VarSymbol->Name);
-    sb_append(sb, "]\n");
+    sb_append(sb2, "mov rax, [");
+    sb_append(sb2, node->VarSymbol->Name);
+    sb_append(sb2, "]\n");
+
+    char* var_asm = sb_concat(sb2);
+
+    LogInformation("<CODE>\n%s\n", var_asm);
+
+    sb_append(sb, var_asm);
 
     //Console.WriteLine($"mov\trax,\t[{node.VarSymbol.Name}]");
     //Console.WriteLine($"mov [{node.VarSymbol.Name}], rax");
@@ -434,38 +450,47 @@ void binop_assemble(StringBuilder* sb, struct Assembler* assembler, astnode_t* n
     struct Instruction* inst = NULL;
     LogInformation("Assemble(): ASTNodeType.BIN_OP");
 
-    // Generate code for left and right operands
-    sb_append(sb, Assemble(assembler, node->Left));
+    StringBuilder* sb2 = sb_create();
 
-    sb_append(sb, "push rax\n");
+
+    // Generate code for left and right operands
+    sb_append(sb2, Assemble(assembler, node->Left));
+
+    sb_append(sb2, "push rax\n");
     //Console.WriteLine("push\trax"); // Save value on the stack
 
-    sb_append(sb, Assemble(assembler, node->Right));
+    sb_append(sb2, Assemble(assembler, node->Right));
 
     // Perform the operation (addition or subtraction in this example)
-    sb_append(sb, "pop rbx\n");
+    sb_append(sb2, "pop rbx\n");
     //Console.WriteLine("pop\trbx"); // Retrieve left operand from the stack
     if (strcmp(node->Value, "+") == 0)
     {
-        sb_append(sb, "add rax, rbx\n");
+        sb_append(sb2, "add rax, rbx\n");
         //Console.WriteLine("add\trax,\trbx");
     }
     else if (strcmp(node->Value, "-") == 0)
     {
-        sb_append(sb, "sub rax, rbx\n");
+        sb_append(sb2, "sub rax, rbx\n");
         //Console.WriteLine("sub\trax,\trbx");
     }
     else if (strcmp(node->Value, "*") == 0)
     {
-        sb_append(sb, "mul rax, rbx\n");
+        sb_append(sb2, "mul rax, rbx\n");
         //Console.WriteLine("mul\trax,\trbx");
     }
     else if (strcmp(node->Value, "/") == 0)
     {
-        sb_append(sb, "div rax, rbx\n");
+        sb_append(sb2, "div rax, rbx\n");
         //TODO: idiv for signed division
         //Console.WriteLine("div\trax,\trbx"); // TODO: confirm if this is the correct divide operator
     }
+
+    char* binop = sb_concat(sb2);
+
+    sb_append(sb, binop);
+
+    LogInformation("<CODE>\n%s\n", binop);
 }
 
 void unaryop_assemble(StringBuilder* sb, struct Assembler* assembler, astnode_t* node)
