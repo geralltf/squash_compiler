@@ -58,8 +58,6 @@ enum OperandType
 struct Op;
 struct OpCodeHandler;
 struct Encoder;
-struct Op;
-struct OpCodeHandler;
 
 typedef struct Encoder encoder_t;
 typedef struct Op opt_t;
