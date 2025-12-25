@@ -187,6 +187,8 @@ void GenerateCode(struct Assembler* assembler, astnode_t* astNode, char* output_
         char* outputAssembly = sb_concat(sb);
         int source_length = strlen(outputAssembly);
 
+        LogInformation("<CODE>\n%s\n</CODE>\n", outputAssembly);
+
         if (enable_tracing)
         {
             printf("%s", outputAssembly);
@@ -364,7 +366,7 @@ void number_assemble(StringBuilder* sb, astnode_t* node, struct Assembler* assem
 
     char* var_asm = sb_concat(sb2);
 
-    LogInformation("<CODE>\n%s\n", var_asm);
+    //LogInformation("<CODE>\n%s\n", var_asm);
     
     sb_append(sb, var_asm);
 
@@ -394,7 +396,7 @@ void variable_assemble(StringBuilder* sb, astnode_t* node, struct Assembler* ass
 
     char* var_asm = sb_concat(sb2);
 
-    LogInformation("<CODE>\n%s\n", var_asm);
+    //LogInformation("<CODE>\n%s\n", var_asm);
 
     sb_append(sb, var_asm);
 
@@ -490,7 +492,7 @@ void binop_assemble(StringBuilder* sb, struct Assembler* assembler, astnode_t* n
 
     sb_append(sb, binop);
 
-    LogInformation("<CODE>\n%s\n", binop);
+    //LogInformation("<CODE>\n%s\n", binop);
 }
 
 void unaryop_assemble(StringBuilder* sb, struct Assembler* assembler, astnode_t* node)
