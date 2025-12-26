@@ -147,6 +147,7 @@
     <ClCompile Include="OpCodeInfo.c" />
     <ClCompile Include="OpCodeInfoData.c" />
     <ClCompile Include="Optimiser.c" />
+    <ClCompile Include="pe_image_stream.c" />
     <ClCompile Include="rb_tree.c" />
     <ClCompile Include="sb.c" />
     <ClCompile Include="SquashCompiler.c" />
@@ -171,9 +172,11 @@
     <ClInclude Include="Encoder.h" />
     <ClInclude Include="Mnemonic.h" />
     <ClInclude Include="MvexEHBit.h" />
+    <ClInclude Include="nt-headers.h" />
     <ClInclude Include="OpCodeInfo.h" />
     <ClInclude Include="OpCodeInfoData.h" />
     <ClInclude Include="Optimiser.h" />
+    <ClInclude Include="pe_image_stream.h" />
     <ClInclude Include="PrefixFlags.h" />
     <ClInclude Include="rb_tree.h" />
     <ClInclude Include="RoundingControl.h" />
@@ -181,6 +184,9 @@
     <ClInclude Include="SquashCompiler.h" />
     <ClInclude Include="Symbols.h" />
     <ClInclude Include="Token.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Makefile" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

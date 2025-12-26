@@ -90,6 +90,9 @@
     <ClCompile Include="rb_tree.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="pe_image_stream.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h">
@@ -173,5 +176,14 @@
     <ClInclude Include="rb_tree.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="pe_image_stream.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="nt-headers.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Makefile" />
   </ItemGroup>
 </Project>
