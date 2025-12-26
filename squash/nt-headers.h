@@ -27,6 +27,8 @@ THE SOFTWARE.
 
 #include <stdint.h>
 
+#include "List.h"
+
 const uint32_t RICH_MAGIC_END = 0x68636952;
 const uint32_t RICH_MAGIC_START = 0x536e6144;
 const uint32_t RICH_OFFSET = 0x80;
@@ -315,7 +317,7 @@ struct optional_header_32
     uint32_t SizeOfHeapCommit;
     uint32_t LoaderFlags;
     uint32_t NumberOfRvaAndSizes;
-    data_directory DataDirectory[NUM_DIR_ENTRIES];
+    struct data_directory* DataDirectory;// [NUM_DIR_ENTRIES] ;
 };
 
 /*
@@ -353,15 +355,15 @@ struct optional_header_64
     uint64_t SizeOfHeapCommit;
     uint32_t LoaderFlags;
     uint32_t NumberOfRvaAndSizes;
-    data_directory DataDirectory[NUM_DIR_ENTRIES];
+    struct data_directory DataDirectory;// [NUM_DIR_ENTRIES] ;
 };
 
 struct nt_header_32 
 {
     uint32_t Signature;
-    file_header FileHeader;
-    optional_header_32 OptionalHeader;
-    optional_header_64 OptionalHeader64;
+    struct file_header* FileHeader;
+    struct optional_header_32* OptionalHeader;
+    struct optional_header_64* OptionalHeader64;
     uint16_t OptionalMagic;
 };
 
@@ -375,7 +377,7 @@ struct rich_entry
 struct rich_header 
 {
     uint32_t StartSignature;
-    //std::vector<rich_entry> Entries;
+    list_t* Entries; //std::vector<rich_entry> Entries;
     uint32_t EndSignature;
     uint32_t DecryptionKey;
     uint32_t Checksum;
@@ -431,7 +433,7 @@ struct resource_dat_entry
 
 struct image_section_header 
 {
-    uint8_t Name[NT_SHORT_NAME_LEN];
+    uint8_t* Name;// [NT_SHORT_NAME_LEN] ;
     union {
         uint32_t PhysicalAddress;
         uint32_t VirtualSize;
@@ -544,7 +546,7 @@ struct image_load_config_32
     uint32_t GuardCFFunctionTable;
     uint32_t GuardCFFunctionCount;
     uint32_t GuardFlags;
-    image_load_config_code_integrity CodeIntegrity;
+    struct image_load_config_code_integrity* CodeIntegrity;
     uint32_t GuardAddressTakenIatEntryTable;
     uint32_t GuardAddressTakenIatEntryCount;
     uint32_t GuardLongJumpTargetTable;
@@ -590,7 +592,7 @@ struct image_load_config_64
     uint64_t GuardCFFunctionTable;
     uint64_t GuardCFFunctionCount;
     uint32_t GuardFlags;
-    image_load_config_code_integrity CodeIntegrity;
+    struct image_load_config_code_integrity* CodeIntegrity;
     uint64_t GuardAddressTakenIatEntryTable;
     uint64_t GuardAddressTakenIatEntryCount;
     uint64_t GuardLongJumpTargetTable;

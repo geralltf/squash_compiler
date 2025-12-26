@@ -22,13 +22,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#include <algorithm>
-#include <array>
-#include <cassert>
-#include <cstring>
-#include <iostream>
-#include <stdexcept>
-#include <vector>
+//#include <algorithm>
+//#include <array>
+//#include <cassert>
+//#include <cstring>
+//#include <iostream>
+//#include <stdexcept>
+//#include <vector>
 
 #include "pe_image_stream.h"
 //#include "nt-headers.h"
@@ -36,101 +36,7 @@ THE SOFTWARE.
 //#include "to_string.h"
 
 
-struct section {
-    std::string sectionName;
-    std::uint64_t sectionBase;
-    bounded_buffer* sectionData;
-    image_section_header sec;
-};
 
-struct importent {
-    VA addr;
-    std::string symbolName;
-    std::string moduleName;
-};
-
-struct exportent {
-    VA addr;
-    std::uint16_t ordinal;
-    std::string symbolName;
-    std::string moduleName;
-    std::string forwardName;
-};
-
-struct reloc {
-    VA shiftedAddr;
-    reloc_type type;
-};
-
-struct debugent {
-    std::uint32_t type;
-    bounded_buffer* data;
-};
-
-#define SYMBOL_NAME_OFFSET(sn) (static_cast<std::uint32_t>(sn.data >> 32))
-#define SYMBOL_TYPE_HI(x) (x.type >> 8)
-
-union symbol_name {
-    std::uint8_t shortName[NT_SHORT_NAME_LEN];
-    std::uint32_t zeroes;
-    std::uint64_t data;
-};
-
-struct aux_symbol_f1 {
-    std::uint32_t tagIndex;
-    std::uint32_t totalSize;
-    std::uint32_t pointerToLineNumber;
-    std::uint32_t pointerToNextFunction;
-};
-
-struct aux_symbol_f2 {
-    std::uint16_t lineNumber;
-    std::uint32_t pointerToNextFunction;
-};
-
-struct aux_symbol_f3 {
-    std::uint32_t tagIndex;
-    std::uint32_t characteristics;
-};
-
-struct aux_symbol_f4 {
-    std::uint8_t filename[SYMTAB_RECORD_LEN];
-    std::string strFilename;
-};
-
-struct aux_symbol_f5 {
-    std::uint32_t length;
-    std::uint16_t numberOfRelocations;
-    std::uint16_t numberOfLineNumbers;
-    std::uint32_t checkSum;
-    std::uint16_t number;
-    std::uint8_t selection;
-};
-
-struct symbol {
-    std::string strName;
-    symbol_name name;
-    std::uint32_t value;
-    std::int16_t sectionNumber;
-    std::uint16_t type;
-    std::uint8_t storageClass;
-    std::uint8_t numberOfAuxSymbols;
-    std::vector<aux_symbol_f1> aux_symbols_f1;
-    std::vector<aux_symbol_f2> aux_symbols_f2;
-    std::vector<aux_symbol_f3> aux_symbols_f3;
-    std::vector<aux_symbol_f4> aux_symbols_f4;
-    std::vector<aux_symbol_f5> aux_symbols_f5;
-};
-
-struct parsed_pe_internal {
-    std::vector<section> secs;
-    std::vector<resource> rsrcs;
-    std::vector<importent> imports;
-    std::vector<reloc> relocs;
-    std::vector<exportent> exports;
-    std::vector<symbol> symbols;
-    std::vector<debugent> debugdirs;
-};
 
 // String representation of Rich header object types
 static const std::string kProdId_C = "[ C ]";
@@ -215,245 +121,245 @@ static const std::map<std::uint16_t, const std::string> ProductMap = {
     // Source: https://github.com/dishather/richprint/blob/master/comp_id.txt
     {std::make_pair(static_cast<std::uint16_t>(0x0000), "Imported Functions")},
     {std::make_pair(static_cast<std::uint16_t>(0x0684),
-                    "VS97 v5.0 SP3 cvtres 5.00.1668")},
+    "VS97 v5.0 SP3 cvtres 5.00.1668")},
     {std::make_pair(static_cast<std::uint16_t>(0x06B8),
-                    "VS98 v6.0 cvtres build 1720")},
+    "VS98 v6.0 cvtres build 1720")},
     {std::make_pair(static_cast<std::uint16_t>(0x06C8),
-                    "VS98 v6.0 SP6 cvtres build 1736")},
+    "VS98 v6.0 SP6 cvtres build 1736")},
     {std::make_pair(static_cast<std::uint16_t>(0x1C87),
-                    "VS97 v5.0 SP3 link 5.10.7303")},
+    "VS97 v5.0 SP3 link 5.10.7303")},
     {std::make_pair(static_cast<std::uint16_t>(0x5E92),
-                    "VS2015 v14.0 UPD3 build 24210")},
+    "VS2015 v14.0 UPD3 build 24210")},
     {std::make_pair(static_cast<std::uint16_t>(0x5E95),
-                    "VS2015 UPD3 build 24213")},
+    "VS2015 UPD3 build 24213")},
 
-                    // http://bytepointer.com/articles/the_microsoft_rich_header.htm
-                    {std::make_pair(static_cast<std::uint16_t>(0x0BEC),
-                                    "VS2003 v7.1 Free Toolkit .NET build 3052")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x0C05),
-                                    "VS2003 v7.1 .NET build 3077")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x0FC3),
-                                    "VS2003 v7.1 | Windows Server 2003 SP1 DDK build 4035")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x1C83), "MASM 6.13.7299")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x178E),
-                                    "VS2003 v7.1 SP1 .NET build 6030")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x1FE8),
-                                    "VS98 v6.0 RTM/SP1/SP2 build 8168")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x1FE9),
-                                    "VB 6.0/SP1/SP2 build 8169")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x20FC), "MASM 6.14.8444")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x20FF),
-                                    "VC++ 6.0 SP3 build 8447")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x212F),
-                                    "VB 6.0 SP3 build 8495")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x225F),
-                                    "VS 6.0 SP4 build 8799")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x2263), "MASM 6.15.8803")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x22AD),
-                                    "VB 6.0 SP4 build 8877")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x2304),
-                                    "VB 6.0 SP5 build 8964")},
-                    {std::make_pair(static_cast<std::uint16_t>(0x2306),
-                                    "VS 6.0 SP5 build 8966")},
-                                    //  {std::make_pair(static_cast<std::uint16_t>(0x2346), "MASM 6.15.9030
-                                    //  (VS.NET 7.0 BETA 1)")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x2346),
-                                                    "VS 7.0 2000 Beta 1 build 9030")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x2354),
-                                                    "VS 6.0 SP5 Processor Pack build 9044")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x2426),
-                                                    "VS2001 v7.0 Beta 2 build 9254")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x24FA),
-                                                    "VS2002 v7.0 .NET build 9466")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x2636),
-                                                    "VB 6.0 SP6 / VC++ build 9782")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x26E3),
-                                                    "VS2002 v7.0 SP1 build 9955")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x520D),
-                                                    "VS2013 v12.[0,1] build 21005")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x521E),
-                                                    "VS2008 v9.0 build 21022")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x56C7),
-                                                    "VS2015 v14.0 build 22215")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x59F2),
-                                                    "VS2015 v14.0 build 23026")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x5BD2),
-                                                    "VS2015 v14.0 UPD1 build 23506")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x5D10),
-                                                    "VS2015 v14.0 UPD2 build 23824")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x5E97),
-                                                    "VS2015 v14.0 UPD3.1 build 24215")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x7725),
-                                                    "VS2013 v12.0 UPD2 build 30501")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x766F),
-                                                    "VS2010 v10.0 build 30319")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x7809),
-                                                    "VS2008 v9.0 SP1 build 30729")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x797D),
-                                                    "VS2013 v12.0 UPD4 build 31101")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x9D1B),
-                                                    "VS2010 v10.0 SP1 build 40219")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x9EB5),
-                                                    "VS2013 v12.0 UPD5 build 40629")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0xC497),
-                                                    "VS2005 v8.0 (Beta) build 50327")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0xC627),
-                                                    "VS2005 v8.0 | VS2012 v11.0 build 50727")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0xC751),
-                                                    "VS2012 v11.0 Nov CTP build 51025")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0xC7A2),
-                                                    "VS2012 v11.0 UPD1 build 51106")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0xEB9B),
-                                                    "VS2012 v11.0 UPD2 build 60315")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0xECC2),
-                                                    "VS2012 v11.0 UPD3 build 60610")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0xEE66),
-                                                    "VS2012 v11.0 UPD4 build 61030")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x5E9A),
-                                                    "VS2015 v14.0 build 24218")},
-                                    {std::make_pair(static_cast<std::uint16_t>(0x61BB),
-                                                    "VS2017 v14.1 build 25019")},
+    // http://bytepointer.com/articles/the_microsoft_rich_header.htm
+    {std::make_pair(static_cast<std::uint16_t>(0x0BEC),
+    "VS2003 v7.1 Free Toolkit .NET build 3052")},
+    {std::make_pair(static_cast<std::uint16_t>(0x0C05),
+    "VS2003 v7.1 .NET build 3077")},
+    {std::make_pair(static_cast<std::uint16_t>(0x0FC3),
+    "VS2003 v7.1 | Windows Server 2003 SP1 DDK build 4035")},
+    {std::make_pair(static_cast<std::uint16_t>(0x1C83), "MASM 6.13.7299")},
+    {std::make_pair(static_cast<std::uint16_t>(0x178E),
+    "VS2003 v7.1 SP1 .NET build 6030")},
+    {std::make_pair(static_cast<std::uint16_t>(0x1FE8),
+    "VS98 v6.0 RTM/SP1/SP2 build 8168")},
+    {std::make_pair(static_cast<std::uint16_t>(0x1FE9),
+    "VB 6.0/SP1/SP2 build 8169")},
+    {std::make_pair(static_cast<std::uint16_t>(0x20FC), "MASM 6.14.8444")},
+    {std::make_pair(static_cast<std::uint16_t>(0x20FF),
+    "VC++ 6.0 SP3 build 8447")},
+    {std::make_pair(static_cast<std::uint16_t>(0x212F),
+    "VB 6.0 SP3 build 8495")},
+    {std::make_pair(static_cast<std::uint16_t>(0x225F),
+    "VS 6.0 SP4 build 8799")},
+    {std::make_pair(static_cast<std::uint16_t>(0x2263), "MASM 6.15.8803")},
+    {std::make_pair(static_cast<std::uint16_t>(0x22AD),
+    "VB 6.0 SP4 build 8877")},
+    {std::make_pair(static_cast<std::uint16_t>(0x2304),
+    "VB 6.0 SP5 build 8964")},
+    {std::make_pair(static_cast<std::uint16_t>(0x2306),
+    "VS 6.0 SP5 build 8966")},
+    //  {std::make_pair(static_cast<std::uint16_t>(0x2346), "MASM 6.15.9030
+    //  (VS.NET 7.0 BETA 1)")},
+    {std::make_pair(static_cast<std::uint16_t>(0x2346),
+    "VS 7.0 2000 Beta 1 build 9030")},
+    {std::make_pair(static_cast<std::uint16_t>(0x2354),
+    "VS 6.0 SP5 Processor Pack build 9044")},
+    {std::make_pair(static_cast<std::uint16_t>(0x2426),
+    "VS2001 v7.0 Beta 2 build 9254")},
+    {std::make_pair(static_cast<std::uint16_t>(0x24FA),
+    "VS2002 v7.0 .NET build 9466")},
+    {std::make_pair(static_cast<std::uint16_t>(0x2636),
+    "VB 6.0 SP6 / VC++ build 9782")},
+    {std::make_pair(static_cast<std::uint16_t>(0x26E3),
+    "VS2002 v7.0 SP1 build 9955")},
+    {std::make_pair(static_cast<std::uint16_t>(0x520D),
+    "VS2013 v12.[0,1] build 21005")},
+    {std::make_pair(static_cast<std::uint16_t>(0x521E),
+    "VS2008 v9.0 build 21022")},
+    {std::make_pair(static_cast<std::uint16_t>(0x56C7),
+    "VS2015 v14.0 build 22215")},
+    {std::make_pair(static_cast<std::uint16_t>(0x59F2),
+    "VS2015 v14.0 build 23026")},
+    {std::make_pair(static_cast<std::uint16_t>(0x5BD2),
+    "VS2015 v14.0 UPD1 build 23506")},
+    {std::make_pair(static_cast<std::uint16_t>(0x5D10),
+    "VS2015 v14.0 UPD2 build 23824")},
+    {std::make_pair(static_cast<std::uint16_t>(0x5E97),
+    "VS2015 v14.0 UPD3.1 build 24215")},
+    {std::make_pair(static_cast<std::uint16_t>(0x7725),
+    "VS2013 v12.0 UPD2 build 30501")},
+    {std::make_pair(static_cast<std::uint16_t>(0x766F),
+    "VS2010 v10.0 build 30319")},
+    {std::make_pair(static_cast<std::uint16_t>(0x7809),
+    "VS2008 v9.0 SP1 build 30729")},
+    {std::make_pair(static_cast<std::uint16_t>(0x797D),
+    "VS2013 v12.0 UPD4 build 31101")},
+    {std::make_pair(static_cast<std::uint16_t>(0x9D1B),
+    "VS2010 v10.0 SP1 build 40219")},
+    {std::make_pair(static_cast<std::uint16_t>(0x9EB5),
+    "VS2013 v12.0 UPD5 build 40629")},
+    {std::make_pair(static_cast<std::uint16_t>(0xC497),
+    "VS2005 v8.0 (Beta) build 50327")},
+    {std::make_pair(static_cast<std::uint16_t>(0xC627),
+    "VS2005 v8.0 | VS2012 v11.0 build 50727")},
+    {std::make_pair(static_cast<std::uint16_t>(0xC751),
+    "VS2012 v11.0 Nov CTP build 51025")},
+    {std::make_pair(static_cast<std::uint16_t>(0xC7A2),
+    "VS2012 v11.0 UPD1 build 51106")},
+    {std::make_pair(static_cast<std::uint16_t>(0xEB9B),
+    "VS2012 v11.0 UPD2 build 60315")},
+    {std::make_pair(static_cast<std::uint16_t>(0xECC2),
+    "VS2012 v11.0 UPD3 build 60610")},
+    {std::make_pair(static_cast<std::uint16_t>(0xEE66),
+    "VS2012 v11.0 UPD4 build 61030")},
+    {std::make_pair(static_cast<std::uint16_t>(0x5E9A),
+    "VS2015 v14.0 build 24218")},
+    {std::make_pair(static_cast<std::uint16_t>(0x61BB),
+    "VS2017 v14.1 build 25019")},
 
-                                                    // https://dev.to/yumetodo/list-of-mscver-and-mscfullver-8nd
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x2264),
-                                                                    "VS 6 [SP5,SP6] build 8804")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x23D8), "Windows XP SP1 DDK")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x0883),
-                                                                    "Windows Server 2003 DDK")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x08F4),
-                                                                    "VS2003 v7.1 .NET Beta build 2292")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x9D76),
-                                                                    "Windows Server 2003 SP1 DDK (for AMD64)")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x9E9F),
-                                                                    "VS2005 v8.0 Beta 1 build 40607")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0xC427),
-                                                                    "VS2005 v8.0 Beta 2 build 50215")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0xC490),
-                                                                    "VS2005 v8.0 build 50320")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x50E2),
-                                                                    "VS2008 v9.0 Beta 2 build 20706")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x501A),
-                                                                    "VS2010 v10.0 Beta 1 build 20506")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x520B),
-                                                                    "VS2010 v10.0 Beta 2 build 21003")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x5089),
-                                                                    "VS2013 v12.0 Preview build 20617")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x515B),
-                                                                    "VS2013 v12.0 RC build 20827")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x527A),
-                                                                    "VS2013 v12.0 Nov CTP build 21114")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x63A3),
-                                                                    "VS2017 v15.3.3 build 25507")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x63C6),
-                                                                    "VS2017 v15.4.4 build 25542")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x63CB),
-                                                                    "VS2017 v15.4.5 build 25547")},
-                                                    {std::make_pair(static_cast<std::uint16_t>(0x7674),
-                                                                    "VS2013 v12.0 UPD2 RC build 30324")},
+    // https://dev.to/yumetodo/list-of-mscver-and-mscfullver-8nd
+    {std::make_pair(static_cast<std::uint16_t>(0x2264),
+    "VS 6 [SP5,SP6] build 8804")},
+    {std::make_pair(static_cast<std::uint16_t>(0x23D8), "Windows XP SP1 DDK")},
+    {std::make_pair(static_cast<std::uint16_t>(0x0883),
+    "Windows Server 2003 DDK")},
+    {std::make_pair(static_cast<std::uint16_t>(0x08F4),
+    "VS2003 v7.1 .NET Beta build 2292")},
+    {std::make_pair(static_cast<std::uint16_t>(0x9D76),
+    "Windows Server 2003 SP1 DDK (for AMD64)")},
+    {std::make_pair(static_cast<std::uint16_t>(0x9E9F),
+    "VS2005 v8.0 Beta 1 build 40607")},
+    {std::make_pair(static_cast<std::uint16_t>(0xC427),
+    "VS2005 v8.0 Beta 2 build 50215")},
+    {std::make_pair(static_cast<std::uint16_t>(0xC490),
+    "VS2005 v8.0 build 50320")},
+    {std::make_pair(static_cast<std::uint16_t>(0x50E2),
+    "VS2008 v9.0 Beta 2 build 20706")},
+    {std::make_pair(static_cast<std::uint16_t>(0x501A),
+    "VS2010 v10.0 Beta 1 build 20506")},
+    {std::make_pair(static_cast<std::uint16_t>(0x520B),
+    "VS2010 v10.0 Beta 2 build 21003")},
+    {std::make_pair(static_cast<std::uint16_t>(0x5089),
+    "VS2013 v12.0 Preview build 20617")},
+    {std::make_pair(static_cast<std::uint16_t>(0x515B),
+    "VS2013 v12.0 RC build 20827")},
+    {std::make_pair(static_cast<std::uint16_t>(0x527A),
+    "VS2013 v12.0 Nov CTP build 21114")},
+    {std::make_pair(static_cast<std::uint16_t>(0x63A3),
+    "VS2017 v15.3.3 build 25507")},
+    {std::make_pair(static_cast<std::uint16_t>(0x63C6),
+    "VS2017 v15.4.4 build 25542")},
+    {std::make_pair(static_cast<std::uint16_t>(0x63CB),
+    "VS2017 v15.4.5 build 25547")},
+    {std::make_pair(static_cast<std::uint16_t>(0x7674),
+    "VS2013 v12.0 UPD2 RC build 30324")},
 
-                                                                    // https://walbourn.github.io/visual-studio-2015-update-2/
-                                                                    {std::make_pair(static_cast<std::uint16_t>(0x5D6E),
-                                                                                    "VS2015 v14.0 UPD2 build 23918")},
+    // https://walbourn.github.io/visual-studio-2015-update-2/
+    {std::make_pair(static_cast<std::uint16_t>(0x5D6E),
+    "VS2015 v14.0 UPD2 build 23918")},
 
-                                                                                    // https://walbourn.github.io/visual-studio-2017/
-                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x61B9),
-                                                                                                    "VS2017 v15.[0,1] build 25017")},
-                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x63A2),
-                                                                                                    "VS2017 v15.2 build 25019")},
+    // https://walbourn.github.io/visual-studio-2017/
+    {std::make_pair(static_cast<std::uint16_t>(0x61B9),
+    "VS2017 v15.[0,1] build 25017")},
+    {std::make_pair(static_cast<std::uint16_t>(0x63A2),
+    "VS2017 v15.2 build 25019")},
 
-                                                                                                    // https://walbourn.github.io/vs-2017-15-5-update/
-                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x64E6),
-                                                                                                                    "VS2017 v15 build 25830")},
-                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x64E7),
-                                                                                                                    "VS2017 v15.5.2 build 25831")},
-                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x64EA),
-                                                                                                                    "VS2017 v15.5.[3,4] build 25834")},
-                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x64EB),
-                                                                                                                    "VS2017 v15.5.[5,6,7] build 25835")},
+    // https://walbourn.github.io/vs-2017-15-5-update/
+    {std::make_pair(static_cast<std::uint16_t>(0x64E6),
+    "VS2017 v15 build 25830")},
+    {std::make_pair(static_cast<std::uint16_t>(0x64E7),
+    "VS2017 v15.5.2 build 25831")},
+    {std::make_pair(static_cast<std::uint16_t>(0x64EA),
+    "VS2017 v15.5.[3,4] build 25834")},
+    {std::make_pair(static_cast<std::uint16_t>(0x64EB),
+    "VS2017 v15.5.[5,6,7] build 25835")},
 
-                                                                                                                    // https://walbourn.github.io/vs-2017-15-6-update/
-                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6610),
-                                                                                                                                    "VS2017 v15.6.[0,1,2] build 26128")},
-                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6611),
-                                                                                                                                    "VS2017 v15.6.[3,4] build 26129")},
-                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6613),
-                                                                                                                                    "VS2017 v15.6.6 build 26131")},
-                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6614),
-                                                                                                                                    "VS2017 v15.6.7 build 26132")},
+    // https://walbourn.github.io/vs-2017-15-6-update/
+    {std::make_pair(static_cast<std::uint16_t>(0x6610),
+    "VS2017 v15.6.[0,1,2] build 26128")},
+    {std::make_pair(static_cast<std::uint16_t>(0x6611),
+    "VS2017 v15.6.[3,4] build 26129")},
+    {std::make_pair(static_cast<std::uint16_t>(0x6613),
+    "VS2017 v15.6.6 build 26131")},
+    {std::make_pair(static_cast<std::uint16_t>(0x6614),
+    "VS2017 v15.6.7 build 26132")},
 
-                                                                                                                                    // https://devblogs.microsoft.com/visualstudio/visual-studio-2017-update/
-                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6723),
-                                                                                                                                                    "VS2017 v15.1 build 26403")},
+    // https://devblogs.microsoft.com/visualstudio/visual-studio-2017-update/
+    {std::make_pair(static_cast<std::uint16_t>(0x6723),
+    "VS2017 v15.1 build 26403")},
 
-                                                                                                                                                    // https://walbourn.github.io/vs-2017-15-7-update/
-                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x673C),
-                                                                                                                                                                    "VS2017 v15.7.[0,1] build 26428")},
-                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x673D),
-                                                                                                                                                                    "VS2017 v15.7.2 build 26429")},
-                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x673E),
-                                                                                                                                                                    "VS2017 v15.7.3 build 26430")},
-                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x673F),
-                                                                                                                                                                    "VS2017 v15.7.4 build 26431")},
-                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6741),
-                                                                                                                                                                    "VS2017 v15.7.5 build 26433")},
+    // https://walbourn.github.io/vs-2017-15-7-update/
+    {std::make_pair(static_cast<std::uint16_t>(0x673C),
+    "VS2017 v15.7.[0,1] build 26428")},
+    {std::make_pair(static_cast<std::uint16_t>(0x673D),
+    "VS2017 v15.7.2 build 26429")},
+    {std::make_pair(static_cast<std::uint16_t>(0x673E),
+    "VS2017 v15.7.3 build 26430")},
+    {std::make_pair(static_cast<std::uint16_t>(0x673F),
+    "VS2017 v15.7.4 build 26431")},
+    {std::make_pair(static_cast<std::uint16_t>(0x6741),
+    "VS2017 v15.7.5 build 26433")},
 
-                                                                                                                                                                    // https://walbourn.github.io/visual-studio-2019/
-                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6B74),
-                                                                                                                                                                                    "VS2019 v16.0.0 build 27508")},
+    // https://walbourn.github.io/visual-studio-2019/
+    {std::make_pair(static_cast<std::uint16_t>(0x6B74),
+    "VS2019 v16.0.0 build 27508")},
 
-                                                                                                                                                                                    // https://walbourn.github.io/vs-2017-15-8-update/
-                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6866),
-                                                                                                                                                                                                    "VS2017 v15.8.0 build 26726")},
-                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6869),
-                                                                                                                                                                                                    "VS2017 v15.8.4 build 26729")},
-                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x686A),
-                                                                                                                                                                                                    "VS2017 v15.8.9 build 26730")},
-                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x686C),
-                                                                                                                                                                                                    "VS2017 v15.8.5 build 26732")},
+    // https://walbourn.github.io/vs-2017-15-8-update/
+    {std::make_pair(static_cast<std::uint16_t>(0x6866),
+    "VS2017 v15.8.0 build 26726")},
+    {std::make_pair(static_cast<std::uint16_t>(0x6869),
+    "VS2017 v15.8.4 build 26729")},
+    {std::make_pair(static_cast<std::uint16_t>(0x686A),
+    "VS2017 v15.8.9 build 26730")},
+    {std::make_pair(static_cast<std::uint16_t>(0x686C),
+    "VS2017 v15.8.5 build 26732")},
 
-                                                                                                                                                                                                    // https://walbourn.github.io/vs-2017-15-9-update/
-                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x698F),
-                                                                                                                                                                                                                    "VS2017 v15.9.[0,1] build 27023")},
-                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6990),
-                                                                                                                                                                                                                    "VS2017 v15.9.2 build 27024")},
-                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6991),
-                                                                                                                                                                                                                    "VS2017 v15.9.4 build 27025")},
-                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6992),
-                                                                                                                                                                                                                    "VS2017 v15.9.5 build 27026")},
-                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6993),
-                                                                                                                                                                                                                    "VS2017 v15.9.7 build 27027")},
-                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6996),
-                                                                                                                                                                                                                    "VS2017 v15.9.11 build 27030")},
-                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6997),
-                                                                                                                                                                                                                    "VS2017 v15.9.12 build 27031")},
-                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6998),
-                                                                                                                                                                                                                    "VS2017 v15.9.14 build 27032")},
-                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x699A),
-                                                                                                                                                                                                                    "VS2017 v15.9.16 build 27034")},
+    // https://walbourn.github.io/vs-2017-15-9-update/
+    {std::make_pair(static_cast<std::uint16_t>(0x698F),
+    "VS2017 v15.9.[0,1] build 27023")},
+    {std::make_pair(static_cast<std::uint16_t>(0x6990),
+    "VS2017 v15.9.2 build 27024")},
+    {std::make_pair(static_cast<std::uint16_t>(0x6991),
+    "VS2017 v15.9.4 build 27025")},
+    {std::make_pair(static_cast<std::uint16_t>(0x6992),
+    "VS2017 v15.9.5 build 27026")},
+    {std::make_pair(static_cast<std::uint16_t>(0x6993),
+    "VS2017 v15.9.7 build 27027")},
+    {std::make_pair(static_cast<std::uint16_t>(0x6996),
+    "VS2017 v15.9.11 build 27030")},
+    {std::make_pair(static_cast<std::uint16_t>(0x6997),
+    "VS2017 v15.9.12 build 27031")},
+    {std::make_pair(static_cast<std::uint16_t>(0x6998),
+    "VS2017 v15.9.14 build 27032")},
+    {std::make_pair(static_cast<std::uint16_t>(0x699A),
+    "VS2017 v15.9.16 build 27034")},
 
-                                                                                                                                                                                                                    // https://walbourn.github.io/visual-studio-2019/
-                                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6B74),
-                                                                                                                                                                                                                                    "VS2019 v16.0.0 RTM build 27508")},
+    // https://walbourn.github.io/visual-studio-2019/
+    {std::make_pair(static_cast<std::uint16_t>(0x6B74),
+    "VS2019 v16.0.0 RTM build 27508")},
 
-                                                                                                                                                                                                                                    // https://walbourn.github.io/vs-2019-update-1/
-                                                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6C36),
-                                                                                                                                                                                                                                                    "VS2019 v16.1.2 UPD1 build 27702")},
+    // https://walbourn.github.io/vs-2019-update-1/
+    {std::make_pair(static_cast<std::uint16_t>(0x6C36),
+    "VS2019 v16.1.2 UPD1 build 27702")},
 
-                                                                                                                                                                                                                                                    // https://walbourn.github.io/vs-2019-update-2/
-                                                                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6D01),
-                                                                                                                                                                                                                                                                    "VS2019 v16.2.3 UPD2 build 27905")},
+    // https://walbourn.github.io/vs-2019-update-2/
+    {std::make_pair(static_cast<std::uint16_t>(0x6D01),
+    "VS2019 v16.2.3 UPD2 build 27905")},
 
-                                                                                                                                                                                                                                                                    // https://walbourn.github.io/vs-2019-update-3/
-                                                                                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x6DC9),
-                                                                                                                                                                                                                                                                                    "VS2019 v16.3.2 UPD3 build 28105")},
+    // https://walbourn.github.io/vs-2019-update-3/
+    {std::make_pair(static_cast<std::uint16_t>(0x6DC9),
+    "VS2019 v16.3.2 UPD3 build 28105")},
 
-                                                                                                                                                                                                                                                                                    // https://walbourn.github.io/visual-studio-2013-update-3/
-                                                                                                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x7803),
-                                                                                                                                                                                                                                                                                                    "VS2013 v12.0 UPD3 build 30723")},
+    // https://walbourn.github.io/visual-studio-2013-update-3/
+    {std::make_pair(static_cast<std::uint16_t>(0x7803),
+    "VS2013 v12.0 UPD3 build 30723")},
 
-                                                                                                                                                                                                                                                                                                    // experimentation
-                                                                                                                                                                                                                                                                                                    {std::make_pair(static_cast<std::uint16_t>(0x685B),
-                                                                                                                                                                                                                                                                                                                    "VS2017 v15.8.? build 26715")},
+    // experimentation
+    {std::make_pair(static_cast<std::uint16_t>(0x685B),
+                    "VS2017 v15.8.? build 26715")},
 };
 
 static const std::string kUnknownProduct = "<unknown>";
