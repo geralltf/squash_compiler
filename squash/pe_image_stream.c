@@ -39,82 +39,298 @@ THE SOFTWARE.
 
 
 // String representation of Rich header object types
-static const std::string kProdId_C = "[ C ]";
-static const std::string kProdId_CPP = "[C++]";
-static const std::string kProdId_RES = "[RES]";
-static const std::string kProdId_IMP = "[IMP]";
-static const std::string kProdId_EXP = "[EXP]";
-static const std::string kProdId_ASM = "[ASM]";
-static const std::string kProdId_LNK = "[LNK]";
-static const std::string kProdId_UNK = "[ ? ]";
+char* kProdId_C = NULL;
+char* kProdId_CPP = NULL;
+char* kProdId_RES = NULL;
+char* kProdId_IMP = NULL;
+char* kProdId_EXP = NULL;
+char* kProdId_ASM = NULL;
+char* kProdId_LNK = NULL;
+char* kProdId_UNK = "[ ? ]";
+
+bool kProdId_loaded = false;
+
+void ProductIdMap_init()
+{
+    if (kProdId_loaded == false)
+    {
+        kProdId_C = (char*)malloc(sizeof(char) * 6);
+        kProdId_C[0] = '[';
+        kProdId_C[1] = ' ';
+        kProdId_C[2] = 'C';
+        kProdId_C[3] = ' ';
+        kProdId_C[4] = ']';
+        kProdId_C[5] = 0x00;
+
+        kProdId_CPP = (char*)malloc(sizeof(char) * 6);
+        kProdId_CPP[0] = '[';
+        kProdId_CPP[1] = 'C';
+        kProdId_CPP[2] = '+';
+        kProdId_CPP[3] = '+';
+        kProdId_CPP[4] = ']';
+        kProdId_CPP[5] = 0x00;
+
+        kProdId_RES = (char*)malloc(sizeof(char) * 6);
+        kProdId_RES[0] = '[';
+        kProdId_RES[1] = 'R';
+        kProdId_RES[2] = 'E';
+        kProdId_RES[3] = 'S';
+        kProdId_RES[4] = ']';
+        kProdId_RES[5] = 0x00;
+
+        kProdId_IMP = (char*)malloc(sizeof(char) * 6);
+        kProdId_IMP[0] = '[';
+        kProdId_IMP[1] = 'I';
+        kProdId_IMP[2] = 'M';
+        kProdId_IMP[3] = 'P';
+        kProdId_IMP[4] = ']';
+        kProdId_IMP[5] = 0x00;
+
+        kProdId_EXP = (char*)malloc(sizeof(char) * 6);
+        kProdId_EXP[0] = '[';
+        kProdId_EXP[1] = 'E';
+        kProdId_EXP[2] = 'X';
+        kProdId_EXP[3] = 'P';
+        kProdId_EXP[4] = ']';
+        kProdId_EXP[5] = 0x00;
+
+        kProdId_ASM = (char*)malloc(sizeof(char) * 6);
+        kProdId_ASM[0] = '[';
+        kProdId_ASM[1] = 'A';
+        kProdId_ASM[2] = 'S';
+        kProdId_ASM[3] = 'M';
+        kProdId_ASM[4] = ']';
+        kProdId_ASM[5] = 0x00;
+
+        kProdId_LNK = (char*)malloc(sizeof(char) * 6);
+        kProdId_LNK[0] = '[';
+        kProdId_LNK[1] = 'L';
+        kProdId_LNK[2] = 'N';
+        kProdId_LNK[3] = 'K';
+        kProdId_LNK[4] = ']';
+        kProdId_LNK[5] = 0x00;
+
+        kProdId_UNK = (char*)malloc(sizeof(char) * 6);
+        kProdId_UNK[0] = '[';
+        kProdId_UNK[1] = ' ';
+        kProdId_UNK[2] = '?';
+        kProdId_UNK[3] = ' ';
+        kProdId_UNK[4] = ']';
+        kProdId_UNK[5] = 0x00;
+
+        kProdId_loaded = true;
+    }
+}
 
 // Mapping of Rich header Product ID to object type string
 // Source: https://github.com/dishather/richprint/blob/master/comp_id.txt
-static const std::map<std::uint16_t, std::string> ProductIdMap = {
-    {std::make_pair(static_cast<std::uint16_t>(0x0000), kProdId_UNK)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0002), kProdId_IMP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0004), kProdId_LNK)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0006), kProdId_RES)},
-    {std::make_pair(static_cast<std::uint16_t>(0x000A), kProdId_C)},
-    {std::make_pair(static_cast<std::uint16_t>(0x000B), kProdId_CPP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x000F), kProdId_ASM)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0015), kProdId_C)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0016), kProdId_CPP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0019), kProdId_IMP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x001C), kProdId_C)},
-    {std::make_pair(static_cast<std::uint16_t>(0x001D), kProdId_CPP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x003D), kProdId_LNK)},
-    {std::make_pair(static_cast<std::uint16_t>(0x003F), kProdId_EXP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0040), kProdId_ASM)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0045), kProdId_RES)},
-    {std::make_pair(static_cast<std::uint16_t>(0x005A), kProdId_LNK)},
-    {std::make_pair(static_cast<std::uint16_t>(0x005C), kProdId_EXP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x005D), kProdId_IMP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x005E), kProdId_RES)},
-    {std::make_pair(static_cast<std::uint16_t>(0x005F), kProdId_C)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0060), kProdId_CPP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x006D), kProdId_C)},
-    {std::make_pair(static_cast<std::uint16_t>(0x006E), kProdId_CPP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0078), kProdId_LNK)},
-    {std::make_pair(static_cast<std::uint16_t>(0x007A), kProdId_EXP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x007B), kProdId_IMP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x007C), kProdId_RES)},
-    {std::make_pair(static_cast<std::uint16_t>(0x007D), kProdId_ASM)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0083), kProdId_C)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0084), kProdId_CPP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0091), kProdId_LNK)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0092), kProdId_EXP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0093), kProdId_IMP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0094), kProdId_RES)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0095), kProdId_ASM)},
-    {std::make_pair(static_cast<std::uint16_t>(0x009A), kProdId_RES)},
-    {std::make_pair(static_cast<std::uint16_t>(0x009B), kProdId_EXP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x009C), kProdId_IMP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x009D), kProdId_LNK)},
-    {std::make_pair(static_cast<std::uint16_t>(0x009E), kProdId_ASM)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00AA), kProdId_C)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00AB), kProdId_CPP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00C9), kProdId_RES)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00CA), kProdId_EXP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00CB), kProdId_IMP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00CC), kProdId_LNK)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00CD), kProdId_ASM)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00CE), kProdId_C)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00CF), kProdId_CPP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00DB), kProdId_RES)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00DC), kProdId_EXP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00DD), kProdId_IMP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00DE), kProdId_LNK)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00DF), kProdId_ASM)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00E0), kProdId_C)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00E1), kProdId_CPP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x00FF), kProdId_RES)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0100), kProdId_EXP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0101), kProdId_IMP)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0102), kProdId_LNK)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0103), kProdId_ASM)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0104), kProdId_C)},
-    {std::make_pair(static_cast<std::uint16_t>(0x0105), kProdId_CPP)} };
+char* GetProductIdMap(uint16_t val)
+{
+    if (kProdId_loaded == false)
+    {
+        ProductIdMap_init();
+    }
+
+    switch (val)
+    {
+    case 0x0000:
+        return kProdId_UNK;
+    case 0x0002:
+        return kProdId_IMP;
+    case 0x0004:
+        return kProdId_LNK;
+    case 0x0006:
+        return kProdId_RES;
+    case 0x000A:
+        return kProdId_C;
+    case 0x000B:
+        return kProdId_CPP;
+    case 0x000F:
+        return kProdId_ASM;
+    case 0x0015:
+        return kProdId_C;
+    case 0x0016:
+        return kProdId_CPP;
+    case 0x0019:
+        return kProdId_IMP;
+    case 0x001C:
+        return kProdId_C;
+    case 0x001D:
+        return kProdId_CPP;
+    case 0x003D:
+        return kProdId_LNK;
+    case 0x003F:
+        return kProdId_EXP;
+    case 0x0040:
+        return kProdId_ASM;
+    case 0x0045:
+        return kProdId_RES;
+    case 0x005A:
+        return kProdId_LNK;
+    case 0x005C:
+        return kProdId_EXP;
+    case 0x005D:
+        return kProdId_IMP;
+    case 0x005E:
+        return kProdId_RES;
+    case 0x005F:
+        return kProdId_C;
+    case 0x0060:
+        return kProdId_CPP;
+    case 0x006D:
+        return kProdId_C;
+    case 0x006E:
+        return kProdId_CPP;
+    case 0x0078:
+        return kProdId_LNK;
+    case 0x007A:
+        return kProdId_EXP;
+    case 0x007B:
+        return kProdId_IMP;
+    case 0x007C:
+        return kProdId_RES;
+    case 0x007D:
+        return kProdId_ASM;
+    case 0x0083:
+        return kProdId_C;
+    case 0x0084:
+        return kProdId_CPP;
+    case 0x0091:
+        return kProdId_LNK;
+    case 0x0092:
+        return kProdId_EXP;
+    case 0x0093:
+        return kProdId_IMP;
+    case 0x0094:
+        return kProdId_RES;
+    case 0x0095:
+        return kProdId_ASM;
+    case 0x009A:
+        return kProdId_RES;
+    case 0x009B:
+        return kProdId_EXP;
+    case 0x009C:
+        return kProdId_IMP;
+    case 0x009D:
+        return kProdId_LNK;
+    case 0x009E:
+        return kProdId_ASM;
+    case 0x00AA:
+        return kProdId_C;
+    case 0x00AB:
+        return kProdId_CPP;
+    case 0x00C9:
+        return kProdId_RES;
+    case 0x00CA:
+        return kProdId_EXP;
+    case 0x00CB:
+        return kProdId_IMP;
+    case 0x00CC:
+        return kProdId_LNK;
+    case 0x00CD:
+        return kProdId_ASM;
+    case 0x00CE:
+        return kProdId_C;
+    case 0x00CF:
+        return kProdId_CPP;
+    case 0x00DB:
+        return kProdId_RES;
+    case 0x00DC:
+        return kProdId_EXP;
+    case 0x00DD:
+        return kProdId_IMP;
+    case 0x00DE:
+        return kProdId_LNK;
+    case 0x00DF:
+        return kProdId_ASM;
+    case 0x00E0:
+        return kProdId_C;
+    case 0x00E1:
+        return kProdId_CPP;
+    case 0x00FF:
+        return kProdId_RES;
+    case 0x0100:
+        return kProdId_EXP;
+    case 0x0101:
+        return kProdId_IMP;
+    case 0x0102:
+        return kProdId_LNK;
+    case 0x0103:
+        return kProdId_ASM;
+    case 0x0104:
+        return kProdId_C;
+    case 0x0105:
+        return kProdId_CPP;
+    default:
+        return NULL;
+    }
+}
+
+//static const std::map<std::uint16_t, std::string> ProductIdMap = {
+//    {std::make_pair(static_cast<std::uint16_t>(0x0000), kProdId_UNK)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0002), kProdId_IMP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0004), kProdId_LNK)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0006), kProdId_RES)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x000A), kProdId_C)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x000B), kProdId_CPP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x000F), kProdId_ASM)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0015), kProdId_C)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0016), kProdId_CPP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0019), kProdId_IMP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x001C), kProdId_C)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x001D), kProdId_CPP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x003D), kProdId_LNK)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x003F), kProdId_EXP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0040), kProdId_ASM)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0045), kProdId_RES)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x005A), kProdId_LNK)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x005C), kProdId_EXP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x005D), kProdId_IMP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x005E), kProdId_RES)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x005F), kProdId_C)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0060), kProdId_CPP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x006D), kProdId_C)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x006E), kProdId_CPP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0078), kProdId_LNK)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x007A), kProdId_EXP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x007B), kProdId_IMP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x007C), kProdId_RES)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x007D), kProdId_ASM)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0083), kProdId_C)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0084), kProdId_CPP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0091), kProdId_LNK)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0092), kProdId_EXP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0093), kProdId_IMP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0094), kProdId_RES)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0095), kProdId_ASM)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x009A), kProdId_RES)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x009B), kProdId_EXP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x009C), kProdId_IMP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x009D), kProdId_LNK)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x009E), kProdId_ASM)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00AA), kProdId_C)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00AB), kProdId_CPP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00C9), kProdId_RES)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00CA), kProdId_EXP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00CB), kProdId_IMP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00CC), kProdId_LNK)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00CD), kProdId_ASM)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00CE), kProdId_C)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00CF), kProdId_CPP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00DB), kProdId_RES)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00DC), kProdId_EXP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00DD), kProdId_IMP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00DE), kProdId_LNK)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00DF), kProdId_ASM)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00E0), kProdId_C)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00E1), kProdId_CPP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x00FF), kProdId_RES)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0100), kProdId_EXP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0101), kProdId_IMP)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0102), kProdId_LNK)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0103), kProdId_ASM)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0104), kProdId_C)},
+//    {std::make_pair(static_cast<std::uint16_t>(0x0105), kProdId_CPP)} };
 
 // Mapping of Rich header build number to version strings
 static const std::map<std::uint16_t, const std::string> ProductMap = {
