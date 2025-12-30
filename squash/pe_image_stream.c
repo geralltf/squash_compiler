@@ -426,8 +426,6 @@ char* GetProductMap(uint16_t id)
         return create_heap_string("VS2017 v15.9.14 build 27032");
     case 0x699A:
         return create_heap_string("VS2017 v15.9.16 build 27034");
-    case 0x6B74:
-        return create_heap_string("VS2019 v16.0.0 RTM build 27508");
     case 0x6C36:
         return create_heap_string("VS2019 v16.1.2 UPD1 build 27702");
     case 0x6D01:
