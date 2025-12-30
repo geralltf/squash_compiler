@@ -50,6 +50,9 @@ char* kProdId_UNK = NULL;
 
 bool kProdId_loaded = false;
 
+uint32_t err = 0;
+char* err_loc = NULL;
+
 char* create_heap_string(const char* source)
 {
     size_t size = strlen(source) + 1;
@@ -462,9 +465,6 @@ char* GetRichProductName(uint16_t buildNum)
     return product;
 }
 
-uint32_t err = 0;
-char* err_loc;
-
 uint32_t GetPEErr()
 {
     return err;
@@ -516,7 +516,7 @@ char* GetSymbolTableStorageClassName(uint8_t id)
     switch (id)
     {
     //case IMAGE_SYM_CLASS_END_OF_FUNCTION:
-    //    return "CLASS_END_OF_FUNCTION";
+    //    return create_heap_string("CLASS_END_OF_FUNCTION");
     case IMAGE_SYM_CLASS_NULL:
         return create_heap_string("CLASS_NULL");
     case IMAGE_SYM_CLASS_AUTOMATIC:
@@ -574,78 +574,243 @@ char* GetSymbolTableStorageClassName(uint8_t id)
     }
 }
 
-static bool readCString(const bounded_buffer& buffer,
-    std::uint32_t off,
-    std::string& result) {
-    if (off < buffer.bufLen) {
-        std::uint8_t* p = buffer.buf;
-        std::uint32_t n = buffer.bufLen;
-        std::uint8_t* b = p + off;
-        std::uint8_t* x = std::find(b, p + n, 0);
+bool readCString(const bounded_buffer* buffer, uint32_t off, char* result)
+{
+    if (off < buffer->bufLen)
+    {
+        uint8_t* p = buffer->buf;
+        uint32_t n = buffer->bufLen;
+        uint8_t* b = p + off;
 
-        if (x == p + n) {
+        // std::find(b, p + n, 0) searches for the null terminator
+        // memchr returns a pointer to the first occurrence of 0
+        uint8_t* x = (uint8_t*)memchr(b, 0, n - off);
+
+        if (x == NULL)
+        {
             return false;
         }
 
-        result.insert(result.end(), b, x);
+        // Calculate length of the string found (excluding null terminator)
+        size_t len = (size_t)(x - b);
+
+        // Copy the data into result and null-terminate it
+        memcpy(result, b, len);
+        result[len] = '\0';
+
         return true;
     }
     return false;
 }
 
-bool getSecForVA(const std::vector<section>& secs, VA v, section& sec) {
-    for (section s : secs) {
-        std::uint64_t low = s.sectionBase;
-        std::uint64_t high = low + s.sec.Misc.VirtualSize;
+bool getSecForVA(list_t* secs, VA v, struct section* sec) // const std::vector<section>& secs, VA v, section* sec)
+{
+    list_t* n = secs;
+    struct section* s;
 
-        if (v >= low && v < high) {
+    while (n != NULL)
+    {
+        s = (struct section*)n->data;
+
+        uint64_t low = s->sectionBase;
+        uint64_t high = low + s->sec->Misc.VirtualSize;
+
+        if (v >= low && v < high)
+        {
             sec = s;
             return true;
         }
+
+        n = n->next;
     }
 
     return false;
 }
 
-void IterRich(parsed_pe* pe, iterRich cb, void* cbd) {
-    for (rich_entry& r : pe->peHeader.rich.Entries) {
-        if (cb(cbd, r) != 0) {
+void IterRich(parsed_pe* pe, iterRich cb, void* cbd)
+{
+    list_t* entries = pe->peHeader.rich.Entries;
+    list_t* n = entries;
+    struct rich_entry* r;
+
+    while (n != NULL)
+    {
+        r = (struct rich_entry*)n->data;
+
+        if (cb(cbd, r) != 0)
+        {
             break;
         }
+
+        n = n->next;
     }
 }
 
-void IterRsrc(parsed_pe* pe, iterRsrc cb, void* cbd) {
-    parsed_pe_internal* pint = pe->internal;
+void IterRsrc(parsed_pe* pe, iterRsrc cb, void* cbd)
+{
+    struct parsed_pe_internal* pint = pe->internal;
 
-    for (const resource& r : pint->rsrcs) {
-        if (cb(cbd, r) != 0) {
+    list_t* n = pint->rsrcs;
+    struct resource* r;
+
+    while (n != NULL)
+    {
+        r = (struct resource*)n->data;
+
+        if (cb(cbd, r) != 0)
+        {
             break;
         }
+
+        n = n->next;
     }
 }
 
-bool parse_resource_id(bounded_buffer* data,
-    std::uint32_t id,
-    std::string& result) {
-    std::uint16_t len;
-    if (!readWord(data, id, len)) {
+/// <summary>
+/// A simple utility function to convert a null-terminated char16_t string to char*
+/// </summary>
+/// <param name="u16_string"></param>
+/// <returns> C String in char* format.</returns>
+char* convert_u16_to_c_str(const char16_t* u16_string)
+{
+    // We will build the char* string dynamically
+    char* temp_mb_buf = (char*)malloc(sizeof(char) * MB_CUR_MAX);
+    size_t current_len = 0;
+    size_t buffer_size = 128; // Initial buffer size
+    char* c_string = (char*)malloc(sizeof(char) * buffer_size);
+    int i = 0;
+
+    if (c_string == NULL)
+    {
+        perror("malloc failed");
+        return NULL;
+    }
+
+    mbstate_t state = { 0 }; // Conversion state, must be initialized to zero
+    size_t bytes_written;
+
+    for (i = 0; u16_string[i] != u'\0'; ++i)
+    {
+        //char temp_mb_buf[MB_CUR_MAX]; // Temporary buffer for a single multibyte character
+
+        // Convert the char16_t to a multibyte sequence
+        bytes_written = c16rtomb(temp_mb_buf, u16_string[i], &state);
+
+        if (bytes_written == (size_t)-1)
+        {
+            // Handle conversion error
+            perror("c16rtomb failed, invalid character sequence");
+            free(c_string);
+            return NULL;
+        }
+
+        // Check if the current buffer is large enough
+        if (current_len + bytes_written >= buffer_size)
+        {
+            buffer_size = buffer_size * 2;
+            char* new_c_string = (char*)realloc(c_string, buffer_size);
+            if (new_c_string == NULL)
+            {
+                free(c_string);
+                perror("realloc failed");
+                return NULL;
+            }
+            c_string = new_c_string;
+        }
+
+        // Append the converted bytes to the output string
+        memcpy(c_string + current_len, temp_mb_buf, bytes_written);
+        current_len += bytes_written;
+    }
+
+    // Null-terminate the resulting string
+    c_string[current_len] = '\0';
+
+    return c_string;
+}
+
+bool parse_resource_id(bounded_buffer* data, uint32_t id, char** result)
+{
+    uint16_t len;
+    if (!readWord(data, id, len))
+    {
         return false;
     }
     id += 2;
 
-    std::uint32_t rawSize = len * 2U;
-    std::u16string rawString;
+    uint32_t rawSize = len * 2U;
+    
+    list_t* rawstring_lst = NULL;
+    list_t* lst_item = NULL;
+    list_t* lst_curr = NULL;
+    list_t* lst_end = NULL;
+
+    //u16string rawString;
     //UCharString rawString;
-    for (std::uint32_t i = 0; i < rawSize; i += 2) {
-        char16_t c;
-        if (!readChar16(data, id + i, c)) {
+    for (uint32_t i = 0; i < rawSize; i += 2)
+    {
+        char16_t* c = (char16_t*)malloc(sizeof(char16_t));
+
+        if (!readChar16(data, id + i, c))
+        {
             return false;
         }
-        rawString.push_back(c);
+
+        if (rawstring_lst == NULL)
+        {
+            rawstring_lst = list_new();
+            rawstring_lst->data = (void*)c;
+            rawstring_lst->next = NULL;
+            rawstring_lst->prev = NULL;
+        }
+        else
+        {
+            lst_curr = rawstring_lst;
+
+            while (lst_curr != NULL)
+            {
+                lst_end = lst_curr;
+
+                lst_curr = lst_curr->next;
+            }
+
+            if (lst_end != NULL)
+            {
+                list_t* lst_item = list_new();
+
+                lst_item->data = (void*)c;
+                lst_item->next = NULL;
+                lst_item->prev = lst_end;
+                lst_end->next = lst_item;
+            }
+        }
     }
 
-    result = from_utf16(rawString);
+    size_t rawstring_count = 0;
+    size_t rawstring_index;
+
+    lst_curr = rawstring_lst;
+    while (lst_curr != NULL)
+    {
+        rawstring_count++;
+
+        lst_curr = lst_curr->next;
+    }
+
+    char16_t* utf16_buffer = (char16_t*)malloc(sizeof(char16_t) * rawstring_count);
+    rawstring_index = 0;
+
+    lst_curr = rawstring_lst;
+    while (lst_curr != NULL)
+    {
+        utf16_buffer[rawstring_index] = (char16_t*)lst_curr->data;
+
+        rawstring_index++;
+        lst_curr = lst_curr->next;
+    }
+
+    (*result) = convert_u16_to_c_str(utf16_buffer);
+
     return true;
 }
 

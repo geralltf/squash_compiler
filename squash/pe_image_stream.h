@@ -30,6 +30,8 @@ THE SOFTWARE.
 //#include <string>
 #include <stdbool.h>
 #include <uchar.h>
+#include <stdint.h>
+#include <string.h>
 
 #include "nt-headers.h"
 #include "List.h"
