@@ -578,22 +578,25 @@ static const std::map<std::uint16_t, const std::string> ProductMap = {
                     "VS2017 v15.8.? build 26715")},
 };
 
-static const std::string kUnknownProduct = "<unknown>";
+char* kUnknownProduct = "<unknown>";
 
 // Returns a stringified Rich header object type given a product id
-const std::string& GetRichObjectType(std::uint16_t prodId) {
-
-    auto it = ProductIdMap.find(prodId);
-    if (it != ProductIdMap.end()) {
-        return it->second;
+char* GetRichObjectType(uint16_t prodId)
+{
+    char* outId = GetProductIdMap(prodId);
+    if (outId != NULL)
+    {
+        return outId;
     }
-    else {
+    else 
+    {
         return kProdId_UNK;
     }
 }
 
 // Returns a stringified Rich header product name given a build number
-const std::string& GetRichProductName(std::uint16_t buildNum) {
+char* GetRichProductName(uint16_t buildNum)
+{
 
     auto it = ProductMap.find(buildNum);
     if (it != ProductMap.end()) {
@@ -604,8 +607,8 @@ const std::string& GetRichProductName(std::uint16_t buildNum) {
     }
 }
 
-std::uint32_t err = 0;
-std::string err_loc;
+uint32_t err = 0;
+char* err_loc;
 
 static const char* pe_err_str[] = {
     "None",
@@ -623,22 +626,27 @@ static const char* pe_err_str[] = {
     "Invalid size",
 };
 
-std::uint32_t GetPEErr() {
+uint32_t GetPEErr()
+{
     return err;
 }
 
-std::string GetPEErrString() {
+char* GetPEErrString()
+{
     return pe_err_str[err];
 }
 
-std::string GetPEErrLoc() {
+char* GetPEErrLoc()
+{
     return err_loc;
 }
 
-const char* GetSymbolTableStorageClassName(std::uint8_t id) {
-    switch (id) {
-    case IMAGE_SYM_CLASS_END_OF_FUNCTION:
-        return "CLASS_END_OF_FUNCTION";
+char* GetSymbolTableStorageClassName(uint8_t id)
+{
+    switch (id)
+    {
+    //case IMAGE_SYM_CLASS_END_OF_FUNCTION:
+    //    return "CLASS_END_OF_FUNCTION";
     case IMAGE_SYM_CLASS_NULL:
         return "CLASS_NULL";
     case IMAGE_SYM_CLASS_AUTOMATIC:

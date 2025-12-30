@@ -179,10 +179,10 @@ const uint16_t IMAGE_SYM_DTYPE_FUNCTION = 2;
 const uint16_t IMAGE_SYM_DTYPE_ARRAY = 3;
 
 // Symbol table storage classes
-const uint8_t IMAGE_SYM_CLASS_END_OF_FUNCTION = 0;// static_cast<uint8_t>(-1);
-const uint8_t IMAGE_SYM_CLASS_NULL = 0;
-const uint8_t IMAGE_SYM_CLASS_AUTOMATIC = 1;
-const uint8_t IMAGE_SYM_CLASS_EXTERNAL = 2;
+#define IMAGE_SYM_CLASS_END_OF_FUNCTION  0
+#define IMAGE_SYM_CLASS_NULL 0
+#define IMAGE_SYM_CLASS_AUTOMATIC 1
+#define IMAGE_SYM_CLASS_EXTERNAL 2
 const uint8_t IMAGE_SYM_CLASS_STATIC = 3;
 const uint8_t IMAGE_SYM_CLASS_REGISTER = 4;
 const uint8_t IMAGE_SYM_CLASS_EXTERNAL_DEF = 5;
