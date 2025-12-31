@@ -814,65 +814,105 @@ bool parse_resource_id(bounded_buffer* data, uint32_t id, char** result)
     return true;
 }
 
-bool parse_resource_table(bounded_buffer* sectionData,
-    std::uint32_t o,
-    std::uint32_t virtaddr,
-    std::uint32_t depth,
-    resource_dir_entry* dirent,
-    std::vector<resource>& rsrcs) {
-    resource_dir_table rdt;
+bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, 
+    struct resource_dir_entry* dirent, list_t* rsrcs) // std::vector<resource>& rsrcs
+{
+    struct resource_dir_table rdt;
 
-    if (sectionData == nullptr) {
+    if (sectionData == NULL) 
+    {
         return false;
     }
 
-    READ_DWORD(sectionData, o, rdt, Characteristics);
-    READ_DWORD(sectionData, o, rdt, TimeDateStamp);
-    READ_WORD(sectionData, o, rdt, MajorVersion);
-    READ_WORD(sectionData, o, rdt, MinorVersion);
-    READ_WORD(sectionData, o, rdt, NameEntries);
-    READ_WORD(sectionData, o, rdt, IDEntries);
+    if (!readDword(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, Characteristics)), rdt.Characteristics)) 
+    {
+        //PE_ERR(PEERR_READ);                                                  
+        return false;
+    }
 
-    o += sizeof(resource_dir_table);
+    if (!readDword(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, TimeDateStamp)), rdt.TimeDateStamp))
+    {
+        //PE_ERR(PEERR_READ);                                                  
+        return false;
+    }
 
-    if (rdt.NameEntries == 0u && rdt.IDEntries == 0u) {
+    if (!readWord(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, MajorVersion)), rdt.MajorVersion))
+    {
+        //PE_ERR(PEERR_READ);                                                        
+        return false;
+    }
+
+    if (!readWord(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, MinorVersion)), rdt.MinorVersion))
+    {
+        //PE_ERR(PEERR_READ);                                                        
+        return false;
+    }
+
+    if (!readWord(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, NameEntries)), rdt.NameEntries))
+    {
+        //PE_ERR(PEERR_READ);                                                        
+        return false;
+    }
+
+    if (!readWord(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, IDEntries)), rdt.IDEntries))
+    {
+        //PE_ERR(PEERR_READ);                                                        
+        return false;
+    }
+
+    //READ_DWORD(sectionData, o, rdt, Characteristics);
+    //READ_DWORD(sectionData, o, rdt, TimeDateStamp);
+    //READ_WORD(sectionData, o, rdt, MajorVersion);
+    //READ_WORD(sectionData, o, rdt, MinorVersion);
+    //READ_WORD(sectionData, o, rdt, NameEntries);
+    //READ_WORD(sectionData, o, rdt, IDEntries);
+
+    o += sizeof(struct resource_dir_table);
+
+    if (rdt.NameEntries == 0u && rdt.IDEntries == 0u)
+    {
         return true; // This is not a hard error. It does happen.
     }
 
-    for (std::uint32_t i = 0;
-        i < static_cast<std::uint32_t>(rdt.NameEntries + rdt.IDEntries);
+    for (uint32_t i = 0;
+        i < (uint32_t)(rdt.NameEntries + rdt.IDEntries);
         i++) {
-        resource_dir_entry* rde = dirent;
-        if (dirent == nullptr) {
-            rde = new resource_dir_entry;
+        struct resource_dir_entry* rde = dirent;
+        if (dirent == NULL)
+        {
+            rde = (struct resource_dir_entry*)malloc(sizeof(struct resource_dir_entry));
         }
 
-        if (!readDword(sectionData, o + offsetof(__typeof__(*rde), ID), rde->ID)) {
-            PE_ERR(PEERR_READ);
-            if (dirent == nullptr) {
-                delete rde;
+        if (!readDword(sectionData, o + offsetof(struct resource_dir_entry, ID), rde->ID))
+        {
+            //PE_ERR(PEERR_READ);
+            if (dirent == NULL)
+            {
+                free(rde);
             }
             return false;
         }
 
-        if (!readDword(
-            sectionData, o + offsetof(__typeof__(*rde), RVA), rde->RVA)) {
-            PE_ERR(PEERR_READ);
-            if (dirent == nullptr) {
-                delete rde;
+        if (!readDword(sectionData, o + offsetof(struct resource_dir_entry, RVA), rde->RVA))
+        {
+            //PE_ERR(PEERR_READ);
+            if (dirent == NULL)
+            {
+                free(rde);
             }
             return false;
         }
 
-        o += sizeof(resource_dir_entry_sz);
+        o += sizeof(struct resource_dir_entry_sz);
 
         if (depth == 0) {
             rde->type = rde->ID;
             if (i < rdt.NameEntries) {
                 if (!parse_resource_id(
                     sectionData, rde->ID & 0x0FFFFFFF, rde->type_str)) {
-                    if (dirent == nullptr) {
-                        delete rde;
+                    if (dirent == NULL)
+                    {
+                        free(rde);
                     }
                     return false;
                 }
@@ -883,8 +923,9 @@ bool parse_resource_table(bounded_buffer* sectionData,
             if (i < rdt.NameEntries) {
                 if (!parse_resource_id(
                     sectionData, rde->ID & 0x0FFFFFFF, rde->name_str)) {
-                    if (dirent == nullptr) {
-                        delete rde;
+                    if (dirent == NULL)
+                    {
+                        free(rde);
                     }
                     return false;
                 }
@@ -895,8 +936,9 @@ bool parse_resource_table(bounded_buffer* sectionData,
             if (i < rdt.NameEntries) {
                 if (!parse_resource_id(
                     sectionData, rde->ID & 0x0FFFFFFF, rde->lang_str)) {
-                    if (dirent == nullptr) {
-                        delete rde;
+                    if (dirent == NULL)
+                    {
+                        free(rde);
                     }
                     return false;
                 }
@@ -922,14 +964,15 @@ bool parse_resource_table(bounded_buffer* sectionData,
                 depth + 1,
                 rde,
                 rsrcs)) {
-                if (dirent == nullptr) {
-                    delete rde;
+                if (dirent == NULL)
+                {
+                    free(rde);
                 }
                 return false;
             }
         }
         else {
-            resource_dat_entry rdat;
+            struct resource_dat_entry rdat;
 
             /*
                 * This one is using rde->RVA as an offset.
@@ -941,46 +984,54 @@ bool parse_resource_table(bounded_buffer* sectionData,
                 */
 
             if (!readDword(sectionData,
-                rde->RVA + offsetof(__typeof__(rdat), RVA),
-                rdat.RVA)) {
-                PE_ERR(PEERR_READ);
-                if (dirent == nullptr) {
-                    delete rde;
+                rde->RVA + offsetof(struct resource_dat_entry, RVA),
+                rdat.RVA))
+            {
+                //PE_ERR(PEERR_READ);
+                if (dirent == NULL)
+                {
+                    free(rde);
                 }
                 return false;
             }
 
             if (!readDword(sectionData,
-                rde->RVA + offsetof(__typeof__(rdat), size),
-                rdat.size)) {
-                PE_ERR(PEERR_READ);
-                if (dirent == nullptr) {
-                    delete rde;
+                rde->RVA + offsetof(struct resource_dat_entry, size),
+                rdat.size))
+            {
+                //PE_ERR(PEERR_READ);
+                if (dirent == NULL)
+                {
+                    free(rde);
                 }
                 return false;
             }
 
             if (!readDword(sectionData,
-                rde->RVA + offsetof(__typeof__(rdat), codepage),
-                rdat.codepage)) {
-                PE_ERR(PEERR_READ);
-                if (dirent == nullptr) {
-                    delete rde;
+                rde->RVA + offsetof(struct resource_dat_entry, codepage),
+                rdat.codepage))
+            {
+                //PE_ERR(PEERR_READ);
+                if (dirent == NULL)
+                {
+                    free(rde);
                 }
                 return false;
             }
 
             if (!readDword(sectionData,
-                rde->RVA + offsetof(__typeof__(rdat), reserved),
-                rdat.reserved)) {
-                PE_ERR(PEERR_READ);
-                if (dirent == nullptr) {
-                    delete rde;
+                rde->RVA + offsetof(struct resource_dat_entry, reserved),
+                rdat.reserved))
+            {
+                //PE_ERR(PEERR_READ);
+                if (dirent == NULL)
+                {
+                    free(rde);
                 }
                 return false;
             }
 
-            resource rsrc;
+            struct resource rsrc;
             rsrc.type_str = rde->type_str;
             rsrc.name_str = rde->name_str;
             rsrc.lang_str = rde->lang_str;
@@ -999,39 +1050,59 @@ bool parse_resource_table(bounded_buffer* sectionData,
                 * If the start is valid, try to get the data and if that fails return
                 * a zero length buffer.
                 */
-            if (start > rdat.RVA) {
+            if (start > rdat.RVA)
+            {
                 rsrc.buf = splitBuffer(sectionData, 0, 0);
             }
             else {
                 rsrc.buf = splitBuffer(sectionData, start, start + rdat.size);
-                if (rsrc.buf == nullptr) {
+                if (rsrc.buf == NULL)
+                {
                     rsrc.buf = splitBuffer(sectionData, 0, 0);
                 }
             }
 
             /* If we can't get even a zero length buffer, something is very wrong. */
-            if (rsrc.buf == nullptr) {
-                if (dirent == nullptr) {
-                    delete rde;
+            if (rsrc.buf == NULL)
+            {
+                if (dirent == NULL)
+                {
+                    free(rde);
                 }
                 return false;
             }
 
-            rsrcs.push_back(rsrc);
+            list_enqueue(rsrcs, (void*)&rsrc);
         }
 
-        if (depth == 0) {
-            rde->type_str.clear();
+        if (depth == 0)
+        {
+            if (rde->type_str != NULL)
+            {
+                free(rde->type_str);
+            }
+            rde->type_str = NULL; //rde->type_str.clear();
         }
-        else if (depth == 1) {
-            rde->name_str.clear();
+        else if (depth == 1)
+        {
+            if (rde->name_str != NULL)
+            {
+                free(rde->name_str);
+            }
+            rde->name_str = NULL; //rde->name_str.clear();
         }
-        else if (depth == 2) {
-            rde->lang_str.clear();
+        else if (depth == 2)
+        {
+            if (rde->lang_str != NULL)
+            {
+                free(rde->lang_str);
+            }
+            rde->lang_str = NULL; //rde->lang_str.clear();
         }
 
-        if (dirent == nullptr) {
-            delete rde;
+        if (dirent == NULL)
+        {
+            free(rde);
         }
     }
 
