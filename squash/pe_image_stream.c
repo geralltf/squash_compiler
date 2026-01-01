@@ -1109,22 +1109,31 @@ bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virt
     return true;
 }
 
-bool getResources(bounded_buffer* b,
-    bounded_buffer* fileBegin,
-    const std::vector<section> secs,
-    std::vector<resource>& rsrcs) {
-    static_cast<void>(fileBegin);
+bool getResources(bounded_buffer* b, bounded_buffer* fileBegin, list_t* secs, list_t* rsrcs)
+{ //const std::vector<section> secs, std::vector<resource>& rsrcs) {
+    //static_cast<void>(fileBegin);
 
-    if (b == nullptr)
+    if (b == NULL)
+    {
         return false;
+    }
+        
+    struct section* s;
+    list_t* n = secs;
 
-    for (section s : secs) {
-        if (s.sectionName != ".rsrc") {
+    while (n != NULL)
+    {
+        s = (struct section*)n->data;
+
+        if (strcmp(s->sectionName, ".rsrc") != 0)
+        {
+            n = n->next;
+
             continue;
         }
 
-        if (!parse_resource_table(
-            s.sectionData, 0, s.sec.VirtualAddress, 0, nullptr, rsrcs)) {
+        if (!parse_resource_table(s->sectionData, 0, s->sec->VirtualAddress, 0, NULL, rsrcs))
+        {
             return false;
         }
 
