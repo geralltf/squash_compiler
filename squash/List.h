@@ -114,4 +114,15 @@ list_t* list_pop(list_t** list_front);
 /// <returns></returns>
 list_t* list_dequeue(list_t* list_front);
 
+/// <summary>
+/// Counts the number of nodes that are in the specified list starting from the front specified.
+/// </summary>
+/// <param name="list_front">
+/// The front of the list to begin the search.
+/// </param>
+/// <returns>
+/// A number corresponding to the number of nodes in the list.
+/// </returns>
+size_t list_count(list_t* list_front);
+
 #endif

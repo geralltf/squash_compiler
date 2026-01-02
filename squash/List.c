@@ -250,3 +250,26 @@ list_t* list_dequeue(list_t* list_front)
 
 	return list_end;
 }
+
+/// <summary>
+/// Counts the number of nodes that are in the specified list starting from the front specified.
+/// </summary>
+/// <param name="list_front">
+/// The front of the list to begin the search.
+/// </param>
+/// <returns>
+/// A number corresponding to the number of nodes in the list.
+/// </returns>
+size_t list_count(list_t* list_front)
+{
+	size_t result = 0;
+	list_t* n = list_front;
+
+	while (n != NULL)
+	{
+		result++;
+		n = n->next;
+	}
+
+	return result;
+}
