@@ -1143,80 +1143,144 @@ bool getResources(bounded_buffer* b, bounded_buffer* fileBegin, list_t* secs, li
     return true;
 }
 
-bool getSections(bounded_buffer* b,
-    bounded_buffer* fileBegin,
-    nt_header_32& nthdr,
-    std::vector<section>& secs) {
-    if (b == nullptr) {
+// Assuming 'section' is defined as a struct
+int compare_sections(const void* a, const void* b) {
+    const struct section* lhs = (const struct section*)a;
+    const struct section* rhs = (const struct section*)b;
+
+    if (lhs->sec->PointerToRawData < rhs->sec->PointerToRawData) return -1;
+    if (lhs->sec->PointerToRawData > rhs->sec->PointerToRawData) return 1;
+    return 0;
+}
+
+bool getSections(bounded_buffer* b, bounded_buffer* fileBegin, struct nt_header_32* nthdr, list_t* secs) // std::vector<section>& secs
+{
+    if (b == NULL)
+    {
         return false;
     }
 
     // get each of the sections...
-    for (std::uint32_t i = 0; i < nthdr.FileHeader.NumberOfSections; i++) {
-        image_section_header curSec;
+    for (uint32_t i = 0; i < nthdr->FileHeader->NumberOfSections; i++)
+    {
+        struct image_section_header* curSec = (struct image_section_header*)malloc(sizeof(struct image_section_header));
 
-        std::uint32_t o = i * sizeof(image_section_header);
-        for (std::uint32_t k = 0; k < NT_SHORT_NAME_LEN; k++) {
-            if (!readByte(b, o + k, curSec.Name[k])) {
+        uint32_t o = i * sizeof(struct image_section_header);
+        for (uint32_t k = 0; k < NT_SHORT_NAME_LEN; k++)
+        {
+            if (!readByte(b, o + k, curSec->Name[k]))
+            {
                 return false;
             }
         }
 
-        READ_DWORD(b, o, curSec, Misc.VirtualSize);
-        READ_DWORD(b, o, curSec, VirtualAddress);
-        READ_DWORD(b, o, curSec, SizeOfRawData);
-        READ_DWORD(b, o, curSec, PointerToRawData);
-        READ_DWORD(b, o, curSec, PointerToRelocations);
-        READ_DWORD(b, o, curSec, PointerToLinenumbers);
-        READ_WORD(b, o, curSec, NumberOfRelocations);
-        READ_WORD(b, o, curSec, NumberOfLinenumbers);
-        READ_DWORD(b, o, curSec, Characteristics);
+        if (!readDword(b, o + (uint32_t)(offsetof(struct image_section_header, Misc.VirtualSize)), curSec->Misc.VirtualSize))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
 
-        // now we have the section header information, so fill in a section
-        // object appropriately
-        section thisSec;
-        for (std::uint32_t charIndex = 0; charIndex < NT_SHORT_NAME_LEN;
-            charIndex++) {
-            std::uint8_t c = curSec.Name[charIndex];
+        if (!readDword(b, o + (uint32_t)(offsetof(struct image_section_header, VirtualAddress)), curSec->VirtualAddress))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!readDword(b, o + (uint32_t)(offsetof(struct image_section_header, SizeOfRawData)), curSec->SizeOfRawData))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!readDword(b, o + (uint32_t)(offsetof(struct image_section_header, PointerToRawData)), curSec->PointerToRawData))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!readDword(b, o + (uint32_t)(offsetof(struct image_section_header, PointerToRelocations)), curSec->PointerToRelocations))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!readDword(b, o + (uint32_t)(offsetof(struct image_section_header, PointerToLinenumbers)), curSec->PointerToLinenumbers))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!readWord(b, o + (uint32_t)(offsetof(struct image_section_header, NumberOfRelocations)), curSec->NumberOfRelocations))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!readWord(b, o + (uint32_t)(offsetof(struct image_section_header, NumberOfLinenumbers)), curSec->NumberOfLinenumbers))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!readDword(b, o + (uint32_t)(offsetof(struct image_section_header, Characteristics)), curSec->Characteristics))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        // now we have the section header information, so fill in a section object appropriately
+        int index = 0;
+        struct section* thisSec = (struct section*)malloc(sizeof(struct section));
+        thisSec->sectionName = (char*)malloc(sizeof(char) * NT_SHORT_NAME_LEN);
+        for (uint32_t charIndex = 0; charIndex < NT_SHORT_NAME_LEN; charIndex++)
+        {
+            uint8_t c = curSec->Name[charIndex];
             if (c == 0) {
                 break;
             }
 
-            thisSec.sectionName.push_back(static_cast<char>(c));
+            uint8_t* ccc = &c;
+            char* cc = (char*)&ccc;
+            strcat(thisSec->sectionName, cc);
+            //thisSec.sectionName.push_back(static_cast<char>(c));
+            index++;
+        }
+        thisSec->sectionName[index + 1] = '\0';
+
+        if (nthdr->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+        {
+            thisSec->sectionBase = nthdr->OptionalHeader->ImageBase + curSec->VirtualAddress;
+        }
+        else if (nthdr->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+        {
+            thisSec->sectionBase = nthdr->OptionalHeader64->ImageBase + curSec->VirtualAddress;
+        }
+        else
+        {
+            //PE_ERR(PEERR_MAGIC);
         }
 
-        if (nthdr.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-            thisSec.sectionBase =
-                nthdr.OptionalHeader.ImageBase + curSec.VirtualAddress;
-        }
-        else if (nthdr.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-            thisSec.sectionBase =
-                nthdr.OptionalHeader64.ImageBase + curSec.VirtualAddress;
-        }
-        else {
-            PE_ERR(PEERR_MAGIC);
-        }
-
-        thisSec.sec = curSec;
-        std::uint32_t lowOff = curSec.PointerToRawData;
-        std::uint32_t highOff = lowOff + curSec.SizeOfRawData;
-        thisSec.sectionData = splitBuffer(fileBegin, lowOff, highOff);
+        thisSec->sec = curSec;
+        uint32_t lowOff = curSec->PointerToRawData;
+        uint32_t highOff = lowOff + curSec->SizeOfRawData;
+        thisSec->sectionData = splitBuffer(fileBegin, lowOff, highOff);
 
         // GH#109: we trusted [lowOff, highOff) to be a range that yields
         // a valid bounded_buffer, despite these being user-controllable.
         // splitBuffer correctly handles this, but we failed to check for
         // the nullptr it returns as a sentinel.
-        if (thisSec.sectionData == nullptr) {
+        if (thisSec->sectionData == NULL)
+        {
             return false;
         }
 
-        secs.push_back(thisSec);
+        list_enqueue(secs, (void*)thisSec); // secs.push_back(thisSec);
     }
 
-    std::sort(
-        secs.begin(), secs.end(), [](const section& lhs, const section& rhs) {
-            return lhs.sec.PointerToRawData < rhs.sec.PointerToRawData;
-        });
+    size_t num_secs = list_count(secs);
+
+    // Assuming 'secs' is a standard C array and 'num_secs' is its length
+    qsort(secs, num_secs, sizeof(struct section), compare_sections);
 
     return true;
 }
