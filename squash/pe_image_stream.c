@@ -1285,7 +1285,8 @@ bool getSections(bounded_buffer* b, bounded_buffer* fileBegin, struct nt_header_
     return true;
 }
 
-bool readOptionalHeader(bounded_buffer* b, optional_header_32& header) {
+bool readOptionalHeader(bounded_buffer* b, struct optional_header_32* header)
+{
     READ_WORD(b, 0, header, Magic);
 
     READ_BYTE(b, 0, header, MajorLinkerVersion);
