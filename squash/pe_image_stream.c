@@ -1287,54 +1287,206 @@ bool getSections(bounded_buffer* b, bounded_buffer* fileBegin, struct nt_header_
 
 bool readOptionalHeader(bounded_buffer* b, struct optional_header_32* header)
 {
-    READ_WORD(b, 0, header, Magic);
-
-    READ_BYTE(b, 0, header, MajorLinkerVersion);
-    READ_BYTE(b, 0, header, MinorLinkerVersion);
-    READ_DWORD(b, 0, header, SizeOfCode);
-    READ_DWORD(b, 0, header, SizeOfInitializedData);
-    READ_DWORD(b, 0, header, SizeOfUninitializedData);
-    READ_DWORD(b, 0, header, AddressOfEntryPoint);
-    READ_DWORD(b, 0, header, BaseOfCode);
-    READ_DWORD(b, 0, header, BaseOfData);
-    READ_DWORD(b, 0, header, ImageBase);
-    READ_DWORD(b, 0, header, SectionAlignment);
-    READ_DWORD(b, 0, header, FileAlignment);
-    READ_WORD(b, 0, header, MajorOperatingSystemVersion);
-    READ_WORD(b, 0, header, MinorOperatingSystemVersion);
-    READ_WORD(b, 0, header, MajorImageVersion);
-    READ_WORD(b, 0, header, MinorImageVersion);
-    READ_WORD(b, 0, header, MajorSubsystemVersion);
-    READ_WORD(b, 0, header, MinorSubsystemVersion);
-    READ_DWORD(b, 0, header, Win32VersionValue);
-    READ_DWORD(b, 0, header, SizeOfImage);
-    READ_DWORD(b, 0, header, SizeOfHeaders);
-    READ_DWORD(b, 0, header, CheckSum);
-    READ_WORD(b, 0, header, Subsystem);
-    READ_WORD(b, 0, header, DllCharacteristics);
-    READ_DWORD(b, 0, header, SizeOfStackReserve);
-    READ_DWORD(b, 0, header, SizeOfStackCommit);
-    READ_DWORD(b, 0, header, SizeOfHeapReserve);
-    READ_DWORD(b, 0, header, SizeOfHeapCommit);
-    READ_DWORD(b, 0, header, LoaderFlags);
-    READ_DWORD(b, 0, header, NumberOfRvaAndSizes);
-
-    if (header.NumberOfRvaAndSizes > NUM_DIR_ENTRIES) {
-        header.NumberOfRvaAndSizes = NUM_DIR_ENTRIES;
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Magic)), header->Magic))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
     }
 
-    for (std::uint32_t i = 0; i < header.NumberOfRvaAndSizes; i++) {
-        std::uint32_t c = (i * sizeof(data_directory));
-        c += offsetof(optional_header_32, DataDirectory[0]);
-        std::uint32_t o;
+    if (!readByte(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorLinkerVersion)), header->MajorLinkerVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
 
-        o = c + offsetof(data_directory, VirtualAddress);
-        if (!readDword(b, o, header.DataDirectory[i].VirtualAddress)) {
+    if (!readByte(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorLinkerVersion)), header->MinorLinkerVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfCode)), header->SizeOfCode))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfInitializedData)), header->SizeOfInitializedData))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfUninitializedData)), header->SizeOfUninitializedData))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, AddressOfEntryPoint)), header->AddressOfEntryPoint))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, BaseOfCode)), header->BaseOfCode))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, BaseOfData)), header->BaseOfData))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, ImageBase)), header->ImageBase))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SectionAlignment)), header->SectionAlignment))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, FileAlignment)), header->FileAlignment))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorOperatingSystemVersion)), header->MajorOperatingSystemVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorOperatingSystemVersion)), header->MinorOperatingSystemVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorImageVersion)), header->MajorImageVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorImageVersion)), header->MinorImageVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorSubsystemVersion)), header->MajorSubsystemVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorSubsystemVersion)), header->MinorSubsystemVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Win32VersionValue)), header->Win32VersionValue))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfImage)), header->SizeOfImage))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfHeaders)), header->SizeOfHeaders))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, CheckSum)), header->CheckSum))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Subsystem)), header->Subsystem))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, DllCharacteristics)), header->DllCharacteristics))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfStackReserve)), header->SizeOfStackReserve))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfStackCommit)), header->SizeOfStackCommit))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfHeapReserve)), header->SizeOfHeapReserve))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfHeapCommit)), header->SizeOfHeapCommit))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, LoaderFlags)), header->LoaderFlags))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, NumberOfRvaAndSizes)), header->NumberOfRvaAndSizes))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (header->NumberOfRvaAndSizes > NUM_DIR_ENTRIES)
+    {
+        header->NumberOfRvaAndSizes = NUM_DIR_ENTRIES;
+    }
+
+    for (uint32_t i = 0; i < header->NumberOfRvaAndSizes; i++)
+    {
+        uint32_t c = (i * sizeof(struct data_directory));
+        c += offsetof(struct optional_header_32, DataDirectory[0]);
+        uint32_t o;
+
+        o = c + offsetof(struct data_directory, VirtualAddress);
+        if (!readDword(b, o, header->DataDirectory[i].VirtualAddress))
+        {
             return false;
         }
 
-        o = c + offsetof(data_directory, Size);
-        if (!readDword(b, o, header.DataDirectory[i].Size)) {
+        o = c + offsetof(struct data_directory, Size);
+        if (!readDword(b, o, header->DataDirectory[i].Size))
+        {
             return false;
         }
     }
