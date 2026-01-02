@@ -355,7 +355,7 @@ struct optional_header_64
     uint64_t SizeOfHeapCommit;
     uint32_t LoaderFlags;
     uint32_t NumberOfRvaAndSizes;
-    struct data_directory DataDirectory;// [NUM_DIR_ENTRIES] ;
+    struct data_directory* DataDirectory;// [NUM_DIR_ENTRIES] ;
 };
 
 struct nt_header_32 
