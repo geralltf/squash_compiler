@@ -629,7 +629,7 @@ bool getSecForVA(list_t* secs, VA v, struct section* sec) // const std::vector<s
 
 void IterRich(parsed_pe* pe, iterRich cb, void* cbd)
 {
-    list_t* entries = pe->peHeader.rich.Entries;
+    list_t* entries = pe->peHeader->rich->Entries;
     list_t* n = entries;
     struct rich_entry* r;
 
@@ -1857,8 +1857,9 @@ bool readNtHeader(bounded_buffer* b, struct nt_header_32* header)
 
 // zero extends its first argument to 32 bits and then performs a rotate left
 // operation equal to the second arguments value of the first argument’s bits
-static inline std::uint32_t rol(std::uint32_t val, std::uint32_t num) {
-    assert(num < 32);
+static inline uint32_t rol(uint32_t val, uint32_t num)
+{
+    //assert(num < 32);
     // Disable MSVC warning for unary minus operator applied to unsigned type
 #if defined(_MSC_VER) || defined(_MSC_FULL_VER)
 #pragma warning(push)
@@ -1871,12 +1872,13 @@ static inline std::uint32_t rol(std::uint32_t val, std::uint32_t num) {
 #endif
 }
 
-std::uint32_t calculateRichChecksum(const bounded_buffer* b, pe_header& p) {
+uint32_t calculateRichChecksum(const bounded_buffer* b, pe_header* p)
+{
 
     // First, calculate the sum of the DOS header bytes each rotated left the
     // number of times their position relative to the start of the DOS header e.g.
     // second byte is rotated left 2x using rol operation
-    std::uint32_t checksum = 0;
+    uint32_t checksum = 0;
 
     for (uint8_t i = 0; i < RICH_OFFSET; i++) {
 
@@ -1889,10 +1891,19 @@ std::uint32_t calculateRichChecksum(const bounded_buffer* b, pe_header& p) {
 
     // Next, take summation of each Rich header entry by combining its ProductId
     // and BuildNumber into a single 32 bit number and rotating by its count.
-    for (rich_entry entry : p.rich.Entries) {
-        std::uint32_t num =
-            static_cast<std::uint32_t>((entry.ProductId << 16) | entry.BuildNumber);
-        checksum += rol(num, entry.Count & 0x1F);
+
+    list_t* entries = p->rich->Entries;
+    list_t* n = entries;
+    struct rich_entry* r;
+
+    while (n != NULL)
+    {
+        r = (struct rich_entry*)n->data;
+
+        uint32_t num = (uint32_t)((r->ProductId << 16) | r->BuildNumber);
+
+        checksum += rol(num, r->Count & 0x1F);
+        n = n->next;
     }
 
     checksum += RICH_OFFSET;

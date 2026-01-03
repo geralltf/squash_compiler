@@ -299,15 +299,15 @@ uint64_t bufLen(bounded_buffer* b);
 struct parsed_pe_internal;
 
 typedef struct _pe_header {
-    struct dos_header dos;
-    struct rich_header rich;
-    struct nt_header_32 nt;
+    struct dos_header* dos;
+    struct rich_header* rich;
+    struct nt_header_32* nt;
 } pe_header;
 
 typedef struct _parsed_pe {
     bounded_buffer* fileBuffer;
     struct parsed_pe_internal* internal;
-    pe_header peHeader;
+    pe_header* peHeader;
 } parsed_pe;
 
 // Resolve a Rich header product id / build number pair to a known
