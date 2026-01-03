@@ -1280,7 +1280,7 @@ bool getSections(bounded_buffer* b, bounded_buffer* fileBegin, struct nt_header_
     size_t num_secs = list_count(secs);
 
     // Assuming 'secs' is a standard C array and 'num_secs' is its length
-    qsort(secs, num_secs, sizeof(struct section), compare_sections);
+    qsort(secs, num_secs, sizeof(struct section), &compare_sections);
 
     return true;
 }
@@ -1697,14 +1697,49 @@ bool readOptionalHeader64(bounded_buffer* b, struct optional_header_64* header)
     return true;
 }
 
-bool readFileHeader(bounded_buffer* b, file_header& header) {
-    READ_WORD(b, 0, header, Machine);
-    READ_WORD(b, 0, header, NumberOfSections);
-    READ_DWORD(b, 0, header, TimeDateStamp);
-    READ_DWORD(b, 0, header, PointerToSymbolTable);
-    READ_DWORD(b, 0, header, NumberOfSymbols);
-    READ_WORD(b, 0, header, SizeOfOptionalHeader);
-    READ_WORD(b, 0, header, Characteristics);
+bool readFileHeader(bounded_buffer* b, struct file_header* header)
+{
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct file_header, Machine)), header->Machine))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct file_header, NumberOfSections)), header->NumberOfSections))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct file_header, TimeDateStamp)), header->TimeDateStamp))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct file_header, PointerToSymbolTable)), header->PointerToSymbolTable))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct file_header, NumberOfSymbols)), header->NumberOfSymbols))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct file_header, SizeOfOptionalHeader)), header->SizeOfOptionalHeader))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct file_header, Characteristics)), header->Characteristics))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
 
     return true;
 }
