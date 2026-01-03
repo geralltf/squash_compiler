@@ -98,8 +98,8 @@ THE SOFTWARE.
 //    return false;                                                              \
 //  }
 //
-//#define TEST_MACHINE_CHARACTERISTICS(h, m, ch) \
-//  ((h.FileHeader.Machine == m) && (h.FileHeader.Characteristics & ch))
+#define TEST_MACHINE_CHARACTERISTICS(h, m, ch) \
+  ((h->FileHeader->Machine == m) && (h->FileHeader->Characteristics & ch))
 
 
 struct section {

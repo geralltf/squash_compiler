@@ -1744,28 +1744,33 @@ bool readFileHeader(bounded_buffer* b, struct file_header* header)
     return true;
 }
 
-bool readNtHeader(bounded_buffer* b, nt_header_32& header) {
-    if (b == nullptr) {
+bool readNtHeader(bounded_buffer* b, struct nt_header_32* header)
+{
+    if (b == NULL)
+    {
         return false;
     }
 
-    std::uint32_t pe_magic;
-    std::uint32_t curOffset = 0;
-    if (!readDword(b, curOffset, pe_magic) || pe_magic != NT_MAGIC) {
-        PE_ERR(PEERR_READ);
+    uint32_t pe_magic;
+    uint32_t curOffset = 0;
+    if (!readDword(b, curOffset, pe_magic) || pe_magic != NT_MAGIC)
+    {
+        //PE_ERR(PEERR_READ);
         return false;
     }
 
-    header.Signature = pe_magic;
-    bounded_buffer* fhb =
-        splitBuffer(b, offsetof(nt_header_32, FileHeader), b->bufLen);
+    header->Signature = pe_magic;
 
-    if (fhb == nullptr) {
-        PE_ERR(PEERR_MEM);
+    bounded_buffer* fhb = splitBuffer(b, offsetof(struct nt_header_32, FileHeader), b->bufLen);
+
+    if (fhb == NULL)
+    {
+        //PE_ERR(PEERR_MEM);
         return false;
     }
 
-    if (!readFileHeader(fhb, header.FileHeader)) {
+    if (!readFileHeader(fhb, header->FileHeader))
+    {
         deleteBuffer(fhb);
         return false;
     }
@@ -1796,42 +1801,49 @@ bool readNtHeader(bounded_buffer* b, nt_header_32& header) {
         * out to be a PE32+. The start of the buffer is at the same spot in the
         * buffer regardless.
         */
-    bounded_buffer* ohb =
-        splitBuffer(b, offsetof(nt_header_32, OptionalHeader), b->bufLen);
+    bounded_buffer* ohb = splitBuffer(b, offsetof(struct nt_header_32, OptionalHeader), b->bufLen);
 
-    if (ohb == nullptr) {
+    if (ohb == NULL)
+    {
         deleteBuffer(fhb);
-        PE_ERR(PEERR_MEM);
+        //PE_ERR(PEERR_MEM);
         return false;
     }
 
     /*
         * Read the Magic to determine if it is 32 or 64.
         */
-    if (!readWord(ohb, 0, header.OptionalMagic)) {
-        PE_ERR(PEERR_READ);
-        if (ohb != nullptr) {
+    if (!readWord(ohb, 0, header->OptionalMagic))
+    {
+        //PE_ERR(PEERR_READ);
+        if (ohb != NULL)
+        {
             deleteBuffer(ohb);
         }
         deleteBuffer(fhb);
         return false;
     }
-    if (header.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-        if (!readOptionalHeader(ohb, header.OptionalHeader)) {
+    if (header->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+    {
+        if (!readOptionalHeader(ohb, header->OptionalHeader))
+        {
             deleteBuffer(ohb);
             deleteBuffer(fhb);
             return false;
         }
     }
-    else if (header.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-        if (!readOptionalHeader64(ohb, header.OptionalHeader64)) {
+    else if (header->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+    {
+        if (!readOptionalHeader64(ohb, header->OptionalHeader64))
+        {
             deleteBuffer(ohb);
             deleteBuffer(fhb);
             return false;
         }
     }
-    else {
-        PE_ERR(PEERR_MAGIC);
+    else
+    {
+        //PE_ERR(PEERR_MAGIC);
         deleteBuffer(ohb);
         deleteBuffer(fhb);
         return false;
