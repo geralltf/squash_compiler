@@ -2200,97 +2200,113 @@ bool readDosHeader(bounded_buffer* file, struct dos_header* dos_hdr)
     return true;
 }
 
-bool getHeader(bounded_buffer* file, pe_header& p, bounded_buffer*& rem) {
-    if (file == nullptr) {
+bool getHeader(bounded_buffer* file, pe_header* p, bounded_buffer* rem) 
+{
+    if (file == NULL)
+    {
         return false;
     }
 
     // read the DOS header
-    readDosHeader(file, p.dos);
+    readDosHeader(file, p->dos);
 
-    if (p.dos.e_magic != MZ_MAGIC) {
-        PE_ERR(PEERR_MAGIC);
+    if (p->dos->e_magic != MZ_MAGIC)
+    {
+        //PE_ERR(PEERR_MAGIC);
         return false;
     }
 
     // get the offset to the NT headers
-    std::uint32_t offset = p.dos.e_lfanew;
-    std::uint32_t curOffset = offset;
+    uint32_t offset = p->dos->e_lfanew;
+    uint32_t curOffset = offset;
 
     // read rich header
-    std::uint32_t dword;
-    std::uint32_t rich_end_signature_offset = 0;
-    std::uint32_t xor_key;
+    uint32_t dword;
+    uint32_t rich_end_signature_offset = 0;
+    uint32_t xor_key;
     bool found_rich = false;
 
     // Start reading from RICH_OFFSET (0x80), a known Rich header offset.
     // Note: 0x80 is based on anecdotal evidence.
     //
     // Iterate over the DWORDs, hence why i increments 4 bytes at a time.
-    for (std::uint32_t i = RICH_OFFSET; i < offset; i += 4) {
-        if (!readDword(file, i, dword)) {
-            PE_ERR(PEERR_READ);
+    for (uint32_t i = RICH_OFFSET; i < offset; i += 4)
+    {
+        if (!readDword(file, i, dword))
+        {
+            //PE_ERR(PEERR_READ);
             return false;
         }
 
         // Found the trailing Rich signature
-        if (dword == RICH_MAGIC_END) {
+        if (dword == RICH_MAGIC_END)
+        {
             found_rich = true;
             rich_end_signature_offset = i;
             break;
         }
     }
 
-    if (found_rich) {
+    if (found_rich)
+    {
         // Get the XOR decryption key.  It is the DWORD immediately
         // after the Rich signature.
-        if (!readDword(file, rich_end_signature_offset + 4, xor_key)) {
-            PE_ERR(PEERR_READ);
+        if (!readDword(file, rich_end_signature_offset + 4, xor_key))
+        {
+            //PE_ERR(PEERR_READ);
             return false;
         }
 
         // Split the Rich header out into its own buffer
-        bounded_buffer* richBuf =
-            splitBuffer(file, 0x80, rich_end_signature_offset + 4);
-        if (richBuf == nullptr) {
+        bounded_buffer* richBuf = splitBuffer(file, 0x80, rich_end_signature_offset + 4);
+        if (richBuf == NULL)
+        {
             return false;
         }
 
-        readRichHeader(richBuf, xor_key, p.rich);
-        if (richBuf != nullptr) {
+        readRichHeader(richBuf, xor_key, p->rich);
+        if (richBuf != NULL)
+        {
             deleteBuffer(richBuf);
         }
 
         // Split the DOS header into a separate buffer which
         // starts at offset 0 and has length 0x80
         bounded_buffer* dosBuf = splitBuffer(file, 0, RICH_OFFSET);
-        if (dosBuf == nullptr) {
+        if (dosBuf == NULL)
+        {
             return false;
         }
         // Calculate checksum
-        p.rich.Checksum = calculateRichChecksum(dosBuf, p);
-        if (p.rich.Checksum == p.rich.DecryptionKey) {
-            p.rich.isValid = true;
+        p->rich->Checksum = calculateRichChecksum(dosBuf, p);
+        if (p->rich->Checksum == p->rich->DecryptionKey)
+        {
+            p->rich->isValid = true;
         }
-        else {
-            p.rich.isValid = false;
+        else
+        {
+            p->rich->isValid = false;
         }
-        if (dosBuf != nullptr) {
+        if (dosBuf != NULL)
+        {
             deleteBuffer(dosBuf);
         }
 
         // Rich header not present
     }
-    else {
-        p.rich.isPresent = false;
+    else
+    {
+        p->rich->isPresent = false;
     }
 
     // now, we can read out the fields of the NT headers
     bounded_buffer* ntBuf = splitBuffer(file, curOffset, file->bufLen);
 
-    if (!readNtHeader(ntBuf, p.nt)) {
+    if (!readNtHeader(ntBuf, p->nt))
+    {
         // err is set by readNtHeader
-        if (ntBuf != nullptr) {
+        if (ntBuf != NULL)
+        {
             deleteBuffer(ntBuf);
         }
         return false;
@@ -2300,19 +2316,20 @@ bool getHeader(bounded_buffer* file, pe_header& p, bounded_buffer*& rem) {
         * Need to determine if this is a PE32 or PE32+ binary and use the
         # correct size.
         */
-    std::uint32_t rem_size;
-    if (p.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
+    uint32_t rem_size;
+    if (p->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+    {
         // signature + file_header + optional_header_32
-        rem_size = sizeof(std::uint32_t) + sizeof(file_header) +
-            sizeof(optional_header_32);
+        rem_size = sizeof(uint32_t) + sizeof(struct file_header) + sizeof(struct optional_header_32);
     }
-    else if (p.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
+    else if (p->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+    {
         // signature + file_header + optional_header_64
-        rem_size = sizeof(std::uint32_t) + sizeof(file_header) +
-            sizeof(optional_header_64);
+        rem_size = sizeof(uint32_t) + sizeof(struct file_header) + sizeof(struct optional_header_64);
     }
-    else {
-        PE_ERR(PEERR_MAGIC);
+    else
+    {
+        //PE_ERR(PEERR_MAGIC);
         deleteBuffer(ntBuf);
         return false;
     }
