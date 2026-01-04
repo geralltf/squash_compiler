@@ -1874,7 +1874,6 @@ static inline uint32_t rol(uint32_t val, uint32_t num)
 
 uint32_t calculateRichChecksum(const bounded_buffer* b, pe_header* p)
 {
-
     // First, calculate the sum of the DOS header bytes each rotated left the
     // number of times their position relative to the start of the DOS header e.g.
     // second byte is rotated left 2x using rol operation
@@ -1911,34 +1910,37 @@ uint32_t calculateRichChecksum(const bounded_buffer* b, pe_header* p)
     return checksum;
 }
 
-bool readRichHeader(bounded_buffer* rich_buf,
-    std::uint32_t key,
-    rich_header& rich_hdr) {
-    if (rich_buf == nullptr) {
+bool readRichHeader(bounded_buffer* rich_buf, uint32_t key, struct rich_header* rich_hdr)
+{
+    if (rich_buf == NULL)
+    {
         return false;
     }
 
-    std::uint32_t encrypted_dword;
-    std::uint32_t decrypted_dword;
+    uint32_t encrypted_dword;
+    uint32_t decrypted_dword;
 
     // Confirm DanS signature exists first.
     // The first decrypted DWORD value of the rich header
     // at offset 0 should be 0x536e6144 aka the "DanS" signature
-    if (!readDword(rich_buf, 0, encrypted_dword)) {
-        PE_ERR(PEERR_READ);
+    if (!readDword(rich_buf, 0, &encrypted_dword))
+    {
+        //PE_ERR(PEERR_READ);
         return false;
     }
 
     decrypted_dword = encrypted_dword ^ key;
 
-    if (decrypted_dword == RICH_MAGIC_START) {
+    if (decrypted_dword == RICH_MAGIC_START)
+    {
         // DanS magic found
-        rich_hdr.isPresent = true;
-        rich_hdr.StartSignature = decrypted_dword;
+        rich_hdr->isPresent = true;
+        rich_hdr->StartSignature = decrypted_dword;
     }
-    else {
+    else
+    {
         // DanS magic not found
-        rich_hdr.isPresent = false;
+        rich_hdr->isPresent = false;
         return false;
     }
 
@@ -1948,84 +1950,252 @@ bool readRichHeader(bounded_buffer* rich_buf,
     // a DWORD is 4 bytes. Loop is incrementing 8 bytes, however
     // we are reading two DWORDS at a time, which is the size
     // of one rich header entry.
-    for (std::uint32_t i = 16; i < rich_buf->bufLen - 8; i += 8) {
-        rich_entry entry;
+    for (uint32_t i = 16; i < rich_buf->bufLen - 8; i += 8)
+    {
+        struct rich_entry* entry = (struct rich_entry*)malloc(sizeof(struct rich_entry));
+
         // Read first DWORD of entry and decrypt it
-        if (!readDword(rich_buf, i, encrypted_dword)) {
-            PE_ERR(PEERR_READ);
+        if (!readDword(rich_buf, i, encrypted_dword))
+        {
+            //PE_ERR(PEERR_READ);
             return false;
         }
         decrypted_dword = encrypted_dword ^ key;
         // The high WORD of the first DWORD is the Product ID
-        entry.ProductId = (decrypted_dword & 0xFFFF0000) >> 16;
+        entry->ProductId = (decrypted_dword & 0xFFFF0000) >> 16;
         // The low WORD of the first DWORD is the Build Number
-        entry.BuildNumber = (decrypted_dword & 0xFFFF);
+        entry->BuildNumber = (decrypted_dword & 0xFFFF);
 
         // The second DWORD represents the use count
-        if (!readDword(rich_buf, i + 4, encrypted_dword)) {
-            PE_ERR(PEERR_READ);
+        if (!readDword(rich_buf, i + 4, encrypted_dword))
+        {
+            //PE_ERR(PEERR_READ);
             return false;
         }
         decrypted_dword = encrypted_dword ^ key;
         // The full 32-bit DWORD is the count
-        entry.Count = decrypted_dword;
+        entry->Count = decrypted_dword;
 
         // Preserve the individual entry
-        rich_hdr.Entries.push_back(entry);
+        list_enqueue(rich_hdr->Entries, (void*)entry);
     }
 
     // Preserve the end signature aka "Rich" magic
-    if (!readDword(rich_buf, rich_buf->bufLen - 4, rich_hdr.EndSignature)) {
-        PE_ERR(PEERR_READ);
+    if (!readDword(rich_buf, rich_buf->bufLen - 4, rich_hdr->EndSignature))
+    {
+        //PE_ERR(PEERR_READ);
         return false;
     };
-    if (rich_hdr.EndSignature != RICH_MAGIC_END) {
-        PE_ERR(PEERR_MAGIC);
+    if (rich_hdr->EndSignature != RICH_MAGIC_END)
+    {
+        //PE_ERR(PEERR_MAGIC);
         return false;
     }
 
     // Preserve the decryption key
-    rich_hdr.DecryptionKey = key;
+    rich_hdr->DecryptionKey = key;
 
     return true;
 }
 
-bool readDosHeader(bounded_buffer* file, dos_header& dos_hdr) {
-    if (file == nullptr) {
+bool readDosHeader(bounded_buffer* file, struct dos_header* dos_hdr)
+{
+    if (file == NULL)
+    {
         return false;
     }
 
-    READ_WORD(file, 0, dos_hdr, e_magic);
-    READ_WORD(file, 0, dos_hdr, e_cblp);
-    READ_WORD(file, 0, dos_hdr, e_cp);
-    READ_WORD(file, 0, dos_hdr, e_crlc);
-    READ_WORD(file, 0, dos_hdr, e_cparhdr);
-    READ_WORD(file, 0, dos_hdr, e_minalloc);
-    READ_WORD(file, 0, dos_hdr, e_maxalloc);
-    READ_WORD(file, 0, dos_hdr, e_ss);
-    READ_WORD(file, 0, dos_hdr, e_sp);
-    READ_WORD(file, 0, dos_hdr, e_csum);
-    READ_WORD(file, 0, dos_hdr, e_ip);
-    READ_WORD(file, 0, dos_hdr, e_cs);
-    READ_WORD(file, 0, dos_hdr, e_lfarlc);
-    READ_WORD(file, 0, dos_hdr, e_ovno);
-    READ_WORD(file, 0, dos_hdr, e_res[0]);
-    READ_WORD(file, 0, dos_hdr, e_res[1]);
-    READ_WORD(file, 0, dos_hdr, e_res[2]);
-    READ_WORD(file, 0, dos_hdr, e_res[3]);
-    READ_WORD(file, 0, dos_hdr, e_oemid);
-    READ_WORD(file, 0, dos_hdr, e_oeminfo);
-    READ_WORD(file, 0, dos_hdr, e_res2[0]);
-    READ_WORD(file, 0, dos_hdr, e_res2[1]);
-    READ_WORD(file, 0, dos_hdr, e_res2[2]);
-    READ_WORD(file, 0, dos_hdr, e_res2[3]);
-    READ_WORD(file, 0, dos_hdr, e_res2[4]);
-    READ_WORD(file, 0, dos_hdr, e_res2[5]);
-    READ_WORD(file, 0, dos_hdr, e_res2[6]);
-    READ_WORD(file, 0, dos_hdr, e_res2[7]);
-    READ_WORD(file, 0, dos_hdr, e_res2[8]);
-    READ_WORD(file, 0, dos_hdr, e_res2[9]);
-    READ_DWORD(file, 0, dos_hdr, e_lfanew);
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_magic)), dos_hdr->e_magic))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cblp)), dos_hdr->e_cblp))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cp)), dos_hdr->e_cp))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_crlc)), dos_hdr->e_crlc))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cparhdr)), dos_hdr->e_cparhdr))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_minalloc)), dos_hdr->e_minalloc))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_maxalloc)), dos_hdr->e_maxalloc))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_ss)), dos_hdr->e_ss))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_sp)), dos_hdr->e_sp))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_csum)), dos_hdr->e_csum))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_ip)), dos_hdr->e_ip))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cs)), dos_hdr->e_cs))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_lfarlc)), dos_hdr->e_lfarlc))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_ovno)), dos_hdr->e_ovno))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[0])), dos_hdr->e_res[0]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[1])), dos_hdr->e_res[1]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[2])), dos_hdr->e_res[2]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[3])), dos_hdr->e_res[3]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_oemid)), dos_hdr->e_oemid))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_oeminfo)), dos_hdr->e_oeminfo))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[0])), dos_hdr->e_res2[0]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[1])), dos_hdr->e_res2[1]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[2])), dos_hdr->e_res2[2]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[3])), dos_hdr->e_res2[3]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[4])), dos_hdr->e_res2[4]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[5])), dos_hdr->e_res2[5]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[6])), dos_hdr->e_res2[6]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[7])), dos_hdr->e_res2[7]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[8])), dos_hdr->e_res2[8]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[9])), dos_hdr->e_res2[9]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_magic)), dos_hdr->e_magic))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(file, 0 + (uint32_t)(offsetof(struct dos_header, e_lfanew)), dos_hdr->e_lfanew))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
 
     return true;
 }
