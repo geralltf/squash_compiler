@@ -574,7 +574,7 @@ char* GetSymbolTableStorageClassName(uint8_t id)
     }
 }
 
-bool readCString(const bounded_buffer* buffer, uint32_t off, char* result)
+bool readCString(const bounded_buffer* buffer, uint32_t off, char** result)
 {
     if (off < buffer->bufLen)
     {
@@ -595,15 +595,16 @@ bool readCString(const bounded_buffer* buffer, uint32_t off, char* result)
         size_t len = (size_t)(x - b);
 
         // Copy the data into result and null-terminate it
-        memcpy(result, b, len);
-        result[len] = '\0';
+        memcpy(*result, b, len);
+
+        (*result)[len] = '\0';
 
         return true;
     }
     return false;
 }
 
-bool getSecForVA(list_t* secs, VA v, struct section* sec) // const std::vector<section>& secs, VA v, section* sec)
+bool getSecForVA(list_t* secs, VA v, struct section** sec) // const std::vector<section>& secs, VA v, section* sec)
 {
     list_t* n = secs;
     struct section* s;
@@ -617,13 +618,13 @@ bool getSecForVA(list_t* secs, VA v, struct section* sec) // const std::vector<s
 
         if (v >= low && v < high)
         {
-            sec = s;
+            (*sec) = s;
             return true;
         }
 
         n = n->next;
     }
-
+    (*sec) = NULL;
     return false;
 }
 
@@ -2341,265 +2342,299 @@ bool getHeader(bounded_buffer* file, pe_header* p, bounded_buffer* rem)
     return true;
 }
 
-bool getExports(parsed_pe* p) {
-    data_directory exportDir;
-    if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-        exportDir = p->peHeader.nt.OptionalHeader.DataDirectory[DIR_EXPORT];
+bool getExports(parsed_pe* p)
+{
+    struct data_directory exportDir;
+    if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+    {
+        exportDir = p->peHeader->nt->OptionalHeader->DataDirectory[DIR_EXPORT];
     }
-    else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-        exportDir = p->peHeader.nt.OptionalHeader64.DataDirectory[DIR_EXPORT];
+    else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC) {
+        exportDir = p->peHeader->nt->OptionalHeader64->DataDirectory[DIR_EXPORT];
     }
-    else {
+    else
+    {
         return false;
     }
 
-    if (exportDir.Size != 0) {
-        section s;
+    if (exportDir.Size != 0)
+    {
+        struct section* s = (struct section*)malloc(sizeof(struct section));
         VA addr;
-        if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-            addr = exportDir.VirtualAddress + p->peHeader.nt.OptionalHeader.ImageBase;
+        if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+        {
+            addr = exportDir.VirtualAddress + p->peHeader->nt->OptionalHeader->ImageBase;
         }
-        else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-            addr =
-                exportDir.VirtualAddress + p->peHeader.nt.OptionalHeader64.ImageBase;
+        else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+        {
+            addr = exportDir.VirtualAddress + p->peHeader->nt->OptionalHeader64->ImageBase;
         }
         else {
             return false;
         }
 
-        if (!getSecForVA(p->internal->secs, addr, s)) {
+        if (!getSecForVA(p->internal->secs, addr, &s))
+        {
             return false;
         }
 
-        auto rvaofft = static_cast<std::uint32_t>(addr - s.sectionBase);
+        uint32_t rvaofft = (uint32_t)(addr - s->sectionBase);
 
         // get the name of this module
-        std::uint32_t nameRva;
-        if (!readDword(s.sectionData,
-            rvaofft + offsetof(export_dir_table, NameRVA),
-            nameRva)) {
+        uint32_t nameRva;
+        if (!readDword(s->sectionData, rvaofft + offsetof(struct export_dir_table, NameRVA), nameRva))
+        {
             return false;
         }
 
         VA nameVA;
-        if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-            nameVA = nameRva + p->peHeader.nt.OptionalHeader.ImageBase;
+        if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+        {
+            nameVA = nameRva + p->peHeader->nt->OptionalHeader->ImageBase;
         }
-        else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-            nameVA = nameRva + p->peHeader.nt.OptionalHeader64.ImageBase;
+        else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+        {
+            nameVA = nameRva + p->peHeader->nt->OptionalHeader64->ImageBase;
         }
         else {
             return false;
         }
 
-        section nameSec;
-        if (!getSecForVA(p->internal->secs, nameVA, nameSec)) {
+        struct section* nameSec = (struct section*)malloc(sizeof(struct section));
+        if (!getSecForVA(p->internal->secs, nameVA, nameSec))
+        {
             return false;
         }
 
-        auto nameOff = static_cast<std::uint32_t>(nameVA - nameSec.sectionBase);
-        std::string modName;
-        if (!readCString(*nameSec.sectionData, nameOff, modName)) {
+        uint32_t nameOff = (uint32_t)(nameVA - nameSec->sectionBase);
+        char* modName;
+        if (!readCString(nameSec->sectionData, nameOff, modName))
+        {
             return false;
         }
 
         // now, get all the named export symbols
-        std::uint32_t numNames;
-        if (!readDword(s.sectionData,
-            rvaofft + offsetof(export_dir_table, NumberOfNamePointers),
-            numNames)) {
+        uint32_t numNames;
+        if (!readDword(s->sectionData, rvaofft + offsetof(struct export_dir_table, NumberOfNamePointers), &numNames))
+        {
             return false;
         }
 
-        if (numNames > 0) {
+        if (numNames > 0)
+        {
             // get the names section
-            std::uint32_t namesRVA;
-            if (!readDword(s.sectionData,
-                rvaofft + offsetof(export_dir_table, NamePointerRVA),
-                namesRVA)) {
+            uint32_t namesRVA;
+            if (!readDword(s->sectionData, rvaofft + offsetof(struct export_dir_table, NamePointerRVA), &namesRVA))
+            {
                 return false;
             }
 
             VA namesVA;
-            if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-                namesVA = namesRVA + p->peHeader.nt.OptionalHeader.ImageBase;
+            if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+            {
+                namesVA = namesRVA + p->peHeader->nt->OptionalHeader->ImageBase;
             }
-            else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-                namesVA = namesRVA + p->peHeader.nt.OptionalHeader64.ImageBase;
+            else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+            {
+                namesVA = namesRVA + p->peHeader->nt->OptionalHeader64->ImageBase;
             }
-            else {
+            else
+            {
                 return false;
             }
 
-            section namesSec;
-            if (!getSecForVA(p->internal->secs, namesVA, namesSec)) {
+            struct section* namesSec = (struct section*)malloc(sizeof(struct section));
+            if (!getSecForVA(p->internal->secs, namesVA, namesSec))
+            {
                 return false;
             }
 
-            auto namesOff =
-                static_cast<std::uint32_t>(namesVA - namesSec.sectionBase);
+            uint32_t namesOff = (uint32_t)(namesVA - namesSec->sectionBase);
 
             // get the EAT section
-            std::uint32_t eatRVA;
-            if (!readDword(s.sectionData,
-                rvaofft +
-                offsetof(export_dir_table, ExportAddressTableRVA),
-                eatRVA)) {
+            uint32_t eatRVA;
+            if (!readDword(s->sectionData, rvaofft + offsetof(struct export_dir_table, ExportAddressTableRVA), &eatRVA))
+            {
                 return false;
             }
 
             VA eatVA;
-            if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-                eatVA = eatRVA + p->peHeader.nt.OptionalHeader.ImageBase;
+            if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+            {
+                eatVA = eatRVA + p->peHeader->nt->OptionalHeader->ImageBase;
             }
-            else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-                eatVA = eatRVA + p->peHeader.nt.OptionalHeader64.ImageBase;
+            else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+            {
+                eatVA = eatRVA + p->peHeader->nt->OptionalHeader64->ImageBase;
             }
-            else {
+            else
+            {
                 return false;
             }
 
-            section eatSec;
-            if (!getSecForVA(p->internal->secs, eatVA, eatSec)) {
+            struct section* eatSec = (struct section*)malloc(sizeof(struct section));
+            if (!getSecForVA(p->internal->secs, eatVA, eatSec))
+            {
                 return false;
             }
 
-            auto eatOff = static_cast<std::uint32_t>(eatVA - eatSec.sectionBase);
+            uint32_t eatOff = (uint32_t)(eatVA - eatSec->sectionBase);
 
             // get the ordinal base
-            std::uint32_t ordinalBase;
-            if (!readDword(s.sectionData,
-                rvaofft + offsetof(export_dir_table, OrdinalBase),
-                ordinalBase)) {
+            uint32_t ordinalBase;
+            if (!readDword(s->sectionData, rvaofft + offsetof(struct export_dir_table, OrdinalBase), &ordinalBase))
+            {
                 return false;
             }
 
             // get the ordinal table
-            std::uint32_t ordinalTableRVA;
-            if (!readDword(s.sectionData,
-                rvaofft + offsetof(export_dir_table, OrdinalTableRVA),
-                ordinalTableRVA)) {
+            uint32_t ordinalTableRVA;
+            if (!readDword(s->sectionData, rvaofft + offsetof(struct export_dir_table, OrdinalTableRVA), ordinalTableRVA))
+            {
                 return false;
             }
 
             VA ordinalTableVA;
-            if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-                ordinalTableVA =
-                    ordinalTableRVA + p->peHeader.nt.OptionalHeader.ImageBase;
+            if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+            {
+                ordinalTableVA = ordinalTableRVA + p->peHeader->nt->OptionalHeader->ImageBase;
             }
-            else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-                ordinalTableVA =
-                    ordinalTableRVA + p->peHeader.nt.OptionalHeader64.ImageBase;
+            else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+            {
+                ordinalTableVA = ordinalTableRVA + p->peHeader->nt->OptionalHeader64->ImageBase;
             }
-            else {
+            else
+            {
                 return false;
             }
 
-            section ordinalTableSec;
-            if (!getSecForVA(p->internal->secs, ordinalTableVA, ordinalTableSec)) {
+            struct section* ordinalTableSec = (struct section*)malloc(sizeof(struct section));
+            if (!getSecForVA(p->internal->secs, ordinalTableVA, ordinalTableSec))
+            {
                 return false;
             }
 
-            auto ordinalOff = static_cast<std::uint32_t>(ordinalTableVA -
-                ordinalTableSec.sectionBase);
+            uint32_t ordinalOff = (uint32_t)(ordinalTableVA - ordinalTableSec->sectionBase);
 
-            for (std::uint32_t i = 0; i < numNames; i++) {
-                std::uint32_t curNameRVA;
-                if (!readDword(namesSec.sectionData,
-                    namesOff + (i * sizeof(std::uint32_t)),
-                    curNameRVA)) {
+            for (uint32_t i = 0; i < numNames; i++)
+            {
+                uint32_t curNameRVA;
+                if (!readDword(namesSec->sectionData, namesOff + (i * sizeof(uint32_t)), &curNameRVA))
+                {
                     return false;
                 }
 
                 VA curNameVA;
-                if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-                    curNameVA = curNameRVA + p->peHeader.nt.OptionalHeader.ImageBase;
+                if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+                {
+                    curNameVA = curNameRVA + p->peHeader->nt->OptionalHeader->ImageBase;
                 }
-                else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-                    curNameVA = curNameRVA + p->peHeader.nt.OptionalHeader64.ImageBase;
+                else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+                {
+                    curNameVA = curNameRVA + p->peHeader->nt->OptionalHeader64->ImageBase;
                 }
-                else {
+                else
+                {
                     return false;
                 }
 
-                section curNameSec;
+                struct section* curNameSec = (struct section*)malloc(sizeof(struct section));
 
-                if (!getSecForVA(p->internal->secs, curNameVA, curNameSec)) {
+                if (!getSecForVA(p->internal->secs, curNameVA, curNameSec))
+                {
                     return false;
                 }
 
-                auto curNameOff =
-                    static_cast<std::uint32_t>(curNameVA - curNameSec.sectionBase);
-                std::string symName;
-                std::uint8_t d;
+                uint32_t curNameOff = (uint32_t)(curNameVA - curNameSec->sectionBase);
+                char* symName = (char*)malloc(sizeof(char) * 200);
+                uint8_t d;
+                int index2 = 0;
 
                 do {
-                    if (!readByte(curNameSec.sectionData, curNameOff, d)) {
+                    if (!readByte(curNameSec->sectionData, curNameOff, &d))
+                    {
                         return false;
                     }
 
-                    if (d == 0) {
+                    if (d == 0)
+                    {
                         break;
                     }
 
-                    symName.push_back(static_cast<char>(d));
+                    uint8_t* ccc = &d;
+                    char* cc = (char*)&ccc;
+                    strcat(symName, cc);
+
+                    //symName.push_back(static_cast<char>(d));
                     curNameOff++;
+                    index2++;
                 } while (true);
+                symName[index2 + 1] = '\0';
 
                 // now, for this i, look it up in the ExportOrdinalTable
-                std::uint16_t ordinal;
-                if (!readWord(ordinalTableSec.sectionData,
-                    ordinalOff + (i * sizeof(std::uint16_t)),
-                    ordinal)) {
+                uint16_t ordinal;
+                if (!readWord(ordinalTableSec->sectionData, ordinalOff + (i * sizeof(uint16_t)), ordinal))
+                {
                     return false;
                 }
 
                 //::uint32_t  eatIdx = ordinal - ordinalBase;
-                std::uint32_t eatIdx = (ordinal * sizeof(std::uint32_t));
+                uint32_t eatIdx = (ordinal * sizeof(uint32_t));
 
-                std::uint32_t symRVA;
-                if (!readDword(eatSec.sectionData, eatOff + eatIdx, symRVA)) {
+                uint32_t symRVA;
+                if (!readDword(eatSec->sectionData, eatOff + eatIdx, symRVA))
+                {
                     return false;
                 }
 
-                bool isForwarded =
-                    ((symRVA >= exportDir.VirtualAddress) &&
-                        (symRVA < exportDir.VirtualAddress + exportDir.Size));
+                bool isForwarded = ((symRVA >= exportDir.VirtualAddress) && (symRVA < exportDir.VirtualAddress + exportDir.Size));
 
                 VA symVA;
-                if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-                    symVA = symRVA + p->peHeader.nt.OptionalHeader.ImageBase;
+                if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+                {
+                    symVA = symRVA + p->peHeader->nt->OptionalHeader->ImageBase;
                 }
-                else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-                    symVA = symRVA + p->peHeader.nt.OptionalHeader64.ImageBase;
+                else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+                {
+                    symVA = symRVA + p->peHeader->nt->OptionalHeader64->ImageBase;
                 }
-                else {
+                else
+                {
                     return false;
                 }
 
-                exportent a;
-                a.ordinal = ordinal;
-                a.symbolName = symName;
-                a.moduleName = modName;
+                struct exportent* a = (struct exportent*)malloc(sizeof(struct exportent));
+                a->ordinal = ordinal;
+                a->symbolName = symName;
+                a->moduleName = modName;
 
-                if (!isForwarded) {
-                    a.addr = symVA;
-                    a.forwardName.clear();
+                if (!isForwarded)
+                {
+                    a->addr = symVA;
+
+                    if (a->forwardName != NULL)
+                    {
+                        free(a->forwardName);
+                    }
+                    a->forwardName = NULL; // a->forwardName.clear();
                 }
-                else {
-                    section fwdSec;
-                    if (!getSecForVA(p->internal->secs, symVA, fwdSec)) {
+                else
+                {
+                    struct section* fwdSec = (struct section*)malloc(sizeof(struct section));
+                    if (!getSecForVA(p->internal->secs, symVA, &fwdSec))
+                    {
                         return false;
                     }
-                    auto fwdOff = static_cast<std::uint32_t>(symVA - fwdSec.sectionBase);
+                    auto fwdOff = (uint32_t)(symVA - fwdSec->sectionBase);
 
                     a.addr = 0;
-                    if (!readCString(*fwdSec.sectionData, fwdOff, a.forwardName)) {
+                    if (!readCString(fwdSec->sectionData, fwdOff, a->forwardName))
+                    {
                         return false;
                     }
                 }
 
-                p->internal->exports.push_back(a);
+                list_enqueue(p->internal->exports, (void*)a);
             }
         }
     }
