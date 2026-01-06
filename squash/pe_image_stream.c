@@ -1857,7 +1857,7 @@ bool readNtHeader(bounded_buffer* b, struct nt_header_32* header)
 }
 
 // zero extends its first argument to 32 bits and then performs a rotate left
-// operation equal to the second arguments value of the first argument’s bits
+// operation equal to the second arguments value of the first argumentï¿½s bits
 static inline uint32_t rol(uint32_t val, uint32_t num)
 {
     //assert(num < 32);
@@ -2627,8 +2627,8 @@ bool getExports(parsed_pe* p)
                     }
                     auto fwdOff = (uint32_t)(symVA - fwdSec->sectionBase);
 
-                    a.addr = 0;
-                    if (!readCString(fwdSec->sectionData, fwdOff, a->forwardName))
+                    a->addr = 0;
+                    if (!readCString(fwdSec->sectionData, fwdOff, &a->forwardName))
                     {
                         return false;
                     }
