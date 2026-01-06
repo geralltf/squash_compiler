@@ -2754,65 +2754,112 @@ bool getRelocations(parsed_pe* p)
     return true;
 }
 
-bool getDebugDir(parsed_pe* p) {
-    data_directory debugDir;
-    if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-        debugDir = p->peHeader.nt.OptionalHeader.DataDirectory[DIR_DEBUG];
+bool getDebugDir(parsed_pe* p)
+{
+    struct data_directory debugDir;
+    if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+    {
+        debugDir = p->peHeader->nt->OptionalHeader->DataDirectory[DIR_DEBUG];
     }
-    else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-        debugDir = p->peHeader.nt.OptionalHeader64.DataDirectory[DIR_DEBUG];
+    else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+    {
+        debugDir = p->peHeader->nt->OptionalHeader64->DataDirectory[DIR_DEBUG];
     }
-    else {
+    else
+    {
         return false;
     }
 
     if (debugDir.Size != 0) {
-        section d;
+        struct section* d = (struct section*)malloc(sizeof(struct section));
         VA vaAddr;
-        if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-            vaAddr =
-                debugDir.VirtualAddress + p->peHeader.nt.OptionalHeader.ImageBase;
+        if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+        {
+            vaAddr = debugDir.VirtualAddress + p->peHeader->nt->OptionalHeader->ImageBase;
         }
-        else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-            vaAddr =
-                debugDir.VirtualAddress + p->peHeader.nt.OptionalHeader64.ImageBase;
+        else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+        {
+            vaAddr = debugDir.VirtualAddress + p->peHeader->nt->OptionalHeader64->ImageBase;
         }
-        else {
+        else
+        {
             return false;
         }
 
-        uint32_t numOfDebugEnts = debugDir.Size / sizeof(debug_dir_entry);
+        uint32_t numOfDebugEnts = debugDir.Size / sizeof(struct debug_dir_entry);
 
         //
         // this will return the rdata section, where the debug directories are
         //
-        if (!getSecForVA(p->internal->secs, vaAddr, d)) {
+        if (!getSecForVA(p->internal->secs, vaAddr, &d))
+        {
             return false;
         }
 
         //
         // get debug directory from this section
         //
-        auto rvaofft = static_cast<std::uint32_t>(vaAddr - d.sectionBase);
+        uint32_t rvaofft = (uint32_t)(vaAddr - d->sectionBase);
 
-        debug_dir_entry emptyEnt;
-        memset(&emptyEnt, 0, sizeof(debug_dir_entry));
+        //struct debug_dir_entry emptyEnt;
+        //memset(&emptyEnt, 0, sizeof(struct debug_dir_entry));
 
-        for (uint32_t i = 0; i < numOfDebugEnts; i++) {
-            debug_dir_entry curEnt = emptyEnt;
+        for (uint32_t i = 0; i < numOfDebugEnts; i++)
+        {
+            struct debug_dir_entry* curEnt = (struct debug_dir_entry*)malloc(sizeof(struct debug_dir_entry));
+            memset(curEnt, 0, sizeof(struct debug_dir_entry));
 
-            READ_DWORD(d.sectionData, rvaofft, curEnt, Characteristics);
-            READ_DWORD(d.sectionData, rvaofft, curEnt, TimeStamp);
-            READ_WORD(d.sectionData, rvaofft, curEnt, MajorVersion);
-            READ_WORD(d.sectionData, rvaofft, curEnt, MinorVersion);
-            READ_DWORD(d.sectionData, rvaofft, curEnt, Type);
-            READ_DWORD(d.sectionData, rvaofft, curEnt, SizeOfData);
-            READ_DWORD(d.sectionData, rvaofft, curEnt, AddressOfRawData);
-            READ_DWORD(d.sectionData, rvaofft, curEnt, PointerToRawData);
+            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, Characteristics)), curEnt->Characteristics))
+            {
+                //PE_ERR(PEERR_READ);
+                return false;
+            }
+
+            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, TimeStamp)), curEnt->TimeStamp))
+            {
+                //PE_ERR(PEERR_READ);
+                return false;
+            }
+
+            if (!readWord(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, MajorVersion)), curEnt->MajorVersion))
+            {
+                //PE_ERR(PEERR_READ);
+                return false;
+            }
+            
+            if (!readWord(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, MinorVersion)), curEnt->MinorVersion))
+            {
+                //PE_ERR(PEERR_READ);
+                return false;
+            }
+
+            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, Type)), curEnt->Type))
+            {
+                //PE_ERR(PEERR_READ);
+                return false;
+            }
+
+            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, SizeOfData)), curEnt->SizeOfData))
+            {
+                //PE_ERR(PEERR_READ);
+                return false;
+            }
+
+            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, AddressOfRawData)), curEnt->AddressOfRawData))
+            {
+                //PE_ERR(PEERR_READ);
+                return false;
+            }
+
+            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, PointerToRawData)), curEnt->PointerToRawData))
+            {
+                //PE_ERR(PEERR_READ);
+                return false;
+            }
 
             // are all the fields in curEnt null? then we break
-            if (curEnt.SizeOfData == 0 && curEnt.AddressOfRawData == 0 &&
-                curEnt.PointerToRawData == 0) {
+            if (curEnt->SizeOfData == 0 && curEnt->AddressOfRawData == 0 && curEnt->PointerToRawData == 0)
+            {
                 break;
             }
 
@@ -2820,15 +2867,16 @@ bool getDebugDir(parsed_pe* p) {
             // Get the address of the data
             //
             VA rawData;
-            if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-                rawData =
-                    curEnt.AddressOfRawData + p->peHeader.nt.OptionalHeader.ImageBase;
+            if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+            {
+                rawData = curEnt->AddressOfRawData + p->peHeader->nt->OptionalHeader->ImageBase;
             }
-            else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-                rawData =
-                    curEnt.AddressOfRawData + p->peHeader.nt.OptionalHeader64.ImageBase;
+            else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+            {
+                rawData = curEnt->AddressOfRawData + p->peHeader->nt->OptionalHeader64->ImageBase;
             }
-            else {
+            else
+            {
                 // Unrecognized optional header type. We can't process debug entries.
                 // Debug entries themselves are optional, so skip them.
                 break;
@@ -2837,30 +2885,30 @@ bool getDebugDir(parsed_pe* p) {
             //
             // Get the section for the data
             //
-            section dataSec;
-            if (!getSecForVA(p->internal->secs, rawData, dataSec)) {
+            struct section* dataSec = (struct section*)malloc(sizeof(struct section));
+            if (!getSecForVA(p->internal->secs, rawData, &dataSec))
+            {
                 // The debug entry points to non-existing data. This means it is
                 // malformed. Skip it and the rest. They are not necessary for parsing
                 // the binary, and binaries do have malformed debug entries sometimes.
                 break;
             }
 
-            debugent ent;
+            struct debugent* ent = (struct debugent*)malloc(sizeof(struct debugent));
 
-            auto dataofft = static_cast<std::uint32_t>(rawData - dataSec.sectionBase);
-            if (dataofft + curEnt.SizeOfData > dataSec.sectionData->bufLen) {
+            auto dataofft = (uint32_t)(rawData - dataSec->sectionBase);
+            if (dataofft + curEnt->SizeOfData > dataSec->sectionData->bufLen)
+            {
                 // The debug entry data stretches outside the containing section. It is
                 // malformed. Skip it and the rest, similar to the above.
                 break;
             }
-            ent.type = curEnt.Type;
-            ent.data = makeBufferFromPointer(
-                reinterpret_cast<std::uint8_t*>(dataSec.sectionData->buf + dataofft),
-                curEnt.SizeOfData);
+            ent->type = curEnt->Type;
+            ent->data = makeBufferFromPointer((uint8_t*)(dataSec->sectionData->buf + dataofft), curEnt->SizeOfData);
 
-            p->internal->debugdirs.push_back(ent);
+            list_enqueue(p->internal->debugdirs, (void*)ent); // p->internal->debugdirs.push_back(ent);
 
-            rvaofft += sizeof(debug_dir_entry);
+            rvaofft += sizeof(struct debug_dir_entry);
         }
     }
 
