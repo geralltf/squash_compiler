@@ -1857,7 +1857,7 @@ bool readNtHeader(bounded_buffer* b, struct nt_header_32* header)
 }
 
 // zero extends its first argument to 32 bits and then performs a rotate left
-// operation equal to the second arguments value of the first argumentï¿½s bits
+// operation equal to the second arguments value of the first argument’s bits
 static inline uint32_t rol(uint32_t val, uint32_t num)
 {
     //assert(num < 32);
@@ -2642,52 +2642,58 @@ bool getExports(parsed_pe* p)
     return true;
 }
 
-bool getRelocations(parsed_pe* p) {
-    data_directory relocDir;
-    if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-        relocDir = p->peHeader.nt.OptionalHeader.DataDirectory[DIR_BASERELOC];
+bool getRelocations(parsed_pe* p)
+{
+    struct data_directory relocDir;
+    if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+    {
+        relocDir = p->peHeader->nt->OptionalHeader->DataDirectory[DIR_BASERELOC];
     }
-    else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-        relocDir = p->peHeader.nt.OptionalHeader64.DataDirectory[DIR_BASERELOC];
+    else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+    {
+        relocDir = p->peHeader->nt->OptionalHeader64->DataDirectory[DIR_BASERELOC];
     }
-    else {
+    else
+    {
         return false;
     }
 
-    if (relocDir.Size != 0) {
-        section d;
+    if (relocDir.Size != 0)
+    {
+        struct section* d = (struct section*)malloc(sizeof(struct section));
         VA vaAddr;
-        if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-            vaAddr =
-                relocDir.VirtualAddress + p->peHeader.nt.OptionalHeader.ImageBase;
+        if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+        {
+            vaAddr = relocDir.VirtualAddress + p->peHeader->nt->OptionalHeader->ImageBase;
         }
-        else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-            vaAddr =
-                relocDir.VirtualAddress + p->peHeader.nt.OptionalHeader64.ImageBase;
+        else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+        {
+            vaAddr = relocDir.VirtualAddress + p->peHeader->nt->OptionalHeader64->ImageBase;
         }
-        else {
+        else
+        {
             return false;
         }
 
-        if (!getSecForVA(p->internal->secs, vaAddr, d)) {
+        if (!getSecForVA(p->internal->secs, vaAddr, &d))
+        {
             return false;
         }
 
-        auto rvaofft = static_cast<std::uint32_t>(vaAddr - d.sectionBase);
+        uint32_t rvaofft = (uint32_t)(vaAddr - d->sectionBase);
 
-        while (rvaofft < relocDir.Size) {
-            std::uint32_t pageRva;
-            std::uint32_t blockSize;
+        while (rvaofft < relocDir.Size)
+        {
+            uint32_t pageRva;
+            uint32_t blockSize;
 
-            if (!readDword(d.sectionData,
-                rvaofft + offsetof(reloc_block, PageRVA),
-                pageRva)) {
+            if (!readDword(d->sectionData, rvaofft + offsetof(struct reloc_block, PageRVA), pageRva))
+            {
                 return false;
             }
 
-            if (!readDword(d.sectionData,
-                rvaofft + offsetof(reloc_block, BlockSize),
-                blockSize)) {
+            if (!readDword(d->sectionData, rvaofft + offsetof(struct reloc_block, BlockSize), blockSize))
+            {
                 return false;
             }
 
@@ -2695,48 +2701,52 @@ bool getRelocations(parsed_pe* p) {
             // including the Page RVA and Block Size fields and the Type/Offset fields
             // that follow. Therefore we should subtract 8 bytes from BlockSize to
             // exclude the Page RVA and Block Size fields.
-            std::uint32_t entryCount = (blockSize - 8) / sizeof(std::uint16_t);
+            uint32_t entryCount = (blockSize - 8) / sizeof(uint16_t);
 
             // Skip the Page RVA and Block Size fields
-            rvaofft += sizeof(reloc_block);
+            rvaofft += sizeof(struct reloc_block);
 
             // Iterate over all of the block Type/Offset entries
-            while (entryCount != 0) {
-                std::uint16_t entry;
-                std::uint8_t type;
-                std::uint16_t offset;
+            while (entryCount != 0)
+            {
+                uint16_t entry;
+                uint8_t type;
+                uint16_t offset;
 
-                if (!readWord(d.sectionData, rvaofft, entry)) {
+                if (!readWord(d->sectionData, rvaofft, &entry))
+                {
                     return false;
                 }
 
                 // Mask out the type and assign
                 type = entry >> 12;
                 // Mask out the offset and assign
-                offset = entry & static_cast<std::uint16_t>(~0xf000);
+                offset = entry & (uint16_t)(~0xf000);
 
                 // Produce the VA of the relocation
                 VA relocVA;
-                if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-                    relocVA = pageRva + offset + p->peHeader.nt.OptionalHeader.ImageBase;
+                if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+                {
+                    relocVA = pageRva + offset + p->peHeader->nt->OptionalHeader->ImageBase;
                 }
-                else if (p->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-                    relocVA =
-                        pageRva + offset + p->peHeader.nt.OptionalHeader64.ImageBase;
+                else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+                {
+                    relocVA = pageRva + offset + p->peHeader->nt->OptionalHeader64->ImageBase;
                 }
-                else {
+                else
+                {
                     return false;
                 }
 
                 // Store in our list
-                reloc r;
-
-                r.shiftedAddr = relocVA;
-                r.type = static_cast<reloc_type>(type);
-                p->internal->relocs.push_back(r);
+                struct reloc* r = (struct reloc*)malloc(sizeof(struct reloc));
+                r->shiftedAddr = relocVA;
+                r->type = (enum reloc_type)(type);
+                
+                list_enqueue(p->internal->relocs, (void*)r); // p->internal->relocs.push_back(r);
 
                 entryCount--;
-                rvaofft += sizeof(std::uint16_t);
+                rvaofft += sizeof(uint16_t);
             }
         }
     }
