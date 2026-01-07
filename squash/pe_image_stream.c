@@ -3235,28 +3235,30 @@ bool getImports(parsed_pe* p)
     return true;
 }
 
-bool getSymbolTable(parsed_pe* p) {
-    if (p->peHeader.nt.FileHeader.PointerToSymbolTable == 0) {
+bool getSymbolTable(parsed_pe* p)
+{
+    if (p->peHeader->nt->FileHeader->PointerToSymbolTable == 0)
+    {
         return true;
     }
 
-    std::uint32_t strTableOffset =
-        p->peHeader.nt.FileHeader.PointerToSymbolTable +
-        (p->peHeader.nt.FileHeader.NumberOfSymbols * SYMTAB_RECORD_LEN);
+    uint32_t strTableOffset = p->peHeader->nt->FileHeader->PointerToSymbolTable 
+        + (p->peHeader->nt->FileHeader->NumberOfSymbols * SYMTAB_RECORD_LEN);
 
-    std::uint32_t offset = p->peHeader.nt.FileHeader.PointerToSymbolTable;
+    uint32_t offset = p->peHeader->nt->FileHeader->PointerToSymbolTable;
 
-    for (std::uint32_t i = 0; i < p->peHeader.nt.FileHeader.NumberOfSymbols;
-        i++) {
-        symbol sym;
+    for (uint32_t i = 0; i < p->peHeader->nt->FileHeader->NumberOfSymbols; i++)
+    {
+        struct symbol sym;
 
         // Read name
-        if (!readQword(p->fileBuffer, offset, sym.name.data)) {
-            PE_ERR(PEERR_MAGIC);
+        if (!readQword(p->fileBuffer, offset, &sym.name->data))
+        {
+            //PE_ERR(PEERR_MAGIC);
             return false;
         }
 
-        if (sym.name.zeroes == 0) {
+        if (sym.name->zeroes == 0) {
             // The symbol name is greater than 8 bytes so it is stored in the string
             // table. In this case instead of name, an offset of the string in the
             // string table is provided.
