@@ -3263,19 +3263,34 @@ bool getSymbolTable(parsed_pe* p)
             // table. In this case instead of name, an offset of the string in the
             // string table is provided.
 
+            sym.strName = (char*)malloc(sizeof(char) * 200);
+
+            int index = 0;
             uint32_t strOffset = strTableOffset + SYMBOL_NAME_OFFSET(sym.name);
             uint8_t ch;
-            for (;;) {
-                if (!readByte(p->fileBuffer, strOffset, ch)) {
-                    PE_ERR(PEERR_MAGIC);
+            while(true)
+            {
+                if (!readByte(p->fileBuffer, strOffset, &ch))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
-                if (ch == 0u) {
+                if (ch == 0u)
+                {
                     break;
                 }
-                sym.strName.push_back(static_cast<char>(ch));
-                strOffset += sizeof(std::uint8_t);
+
+                char cc = (char)ch;
+                char* cp = &c;
+                strcat(sym.name, cp);
+
+                //sym.strName.push_back(static_cast<char>(ch));
+
+                index++;
+                strOffset += sizeof(uint8_t);
             }
+
+            sym.strName[index + 1] = '\0';
         }
         else {
             for (std::uint8_t n = 0;

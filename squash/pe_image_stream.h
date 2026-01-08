@@ -101,6 +101,8 @@ THE SOFTWARE.
 #define TEST_MACHINE_CHARACTERISTICS(h, m, ch) \
   ((h->FileHeader->Machine == m) && (h->FileHeader->Characteristics & ch))
 
+#define SYMBOL_NAME_OFFSET(sn) ((uint32_t)(sn->data >> 32))
+#define SYMBOL_TYPE_HI(x) (x.type >> 8)
 
 struct section {
     char* sectionName;
@@ -132,9 +134,6 @@ struct debugent {
     uint32_t type;
     bounded_buffer* data;
 };
-
-//#define SYMBOL_NAME_OFFSET(sn) (static_cast<std::uint32_t>(sn.data >> 32))
-//#define SYMBOL_TYPE_HI(x) (x.type >> 8)
 
 union symbol_name {
     uint8_t* shortName;// [NT_SHORT_NAME_LEN] ;
