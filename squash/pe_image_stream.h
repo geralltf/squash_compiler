@@ -102,7 +102,7 @@ THE SOFTWARE.
   ((h->FileHeader->Machine == m) && (h->FileHeader->Characteristics & ch))
 
 #define SYMBOL_NAME_OFFSET(sn) ((uint32_t)(sn->data >> 32))
-#define SYMBOL_TYPE_HI(x) (x.type >> 8)
+#define SYMBOL_TYPE_HI(x) (x->type >> 8)
 
 struct section {
     char* sectionName;

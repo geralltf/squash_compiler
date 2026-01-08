@@ -3249,25 +3249,30 @@ bool getSymbolTable(parsed_pe* p)
 
     for (uint32_t i = 0; i < p->peHeader->nt->FileHeader->NumberOfSymbols; i++)
     {
-        struct symbol sym;
+        struct symbol* sym;
+        int index = 0;
+        uint8_t ch;
+
+        sym = (struct symbol*)malloc(sizeof(struct symbol));
 
         // Read name
-        if (!readQword(p->fileBuffer, offset, &sym.name->data))
+        if (!readQword(p->fileBuffer, offset, &sym->name->data))
         {
             //PE_ERR(PEERR_MAGIC);
             return false;
         }
 
-        if (sym.name->zeroes == 0) {
+        sym->strName = (char*)malloc(sizeof(char) * 200);
+
+        if (sym->name->zeroes == 0) {
             // The symbol name is greater than 8 bytes so it is stored in the string
             // table. In this case instead of name, an offset of the string in the
             // string table is provided.
 
-            sym.strName = (char*)malloc(sizeof(char) * 200);
+            index = 0;
 
-            int index = 0;
-            uint32_t strOffset = strTableOffset + SYMBOL_NAME_OFFSET(sym.name);
-            uint8_t ch;
+            uint32_t strOffset = strTableOffset + SYMBOL_NAME_OFFSET(sym->name);
+            
             while(true)
             {
                 if (!readByte(p->fileBuffer, strOffset, &ch))
@@ -3281,8 +3286,8 @@ bool getSymbolTable(parsed_pe* p)
                 }
 
                 char cc = (char)ch;
-                char* cp = &c;
-                strcat(sym.name, cp);
+                char* cp = &cc;
+                strcat(sym->strName, cp);
 
                 //sym.strName.push_back(static_cast<char>(ch));
 
@@ -3290,80 +3295,97 @@ bool getSymbolTable(parsed_pe* p)
                 strOffset += sizeof(uint8_t);
             }
 
-            sym.strName[index + 1] = '\0';
+            sym->strName[index + 1] = '\0';
         }
-        else {
-            for (std::uint8_t n = 0;
-                n < NT_SHORT_NAME_LEN && sym.name.shortName[n] != 0;
-                n++) {
-                sym.strName.push_back(static_cast<char>(sym.name.shortName[n]));
+        else
+        {
+            index = 0;
+
+            for (uint8_t n = 0; n < NT_SHORT_NAME_LEN && sym.name->shortName[n] != 0; n++)
+            {
+                ch = sym->name->shortName[n];
+
+                char cc = (char)ch;
+                char* cp = &cc;
+                strcat(sym->strName, cp);
+                
+                //sym.strName.push_back(static_cast<char>(sym.name.shortName[n]));
+
+                index++;
             }
+
+            sym->strName[index + 1] = '\0';
         }
 
-        offset += sizeof(std::uint64_t);
+        offset += sizeof(uint64_t);
 
         // Read value
-        if (!readDword(p->fileBuffer, offset, sym.value)) {
-            PE_ERR(PEERR_MAGIC);
+        if (!readDword(p->fileBuffer, offset, &sym->value))
+        {
+            //PE_ERR(PEERR_MAGIC);
             return false;
         }
 
-        offset += sizeof(std::uint32_t);
+        offset += sizeof(uint32_t);
 
         // Read section number
         uint16_t secNum;
-        if (!readWord(p->fileBuffer, offset, secNum)) {
-            PE_ERR(PEERR_MAGIC);
+        if (!readWord(p->fileBuffer, offset, &secNum))
+        {
+            //PE_ERR(PEERR_MAGIC);
             return false;
         }
-        sym.sectionNumber = static_cast<std::int16_t>(secNum);
+        sym.sectionNumber = (int16_t)(secNum);
 
-        offset += sizeof(std::uint16_t);
+        offset += sizeof(uint16_t);
 
         // Read type
-        if (!readWord(p->fileBuffer, offset, sym.type)) {
-            PE_ERR(PEERR_MAGIC);
+        if (!readWord(p->fileBuffer, offset, &sym->type))
+        {
+            //PE_ERR(PEERR_MAGIC);
             return false;
         }
 
-        offset += sizeof(std::uint16_t);
+        offset += sizeof(uint16_t);
 
         // Read storage class
-        if (!readByte(p->fileBuffer, offset, sym.storageClass)) {
-            PE_ERR(PEERR_MAGIC);
+        if (!readByte(p->fileBuffer, offset, &sym->storageClass))
+        {
+            //PE_ERR(PEERR_MAGIC);
             return false;
         }
 
-        offset += sizeof(std::uint8_t);
+        offset += sizeof(uint8_t);
 
         // Read number of auxiliary symbols
-        if (!readByte(p->fileBuffer, offset, sym.numberOfAuxSymbols)) {
-            PE_ERR(PEERR_MAGIC);
+        if (!readByte(p->fileBuffer, offset, &sym->numberOfAuxSymbols))
+        {
+            //PE_ERR(PEERR_MAGIC);
             return false;
         }
 
         // Set offset to next symbol
-        offset += sizeof(std::uint8_t);
+        offset += sizeof(uint8_t);
 
         // Save the symbol
-        p->internal->symbols.push_back(sym);
+        list_enqueue(p->internal->symbols, (void*)sym);
 
-        if (sym.numberOfAuxSymbols == 0) {
+        if (sym->numberOfAuxSymbols == 0)
+        {
             continue;
         }
 
         // Read auxiliary symbol records
-        auto nextSymbolOffset =
-            offset + (static_cast<std::uint32_t>(sym.numberOfAuxSymbols) *
-                static_cast<std::uint32_t>(SYMTAB_RECORD_LEN));
+        auto nextSymbolOffset = offset + ((uint32_t)(sym->numberOfAuxSymbols) * (uint32_t)(SYMTAB_RECORD_LEN));
 
-        i += sym.numberOfAuxSymbols;
+        i += sym->numberOfAuxSymbols;
 
-        if (sym.storageClass == IMAGE_SYM_CLASS_EXTERNAL &&
-            SYMBOL_TYPE_HI(sym) == 0x20 && sym.sectionNumber > 0) {
+        if (sym->storageClass == IMAGE_SYM_CLASS_EXTERNAL && SYMBOL_TYPE_HI(sym) == 0x20 && sym->sectionNumber > 0)
+        {
             // Auxiliary Format 1: Function Definitions
 
-            for (std::uint8_t n = 0; n < sym.numberOfAuxSymbols; n++) {
+            for (uint8_t n = 0; n < sym->numberOfAuxSymbols; n++)
+            {
                 aux_symbol_f1 asym;
 
                 // Read tag index
