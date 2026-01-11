@@ -1235,6 +1235,7 @@ bool getSections(bounded_buffer* b, bounded_buffer* fileBegin, struct nt_header_
         int index = 0;
         struct section* thisSec = (struct section*)malloc(sizeof(struct section));
         thisSec->sectionName = (char*)malloc(sizeof(char) * NT_SHORT_NAME_LEN);
+
         for (uint32_t charIndex = 0; charIndex < NT_SHORT_NAME_LEN; charIndex++)
         {
             uint8_t c = curSec->Name[charIndex];
@@ -3335,7 +3336,7 @@ bool getSymbolTable(parsed_pe* p)
             //PE_ERR(PEERR_MAGIC);
             return false;
         }
-        sym.sectionNumber = (int16_t)(secNum);
+        sym->sectionNumber = (int16_t)(secNum);
 
         offset += sizeof(uint16_t);
 
@@ -3466,159 +3467,179 @@ bool getSymbolTable(parsed_pe* p)
             }
 
         }
-        else if (sym.storageClass == IMAGE_SYM_CLASS_EXTERNAL &&
-            sym.sectionNumber == IMAGE_SYM_UNDEFINED && sym.value == 0) {
+        else if (sym->storageClass == IMAGE_SYM_CLASS_EXTERNAL && sym->sectionNumber == IMAGE_SYM_UNDEFINED && sym->value == 0)
+        {
             // Auxiliary Format 3: Weak Externals
 
-            for (std::uint8_t n = 0; n < sym.numberOfAuxSymbols; n++) {
-                aux_symbol_f3 asym;
+            for (uint8_t n = 0; n < sym->numberOfAuxSymbols; n++)
+            {
+                struct aux_symbol_f3* asym = (struct aux_symbol_f3*)malloc(sizeof(struct aux_symbol_f3));
 
                 // Read line number
-                if (!readDword(p->fileBuffer, offset, asym.tagIndex)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readDword(p->fileBuffer, offset, &asym->tagIndex))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
                 // Read characteristics
-                if (!readDword(p->fileBuffer, offset, asym.characteristics)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readDword(p->fileBuffer, offset, &asym->characteristics))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
                 // Skip unused 10 bytes
-                offset += sizeof(std::uint8_t) * 10;
+                offset += sizeof(uint8_t) * 10;
 
                 // Save the record
-                sym.aux_symbols_f3.push_back(asym);
+                list_enqueue(sym->aux_symbols_f3, (void*)asym);
             }
 
         }
-        else if (sym.storageClass == IMAGE_SYM_CLASS_FILE) {
+        else if (sym->storageClass == IMAGE_SYM_CLASS_FILE) {
             // Auxiliary Format 4: Files
 
-            for (std::uint8_t n = 0; n < sym.numberOfAuxSymbols; n++) {
-                aux_symbol_f4 asym;
+            for (uint8_t n = 0; n < sym->numberOfAuxSymbols; n++)
+            {
+                struct aux_symbol_f4* asym = (struct aux_symbol_f4*)malloc(sizeof(struct aux_symbol_f4));
 
                 // Read filename
                 bool terminatorFound = false;
+                asym->strFilename = (char*)malloc(sizeof(char) * 200);
 
-                for (std::uint16_t j = 0; j < SYMTAB_RECORD_LEN; j++) {
+                for (uint16_t j = 0; j < SYMTAB_RECORD_LEN; j++)
+                {
                     // Save the raw field
-                    if (!readByte(p->fileBuffer, offset, asym.filename[j])) {
-                        PE_ERR(PEERR_MAGIC);
+                    if (!readByte(p->fileBuffer, offset, &asym->filename[j]))
+                    {
+                        //PE_ERR(PEERR_MAGIC);
                         return false;
                     }
 
-                    offset += sizeof(std::uint8_t);
+                    offset += sizeof(uint8_t);
 
-                    if (asym.filename[j] == 0) {
+                    if (asym->filename[j] == 0)
+                    {
                         terminatorFound = true;
                     }
 
-                    if (!terminatorFound) {
-                        asym.strFilename.push_back(static_cast<char>(asym.filename[j]));
+                    if (!terminatorFound)
+                    {
+                        //asym->strFilename.push_back(static_cast<char>(asym->filename[j]));
+                        uint8_t* ccc = asym->filename[j];
+                        char* cc = (char*)&ccc;
+                        strcat(asym->strFilename, cc);
                     }
                 }
 
                 // Save the record
-                sym.aux_symbols_f4.push_back(asym);
+                list_enqueue(sym->aux_symbols_f4, (void*)asym);
             }
-
         }
-        else if (sym.storageClass == IMAGE_SYM_CLASS_STATIC) {
+        else if (sym->storageClass == IMAGE_SYM_CLASS_STATIC)
+        {
             // Auxiliary Format 5: Section Definitions
 
-            for (std::uint8_t n = 0; n < sym.numberOfAuxSymbols; n++) {
-                aux_symbol_f5 asym;
+            for (uint8_t n = 0; n < sym->numberOfAuxSymbols; n++)
+            {
+                struct aux_symbol_f5* asym = (struct aux_symbol_f5*)malloc(sizeof(struct aux_symbol_f5));
 
                 // Read length
-                if (!readDword(p->fileBuffer, offset, asym.length)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readDword(p->fileBuffer, offset, &asym->length))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
-                offset += sizeof(std::uint32_t);
+                offset += sizeof(uint32_t);
 
                 // Read number of relocations
-                if (!readWord(p->fileBuffer, offset, asym.numberOfRelocations)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readWord(p->fileBuffer, offset, &asym->numberOfRelocations))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
-                offset += sizeof(std::uint16_t);
+                offset += sizeof(uint16_t);
 
                 // Read number of line numbers
-                if (!readWord(p->fileBuffer, offset, asym.numberOfLineNumbers)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readWord(p->fileBuffer, offset, &asym->numberOfLineNumbers))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
-                offset += sizeof(std::uint16_t);
+                offset += sizeof(uint16_t);
 
                 // Read checksum
-                if (!readDword(p->fileBuffer, offset, asym.checkSum)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readDword(p->fileBuffer, offset, &asym->checkSum))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
-                offset += sizeof(std::uint32_t);
+                offset += sizeof(uint32_t);
 
                 // Read number
-                if (!readWord(p->fileBuffer, offset, asym.number)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readWord(p->fileBuffer, offset, &asym->number))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
-                offset += sizeof(std::uint16_t);
+                offset += sizeof(uint16_t);
 
                 // Read selection
-                if (!readByte(p->fileBuffer, offset, asym.selection)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readByte(p->fileBuffer, offset, &asym->selection))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
-                offset += sizeof(std::uint8_t);
+                offset += sizeof(uint8_t);
 
                 // Skip unused 3 bytes
-                offset += sizeof(std::uint8_t) * 3;
+                offset += sizeof(uint8_t) * 3;
 
                 // Save the record
-                sym.aux_symbols_f5.push_back(asym);
+                list_enqueue(sym->aux_symbols_f5, (void*)asym);
             }
-
         }
-        else {
-#ifdef PEPARSE_LIBRARY_WARNINGS
-            std::ios::fmtflags originalStreamFlags(std::cerr.flags());
-
-            auto storageClassName = GetSymbolTableStorageClassName(sym.storageClass);
-            if (storageClassName == nullptr) {
-                std::cerr << "Warning: Skipping auxiliary symbol of type 0x" << std::hex
-                    << static_cast<std::uint32_t>(sym.storageClass)
-                    << " at offset 0x" << std::hex << offset << "\n";
-            }
-            else {
-
-                std::cerr << "Warning: Skipping auxiliary symbol of type "
-                    << storageClassName << " at offset 0x" << std::hex << offset
-                    << "\n";
-            }
-
-            std::cerr.flags(originalStreamFlags);
-#endif
+        else
+        {
+//#ifdef PEPARSE_LIBRARY_WARNINGS
+//            std::ios::fmtflags originalStreamFlags(std::cerr.flags());
+//
+//            auto storageClassName = GetSymbolTableStorageClassName(sym.storageClass);
+//            if (storageClassName == nullptr) {
+//                std::cerr << "Warning: Skipping auxiliary symbol of type 0x" << std::hex
+//                    << static_cast<std::uint32_t>(sym.storageClass)
+//                    << " at offset 0x" << std::hex << offset << "\n";
+//            }
+//            else {
+//
+//                std::cerr << "Warning: Skipping auxiliary symbol of type "
+//                    << storageClassName << " at offset 0x" << std::hex << offset
+//                    << "\n";
+//            }
+//
+//            std::cerr.flags(originalStreamFlags);
+//#endif
             offset = nextSymbolOffset;
         }
 
-        if (offset != nextSymbolOffset) {
-#ifdef PEPARSE_LIBRARY_WARNINGS
-            std::ios::fmtflags originalStreamFlags(std::cerr.flags());
-
-            std::cerr << "Warning: Invalid internal offset (current: 0x" << std::hex
-                << offset << ", expected: 0x" << std::hex << nextSymbolOffset
-                << ")\n";
-
-            std::cerr.flags(originalStreamFlags);
-#endif
+        if (offset != nextSymbolOffset)
+        {
+//#ifdef PEPARSE_LIBRARY_WARNINGS
+//            std::ios::fmtflags originalStreamFlags(std::cerr.flags());
+//
+//            std::cerr << "Warning: Invalid internal offset (current: 0x" << std::hex
+//                << offset << ", expected: 0x" << std::hex << nextSymbolOffset
+//                << ")\n";
+//
+//            std::cerr.flags(originalStreamFlags);
+//#endif
             offset = nextSymbolOffset;
         }
     }
