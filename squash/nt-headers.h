@@ -46,16 +46,16 @@ const uint16_t IMAGE_FILE_MACHINE_UNKNOWN = 0x0;
 const uint16_t IMAGE_FILE_MACHINE_ALPHA = 0x184;     // Alpha_AXP
 const uint16_t IMAGE_FILE_MACHINE_ALPHA64 = 0x284;   // ALPHA64
 const uint16_t IMAGE_FILE_MACHINE_AM33 = 0x1d3;      // Matsushita AM33
-const uint16_t IMAGE_FILE_MACHINE_AMD64 = 0x8664;    // x64
+#define IMAGE_FILE_MACHINE_AMD64 0x8664    // x64
 const uint16_t IMAGE_FILE_MACHINE_ARM = 0x1c0;       // ARM little endian
-const uint16_t IMAGE_FILE_MACHINE_ARM64 = 0xaa64;    // ARM64 little endian
-const uint16_t IMAGE_FILE_MACHINE_ARMNT = 0x1c4;     // ARM Thumb-2 little endian
+#define IMAGE_FILE_MACHINE_ARM64 0xaa64    // ARM64 little endian
+#define IMAGE_FILE_MACHINE_ARMNT 0x1c4     // ARM Thumb-2 little endian
 const uint16_t IMAGE_FILE_MACHINE_AXP64 = 0x284;     // ALPHA64
-const uint16_t IMAGE_FILE_MACHINE_CEE = 0xc0ee;
+#define IMAGE_FILE_MACHINE_CEE 0xc0ee
 const uint16_t IMAGE_FILE_MACHINE_CEF = 0xcef;
 const uint16_t IMAGE_FILE_MACHINE_EBC = 0xebc;       // EFI byte code
-const uint16_t IMAGE_FILE_MACHINE_I386 = 0x14c;      // Intel 386 or later processors and compatible processors
-const uint16_t IMAGE_FILE_MACHINE_IA64 = 0x200;      // Intel Itanium processor family
+#define IMAGE_FILE_MACHINE_I386 0x14c      // Intel 386 or later processors and compatible processors
+#define IMAGE_FILE_MACHINE_IA64 0x200      // Intel Itanium processor family
 const uint16_t IMAGE_FILE_MACHINE_LOONGARCH32 = 0x6232; // LoongArch 32-bit address space
 const uint16_t IMAGE_FILE_MACHINE_LOONGARCH64 = 0x6264; // LoongArch 64-bit address space
 const uint16_t IMAGE_FILE_MACHINE_M32R = 0x9041;     // Mitsubishi M32R little endian
