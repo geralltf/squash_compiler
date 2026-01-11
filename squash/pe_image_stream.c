@@ -3651,84 +3651,95 @@ parsed_pe* ParsePEFromBuffer(bounded_buffer* buffer) {
     // First, create a new parsed_pe structure
     // We pass std::nothrow parameter to new so in case of failure it returns
     // nullptr instead of throwing exception std::bad_alloc.
-    parsed_pe* p = new (std::nothrow) parsed_pe();
+    //parsed_pe* p = new (std::nothrow) parsed_pe();
+    parsed_pe* p = (parsed_pe*)malloc(sizeof(parsed_pe));
 
-    if (p == nullptr) {
-        PE_ERR(PEERR_MEM);
-        return nullptr;
+    if (p == NULL)
+    {
+        //PE_ERR(PEERR_MEM);
+        return NULL;
     }
 
     // Make a new buffer object to hold just our file data
     p->fileBuffer = buffer;
 
-    p->internal = new (std::nothrow) parsed_pe_internal();
+    p->internal = (struct parsed_pe_internal*)malloc(sizeof(struct parsed_pe_internal));
 
-    if (p->internal == nullptr) {
+    if (p->internal == NULL)
+    {
         deleteBuffer(p->fileBuffer);
-        delete p;
-        PE_ERR(PEERR_MEM);
-        return nullptr;
+        free(p);
+        //PE_ERR(PEERR_MEM);
+        return NULL;
     }
 
     // get header information
-    bounded_buffer* remaining = nullptr;
-    if (!getHeader(p->fileBuffer, p->peHeader, remaining)) {
+    bounded_buffer* remaining = NULL;
+    if (!getHeader(p->fileBuffer, p->peHeader, remaining))
+    {
         deleteBuffer(remaining);
         DestructParsedPE(p);
         // err is set by getHeader
-        return nullptr;
+        return NULL;
     }
 
     bounded_buffer* file = p->fileBuffer;
-    if (!getSections(remaining, file, p->peHeader.nt, p->internal->secs)) {
+    if (!getSections(remaining, file, p->peHeader->nt, p->internal->secs))
+    {
         deleteBuffer(remaining);
         DestructParsedPE(p);
-        PE_ERR(PEERR_SECT);
-        return nullptr;
+        //PE_ERR(PEERR_SECT);
+        return NULL;
     }
 
-    if (!getResources(remaining, file, p->internal->secs, p->internal->rsrcs)) {
+    if (!getResources(remaining, file, p->internal->secs, p->internal->rsrcs))
+    {
         deleteBuffer(remaining);
         DestructParsedPE(p);
-        PE_ERR(PEERR_RESC);
-        return nullptr;
+        //PE_ERR(PEERR_RESC);
+        return NULL;
     }
 
     // Get exports
-    if (!getExports(p)) {
+    if (!getExports(p))
+    {
         deleteBuffer(remaining);
         DestructParsedPE(p);
-        PE_ERR(PEERR_MAGIC);
-        return nullptr;
+        //PE_ERR(PEERR_MAGIC);
+        return NULL;
     }
 
     // Get relocations, if exist
-    if (!getRelocations(p)) {
+    if (!getRelocations(p))
+    {
         deleteBuffer(remaining);
         DestructParsedPE(p);
-        PE_ERR(PEERR_MAGIC);
-        return nullptr;
+        //PE_ERR(PEERR_MAGIC);
+        return NULL;
     }
 
-    if (!getDebugDir(p)) {
+    if (!getDebugDir(p))
+    {
         deleteBuffer(remaining);
         DestructParsedPE(p);
-        PE_ERR(PEERR_MAGIC);
-        return nullptr;
+        //PE_ERR(PEERR_MAGIC);
+        return NULL;
     }
 
     // Get imports
-    if (!getImports(p)) {
+    if (!getImports(p))
+    {
         deleteBuffer(remaining);
         DestructParsedPE(p);
-        return nullptr;
+        return NULL;
     }
 
     // Get symbol table
-    if (!getSymbolTable(p)) {
+    if (!getSymbolTable(p))
+    {
         deleteBuffer(remaining);
         DestructParsedPE(p);
-        return nullptr;
+        return NULL;
     }
 
     deleteBuffer(remaining);
@@ -3736,150 +3747,227 @@ parsed_pe* ParsePEFromBuffer(bounded_buffer* buffer) {
     return p;
 }
 
-parsed_pe* ParsePEFromFile(const char* filePath) {
+parsed_pe* ParsePEFromFile(const char* filePath)
+{
     auto buffer = readFileToFileBuffer(filePath);
 
-    if (buffer == nullptr) {
+    if (buffer == NULL)
+    {
         // err is set by readFileToFileBuffer
-        return nullptr;
+        return NULL;
     }
 
     return ParsePEFromBuffer(buffer);
 }
 
-parsed_pe* ParsePEFromPointer(std::uint8_t* ptr, std::uint32_t sz) {
+parsed_pe* ParsePEFromPointer(uint8_t* ptr, uint32_t sz)
+{
     auto buffer = makeBufferFromPointer(ptr, sz);
 
-    if (buffer == nullptr) {
+    if (buffer == NULL)
+    {
         // err is set by makeBufferFromPointer
-        return nullptr;
+        return NULL;
     }
 
     return ParsePEFromBuffer(buffer);
 }
 
-void DestructParsedPE(parsed_pe* p) {
-    if (p == nullptr) {
+void DestructParsedPE(parsed_pe* p)
+{
+    if (p == NULL)
+    {
         return;
     }
 
     deleteBuffer(p->fileBuffer);
 
-    for (section s : p->internal->secs) {
-        if (s.sectionData != nullptr) {
-            deleteBuffer(s.sectionData);
+    list_t* n = p->internal->secs;
+    struct section* s;
+    struct resource* r;
+    struct debugent* d;
+
+    while (n != NULL)
+    {
+        s = (struct section*)n->data;
+        if (s != NULL && s->sectionData != NULL)
+        {
+            deleteBuffer(s->sectionData);
         }
-    }
-    for (resource r : p->internal->rsrcs) {
-        if (r.buf != nullptr) {
-            deleteBuffer(r.buf);
-        }
+        n = n->next;
     }
 
-    for (debugent d : p->internal->debugdirs) {
-        if (d.data != nullptr) {
-            deleteBuffer(d.data);
+    n = p->internal->rsrcs;
+    while (n != NULL)
+    {
+        r = (struct resource*)n->data;
+        if (r != NULL && r->buf != NULL)
+        {
+            deleteBuffer(r->buf);
         }
+        n = n->next;
     }
 
-    delete p->internal;
-    delete p;
-    return;
+    n = p->internal->debugdirs;
+    while (n != NULL)
+    {
+        d = (struct debugent*)n->data;
+        if (d != NULL && d->data != NULL)
+        {
+            deleteBuffer(d->data);
+        }
+        n = n->next;
+    }
+
+    free(p->internal);
+    free(p);
 }
 
 // iterate over the imports by VA and string
-void IterImpVAString(parsed_pe* pe, iterVAStr cb, void* cbd) {
-    std::vector<importent>& l = pe->internal->imports;
+void IterImpVAString(parsed_pe* pe, iterVAStr cb, void* cbd)
+{
+    list_t* l = pe->internal->imports;
+    list_t* n = pe->internal->imports;
 
-    for (importent& i : l) {
-        if (cb(cbd, i.addr, i.moduleName, i.symbolName) != 0) {
+    while(n != NULL)
+    {
+        struct importent* i = (struct importent*)n->data;
+
+        if (cb(cbd, i->addr, i->moduleName, i->symbolName) != 0)
+        {
             break;
         }
-    }
 
-    return;
+        n = n->next;
+    }
 }
 
 // iterate over relocations in the PE file
-void IterRelocs(parsed_pe* pe, iterReloc cb, void* cbd) {
-    std::vector<reloc>& l = pe->internal->relocs;
+void IterRelocs(parsed_pe* pe, iterReloc cb, void* cbd)
+{
+    list_t* l = pe->internal->relocs;
+    list_t* n = pe->internal->relocs;
 
-    for (reloc& r : l) {
-        if (cb(cbd, r.shiftedAddr, r.type) != 0) {
+    while (n != NULL)
+    {
+        struct reloc* r = (struct reloc*)n->data;
+
+        if (cb(cbd, r->shiftedAddr, r->type) != 0)
+        {
             break;
         }
-    }
 
-    return;
+        n = n->next;
+    }
 }
 
-void IterDebugs(parsed_pe* pe, iterDebug cb, void* cbd) {
-    std::vector<debugent>& l = pe->internal->debugdirs;
+void IterDebugs(parsed_pe* pe, iterDebug cb, void* cbd)
+{
+    list_t* l = pe->internal->debugdirs;
+    list_t* n = pe->internal->debugdirs;
 
-    for (debugent& d : l) {
-        if (cb(cbd, d.type, d.data) != 0) {
+    while (n != NULL)
+    {
+        struct debugent* d = (struct debugent*)n->data;
+
+        if (cb(cbd, d->type, d->data) != 0)
+        {
             break;
         }
+
+        n = n->next;
     }
 }
 
 // Iterate over symbols (symbol table) in the PE file
-void IterSymbols(parsed_pe* pe, iterSymbol cb, void* cbd) {
-    std::vector<symbol>& l = pe->internal->symbols;
+void IterSymbols(parsed_pe* pe, iterSymbol cb, void* cbd)
+{
+    list_t* l = pe->internal->symbols;
+    list_t* n = pe->internal->symbols;
 
-    for (symbol& s : l) {
+    while (n != NULL)
+    {
+        struct symbol* s = (struct symbol*)n->data;
+
         if (cb(cbd,
-            s.strName,
-            s.value,
-            s.sectionNumber,
-            s.type,
-            s.storageClass,
-            s.numberOfAuxSymbols) != 0) {
+            s->strName,
+            s->value,
+            s->sectionNumber,
+            s->type,
+            s->storageClass,
+            s->numberOfAuxSymbols) != 0)
+        {
             break;
         }
-    }
 
-    return;
+        n = n->next;
+    }
 }
 
 // iterate over the exports by VA
-void IterExpVA(parsed_pe* pe, iterExp cb, void* cbd) {
-    std::vector<exportent>& l = pe->internal->exports;
+void IterExpVA(parsed_pe* pe, iterExp cb, void* cbd)
+{
+    list_t* l = pe->internal->exports;
+    list_t* n = pe->internal->exports;
 
-    for (exportent& i : l) {
-        if (i.addr == 0) {
+    while (n != NULL)
+    {
+        struct exportent* i = (struct exportent*)n->data;
+
+        if (i->addr == 0)
+        {
+            n = n->next;
+
             continue;
         }
-        if (cb(cbd, i.addr, i.moduleName, i.symbolName) != 0) {
+        if (cb(cbd, i->addr, i->moduleName, i->symbolName) != 0)
+        {
             break;
         }
+
+        n = n->next;
     }
 
     return;
 }
 
 // iterate over the exports with full information
-void IterExpFull(parsed_pe* pe, iterExpFull cb, void* cbd) {
-    std::vector<exportent>& l = pe->internal->exports;
+void IterExpFull(parsed_pe* pe, iterExpFull cb, void* cbd)
+{
+    list_t* l = pe->internal->exports;
+    list_t* n = pe->internal->exports;
 
-    for (exportent& i : l) {
-        if (cb(cbd, i.addr, i.ordinal, i.moduleName, i.symbolName, i.forwardName) !=
-            0) {
+    while (n != NULL)
+    {
+        struct exportent* i = (struct exportent*)n->data;
+
+        if (cb(cbd, i->addr, i->ordinal, i->moduleName, i->symbolName, i->forwardName) != 0)
+        {
             break;
         }
+
+        n = n->next;
     }
 
     return;
 }
 
 // iterate over sections
-void IterSec(parsed_pe* pe, int dt, iterSec cb, void* cbd) {
-    parsed_pe_internal* pint = pe->internal;
+void IterSec(parsed_pe* pe, int dt, iterSec cb, void* cbd)
+{
+    struct parsed_pe_internal* pint = pe->internal;
+    list_t* n = pint->secs;
 
-    for (section& s : pint->secs) {
-        if (cb(pe, dt, cbd, s.sectionBase, s.sectionName, s.sec, s.sectionData) != 0) {
+    while (n != NULL)
+    {
+        struct section* s = (struct section*)n->data;
+
+        if (cb(pe, dt, cbd, s->sectionBase, s->sectionName, s->sec, s->sectionData) != 0)
+        {
             break;
         }
+
+        n = n->next;
     }
 
     return;
@@ -3970,25 +4058,29 @@ bool GetEntryPoint(parsed_pe* pe, VA& v) {
     return false;
 }
 
-const char* GetMachineAsString(parsed_pe* pe) {
-    if (pe == nullptr)
-        return nullptr;
+const char* GetMachineAsString(parsed_pe* pe)
+{
+    if (pe == NULL)
+    {
+        return NULL;
+    }
 
-    switch (pe->peHeader.nt.FileHeader.Machine) {
+    switch (pe->peHeader->nt->FileHeader->Machine)
+    {
     case IMAGE_FILE_MACHINE_I386:
-        return "x86";
+        return create_heap_string("x86");
     case IMAGE_FILE_MACHINE_ARMNT:
-        return "ARM Thumb-2 Little-Endian";
+        return create_heap_string("ARM Thumb-2 Little-Endian");
     case IMAGE_FILE_MACHINE_IA64:
-        return "Intel IA64";
+        return create_heap_string("Intel IA64");
     case IMAGE_FILE_MACHINE_AMD64:
-        return "x64";
+        return create_heap_string("x64");
     case IMAGE_FILE_MACHINE_ARM64:
-        return "ARM64";
+        return create_heap_string("ARM64");
     case IMAGE_FILE_MACHINE_CEE:
-        return "CLR Pure MSIL";
+        return create_heap_string("CLR Pure MSIL");
     default:
-        return nullptr;
+        return NULL;
     }
 }
 
