@@ -3301,7 +3301,7 @@ bool getSymbolTable(parsed_pe* p)
         {
             index = 0;
 
-            for (uint8_t n = 0; n < NT_SHORT_NAME_LEN && sym.name->shortName[n] != 0; n++)
+            for (uint8_t n = 0; n < NT_SHORT_NAME_LEN && sym->name->shortName[n] != 0; n++)
             {
                 ch = sym->name->shortName[n];
 
@@ -3386,76 +3386,83 @@ bool getSymbolTable(parsed_pe* p)
 
             for (uint8_t n = 0; n < sym->numberOfAuxSymbols; n++)
             {
-                aux_symbol_f1 asym;
+                struct aux_symbol_f1* asym = (struct aux_symbol_f1*)malloc(sizeof(struct aux_symbol_f1));
 
                 // Read tag index
-                if (!readDword(p->fileBuffer, offset, asym.tagIndex)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readDword(p->fileBuffer, offset, &asym->tagIndex))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
-                offset += sizeof(std::uint32_t);
+                offset += sizeof(uint32_t);
 
                 // Read total size
-                if (!readDword(p->fileBuffer, offset, asym.totalSize)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readDword(p->fileBuffer, offset, &asym->totalSize))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
-                offset += sizeof(std::uint32_t);
+                offset += sizeof(uint32_t);
 
                 // Read pointer to line number
-                if (!readDword(p->fileBuffer, offset, asym.pointerToLineNumber)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readDword(p->fileBuffer, offset, &asym->pointerToLineNumber))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
-                offset += sizeof(std::uint32_t);
+                offset += sizeof(uint32_t);
 
                 // Read pointer to next function
-                if (!readDword(p->fileBuffer, offset, asym.pointerToNextFunction)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readDword(p->fileBuffer, offset, &asym->pointerToNextFunction))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
                 // Skip the processed 4 bytes + unused 2 bytes
-                offset += sizeof(std::uint8_t) * 6;
+                offset += sizeof(uint8_t) * 6;
 
                 // Save the record
-                sym.aux_symbols_f1.push_back(asym);
+                list_enqueue(sym->aux_symbols_f1, (void*)asym);
             }
 
         }
-        else if (sym.storageClass == IMAGE_SYM_CLASS_FUNCTION) {
+        else if (sym->storageClass == IMAGE_SYM_CLASS_FUNCTION) {
             // Auxiliary Format 2: .bf and .ef Symbols
 
-            for (std::uint8_t n = 0; n < sym.numberOfAuxSymbols; n++) {
-                aux_symbol_f2 asym;
+            for (uint8_t n = 0; n < sym->numberOfAuxSymbols; n++)
+            {
+                struct aux_symbol_f2* asym = (struct aux_symbol_f2*)malloc(sizeof(struct aux_symbol_f2));
+
                 // Skip unused 4 bytes
-                offset += sizeof(std::uint32_t);
+                offset += sizeof(uint32_t);
 
                 // Read line number
-                if (!readWord(p->fileBuffer, offset, asym.lineNumber)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readWord(p->fileBuffer, offset, &asym->lineNumber)) {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
-                offset += sizeof(std::uint16_t);
+                offset += sizeof(uint16_t);
 
                 // Skip unused 6 bytes
-                offset += sizeof(std::uint8_t) * 6;
+                offset += sizeof(uint8_t) * 6;
 
                 // Read pointer to next function
-                if (!readDword(p->fileBuffer, offset, asym.pointerToNextFunction)) {
-                    PE_ERR(PEERR_MAGIC);
+                if (!readDword(p->fileBuffer, offset, &asym->pointerToNextFunction))
+                {
+                    //PE_ERR(PEERR_MAGIC);
                     return false;
                 }
 
                 // Skip the processed 4 bytes + unused 2 bytes
-                offset += sizeof(std::uint8_t) * 6;
+                offset += sizeof(uint8_t) * 6;
 
                 // Save the record
-                sym.aux_symbols_f2.push_back(asym);
+                list_enqueue(sym->aux_symbols_f2, asym);
             }
 
         }
