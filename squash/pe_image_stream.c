@@ -3973,47 +3973,51 @@ void IterSec(parsed_pe* pe, int dt, iterSec cb, void* cbd)
     return;
 }
 
-bool ReadByteAtVA(parsed_pe* pe, VA v, std::uint8_t& b) {
+bool ReadByteAtVA(parsed_pe* pe, VA v, uint8_t* b)
+{
     // find this VA in a section
-    section s;
+    struct section* s = (struct section*)malloc(sizeof(struct section));
 
-    if (!getSecForVA(pe->internal->secs, v, s)) {
-        PE_ERR(PEERR_SECTVA);
+    if (!getSecForVA(pe->internal->secs, v, &s))
+    {
+        //PE_ERR(PEERR_SECTVA);
         return false;
     }
 
-    auto off = static_cast<std::uint32_t>(v - s.sectionBase);
-    return readByte(s.sectionData, off, b);
+    auto off = (uint32_t)(v - s->sectionBase);
+    return readByte(s->sectionData, off, b);
 }
 
 uint32_t ReadSectionSize(parsed_pe* pe, VA v)
 {
-    section s;
+    struct section* s = (struct section*)malloc(sizeof(struct section));
 
-    if (getSecForVA(pe->internal->secs, v, s))
+    if (getSecForVA(pe->internal->secs, v, &s))
     {
-        return s.sec.SizeOfRawData;
+        return s->sec->SizeOfRawData;
     }
     return 0;
 }
 
-bool ReadBytesAtVA(parsed_pe* pe, VA v, std::uint8_t* buffer, uint32_t size_buffer) {
+bool ReadBytesAtVA(parsed_pe* pe, VA v, uint8_t* buffer, uint32_t size_buffer)
+{
     bool result = true;
     // find this VA in a section
-    section s;
-    std::uint8_t b;
+    struct section* s = (struct section*)malloc(sizeof(struct section));
+    uint8_t b;
     uint32_t i;
 
-    if (!getSecForVA(pe->internal->secs, v, s)) {
-        PE_ERR(PEERR_SECTVA);
+    if (!getSecForVA(pe->internal->secs, v, &s))
+    {
+        //PE_ERR(PEERR_SECTVA);
         return false;
     }
 
-    auto offset = static_cast<std::uint32_t>(v - s.sectionBase);
+    uint32_t offset = (uint32_t)(v - s->sectionBase);
 
     for (i = 0; i < size_buffer; i++)
     {
-        if (readByte(s.sectionData, offset + i, b))
+        if (readByte(s->sectionData, offset + i, &b))
         {
             buffer[i] = b;
 
@@ -4034,21 +4038,23 @@ bool ReadBytesAtVA(parsed_pe* pe, VA v, std::uint8_t* buffer, uint32_t size_buff
     return result;
 }
 
-bool GetEntryPoint(parsed_pe* pe, VA& v) {
+bool GetEntryPoint(parsed_pe* pe, VA* v)
+{
+    if (pe != NULL)
+    {
+        struct nt_header_32* nthdr = &pe->peHeader->nt;
 
-    if (pe != nullptr) {
-        nt_header_32* nthdr = &pe->peHeader.nt;
-
-        if (nthdr->OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-            v = nthdr->OptionalHeader.AddressOfEntryPoint +
-                nthdr->OptionalHeader.ImageBase;
+        if (nthdr->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+        {
+            v = nthdr->OptionalHeader->AddressOfEntryPoint + nthdr->OptionalHeader->ImageBase;
         }
-        else if (nthdr->OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-            v = nthdr->OptionalHeader64.AddressOfEntryPoint +
-                nthdr->OptionalHeader64.ImageBase;
+        else if (nthdr->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+        {
+            v = nthdr->OptionalHeader64->AddressOfEntryPoint + nthdr->OptionalHeader64->ImageBase;
         }
-        else {
-            PE_ERR(PEERR_MAGIC);
+        else
+        {
+            //PE_ERR(PEERR_MAGIC);
             return false;
         }
 
@@ -4084,51 +4090,62 @@ const char* GetMachineAsString(parsed_pe* pe)
     }
 }
 
-const char* GetSubsystemAsString(parsed_pe* pe) {
-    if (pe == nullptr)
-        return nullptr;
+const char* GetSubsystemAsString(parsed_pe* pe)
+{
+    if (pe == NULL)
+    {
+        return NULL;
+    }
 
-    std::uint16_t subsystem;
-    if (pe->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC)
-        subsystem = pe->peHeader.nt.OptionalHeader.Subsystem;
-    else if (pe->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC)
-        subsystem = pe->peHeader.nt.OptionalHeader64.Subsystem;
+    uint16_t subsystem;
+    if (pe->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+    {
+        subsystem = pe->peHeader->nt->OptionalHeader->Subsystem;
+    }
+       
+    else if (pe->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+    {
+        subsystem = pe->peHeader->nt->OptionalHeader64->Subsystem;
+    } 
     else
-        return nullptr;
+    {
+        return NULL;
+    }
 
-    switch (subsystem) {
+    switch (subsystem)
+    {
     case IMAGE_SUBSYSTEM_UNKNOWN:
-        return "UNKNOWN";
+        return create_heap_string("UNKNOWN");
     case IMAGE_SUBSYSTEM_NATIVE:
-        return "NATIVE";
+        return create_heap_string("NATIVE");
     case IMAGE_SUBSYSTEM_WINDOWS_GUI:
-        return "WINDOWS_GUI";
+        return create_heap_string("WINDOWS_GUI");
     case IMAGE_SUBSYSTEM_WINDOWS_CUI:
-        return "WINDOWS_CUI";
+        return create_heap_string("WINDOWS_CUI");
     case IMAGE_SUBSYSTEM_OS2_CUI:
-        return "OS2_CUI";
+        return create_heap_string("OS2_CUI");
     case IMAGE_SUBSYSTEM_POSIX_CUI:
-        return "POSIX_CUI";
+        return create_heap_string("POSIX_CUI");
     case IMAGE_SUBSYSTEM_NATIVE_WINDOWS:
-        return "NATIVE_WINDOWS";
+        return create_heap_string("NATIVE_WINDOWS");
     case IMAGE_SUBSYSTEM_WINDOWS_CE_GUI:
-        return "WINDOWS_CE_GUI";
+        return create_heap_string("WINDOWS_CE_GUI");
     case IMAGE_SUBSYSTEM_EFI_APPLICATION:
-        return "EFI_APPLICATION";
+        return create_heap_string("EFI_APPLICATION");
     case IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER:
-        return "EFI_BOOT_SERVICE_DRIVER";
+        return create_heap_string("EFI_BOOT_SERVICE_DRIVER");
     case IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER:
-        return "EFI_RUNTIME_DRIVER";
+        return create_heap_string("EFI_RUNTIME_DRIVER");
     case IMAGE_SUBSYSTEM_EFI_ROM:
-        return "EFI_ROM";
+        return create_heap_string("EFI_ROM");
     case IMAGE_SUBSYSTEM_XBOX:
-        return "XBOX";
+        return create_heap_string("XBOX");
     case IMAGE_SUBSYSTEM_WINDOWS_BOOT_APPLICATION:
-        return "WINDOWS_BOOT_APPLICATION";
+        return create_heap_string("WINDOWS_BOOT_APPLICATION");
     case IMAGE_SUBSYSTEM_XBOX_CODE_CATALOG:
-        return "XBOX_CODE_CATALOG";
+        return create_heap_string("XBOX_CODE_CATALOG");
     default:
-        return nullptr;
+        return NULL;
     }
 }
 
