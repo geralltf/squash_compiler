@@ -414,7 +414,10 @@ const char* GetMachineAsString(parsed_pe* pe);
 const char* GetSubsystemAsString(parsed_pe* pe);
 
 // get a table or string by its data directory entry
+bool GetDataDirectoryEntry(parsed_pe* pe, enum data_directory_kind dirnum, uint8_t** raw_entry);
+
 //bool GetDataDirectoryEntry(parsed_pe* pe,
 //    data_directory_kind dirnum,
 //    std::vector<std::uint8_t>& raw_entry);
+
 #endif

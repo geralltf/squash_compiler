@@ -3647,7 +3647,8 @@ bool getSymbolTable(parsed_pe* p)
     return true;
 }
 
-parsed_pe* ParsePEFromBuffer(bounded_buffer* buffer) {
+parsed_pe* ParsePEFromBuffer(bounded_buffer* buffer)
+{
     // First, create a new parsed_pe structure
     // We pass std::nothrow parameter to new so in case of failure it returns
     // nullptr instead of throwing exception std::bad_alloc.
@@ -4149,33 +4150,37 @@ const char* GetSubsystemAsString(parsed_pe* pe)
     }
 }
 
-bool GetDataDirectoryEntry(parsed_pe* pe,
-    data_directory_kind dirnum,
-    std::vector<std::uint8_t>& raw_entry) {
-    raw_entry.clear();
+bool GetDataDirectoryEntry(parsed_pe* pe, enum data_directory_kind dirnum, uint8_t** raw_entry) // std::vector<std::uint8_t>&
+{
+    //raw_entry.clear();
 
-    if (pe == nullptr) {
-        PE_ERR(PEERR_NONE);
+    if (pe == NULL)
+    {
+        //PE_ERR(PEERR_NONE);
         return false;
     }
 
-    data_directory dir;
+    struct data_directory dir;
     VA addr;
-    if (pe->peHeader.nt.OptionalMagic == NT_OPTIONAL_32_MAGIC) {
-        dir = pe->peHeader.nt.OptionalHeader.DataDirectory[dirnum];
-        addr = dir.VirtualAddress + pe->peHeader.nt.OptionalHeader.ImageBase;
+    if (pe->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+    {
+        dir = pe->peHeader->nt->OptionalHeader->DataDirectory[dirnum];
+        addr = dir.VirtualAddress + pe->peHeader->nt->OptionalHeader->ImageBase;
     }
-    else if (pe->peHeader.nt.OptionalMagic == NT_OPTIONAL_64_MAGIC) {
-        dir = pe->peHeader.nt.OptionalHeader64.DataDirectory[dirnum];
-        addr = dir.VirtualAddress + pe->peHeader.nt.OptionalHeader64.ImageBase;
+    else if (pe->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+    {
+        dir = pe->peHeader->nt->OptionalHeader64->DataDirectory[dirnum];
+        addr = dir.VirtualAddress + pe->peHeader->nt->OptionalHeader64->ImageBase;
     }
-    else {
-        PE_ERR(PEERR_MAGIC);
+    else
+    {
+        //PE_ERR(PEERR_MAGIC);
         return false;
     }
 
-    if (dir.Size <= 0) {
-        PE_ERR(PEERR_SIZE);
+    if (dir.Size <= 0)
+    {
+        //PE_ERR(PEERR_SIZE);
         return false;
     }
 
@@ -4185,32 +4190,45 @@ bool GetDataDirectoryEntry(parsed_pe* pe,
         * See:
         * https://docs.microsoft.com/en-us/windows/win32/debug/pe-format#the-attribute-certificate-table-image-only
         */
-    if (dirnum == DIR_SECURITY) {
-        auto* buf = splitBuffer(
-            pe->fileBuffer, dir.VirtualAddress, dir.VirtualAddress + dir.Size);
-        if (buf == nullptr) {
-            PE_ERR(PEERR_SIZE);
+    if (dirnum == DIR_SECURITY)
+    {
+        bounded_buffer* buf = splitBuffer(pe->fileBuffer, dir.VirtualAddress, dir.VirtualAddress + dir.Size);
+        if (buf == NULL)
+        {
+            //PE_ERR(PEERR_SIZE);
             return false;
         }
 
-        raw_entry.assign(buf->buf, buf->buf + buf->bufLen);
+        size_t new_len = buf->bufLen;
+
+        (*raw_entry) = (uint8_t*)malloc(sizeof(uint8_t) * new_len);
+
+        memcpy(*raw_entry, buf->buf, new_len); //raw_entry.assign(buf->buf, buf->buf + buf->bufLen);
+        
         deleteBuffer(buf);
     }
-    else {
-        section sec;
-        if (!getSecForVA(pe->internal->secs, addr, sec)) {
-            PE_ERR(PEERR_SECTVA);
+    else
+    {
+        struct section* sec = (struct section*)malloc(sizeof(struct section));
+        if (!getSecForVA(pe->internal->secs, addr, &sec))
+        {
+            //PE_ERR(PEERR_SECTVA);
             return false;
         }
 
-        auto off = static_cast<std::uint32_t>(addr - sec.sectionBase);
-        if (off + dir.Size >= sec.sectionData->bufLen) {
-            PE_ERR(PEERR_SIZE);
+        uint32_t off = (uint32_t)(addr - sec->sectionBase);
+        if (off + dir.Size >= sec->sectionData->bufLen)
+        {
+            //PE_ERR(PEERR_SIZE);
             return false;
         }
 
-        raw_entry.assign(sec.sectionData->buf + off,
-            sec.sectionData->buf + off + dir.Size);
+        //std::vector<std::uint8_t> raw_entry;
+        size_t entry_size = dir.Size;
+
+        (*raw_entry) = (uint8_t*)malloc(sizeof(uint8_t) * entry_size);
+
+        memcpy(*raw_entry, sec->sectionData->buf + off, entry_size); //raw_entry.assign(sec.sectionData->buf + off, sec.sectionData->buf + off + dir.Size);
     }
 
     return true;
