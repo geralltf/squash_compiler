@@ -817,8 +817,7 @@ bool parse_resource_id(bounded_buffer* data, uint32_t id, char** result)
     return true;
 }
 
-bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, 
-    struct resource_dir_entry* dirent, list_t* rsrcs) // std::vector<resource>& rsrcs
+bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, struct resource_dir_entry* dirent, list_t* rsrcs) // std::vector<resource>& rsrcs
 {
     struct resource_dir_table rdt;
 
@@ -954,19 +953,18 @@ bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virt
                 * https://docs.microsoft.com/en-us/windows/desktop/debug/pe-format#the-rsrc-section
                 */
 
-            PE_ERR(PEERR_RESC);
+            //PE_ERR(PEERR_RESC);
             return false;
         }
 
+
+        // bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, struct resource_dir_entry* dirent, list_t* rsrcs)
+       
         // High bit 0 = RVA to RDT.
         // High bit 1 = RVA to RDE.
         if (rde->RVA & 0x80000000) {
-            if (!parse_resource_table(sectionData,
-                rde->RVA & 0x0FFFFFFF,
-                virtaddr,
-                depth + 1,
-                rde,
-                rsrcs)) {
+            if (!parse_resource_table(sectionData, rde->RVA & 0x0FFFFFFF, virtaddr, depth + 1, rde, rsrcs))
+            {
                 if (dirent == NULL)
                 {
                     free(rde);
