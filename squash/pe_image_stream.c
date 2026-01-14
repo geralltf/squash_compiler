@@ -447,7 +447,7 @@ char* GetProductMap(uint16_t id)
 }
 
 // Returns a stringified Rich header object type given a product id
-char* GetRichObjectType(uint16_t prodId)
+const char* GetRichObjectType(uint16_t prodId)
 {
     char* outId = GetProductIdMap(prodId);
     if (outId != NULL)
@@ -461,7 +461,7 @@ char* GetRichObjectType(uint16_t prodId)
 }
 
 // Returns a stringified Rich header product name given a build number
-char* GetRichProductName(uint16_t buildNum)
+const char* GetRichProductName(uint16_t buildNum)
 {
     char* product = GetProductMap(buildNum);
     return product;
@@ -595,6 +595,13 @@ bool readCString(const bounded_buffer* buffer, uint32_t off, char** result)
 
         // Calculate length of the string found (excluding null terminator)
         size_t len = (size_t)(x - b);
+
+        if ((*result) != NULL)
+        {
+            free((*result));
+        }
+
+        (*result) = (char*)malloc(sizeof(char) * len + 1);
 
         // Copy the data into result and null-terminate it
         memcpy(*result, b, len);
@@ -817,7 +824,7 @@ bool parse_resource_id(bounded_buffer* data, uint32_t id, char** result)
     return true;
 }
 
-bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, struct resource_dir_entry* dirent, list_t* rsrcs) // std::vector<resource>& rsrcs
+bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, resource_dir_entry_t* dirent, list_t* rsrcs) // std::vector<resource>& rsrcs
 {
     struct resource_dir_table rdt;
 
@@ -962,8 +969,10 @@ bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virt
        
         // High bit 0 = RVA to RDT.
         // High bit 1 = RVA to RDE.
-        if (rde->RVA & 0x80000000) {
-            if (!parse_resource_table(sectionData, rde->RVA & 0x0FFFFFFF, virtaddr, depth + 1, rde, rsrcs))
+        if (rde->RVA & 0x80000000)
+        {
+            // bool parse_resource_table(bounded_buffer*, uint32_t, uint32_t, uint32_t, struct resource_dir_entry*, list_t*)
+            if (!parse_resource_table(sectionData, (uint32_t)(rde->RVA & 0x0FFFFFFF), virtaddr, depth + 1, rde, rsrcs))
             {
                 if (dirent == NULL)
                 {
@@ -1136,7 +1145,10 @@ bool getResources(bounded_buffer* b, bounded_buffer* fileBegin, list_t* secs, li
             continue;
         }
 
-        if (!parse_resource_table(s->sectionData, 0, s->sec->VirtualAddress, 0, NULL, rsrcs))
+        bounded_buffer* buff = s->sectionData;
+        uint32_t va = s->sec->VirtualAddress;
+
+        if (!parse_resource_table(buff, (uint32_t)0, va, (uint32_t)0, NULL, rsrcs))
         {
             return false;
         }
@@ -2387,10 +2399,11 @@ bool getExports(parsed_pe* p)
         }
 
         uint32_t rvaofft = (uint32_t)(addr - s->sectionBase);
-
+        bounded_buffer* buffer = s->sectionData;
         // get the name of this module
         uint32_t nameRva;
-        if (!readDword(s->sectionData, rvaofft + offsetof(struct export_dir_table, NameRVA), nameRva))
+
+        if (!readDword(buffer, rvaofft + offsetof(struct export_dir_table, NameRVA), &nameRva))
         {
             return false;
         }
@@ -2409,21 +2422,21 @@ bool getExports(parsed_pe* p)
         }
 
         struct section* nameSec = (struct section*)malloc(sizeof(struct section));
-        if (!getSecForVA(p->internal->secs, nameVA, nameSec))
+        if (!getSecForVA(p->internal->secs, nameVA, &nameSec))
         {
             return false;
         }
 
         uint32_t nameOff = (uint32_t)(nameVA - nameSec->sectionBase);
-        char* modName;
-        if (!readCString(nameSec->sectionData, nameOff, modName))
+        char* modName = (char*)malloc(sizeof(char) * 200);
+        if (!readCString(buffer, nameOff, &modName))
         {
             return false;
         }
 
         // now, get all the named export symbols
         uint32_t numNames;
-        if (!readDword(s->sectionData, rvaofft + offsetof(struct export_dir_table, NumberOfNamePointers), &numNames))
+        if (!readDword(buffer, rvaofft + offsetof(struct export_dir_table, NumberOfNamePointers), &numNames))
         {
             return false;
         }
@@ -2432,7 +2445,7 @@ bool getExports(parsed_pe* p)
         {
             // get the names section
             uint32_t namesRVA;
-            if (!readDword(s->sectionData, rvaofft + offsetof(struct export_dir_table, NamePointerRVA), &namesRVA))
+            if (!readDword(buffer, rvaofft + offsetof(struct export_dir_table, NamePointerRVA), &namesRVA))
             {
                 return false;
             }
@@ -2452,7 +2465,7 @@ bool getExports(parsed_pe* p)
             }
 
             struct section* namesSec = (struct section*)malloc(sizeof(struct section));
-            if (!getSecForVA(p->internal->secs, namesVA, namesSec))
+            if (!getSecForVA(p->internal->secs, namesVA, &namesSec))
             {
                 return false;
             }
@@ -2461,7 +2474,7 @@ bool getExports(parsed_pe* p)
 
             // get the EAT section
             uint32_t eatRVA;
-            if (!readDword(s->sectionData, rvaofft + offsetof(struct export_dir_table, ExportAddressTableRVA), &eatRVA))
+            if (!readDword(buffer, rvaofft + offsetof(struct export_dir_table, ExportAddressTableRVA), &eatRVA))
             {
                 return false;
             }
@@ -2481,7 +2494,7 @@ bool getExports(parsed_pe* p)
             }
 
             struct section* eatSec = (struct section*)malloc(sizeof(struct section));
-            if (!getSecForVA(p->internal->secs, eatVA, eatSec))
+            if (!getSecForVA(p->internal->secs, eatVA, &eatSec))
             {
                 return false;
             }
@@ -2490,14 +2503,14 @@ bool getExports(parsed_pe* p)
 
             // get the ordinal base
             uint32_t ordinalBase;
-            if (!readDword(s->sectionData, rvaofft + offsetof(struct export_dir_table, OrdinalBase), &ordinalBase))
+            if (!readDword(buffer, rvaofft + offsetof(struct export_dir_table, OrdinalBase), &ordinalBase))
             {
                 return false;
             }
 
             // get the ordinal table
             uint32_t ordinalTableRVA;
-            if (!readDword(s->sectionData, rvaofft + offsetof(struct export_dir_table, OrdinalTableRVA), ordinalTableRVA))
+            if (!readDword(buffer, rvaofft + offsetof(struct export_dir_table, OrdinalTableRVA), ordinalTableRVA))
             {
                 return false;
             }
@@ -2517,7 +2530,7 @@ bool getExports(parsed_pe* p)
             }
 
             struct section* ordinalTableSec = (struct section*)malloc(sizeof(struct section));
-            if (!getSecForVA(p->internal->secs, ordinalTableVA, ordinalTableSec))
+            if (!getSecForVA(p->internal->secs, ordinalTableVA, &ordinalTableSec))
             {
                 return false;
             }
@@ -2527,7 +2540,7 @@ bool getExports(parsed_pe* p)
             for (uint32_t i = 0; i < numNames; i++)
             {
                 uint32_t curNameRVA;
-                if (!readDword(namesSec->sectionData, namesOff + (i * sizeof(uint32_t)), &curNameRVA))
+                if (!readDword(buffer, namesOff + (i * sizeof(uint32_t)), &curNameRVA))
                 {
                     return false;
                 }
@@ -2548,7 +2561,7 @@ bool getExports(parsed_pe* p)
 
                 struct section* curNameSec = (struct section*)malloc(sizeof(struct section));
 
-                if (!getSecForVA(p->internal->secs, curNameVA, curNameSec))
+                if (!getSecForVA(p->internal->secs, curNameVA, &curNameSec))
                 {
                     return false;
                 }
@@ -2559,7 +2572,7 @@ bool getExports(parsed_pe* p)
                 int index2 = 0;
 
                 do {
-                    if (!readByte(curNameSec->sectionData, curNameOff, &d))
+                    if (!readByte(buffer, curNameOff, &d))
                     {
                         return false;
                     }
@@ -2579,9 +2592,12 @@ bool getExports(parsed_pe* p)
                 } while (true);
                 symName[index2 + 1] = '\0';
 
+                bounded_buffer* buffer2 = ordinalTableSec->sectionData;
+                bounded_buffer* eatSec_buffer = eatSec->sectionData;
+
                 // now, for this i, look it up in the ExportOrdinalTable
                 uint16_t ordinal;
-                if (!readWord(ordinalTableSec->sectionData, ordinalOff + (i * sizeof(uint16_t)), &ordinal))
+                if (!readWord(buffer2, ordinalOff + (i * sizeof(uint16_t)), &ordinal))
                 {
                     return false;
                 }
@@ -2590,7 +2606,7 @@ bool getExports(parsed_pe* p)
                 uint32_t eatIdx = (ordinal * sizeof(uint32_t));
 
                 uint32_t symRVA;
-                if (!readDword(eatSec->sectionData, eatOff + eatIdx, symRVA))
+                if (!readDword(eatSec_buffer, eatOff + eatIdx, &symRVA))
                 {
                     return false;
                 }
@@ -2620,9 +2636,11 @@ bool getExports(parsed_pe* p)
                 {
                     a->addr = symVA;
 
-                    if (a->forwardName != NULL)
+                    char* fwdName = a->forwardName;
+
+                    if (fwdName != NULL)
                     {
-                        free(a->forwardName);
+                        free(fwdName);
                     }
                     a->forwardName = NULL; // a->forwardName.clear();
                 }
@@ -2636,7 +2654,12 @@ bool getExports(parsed_pe* p)
                     auto fwdOff = (uint32_t)(symVA - fwdSec->sectionBase);
 
                     a->addr = 0;
-                    if (!readCString(fwdSec->sectionData, fwdOff, &a->forwardName))
+                    a->forwardName = (char*)malloc(sizeof(char) * 200);
+
+                    bounded_buffer* fwdSec_buffer = fwdSec->sectionData;
+                    char* fwd_name = a->forwardName;
+
+                    if (!readCString(fwdSec_buffer, fwdOff, &fwd_name))
                     {
                         return false;
                     }
@@ -2688,6 +2711,8 @@ bool getRelocations(parsed_pe* p)
             return false;
         }
 
+        bounded_buffer* buffer = d->sectionData;
+
         uint32_t rvaofft = (uint32_t)(vaAddr - d->sectionBase);
 
         while (rvaofft < relocDir.Size)
@@ -2695,12 +2720,12 @@ bool getRelocations(parsed_pe* p)
             uint32_t pageRva;
             uint32_t blockSize;
 
-            if (!readDword(d->sectionData, rvaofft + offsetof(struct reloc_block, PageRVA), pageRva))
+            if (!readDword(buffer, rvaofft + offsetof(struct reloc_block, PageRVA), &pageRva))
             {
                 return false;
             }
 
-            if (!readDword(d->sectionData, rvaofft + offsetof(struct reloc_block, BlockSize), blockSize))
+            if (!readDword(buffer, rvaofft + offsetof(struct reloc_block, BlockSize), &blockSize))
             {
                 return false;
             }
@@ -2721,7 +2746,7 @@ bool getRelocations(parsed_pe* p)
                 uint8_t type;
                 uint16_t offset;
 
-                if (!readWord(d->sectionData, rvaofft, &entry))
+                if (!readWord(buffer, rvaofft, &entry))
                 {
                     return false;
                 }
@@ -2804,6 +2829,8 @@ bool getDebugDir(parsed_pe* p)
             return false;
         }
 
+        bounded_buffer* buffer = d->sectionData;
+
         //
         // get debug directory from this section
         //
@@ -2817,49 +2844,49 @@ bool getDebugDir(parsed_pe* p)
             struct debug_dir_entry* curEnt = (struct debug_dir_entry*)malloc(sizeof(struct debug_dir_entry));
             memset(curEnt, 0, sizeof(struct debug_dir_entry));
 
-            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, Characteristics)), &curEnt->Characteristics))
+            if (!readDword(buffer, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, Characteristics)), &curEnt->Characteristics))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, TimeStamp)), &curEnt->TimeStamp))
+            if (!readDword(buffer, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, TimeStamp)), &curEnt->TimeStamp))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readWord(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, MajorVersion)), &curEnt->MajorVersion))
+            if (!readWord(buffer, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, MajorVersion)), &curEnt->MajorVersion))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
             
-            if (!readWord(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, MinorVersion)), &curEnt->MinorVersion))
+            if (!readWord(buffer, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, MinorVersion)), &curEnt->MinorVersion))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, Type)), &curEnt->Type))
+            if (!readDword(buffer, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, Type)), &curEnt->Type))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, SizeOfData)), &curEnt->SizeOfData))
+            if (!readDword(buffer, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, SizeOfData)), &curEnt->SizeOfData))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, AddressOfRawData)), &curEnt->AddressOfRawData))
+            if (!readDword(buffer, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, AddressOfRawData)), &curEnt->AddressOfRawData))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, PointerToRawData)), &curEnt->PointerToRawData))
+            if (!readDword(buffer, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, PointerToRawData)), &curEnt->PointerToRawData))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
@@ -2911,8 +2938,11 @@ bool getDebugDir(parsed_pe* p)
                 // malformed. Skip it and the rest, similar to the above.
                 break;
             }
+
+            uint8_t* buffer_data = (uint8_t*)(dataSec->sectionData->buf + dataofft);
+
             ent->type = curEnt->Type;
-            ent->data = makeBufferFromPointer((uint8_t*)(dataSec->sectionData->buf + dataofft), curEnt->SizeOfData);
+            ent->data = makeBufferFromPointer(buffer_data, curEnt->SizeOfData);
 
             list_enqueue(p->internal->debugdirs, (void*)ent); // p->internal->debugdirs.push_back(ent);
 
@@ -2962,6 +2992,8 @@ bool getImports(parsed_pe* p)
             return false;
         }
 
+        bounded_buffer* c_buffer = c->sectionData;
+
         // get import directory from this section
         uint32_t offt = (uint32_t)(addr - c->sectionBase);
 
@@ -2970,31 +3002,31 @@ bool getImports(parsed_pe* p)
             struct import_dir_entry* curEnt = (struct import_dir_entry*)malloc(sizeof(struct import_dir_entry));
             memset(curEnt, 0, sizeof(struct import_dir_entry));
 
-            if (!readDword(c->sectionData, offt + (uint32_t)(offsetof(struct import_dir_entry, LookupTableRVA)), curEnt->LookupTableRVA))
+            if (!readDword(c_buffer, offt + (uint32_t)(offsetof(struct import_dir_entry, LookupTableRVA)), &curEnt->LookupTableRVA))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(c->sectionData, offt + (uint32_t)(offsetof(struct import_dir_entry, TimeStamp)), curEnt->TimeStamp))
+            if (!readDword(c_buffer, offt + (uint32_t)(offsetof(struct import_dir_entry, TimeStamp)), &curEnt->TimeStamp))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(c->sectionData, offt + (uint32_t)(offsetof(struct import_dir_entry, ForwarderChain)), curEnt->ForwarderChain))
+            if (!readDword(c_buffer, offt + (uint32_t)(offsetof(struct import_dir_entry, ForwarderChain)), &curEnt->ForwarderChain))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(c->sectionData, offt + (uint32_t)(offsetof(struct import_dir_entry, NameRVA)), curEnt->NameRVA))
+            if (!readDword(c_buffer, offt + (uint32_t)(offsetof(struct import_dir_entry, NameRVA)), &curEnt->NameRVA))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(c->sectionData, offt + (uint32_t)(offsetof(struct import_dir_entry, AddressRVA)), curEnt->AddressRVA))
+            if (!readDword(c_buffer, offt + (uint32_t)(offsetof(struct import_dir_entry, AddressRVA)), &curEnt->AddressRVA))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
@@ -3027,10 +3059,12 @@ bool getImports(parsed_pe* p)
                 return false;
             }
 
+            bounded_buffer* nameSec_buffer = nameSec->sectionData;
+
             uint32_t nameOff = (uint32_t)(name - nameSec->sectionBase);
 
             char* modName = (char*)malloc(sizeof(char) * 200);
-            if (!readCString(nameSec->sectionData, nameOff, modName))
+            if (!readCString(nameSec_buffer, nameOff, &modName))
             {
                 return false;
             }
@@ -3080,6 +3114,7 @@ bool getImports(parsed_pe* p)
                 return false;
             }
 
+            bounded_buffer* lookupSec_buffer = lookupSec->sectionData;
             uint32_t lookupOff = (uint32_t)(lookupVA - lookupSec->sectionBase);
             uint32_t offInTable = 0;
             do {
@@ -3090,7 +3125,7 @@ bool getImports(parsed_pe* p)
                 uint64_t val64 = 0;
                 if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_32_MAGIC)
                 {
-                    if (!readDword(lookupSec->sectionData, lookupOff, &val32))
+                    if (!readDword(lookupSec_buffer, lookupOff, &val32))
                     {
                         return false;
                     }
@@ -3104,7 +3139,7 @@ bool getImports(parsed_pe* p)
                 }
                 else if (p->peHeader->nt->OptionalMagic == NT_OPTIONAL_64_MAGIC)
                 {
-                    if (!readQword(lookupSec->sectionData, lookupOff, val64))
+                    if (!readQword(lookupSec_buffer, lookupOff, val64))
                     {
                         return false;
                     }
@@ -3132,11 +3167,14 @@ bool getImports(parsed_pe* p)
                         return false;
                     }
 
+                    bounded_buffer* symNameSec_buffer = symNameSec->sectionData;
+
+
                     int index = 0;
                     uint32_t nameOffset = (uint32_t)(valVA - symNameSec->sectionBase) + sizeof(uint16_t);
                     do {
                         uint8_t chr;
-                        if (!readByte(symNameSec->sectionData, nameOffset, &chr))
+                        if (!readByte(symNameSec_buffer, nameOffset, &chr))
                         {
                             return false;
                         }
@@ -3792,13 +3830,19 @@ void DestructParsedPE(parsed_pe* p)
     struct section* s;
     struct resource* r;
     struct debugent* d;
+    bounded_buffer* s_buffer = NULL;
 
     while (n != NULL)
     {
         s = (struct section*)n->data;
-        if (s != NULL && s->sectionData != NULL)
+        if (s != NULL)
         {
-            deleteBuffer(s->sectionData);
+            s_buffer = s->sectionData;
+
+            if (s_buffer != NULL)
+            {
+                deleteBuffer(s_buffer);
+            }
         }
         n = n->next;
     }
@@ -3807,9 +3851,14 @@ void DestructParsedPE(parsed_pe* p)
     while (n != NULL)
     {
         r = (struct resource*)n->data;
-        if (r != NULL && r->buf != NULL)
+        if (r != NULL)
         {
-            deleteBuffer(r->buf);
+            s_buffer = r->buf;
+
+            if (s_buffer != NULL)
+            {
+                deleteBuffer(s_buffer);
+            }
         }
         n = n->next;
     }
@@ -3818,9 +3867,14 @@ void DestructParsedPE(parsed_pe* p)
     while (n != NULL)
     {
         d = (struct debugent*)n->data;
-        if (d != NULL && d->data != NULL)
+        if (d != NULL)
         {
-            deleteBuffer(d->data);
+            s_buffer = d->data;
+
+            if (s_buffer != NULL)
+            {
+                deleteBuffer(s_buffer);
+            }
         }
         n = n->next;
     }
@@ -3838,8 +3892,11 @@ void IterImpVAString(parsed_pe* pe, iterVAStr cb, void* cbd)
     while(n != NULL)
     {
         struct importent* i = (struct importent*)n->data;
+        const VA addr = (const VA)i->addr;
+        const char* mod = (const char*)i->moduleName;
+        const char* symbol_name = (const char*)i->symbolName;
 
-        if (cb(cbd, i->addr, i->moduleName, i->symbolName) != 0)
+        if (cb(cbd, addr, mod, symbol_name) != 0)
         {
             break;
         }
