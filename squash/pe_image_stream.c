@@ -1126,7 +1126,10 @@ bool getResources(bounded_buffer* b, bounded_buffer* fileBegin, list_t* secs, li
     {
         s = (struct section*)n->data;
 
-        if (strcmp(s->sectionName, ".rsrc") != 0)
+        const char* left = (const char*)s->sectionName;
+        const char* right = ".rsrc";
+
+        if (strcmp(left, right) != 0)
         {
             n = n->next;
 
@@ -1243,7 +1246,11 @@ bool getSections(bounded_buffer* b, bounded_buffer* fileBegin, struct nt_header_
 
             uint8_t* ccc = &c;
             char* cc = (char*)&ccc;
-            strcat(thisSec->sectionName, cc);
+
+            const char* left = (const char*)thisSec->sectionName;
+            const char* right = (const char*)cc;
+
+            strcat(left, right);
             //thisSec.sectionName.push_back(static_cast<char>(c));
             index++;
         }
@@ -2574,7 +2581,7 @@ bool getExports(parsed_pe* p)
 
                 // now, for this i, look it up in the ExportOrdinalTable
                 uint16_t ordinal;
-                if (!readWord(ordinalTableSec->sectionData, ordinalOff + (i * sizeof(uint16_t)), ordinal))
+                if (!readWord(ordinalTableSec->sectionData, ordinalOff + (i * sizeof(uint16_t)), &ordinal))
                 {
                     return false;
                 }
@@ -2810,49 +2817,49 @@ bool getDebugDir(parsed_pe* p)
             struct debug_dir_entry* curEnt = (struct debug_dir_entry*)malloc(sizeof(struct debug_dir_entry));
             memset(curEnt, 0, sizeof(struct debug_dir_entry));
 
-            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, Characteristics)), curEnt->Characteristics))
+            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, Characteristics)), &curEnt->Characteristics))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, TimeStamp)), curEnt->TimeStamp))
+            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, TimeStamp)), &curEnt->TimeStamp))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readWord(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, MajorVersion)), curEnt->MajorVersion))
+            if (!readWord(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, MajorVersion)), &curEnt->MajorVersion))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
             
-            if (!readWord(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, MinorVersion)), curEnt->MinorVersion))
+            if (!readWord(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, MinorVersion)), &curEnt->MinorVersion))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, Type)), curEnt->Type))
+            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, Type)), &curEnt->Type))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, SizeOfData)), curEnt->SizeOfData))
+            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, SizeOfData)), &curEnt->SizeOfData))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, AddressOfRawData)), curEnt->AddressOfRawData))
+            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, AddressOfRawData)), &curEnt->AddressOfRawData))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
             }
 
-            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, PointerToRawData)), curEnt->PointerToRawData))
+            if (!readDword(d->sectionData, rvaofft + (uint32_t)(offsetof(struct debug_dir_entry, PointerToRawData)), &curEnt->PointerToRawData))
             {
                 //PE_ERR(PEERR_READ);
                 return false;
