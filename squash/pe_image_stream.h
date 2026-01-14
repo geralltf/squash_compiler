@@ -330,6 +330,8 @@ parsed_pe* ParsePEFromFile(const char* filePath);
 parsed_pe* ParsePEFromPointer(uint8_t* buffer, uint32_t sz);
 parsed_pe* ParsePEFromBuffer(bounded_buffer* buffer);
 
+bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, resource_dir_entry_t* dirent, list_t* rsrcs);
+
 // destruct a PE context
 void DestructParsedPE(parsed_pe* p);
 
