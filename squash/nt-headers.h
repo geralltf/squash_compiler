@@ -412,6 +412,7 @@ struct resource_dir_entry
     char* name_str;
     char* lang_str;
 };
+typedef struct resource_dir_entry resource_dir_entry_t;
 
 struct resource_dir_table 
 {
