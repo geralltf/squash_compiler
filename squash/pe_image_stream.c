@@ -4303,3 +4303,4 @@ bool GetDataDirectoryEntry(parsed_pe* pe, enum data_directory_kind dirnum, uint8
 
     return true;
 }
+
