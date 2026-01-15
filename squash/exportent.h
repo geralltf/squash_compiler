@@ -17,6 +17,4 @@ struct exportent {
     char* forwardName;
 };
 
-//typedef struct exportent exportent_t;
-
 #endif
