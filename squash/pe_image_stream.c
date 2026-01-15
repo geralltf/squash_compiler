@@ -739,7 +739,7 @@ char* convert_u16_to_c_str(const char16_t* u16_string)
 bool parse_resource_id(bounded_buffer* data, uint32_t id, char** result)
 {
     uint16_t len;
-    if (!readWord(data, id, len))
+    if (!readWord(data, id, &len))
     {
         return false;
     }
@@ -830,37 +830,37 @@ bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virt
         return false;
     }
 
-    if (!readDword(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, Characteristics)), rdt.Characteristics)) 
+    if (!readDword(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, Characteristics)), &rdt.Characteristics)) 
     {
         //PE_ERR(PEERR_READ);                                                  
         return false;
     }
 
-    if (!readDword(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, TimeDateStamp)), rdt.TimeDateStamp))
+    if (!readDword(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, TimeDateStamp)), &rdt.TimeDateStamp))
     {
         //PE_ERR(PEERR_READ);                                                  
         return false;
     }
 
-    if (!readWord(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, MajorVersion)), rdt.MajorVersion))
+    if (!readWord(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, MajorVersion)), &rdt.MajorVersion))
     {
         //PE_ERR(PEERR_READ);                                                        
         return false;
     }
 
-    if (!readWord(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, MinorVersion)), rdt.MinorVersion))
+    if (!readWord(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, MinorVersion)), &rdt.MinorVersion))
     {
         //PE_ERR(PEERR_READ);                                                        
         return false;
     }
 
-    if (!readWord(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, NameEntries)), rdt.NameEntries))
+    if (!readWord(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, NameEntries)), &rdt.NameEntries))
     {
         //PE_ERR(PEERR_READ);                                                        
         return false;
     }
 
-    if (!readWord(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, IDEntries)), rdt.IDEntries))
+    if (!readWord(sectionData, o + (uint32_t)(offsetof(struct resource_dir_table, IDEntries)), &rdt.IDEntries))
     {
         //PE_ERR(PEERR_READ);                                                        
         return false;
@@ -990,9 +990,7 @@ bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virt
                 * but meh.
                 */
 
-            if (!readDword(sectionData,
-                rde->RVA + offsetof(struct resource_dat_entry, RVA),
-                rdat.RVA))
+            if (!readDword(sectionData, rde->RVA + offsetof(struct resource_dat_entry, RVA), &rdat.RVA))
             {
                 //PE_ERR(PEERR_READ);
                 if (dirent == NULL)
@@ -1771,7 +1769,7 @@ bool readNtHeader(bounded_buffer* b, struct nt_header_32* header)
 
     uint32_t pe_magic;
     uint32_t curOffset = 0;
-    if (!readDword(b, curOffset, pe_magic) || pe_magic != NT_MAGIC)
+    if (!readDword(b, curOffset, &pe_magic) || pe_magic != NT_MAGIC)
     {
         //PE_ERR(PEERR_READ);
         return false;
@@ -2250,7 +2248,7 @@ bool getHeader(bounded_buffer* file, pe_header* p, bounded_buffer* rem)
     // Iterate over the DWORDs, hence why i increments 4 bytes at a time.
     for (uint32_t i = RICH_OFFSET; i < offset; i += 4)
     {
-        if (!readDword(file, i, dword))
+        if (!readDword(file, i, &dword))
         {
             //PE_ERR(PEERR_READ);
             return false;
@@ -2269,7 +2267,7 @@ bool getHeader(bounded_buffer* file, pe_header* p, bounded_buffer* rem)
     {
         // Get the XOR decryption key.  It is the DWORD immediately
         // after the Rich signature.
-        if (!readDword(file, rich_end_signature_offset + 4, xor_key))
+        if (!readDword(file, rich_end_signature_offset + 4, &xor_key))
         {
             //PE_ERR(PEERR_READ);
             return false;
@@ -2507,7 +2505,7 @@ bool getExports(parsed_pe* p)
 
             // get the ordinal table
             uint32_t ordinalTableRVA;
-            if (!readDword(buffer, rvaofft + offsetof(struct export_dir_table, OrdinalTableRVA), ordinalTableRVA))
+            if (!readDword(buffer, rvaofft + offsetof(struct export_dir_table, OrdinalTableRVA), &ordinalTableRVA))
             {
                 return false;
             }
@@ -4084,11 +4082,11 @@ bool ReadBytesAtVA(parsed_pe* pe, VA v, uint8_t* buffer, uint32_t size_buffer)
 
     uint32_t offset = (uint32_t)(v - s->sectionBase);
 
-    bounded_buffer* buffer = s->sectionData;
+    bounded_buffer* s_buffer = s->sectionData;
 
     for (i = 0; i < size_buffer; i++)
     {
-        if (readByte(buffer, offset + i, &b))
+        if (readByte(s_buffer, offset + i, &b))
         {
             buffer[i] = b;
 

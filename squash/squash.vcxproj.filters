@@ -185,6 +185,9 @@
     <ClInclude Include="exportent.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="debugent.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="Makefile" />

@@ -158,6 +158,7 @@
     <ClInclude Include="Assembler.h" />
     <ClInclude Include="Assembly.h" />
     <ClInclude Include="AST.h" />
+    <ClInclude Include="debugent.h" />
     <ClInclude Include="EncoderInstructionSet.h" />
     <ClInclude Include="Enums.h" />
     <ClInclude Include="exportent.h" />

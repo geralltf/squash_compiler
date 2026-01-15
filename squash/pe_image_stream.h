@@ -33,6 +33,7 @@ THE SOFTWARE.
 #include <stdint.h>
 #include <string.h>
 
+#include "debugent.h"
 #include "exportent.h"
 #include "nt-headers.h"
 #include "List.h"
@@ -123,11 +124,6 @@ struct reloc {
     enum reloc_type type;
 };
 
-struct debugent {
-    uint32_t type;
-    bounded_buffer* data;
-};
-
 union symbol_name {
     uint8_t* shortName;// [NT_SHORT_NAME_LEN] ;
     uint32_t zeroes;
@@ -202,16 +198,6 @@ struct parsed_pe_internal {
     list_t* symbols;
     list_t* debugdirs;
 };
-
-struct buffer_detail;
-
-typedef struct _bounded_buffer {
-    uint8_t* buf;
-    uint32_t bufLen;
-    bool copy;
-    bool swapBytes;
-    struct buffer_detail* detail;
-} bounded_buffer;
 
 struct resource {
     //resource()
