@@ -160,6 +160,7 @@
     <ClInclude Include="AST.h" />
     <ClInclude Include="EncoderInstructionSet.h" />
     <ClInclude Include="Enums.h" />
+    <ClInclude Include="exportent.h" />
     <ClInclude Include="FileIO.h" />
     <ClInclude Include="Instruction.Create.h" />
     <ClInclude Include="Instruction.h" />
