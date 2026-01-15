@@ -35,6 +35,7 @@ THE SOFTWARE.
 
 #include "debugent.h"
 #include "exportent.h"
+#include "buffer.h"
 #include "nt-headers.h"
 #include "List.h"
 
@@ -258,18 +259,6 @@ enum pe_err {
     PEERR_ADDRESS = 11,
     PEERR_SIZE = 12,
 };
-
-bool readByte(bounded_buffer* b, uint32_t offset, uint8_t* out);
-bool readWord(bounded_buffer* b, uint32_t offset, uint16_t* out);
-bool readDword(bounded_buffer* b, uint32_t offset, uint32_t* out);
-bool readQword(bounded_buffer* b, uint32_t offset, uint64_t* out);
-bool readChar16(bounded_buffer* b, uint32_t offset, char16_t* out);
-
-bounded_buffer* readFileToFileBuffer(const char* filePath);
-bounded_buffer* makeBufferFromPointer(uint8_t* data, uint32_t sz);
-bounded_buffer* splitBuffer(bounded_buffer* b, uint32_t from, uint32_t to);
-void deleteBuffer(bounded_buffer* b);
-uint64_t bufLen(bounded_buffer* b);
 
 struct parsed_pe_internal;
 

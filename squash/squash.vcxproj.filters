@@ -93,6 +93,9 @@
     <ClCompile Include="pe_image_stream.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="buffer.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Assembler.h">
@@ -186,6 +189,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="debugent.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="buffer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

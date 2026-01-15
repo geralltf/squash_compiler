@@ -131,6 +131,7 @@
   <ItemGroup>
     <ClCompile Include="Assembler.c" />
     <ClCompile Include="AST.c" />
+    <ClCompile Include="buffer.c" />
     <ClCompile Include="EncoderInstructionSet.c" />
     <ClCompile Include="EntryPoint.c" />
     <ClCompile Include="FileIO.c" />
@@ -158,6 +159,7 @@
     <ClInclude Include="Assembler.h" />
     <ClInclude Include="Assembly.h" />
     <ClInclude Include="AST.h" />
+    <ClInclude Include="buffer.h" />
     <ClInclude Include="debugent.h" />
     <ClInclude Include="EncoderInstructionSet.h" />
     <ClInclude Include="Enums.h" />
