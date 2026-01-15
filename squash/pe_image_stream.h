@@ -33,6 +33,7 @@ THE SOFTWARE.
 #include <stdint.h>
 #include <string.h>
 
+#include "exportent.h"
 #include "nt-headers.h"
 #include "List.h"
 
@@ -115,14 +116,6 @@ struct importent {
     VA addr;
     char* symbolName;
     char* moduleName;
-};
-
-struct exportent {
-    VA addr;
-    uint16_t ordinal;
-    char* symbolName;
-    char* moduleName;
-    char* forwardName;
 };
 
 struct reloc {
@@ -209,9 +202,6 @@ struct parsed_pe_internal {
     list_t* symbols;
     list_t* debugdirs;
 };
-
-typedef uint32_t RVA;
-typedef uint64_t VA;
 
 struct buffer_detail;
 
@@ -351,7 +341,7 @@ typedef int (*iterVAStr)(void*,
 void IterImpVAString(parsed_pe* pe, iterVAStr cb, void* cbd);
 
 // iterate over relocations in the PE file
-typedef int (*iterReloc)(void*, const VA*, const enum reloc_type*);
+typedef int (*iterReloc)(void*, const VA*, const enum reloc_type);
 void IterRelocs(parsed_pe* pe, iterReloc cb, void* cbd);
 
 // iterate over debug directories in the PE file

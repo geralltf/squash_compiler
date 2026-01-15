@@ -37,9 +37,6 @@ THE SOFTWARE.
 //#include "parse.h"
 //#include "to_string.h"
 
-
-
-
 // String representation of Rich header object types
 char* kProdId_C = NULL;
 char* kProdId_CPP = NULL;
@@ -3915,7 +3912,7 @@ void IterRelocs(parsed_pe* pe, iterReloc cb, void* cbd)
     {
         struct reloc* r = (struct reloc*)n->data;
 
-        if (cb(cbd, r->shiftedAddr, r->type) != 0)
+        if (cb(cbd, r->shiftedAddr, (const enum reloc_type)r->type) != 0)
         {
             break;
         }
@@ -3932,8 +3929,10 @@ void IterDebugs(parsed_pe* pe, iterDebug cb, void* cbd)
     while (n != NULL)
     {
         struct debugent* d = (struct debugent*)n->data;
+        const bounded_buffer* buffer = (const bounded_buffer*)d->data;
+        uint32_t d_type = d->type;
 
-        if (cb(cbd, d->type, d->data) != 0)
+        if (cb(cbd, d_type, buffer) != 0)
         {
             break;
         }
@@ -4024,8 +4023,12 @@ void IterSec(parsed_pe* pe, int dt, iterSec cb, void* cbd)
     while (n != NULL)
     {
         struct section* s = (struct section*)n->data;
+        const VA section_base = (const VA)s->sectionBase;
+        const char* section_name = (const char*)s->sectionName;
+        const struct image_section_header* img_header = (const struct image_section_header*)s->sec;
+        bounded_buffer* buffer = s->sectionData;
 
-        if (cb(pe, dt, cbd, s->sectionBase, s->sectionName, s->sec, s->sectionData) != 0)
+        if (cb(pe, dt, cbd, section_base, section_name, img_header, buffer) != 0)
         {
             break;
         }
@@ -4048,7 +4051,10 @@ bool ReadByteAtVA(parsed_pe* pe, VA v, uint8_t* b)
     }
 
     auto off = (uint32_t)(v - s->sectionBase);
-    return readByte(s->sectionData, off, b);
+
+    bounded_buffer* buffer = s->sectionData;
+
+    return readByte(buffer, off, b);
 }
 
 uint32_t ReadSectionSize(parsed_pe* pe, VA v)
@@ -4078,9 +4084,11 @@ bool ReadBytesAtVA(parsed_pe* pe, VA v, uint8_t* buffer, uint32_t size_buffer)
 
     uint32_t offset = (uint32_t)(v - s->sectionBase);
 
+    bounded_buffer* buffer = s->sectionData;
+
     for (i = 0; i < size_buffer; i++)
     {
-        if (readByte(s->sectionData, offset + i, &b))
+        if (readByte(buffer, offset + i, &b))
         {
             buffer[i] = b;
 
@@ -4290,7 +4298,9 @@ bool GetDataDirectoryEntry(parsed_pe* pe, enum data_directory_kind dirnum, uint8
 
         (*raw_entry) = (uint8_t*)malloc(sizeof(uint8_t) * entry_size);
 
-        memcpy(*raw_entry, sec->sectionData->buf + off, entry_size); //raw_entry.assign(sec.sectionData->buf + off, sec.sectionData->buf + off + dir.Size);
+        uint8_t* underlying_buffer = sec->sectionData->buf;
+
+        memcpy(*raw_entry, underlying_buffer + off, entry_size); //raw_entry.assign(sec.sectionData->buf + off, sec.sectionData->buf + off + dir.Size);
     }
 
     return true;
