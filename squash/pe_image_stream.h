@@ -387,4 +387,7 @@ bool GetDataDirectoryEntry(parsed_pe* pe, enum data_directory_kind dirnum, uint8
 //    data_directory_kind dirnum,
 //    std::vector<std::uint8_t>& raw_entry);
 
+bool WritePEFile(const char* fileName, parsed_pe* program_pe);
+bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image, int encoded_length);
+
 #endif

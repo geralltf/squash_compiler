@@ -8,6 +8,7 @@ struct Assembler;
 #include "sb.h"
 #include "FileIO.h"
 #include "Encoder.h"
+#include "pe_image_stream.h"
 
 #include <stdio.h>
 

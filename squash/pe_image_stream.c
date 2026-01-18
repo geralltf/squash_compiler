@@ -4304,3 +4304,123 @@ bool GetDataDirectoryEntry(parsed_pe* pe, enum data_directory_kind dirnum, uint8
     return true;
 }
 
+bool WritePEFile(const char* fileName, parsed_pe* program_pe)
+{
+    return true;
+    //    // First, create a new parsed_pe structure
+    //// We pass std::nothrow parameter to new so in case of failure it returns
+    //// nullptr instead of throwing exception std::bad_alloc.
+    ////parsed_pe* p = new (std::nothrow) parsed_pe();
+    //    parsed_pe* p = (parsed_pe*)malloc(sizeof(parsed_pe));
+    //
+    //    if (p == NULL)
+    //    {
+    //        //PE_ERR(PEERR_MEM);
+    //        return NULL;
+    //    }
+    //
+    //    // Make a new buffer object to hold just our file data
+    //    p->fileBuffer = buffer;
+    //
+    //    p->internal = (struct parsed_pe_internal*)malloc(sizeof(struct parsed_pe_internal));
+    //
+    //    if (p->internal == NULL)
+    //    {
+    //        deleteBuffer(p->fileBuffer);
+    //        free(p);
+    //        //PE_ERR(PEERR_MEM);
+    //        return NULL;
+    //    }
+    //
+    //    // get header information
+    //    bounded_buffer* remaining = NULL;
+    //    if (!getHeader(p->fileBuffer, p->peHeader, remaining))
+    //    {
+    //        deleteBuffer(remaining);
+    //        DestructParsedPE(p);
+    //        // err is set by getHeader
+    //        return NULL;
+    //    }
+    //
+    //    bounded_buffer* file = p->fileBuffer;
+    //    if (!getSections(remaining, file, p->peHeader->nt, p->internal->secs))
+    //    {
+    //        deleteBuffer(remaining);
+    //        DestructParsedPE(p);
+    //        //PE_ERR(PEERR_SECT);
+    //        return NULL;
+    //    }
+    //
+    //    if (!getResources(remaining, file, p->internal->secs, p->internal->rsrcs))
+    //    {
+    //        deleteBuffer(remaining);
+    //        DestructParsedPE(p);
+    //        //PE_ERR(PEERR_RESC);
+    //        return NULL;
+    //    }
+    //
+    //    // Get exports
+    //    if (!getExports(p))
+    //    {
+    //        deleteBuffer(remaining);
+    //        DestructParsedPE(p);
+    //        //PE_ERR(PEERR_MAGIC);
+    //        return NULL;
+    //    }
+    //
+    //    // Get relocations, if exist
+    //    if (!getRelocations(p))
+    //    {
+    //        deleteBuffer(remaining);
+    //        DestructParsedPE(p);
+    //        //PE_ERR(PEERR_MAGIC);
+    //        return NULL;
+    //    }
+    //
+    //    if (!getDebugDir(p))
+    //    {
+    //        deleteBuffer(remaining);
+    //        DestructParsedPE(p);
+    //        //PE_ERR(PEERR_MAGIC);
+    //        return NULL;
+    //    }
+    //
+    //    // Get imports
+    //    if (!getImports(p))
+    //    {
+    //        deleteBuffer(remaining);
+    //        DestructParsedPE(p);
+    //        return NULL;
+    //    }
+    //
+    //    // Get symbol table
+    //    if (!getSymbolTable(p))
+    //    {
+    //        deleteBuffer(remaining);
+    //        DestructParsedPE(p);
+    //        return NULL;
+    //    }
+    //
+    //    deleteBuffer(remaining);
+}
+
+bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image, int encoded_length)
+{
+    parsed_pe* program_pe = (parsed_pe*)malloc(sizeof(parsed_pe));
+
+    if (program_pe != NULL)
+    {
+        program_pe->fileBuffer = NULL;
+        program_pe->internal = (struct parsed_pe_internal*)malloc(sizeof(struct parsed_pe_internal));
+        program_pe->peHeader = (pe_header*)malloc(sizeof(pe_header));
+
+        if (program_pe->peHeader != NULL)
+        {
+            program_pe->peHeader->dos = (struct dos_header*)malloc(sizeof(struct dos_header));
+            program_pe->peHeader->nt = (struct nt_header_32*)malloc(sizeof(struct nt_header_32));
+            program_pe->peHeader->rich = (struct rich_header*)malloc(sizeof(struct rich_header));
+        }
+    }
+
+    return true;
+}

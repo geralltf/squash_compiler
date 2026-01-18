@@ -1590,7 +1590,7 @@ unsigned char* squash_assemble(struct Assembler* assembler, unsigned long RIP_pr
     return sq_program_image;
 }
 
-void test_assembler()
+void test_assembler(const char* binaryFileName)
 {
     const unsigned long RIP = 0x1234567810000000;
     int Bitness = 64;
@@ -1728,4 +1728,13 @@ void test_assembler()
     }
 
     //printf("\n");
+
+    if (WritePEProgramSQImage(binaryFileName, sq_program_image, encoded_length))
+    {
+        printf("Assembled platform binary.\n");
+    }
+    else
+    {
+        printf("There was an error assembling the platform binary.\n");
+    }
 }
