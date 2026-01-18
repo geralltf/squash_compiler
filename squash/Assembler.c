@@ -1727,7 +1727,7 @@ void test_assembler(const char* binaryFileName)
         printf("%02X ", (unsigned int)sq_program_image[buffer_index]);
     }
 
-    //printf("\n");
+    printf("\n");
 
     if (WritePEProgramSQImage(binaryFileName, sq_program_image, encoded_length))
     {
