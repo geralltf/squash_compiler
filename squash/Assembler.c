@@ -211,7 +211,7 @@ void GenerateCode(struct Assembler* assembler, astnode_t* astNode, char* output_
 
             if (output_binary_file_name != NULL)
             {
-                test_assembler();
+                test_assembler(output_binary_file_name);
             }
             else
             {
