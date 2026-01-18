@@ -108,7 +108,7 @@ void nop(struct Assembler* assembler, int sizeInBytes);
 /// </returns>
 unsigned char* squash_assemble(struct Assembler* assembler, unsigned long RIP_program_start_addr, int* encoder_length);
 
-void test_assembler();
+void test_assembler(const char* binaryFileName);
 
 //void squash_assembler(struct Assembler* assembler, char* source_asm, int source_size, char* output_binary_file_name);
 
