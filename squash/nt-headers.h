@@ -29,16 +29,16 @@ THE SOFTWARE.
 
 #include "List.h"
 
-const uint32_t RICH_MAGIC_END = 0x68636952;
-const uint32_t RICH_MAGIC_START = 0x536e6144;
-const uint32_t RICH_OFFSET = 0x80;
-const uint16_t MZ_MAGIC = 0x5A4D;
-const uint32_t NT_MAGIC = 0x00004550;
-const uint16_t NUM_DIR_ENTRIES = 16;
-const uint16_t NT_OPTIONAL_32_MAGIC = 0x10B;
-const uint16_t NT_OPTIONAL_64_MAGIC = 0x20B;
-const uint16_t NT_SHORT_NAME_LEN = 8;
-const uint16_t SYMTAB_RECORD_LEN = 18;
+#define RICH_MAGIC_END 0x68636952
+#define RICH_MAGIC_START 0x536e6144
+#define RICH_OFFSET 0x80
+#define MZ_MAGIC 0x5A4D
+#define NT_MAGIC 0x00004550
+#define NUM_DIR_ENTRIES 16
+#define NT_OPTIONAL_32_MAGIC 0x10B
+#define NT_OPTIONAL_64_MAGIC 0x20B
+#define NT_SHORT_NAME_LEN 8
+#define SYMTAB_RECORD_LEN 18
 
 #ifndef _PEPARSE_WINDOWS_CONFLICTS
 // Machine Types
