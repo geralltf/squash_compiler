@@ -2014,158 +2014,158 @@ bool readRichHeader(bounded_buffer* rich_buf, uint32_t key, struct rich_header* 
     return true;
 }
 
-bool readDosHeader(bounded_buffer* file, struct dos_header* dos_hdr)
+bool writeDosHeader(bounded_buffer* file, struct dos_header* dos_hdr)
 {
     if (file == NULL)
     {
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_magic)), dos_hdr->e_magic))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_magic)), dos_hdr->e_magic))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cblp)), dos_hdr->e_cblp))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cblp)), dos_hdr->e_cblp))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cp)), dos_hdr->e_cp))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cp)), dos_hdr->e_cp))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_crlc)), dos_hdr->e_crlc))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_crlc)), dos_hdr->e_crlc))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cparhdr)), dos_hdr->e_cparhdr))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cparhdr)), dos_hdr->e_cparhdr))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_minalloc)), dos_hdr->e_minalloc))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_minalloc)), dos_hdr->e_minalloc))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_maxalloc)), dos_hdr->e_maxalloc))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_maxalloc)), dos_hdr->e_maxalloc))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_ss)), dos_hdr->e_ss))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_ss)), dos_hdr->e_ss))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_sp)), dos_hdr->e_sp))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_sp)), dos_hdr->e_sp))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_csum)), dos_hdr->e_csum))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_csum)), dos_hdr->e_csum))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_ip)), dos_hdr->e_ip))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_ip)), dos_hdr->e_ip))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cs)), dos_hdr->e_cs))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cs)), dos_hdr->e_cs))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_lfarlc)), dos_hdr->e_lfarlc))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_lfarlc)), dos_hdr->e_lfarlc))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_ovno)), dos_hdr->e_ovno))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_ovno)), dos_hdr->e_ovno))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[0])), dos_hdr->e_res[0]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[0])), dos_hdr->e_res[0]))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[1])), dos_hdr->e_res[1]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[1])), dos_hdr->e_res[1]))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[2])), dos_hdr->e_res[2]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[2])), dos_hdr->e_res[2]))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[3])), dos_hdr->e_res[3]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[3])), dos_hdr->e_res[3]))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_oemid)), dos_hdr->e_oemid))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_oemid)), dos_hdr->e_oemid))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_oeminfo)), dos_hdr->e_oeminfo))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_oeminfo)), dos_hdr->e_oeminfo))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[0])), dos_hdr->e_res2[0]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[0])), dos_hdr->e_res2[0]))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[1])), dos_hdr->e_res2[1]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[1])), dos_hdr->e_res2[1]))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[2])), dos_hdr->e_res2[2]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[2])), dos_hdr->e_res2[2]))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[3])), dos_hdr->e_res2[3]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[3])), dos_hdr->e_res2[3]))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[4])), dos_hdr->e_res2[4]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[4])), dos_hdr->e_res2[4]))
     {
         //PE_ERR(PEERR_READ);
         return false;
@@ -2177,31 +2177,31 @@ bool readDosHeader(bounded_buffer* file, struct dos_header* dos_hdr)
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[6])), dos_hdr->e_res2[6]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[6])), dos_hdr->e_res2[6]))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[7])), dos_hdr->e_res2[7]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[7])), dos_hdr->e_res2[7]))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[8])), dos_hdr->e_res2[8]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[8])), dos_hdr->e_res2[8]))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[9])), dos_hdr->e_res2[9]))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[9])), dos_hdr->e_res2[9]))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_magic)), dos_hdr->e_magic))
+    if (!writeWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_magic)), dos_hdr->e_magic))
     {
         //PE_ERR(PEERR_READ);
         return false;
@@ -2210,6 +2210,223 @@ bool readDosHeader(bounded_buffer* file, struct dos_header* dos_hdr)
     if (!readDword(file, 0 + (uint32_t)(offsetof(struct dos_header, e_lfanew)), dos_hdr->e_lfanew))
     {
         //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    return true;
+}
+
+bool readDosHeader(bounded_buffer* file, struct dos_header* dos_hdr)
+{
+    if (file == NULL)
+    {
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_magic)), &dos_hdr->e_magic))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cblp)), &dos_hdr->e_cblp))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cp)), &dos_hdr->e_cp))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_crlc)), &dos_hdr->e_crlc))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cparhdr)), &dos_hdr->e_cparhdr))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_minalloc)), &dos_hdr->e_minalloc))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_maxalloc)), &dos_hdr->e_maxalloc))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_ss)), &dos_hdr->e_ss))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_sp)), &dos_hdr->e_sp))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_csum)), &dos_hdr->e_csum))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_ip)), &dos_hdr->e_ip))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_cs)), &dos_hdr->e_cs))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_lfarlc)), &dos_hdr->e_lfarlc))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_ovno)), &dos_hdr->e_ovno))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[0])), &dos_hdr->e_res[0]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[1])), &dos_hdr->e_res[1]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[2])), &dos_hdr->e_res[2]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res[3])), &dos_hdr->e_res[3]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_oemid)), &dos_hdr->e_oemid))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_oeminfo)), &dos_hdr->e_oeminfo))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[0])), &dos_hdr->e_res2[0]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[1])), &dos_hdr->e_res2[1]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[2])), &dos_hdr->e_res2[2]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[3])), &dos_hdr->e_res2[3]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[4])), &dos_hdr->e_res2[4]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[5])), &dos_hdr->e_res2[5]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[6])), &dos_hdr->e_res2[6]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[7])), &dos_hdr->e_res2[7]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[8])), &dos_hdr->e_res2[8]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[9])), &dos_hdr->e_res2[9]))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(file, 0 + (uint32_t)(offsetof(struct dos_header, e_magic)), &dos_hdr->e_magic))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(file, 0 + (uint32_t)(offsetof(struct dos_header, e_lfanew)), &dos_hdr->e_lfanew))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    return true;
+}
+
+bool writeHeader(bounded_buffer* file, pe_header* p, bounded_buffer* rem)
+{
+    if (file == NULL)
+    {
+        return false;
+    }
+
+    if (!writeDosHeader(file, p->dos))
+    {
         return false;
     }
 
