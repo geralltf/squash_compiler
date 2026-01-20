@@ -44,7 +44,6 @@ THE SOFTWARE.
 #include <unistd.h>
 #endif
 
-
 inline uint16_t byteSwapUint16(uint16_t val)
 {
 #if defined(_MSC_VER) || defined(_MSC_FULL_VER)
@@ -84,6 +83,137 @@ struct buffer_detail
     int fd;
 #endif
 };
+
+bool writeByte(bounded_buffer* b, uint32_t offset, uint8_t value)
+{
+    if (b == NULL)
+    {
+        return false;
+    }
+
+    // Ensure the offset + 2 bytes (size of uint16_t) does not exceed buffer length
+    if ((uint64_t)offset + sizeof(uint8_t) > b->bufLen)
+    {
+        return false;
+    }
+
+    uint8_t tmp = value;
+
+    // Write the data to the buffer at the specified offset
+    memcpy((b->buf + offset), &tmp, sizeof(uint8_t));
+
+    return true;
+}
+
+bool writeWord(bounded_buffer* b, uint32_t offset, uint16_t value)
+{
+    if (b == NULL)
+    {
+        return false;
+    }
+
+    // Ensure the offset + 2 bytes (size of uint16_t) does not exceed buffer length
+    if ((uint64_t)offset + sizeof(uint16_t) > b->bufLen)
+    {
+        return false;
+    }
+
+    uint16_t tmp = value;
+
+    // If the buffer requires specific endianness, swap before writing
+    if (b->swapBytes)
+    {
+        tmp = byteSwapUint16(value);
+    }
+
+    // Write the data to the buffer at the specified offset
+    memcpy((b->buf + offset), &tmp, sizeof(uint16_t));
+
+    return true;
+}
+
+bool writeDword(bounded_buffer* b, uint32_t offset, uint32_t value)
+{
+    if (b == NULL)
+    {
+        return false;
+    }
+
+    // Ensure the offset + 2 bytes (size of uint16_t) does not exceed buffer length
+    if ((uint64_t)offset + sizeof(uint32_t) > b->bufLen)
+    {
+        return false;
+    }
+
+    uint32_t tmp = value;
+
+    // If the buffer requires specific endianness, swap before writing
+    if (b->swapBytes)
+    {
+        tmp = byteSwapUint32(value);
+    }
+
+    // Write the data to the buffer at the specified offset
+    memcpy((b->buf + offset), &tmp, sizeof(uint32_t));
+
+    return true;
+}
+
+bool writeQword(bounded_buffer* b, uint32_t offset, uint64_t value)
+{
+    if (b == NULL)
+    {
+        return false;
+    }
+
+    // Ensure the offset + 2 bytes (size of uint16_t) does not exceed buffer length
+    if ((uint64_t)offset + sizeof(uint64_t) > b->bufLen)
+    {
+        return false;
+    }
+
+    uint64_t tmp = value;
+
+    // If the buffer requires specific endianness, swap before writing
+    if (b->swapBytes)
+    {
+        tmp = byteSwapUint64(value);
+    }
+
+    // Write the data to the buffer at the specified offset
+    memcpy((b->buf + offset), &tmp, sizeof(uint64_t));
+
+    return true;
+}
+
+bool writeChar16(bounded_buffer* b, uint32_t offset, char16_t value)
+{
+    if (b == NULL)
+    {
+        return false;
+    }
+
+    // Ensure the offset + 2 bytes does not exceed buffer length
+    if ((uint64_t)offset + sizeof(char16_t) > b->bufLen)
+    {
+        return false;
+    }
+
+    if (b->swapBytes)
+    {
+        // Manually swap bytes and write to the buffer
+        uint8_t* dest = b->buf + offset;
+        dest[0] = (uint8_t)((value & 0xFF00) >> 8);
+        dest[1] = (uint8_t)(value & 0x00FF);
+    }
+    else
+    {
+        // Copy memory directly if no swap is required
+        memcpy((b->buf + offset), &value, sizeof(char16_t));
+    }
+
+    return true;
+}
 
 bool readByte(bounded_buffer* b, uint32_t offset, uint8_t* out)
 {

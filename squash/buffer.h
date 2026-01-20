@@ -3,6 +3,12 @@
 
 #include "debugent.h"
 
+bool writeByte(bounded_buffer* b, uint32_t offset, uint8_t value);
+bool writeWord(bounded_buffer* b, uint32_t offset, uint16_t value);
+bool writeDword(bounded_buffer* b, uint32_t offset, uint32_t value);
+bool writeQword(bounded_buffer* b, uint32_t offset, uint64_t value);
+bool writeChar16(bounded_buffer* b, uint32_t offset, char16_t value);
+
 bool readByte(bounded_buffer* b, uint32_t offset, uint8_t* out);
 bool readWord(bounded_buffer* b, uint32_t offset, uint16_t* out);
 bool readDword(bounded_buffer* b, uint32_t offset, uint32_t* out);
