@@ -2418,18 +2418,71 @@ bool readDosHeader(bounded_buffer* file, struct dos_header* dos_hdr)
     return true;
 }
 
-bool writeHeader(bounded_buffer* file, pe_header* p, bounded_buffer* rem)
+bool writeHeader(bounded_buffer* file, pe_header* p)
 {
-    if (file == NULL)
+    if (file == NULL || p == NULL)
     {
         return false;
     }
 
+    p->dos->e_magic = MZ_MAGIC;
+
+    if (p->dos->e_magic != MZ_MAGIC)
+    {
+        //PE_ERR(PEERR_MAGIC);
+        return false;
+    }
+
+    // 1. Write the DOS header
+    // Assumes p->dos contains the data and p->dos->e_magic == MZ_MAGIC
     if (!writeDosHeader(file, p->dos))
     {
         return false;
     }
 
+    // 2. Handle the Rich Header if present
+    // The original code expects the Rich header between 0x80 and e_lfanew
+    if (p->rich && p->rich->isPresent)
+    {
+        // Note: Writing a Rich Header usually involves re-encoding it with 
+        // the XOR key. This assumes a helper function handles that logic.
+        if (!writeRichHeader(file, RICH_OFFSET, p->rich))
+        {
+            return false;
+        }
+
+        // Write the Rich Signature (Rich) and the XOR Key at the end of the Rich block
+        // rich_end_signature_offset is typically (p->dos->e_lfanew - 8)
+        uint32_t rich_end_offset = p->dos->e_lfanew - 8;
+        if (!writeDword(file, rich_end_offset, RICH_MAGIC_END))
+        {
+            return false;
+        }
+        if (!writeDword(file, rich_end_offset + 4, p->rich->DecryptionKey))
+        {
+            return false;
+        }
+    }
+
+    // 3. Write the NT Headers
+    // We write at the offset specified in the DOS header (e_lfanew)
+    uint32_t ntOffset = p->dos->e_lfanew;
+
+    // Create a temporary view/buffer of the file starting at the NT offset
+    bounded_buffer* ntBuf = splitBuffer(file, ntOffset, file->bufLen - ntOffset);
+    if (ntBuf == NULL)
+    {
+        return false;
+    }
+
+    if (!writeNtHeader(ntBuf, p->nt))
+    {
+        deleteBuffer(ntBuf);
+        return false;
+    }
+
+    // 4. Cleanup
+    deleteBuffer(ntBuf);
     return true;
 }
 
