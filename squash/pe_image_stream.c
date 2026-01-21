@@ -1301,183 +1301,183 @@ bool getSections(bounded_buffer* b, bounded_buffer* fileBegin, struct nt_header_
     return true;
 }
 
-bool readOptionalHeader(bounded_buffer* b, struct optional_header_32* header)
+bool writeOptionalHeader(bounded_buffer* b, struct optional_header_32* header)
 {
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Magic)), header->Magic))
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Magic)), header->Magic))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readByte(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorLinkerVersion)), header->MajorLinkerVersion))
+    if (!writeByte(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorLinkerVersion)), header->MajorLinkerVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readByte(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorLinkerVersion)), header->MinorLinkerVersion))
+    if (!writeByte(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorLinkerVersion)), header->MinorLinkerVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfCode)), header->SizeOfCode))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfCode)), header->SizeOfCode))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfInitializedData)), header->SizeOfInitializedData))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfInitializedData)), header->SizeOfInitializedData))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfUninitializedData)), header->SizeOfUninitializedData))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfUninitializedData)), header->SizeOfUninitializedData))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, AddressOfEntryPoint)), header->AddressOfEntryPoint))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, AddressOfEntryPoint)), header->AddressOfEntryPoint))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, BaseOfCode)), header->BaseOfCode))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, BaseOfCode)), header->BaseOfCode))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, BaseOfData)), header->BaseOfData))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, BaseOfData)), header->BaseOfData))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, ImageBase)), header->ImageBase))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, ImageBase)), header->ImageBase))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SectionAlignment)), header->SectionAlignment))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SectionAlignment)), header->SectionAlignment))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, FileAlignment)), header->FileAlignment))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, FileAlignment)), header->FileAlignment))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorOperatingSystemVersion)), header->MajorOperatingSystemVersion))
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorOperatingSystemVersion)), header->MajorOperatingSystemVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorOperatingSystemVersion)), header->MinorOperatingSystemVersion))
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorOperatingSystemVersion)), header->MinorOperatingSystemVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorImageVersion)), header->MajorImageVersion))
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorImageVersion)), header->MajorImageVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorImageVersion)), header->MinorImageVersion))
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorImageVersion)), header->MinorImageVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorSubsystemVersion)), header->MajorSubsystemVersion))
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorSubsystemVersion)), header->MajorSubsystemVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorSubsystemVersion)), header->MinorSubsystemVersion))
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorSubsystemVersion)), header->MinorSubsystemVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Win32VersionValue)), header->Win32VersionValue))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Win32VersionValue)), header->Win32VersionValue))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfImage)), header->SizeOfImage))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfImage)), header->SizeOfImage))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfHeaders)), header->SizeOfHeaders))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfHeaders)), header->SizeOfHeaders))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, CheckSum)), header->CheckSum))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, CheckSum)), header->CheckSum))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Subsystem)), header->Subsystem))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Subsystem)), header->Subsystem))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, DllCharacteristics)), header->DllCharacteristics))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, DllCharacteristics)), header->DllCharacteristics))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfStackReserve)), header->SizeOfStackReserve))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfStackReserve)), header->SizeOfStackReserve))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfStackCommit)), header->SizeOfStackCommit))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfStackCommit)), header->SizeOfStackCommit))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfHeapReserve)), header->SizeOfHeapReserve))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfHeapReserve)), header->SizeOfHeapReserve))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfHeapCommit)), header->SizeOfHeapCommit))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfHeapCommit)), header->SizeOfHeapCommit))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, LoaderFlags)), header->LoaderFlags))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, LoaderFlags)), header->LoaderFlags))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, NumberOfRvaAndSizes)), header->NumberOfRvaAndSizes))
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, NumberOfRvaAndSizes)), header->NumberOfRvaAndSizes))
     {
         //PE_ERR(PEERR_READ);
         return false;
@@ -1495,13 +1495,13 @@ bool readOptionalHeader(bounded_buffer* b, struct optional_header_32* header)
         uint32_t o;
 
         o = c + offsetof(struct data_directory, VirtualAddress);
-        if (!readDword(b, o, header->DataDirectory[i].VirtualAddress))
+        if (!writeDword(b, o, header->DataDirectory[i].VirtualAddress))
         {
             return false;
         }
 
         o = c + offsetof(struct data_directory, Size);
-        if (!readDword(b, o, header->DataDirectory[i].Size))
+        if (!writeDword(b, o, header->DataDirectory[i].Size))
         {
             return false;
         }
@@ -1510,177 +1510,386 @@ bool readOptionalHeader(bounded_buffer* b, struct optional_header_32* header)
     return true;
 }
 
-bool readOptionalHeader64(bounded_buffer* b, struct optional_header_64* header)
+bool readOptionalHeader(bounded_buffer* b, struct optional_header_32* header)
 {
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, Magic)), header->Magic))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Magic)), &header->Magic))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readByte(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MajorLinkerVersion)), header->MajorLinkerVersion))
+    if (!readByte(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorLinkerVersion)), &header->MajorLinkerVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readByte(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MinorLinkerVersion)), header->MinorLinkerVersion))
+    if (!readByte(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorLinkerVersion)), &header->MinorLinkerVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfCode)), header->SizeOfCode))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfCode)), &header->SizeOfCode))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfInitializedData)), header->SizeOfInitializedData))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfInitializedData)), &header->SizeOfInitializedData))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfUninitializedData)), header->SizeOfUninitializedData))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfUninitializedData)), &header->SizeOfUninitializedData))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, AddressOfEntryPoint)), header->AddressOfEntryPoint))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, AddressOfEntryPoint)), &header->AddressOfEntryPoint))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, BaseOfCode)), header->BaseOfCode))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, BaseOfCode)), &header->BaseOfCode))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, ImageBase)), header->ImageBase))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, BaseOfData)), &header->BaseOfData))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SectionAlignment)), header->SectionAlignment))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, ImageBase)), &header->ImageBase))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, FileAlignment)), header->FileAlignment))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SectionAlignment)), &header->SectionAlignment))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MajorOperatingSystemVersion)), header->MajorOperatingSystemVersion))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, FileAlignment)), &header->FileAlignment))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MinorOperatingSystemVersion)), header->MinorOperatingSystemVersion))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorOperatingSystemVersion)), &header->MajorOperatingSystemVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MajorImageVersion)), header->MajorImageVersion))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorOperatingSystemVersion)), &header->MinorOperatingSystemVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MinorImageVersion)), header->MinorImageVersion))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorImageVersion)), &header->MajorImageVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MajorSubsystemVersion)), header->MajorSubsystemVersion))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorImageVersion)), &header->MinorImageVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MinorSubsystemVersion)), header->MinorSubsystemVersion))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MajorSubsystemVersion)), &header->MajorSubsystemVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, Win32VersionValue)), header->Win32VersionValue))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, MinorSubsystemVersion)), &header->MinorSubsystemVersion))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfImage)), header->SizeOfImage))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Win32VersionValue)), &header->Win32VersionValue))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfHeaders)), header->SizeOfHeaders))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfImage)), &header->SizeOfImage))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, CheckSum)), header->CheckSum))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfHeaders)), &header->SizeOfHeaders))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, Subsystem)), header->Subsystem))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, CheckSum)), &header->CheckSum))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, DllCharacteristics)), header->DllCharacteristics))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Subsystem)), &header->Subsystem))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readQword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfStackReserve)), header->SizeOfStackReserve))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, DllCharacteristics)), &header->DllCharacteristics))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readQword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfStackCommit)), header->SizeOfStackCommit))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfStackReserve)), &header->SizeOfStackReserve))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readQword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfHeapReserve)), header->SizeOfHeapReserve))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfStackCommit)), &header->SizeOfStackCommit))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readQword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfHeapCommit)), header->SizeOfHeapCommit))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfHeapReserve)), &header->SizeOfHeapReserve))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readQword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, LoaderFlags)), header->LoaderFlags))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, SizeOfHeapCommit)), &header->SizeOfHeapCommit))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
-    
-    if (!readQword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, NumberOfRvaAndSizes)), header->NumberOfRvaAndSizes))
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, LoaderFlags)), &header->LoaderFlags))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_32, NumberOfRvaAndSizes)), &header->NumberOfRvaAndSizes))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (header->NumberOfRvaAndSizes > NUM_DIR_ENTRIES)
+    {
+        header->NumberOfRvaAndSizes = NUM_DIR_ENTRIES;
+    }
+
+    for (uint32_t i = 0; i < header->NumberOfRvaAndSizes; i++)
+    {
+        uint32_t c = (i * sizeof(struct data_directory));
+        c += offsetof(struct optional_header_32, DataDirectory[0]);
+        uint32_t o;
+
+        o = c + offsetof(struct data_directory, VirtualAddress);
+        if (!readDword(b, o, &header->DataDirectory[i].VirtualAddress))
+        {
+            return false;
+        }
+
+        o = c + offsetof(struct data_directory, Size);
+        if (!readDword(b, o, &header->DataDirectory[i].Size))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool writeOptionalHeader64(bounded_buffer* b, struct optional_header_64* header)
+{
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, Magic)), header->Magic))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeByte(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MajorLinkerVersion)), header->MajorLinkerVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeByte(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MinorLinkerVersion)), header->MinorLinkerVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfCode)), header->SizeOfCode))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfInitializedData)), header->SizeOfInitializedData))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfUninitializedData)), header->SizeOfUninitializedData))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, AddressOfEntryPoint)), header->AddressOfEntryPoint))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, BaseOfCode)), header->BaseOfCode))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, ImageBase)), header->ImageBase))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SectionAlignment)), header->SectionAlignment))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, FileAlignment)), header->FileAlignment))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MajorOperatingSystemVersion)), header->MajorOperatingSystemVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MinorOperatingSystemVersion)), header->MinorOperatingSystemVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MajorImageVersion)), header->MajorImageVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MinorImageVersion)), header->MinorImageVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MajorSubsystemVersion)), header->MajorSubsystemVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MinorSubsystemVersion)), header->MinorSubsystemVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, Win32VersionValue)), header->Win32VersionValue))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfImage)), header->SizeOfImage))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfHeaders)), header->SizeOfHeaders))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, CheckSum)), header->CheckSum))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, Subsystem)), header->Subsystem))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, DllCharacteristics)), header->DllCharacteristics))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfStackReserve)), header->SizeOfStackReserve))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfStackCommit)), header->SizeOfStackCommit))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfHeapReserve)), header->SizeOfHeapReserve))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfHeapCommit)), header->SizeOfHeapCommit))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, LoaderFlags)), header->LoaderFlags))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, NumberOfRvaAndSizes)), header->NumberOfRvaAndSizes))
     {
         //PE_ERR(PEERR_READ);
         return false;
@@ -1698,13 +1907,13 @@ bool readOptionalHeader64(bounded_buffer* b, struct optional_header_64* header)
         uint32_t o;
 
         o = c + offsetof(struct data_directory, VirtualAddress);
-        if (!readDword(b, o, header->DataDirectory[i].VirtualAddress))
+        if (!writeDword(b, o, header->DataDirectory[i].VirtualAddress))
         {
             return false;
         }
 
         o = c + offsetof(struct data_directory, Size);
-        if (!readDword(b, o, header->DataDirectory[i].Size))
+        if (!writeDword(b, o, header->DataDirectory[i].Size))
         {
             return false;
         }
@@ -1713,45 +1922,295 @@ bool readOptionalHeader64(bounded_buffer* b, struct optional_header_64* header)
     return true;
 }
 
+bool readOptionalHeader64(bounded_buffer* b, struct optional_header_64* header)
+{
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, Magic)), &header->Magic))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readByte(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MajorLinkerVersion)), &header->MajorLinkerVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readByte(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MinorLinkerVersion)), &header->MinorLinkerVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfCode)), &header->SizeOfCode))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfInitializedData)), &header->SizeOfInitializedData))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfUninitializedData)), &header->SizeOfUninitializedData))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, AddressOfEntryPoint)), &header->AddressOfEntryPoint))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, BaseOfCode)), &header->BaseOfCode))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, ImageBase)), &header->ImageBase))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SectionAlignment)), &header->SectionAlignment))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, FileAlignment)), &header->FileAlignment))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MajorOperatingSystemVersion)), &header->MajorOperatingSystemVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MinorOperatingSystemVersion)), &header->MinorOperatingSystemVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MajorImageVersion)), &header->MajorImageVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MinorImageVersion)), &header->MinorImageVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MajorSubsystemVersion)), &header->MajorSubsystemVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, MinorSubsystemVersion)), &header->MinorSubsystemVersion))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, Win32VersionValue)), &header->Win32VersionValue))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfImage)), &header->SizeOfImage))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfHeaders)), &header->SizeOfHeaders))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, CheckSum)), &header->CheckSum))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, Subsystem)), &header->Subsystem))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct optional_header_64, DllCharacteristics)), &header->DllCharacteristics))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readQword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfStackReserve)), &header->SizeOfStackReserve))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readQword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfStackCommit)), &header->SizeOfStackCommit))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readQword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfHeapReserve)), &header->SizeOfHeapReserve))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readQword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, SizeOfHeapCommit)), &header->SizeOfHeapCommit))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!readQword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, LoaderFlags)), &header->LoaderFlags))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+    
+    if (!readQword(b, 0 + (uint32_t)(offsetof(struct optional_header_64, NumberOfRvaAndSizes)), &header->NumberOfRvaAndSizes))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (header->NumberOfRvaAndSizes > NUM_DIR_ENTRIES)
+    {
+        header->NumberOfRvaAndSizes = NUM_DIR_ENTRIES;
+    }
+
+    for (uint32_t i = 0; i < header->NumberOfRvaAndSizes; i++) {
+        uint32_t c = (i * sizeof(struct data_directory));
+        //c += offsetof(struct optional_header_64, DataDirectory[0]);
+        c += offsetof(struct optional_header_64, DataDirectory);
+        uint32_t o;
+
+        o = c + offsetof(struct data_directory, VirtualAddress);
+        if (!readDword(b, o, &header->DataDirectory[i].VirtualAddress))
+        {
+            return false;
+        }
+
+        o = c + offsetof(struct data_directory, Size);
+        if (!readDword(b, o, &header->DataDirectory[i].Size))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool writeFileHeader(bounded_buffer* b, struct file_header* header)
+{
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct file_header, Machine)), header->Machine))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct file_header, NumberOfSections)), header->NumberOfSections))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct file_header, TimeDateStamp)), header->TimeDateStamp))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct file_header, PointerToSymbolTable)), header->PointerToSymbolTable))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct file_header, NumberOfSymbols)), header->NumberOfSymbols))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct file_header, SizeOfOptionalHeader)), header->SizeOfOptionalHeader))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    if (!writeWord(b, 0 + (uint32_t)(offsetof(struct file_header, Characteristics)), header->Characteristics))
+    {
+        //PE_ERR(PEERR_READ);
+        return false;
+    }
+
+    return true;
+}
+
 bool readFileHeader(bounded_buffer* b, struct file_header* header)
 {
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct file_header, Machine)), header->Machine))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct file_header, Machine)), &header->Machine))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct file_header, NumberOfSections)), header->NumberOfSections))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct file_header, NumberOfSections)), &header->NumberOfSections))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct file_header, TimeDateStamp)), header->TimeDateStamp))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct file_header, TimeDateStamp)), &header->TimeDateStamp))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct file_header, PointerToSymbolTable)), header->PointerToSymbolTable))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct file_header, PointerToSymbolTable)), &header->PointerToSymbolTable))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readDword(b, 0 + (uint32_t)(offsetof(struct file_header, NumberOfSymbols)), header->NumberOfSymbols))
+    if (!readDword(b, 0 + (uint32_t)(offsetof(struct file_header, NumberOfSymbols)), &header->NumberOfSymbols))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct file_header, SizeOfOptionalHeader)), header->SizeOfOptionalHeader))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct file_header, SizeOfOptionalHeader)), &header->SizeOfOptionalHeader))
     {
         //PE_ERR(PEERR_READ);
         return false;
     }
 
-    if (!readWord(b, 0 + (uint32_t)(offsetof(struct file_header, Characteristics)), header->Characteristics))
+    if (!readWord(b, 0 + (uint32_t)(offsetof(struct file_header, Characteristics)), &header->Characteristics))
     {
         //PE_ERR(PEERR_READ);
         return false;
@@ -2010,6 +2469,78 @@ bool readRichHeader(bounded_buffer* rich_buf, uint32_t key, struct rich_header* 
 
     // Preserve the decryption key
     rich_hdr->DecryptionKey = key;
+
+    return true;
+}
+
+bool writeRichHeader(bounded_buffer* rich_buf, uint32_t key, struct rich_header* rich_hdr)
+{
+    if (rich_buf == NULL || rich_hdr == NULL || !rich_hdr->isPresent)
+    {
+        return false;
+    }
+
+    uint32_t encrypted_dword;
+
+    // 1. Write DanS signature (0x536e6144) XORed with the key
+    encrypted_dword = RICH_MAGIC_START ^ key;
+    if (!writeDword(rich_buf, 0, encrypted_dword))
+    {
+        return false;
+    }
+
+    // 2. Write three DWORDs of zero padding (XORed with key)
+    // These reside at offsets 4, 8, and 12.
+    uint32_t padding = 0x0 ^ key;
+    for (uint32_t p = 4; p <= 12; p += 4)
+    {
+        if (!writeDword(rich_buf, p, padding))
+        {
+            return false;
+        }
+    }
+
+    // 3. Iterate over the entries list and write to buffer
+    // Starting at offset 16
+    uint32_t offset = 16;
+    list_t* current = rich_hdr->Entries; // Assuming a standard linked list structure
+
+    while (current != NULL && offset < (rich_buf->bufLen - 8))
+    {
+        struct rich_entry* entry = (struct rich_entry*)current->data;
+
+        // Pack ProductId (High) and BuildNumber (Low) into one DWORD
+        uint32_t raw_entry = (uint32_t)(entry->ProductId << 16) | (entry->BuildNumber & 0xFFFF);
+        encrypted_dword = raw_entry ^ key;
+
+        if (!writeDword(rich_buf, offset, encrypted_dword))
+        {
+            return false;
+        }
+
+        // Encrypt and write the Count
+        encrypted_dword = entry->Count ^ key;
+        if (!writeDword(rich_buf, offset + 4, encrypted_dword))
+        {
+            return false;
+        }
+
+        offset += 8;
+        current = current->next;
+    }
+
+    // 4. Write the end signature "Rich" (0x68636952)
+    // Note: The end signature and the key itself are NOT XORed
+    if (!writeDword(rich_buf, rich_buf->bufLen - 8, RICH_MAGIC_END))
+    {
+        return false;
+    }
+
+    // 5. Write the decryption key at the very end
+    if (!writeDword(rich_buf, rich_buf->bufLen - 4, key))
+    {
+        return false;
+    }
 
     return true;
 }
@@ -2418,6 +2949,90 @@ bool readDosHeader(bounded_buffer* file, struct dos_header* dos_hdr)
     return true;
 }
 
+bool writeNtHeader(bounded_buffer* b, struct nt_header_32* header)
+{
+    if (b == NULL || header == NULL)
+    {
+        return false;
+    }
+
+    // 1. Write the PE Magic (Signature)
+    uint32_t curOffset = 0;
+    if (!writeDword(b, curOffset, header->Signature))
+    {
+        return false;
+    }
+
+    // 2. Handle Byte Swapping (Endianness)
+    // We check the machine characteristics to see if the target buffer 
+    // requires byte swapping for the subsequent write operations.
+    if (TEST_MACHINE_CHARACTERISTICS(header, IMAGE_FILE_MACHINE_AMD64, IMAGE_FILE_BYTES_REVERSED_HI) ||
+        TEST_MACHINE_CHARACTERISTICS(header, IMAGE_FILE_MACHINE_ARM, IMAGE_FILE_BYTES_REVERSED_HI) ||
+        TEST_MACHINE_CHARACTERISTICS(header, IMAGE_FILE_MACHINE_ARM64, IMAGE_FILE_BYTES_REVERSED_HI) ||
+        TEST_MACHINE_CHARACTERISTICS(header, IMAGE_FILE_MACHINE_ARMNT, IMAGE_FILE_BYTES_REVERSED_HI) ||
+        TEST_MACHINE_CHARACTERISTICS(header, IMAGE_FILE_MACHINE_I386, IMAGE_FILE_BYTES_REVERSED_HI) ||
+        TEST_MACHINE_CHARACTERISTICS(header, IMAGE_FILE_MACHINE_M32R, IMAGE_FILE_BYTES_REVERSED_HI) ||
+        TEST_MACHINE_CHARACTERISTICS(header, IMAGE_FILE_MACHINE_POWERPC, IMAGE_FILE_BYTES_REVERSED_HI) ||
+        TEST_MACHINE_CHARACTERISTICS(header, IMAGE_FILE_MACHINE_R4000, IMAGE_FILE_BYTES_REVERSED_HI) ||
+        TEST_MACHINE_CHARACTERISTICS(header, IMAGE_FILE_MACHINE_WCEMIPSV2, IMAGE_FILE_BYTES_REVERSED_HI)) {
+        b->swapBytes = true;
+    }
+
+    // 3. Write File Header
+    bounded_buffer* fhb = splitBuffer(b, offsetof(struct nt_header_32, FileHeader), b->bufLen);
+    if (fhb == NULL)
+    {
+        return false;
+    }
+
+    if (!writeFileHeader(fhb, header->FileHeader))
+    {
+        deleteBuffer(fhb);
+        return false;
+    }
+
+    // 4. Write Optional Header
+    bounded_buffer* ohb = splitBuffer(b, offsetof(struct nt_header_32, OptionalHeader), b->bufLen);
+    if (ohb == NULL)
+    {
+        deleteBuffer(fhb);
+        return false;
+    }
+
+    // Determine which Optional Header version to write based on the Magic field
+    if (header->OptionalMagic == NT_OPTIONAL_32_MAGIC)
+    {
+        if (!writeOptionalHeader(ohb, header->OptionalHeader))
+        {
+            deleteBuffer(ohb);
+            deleteBuffer(fhb);
+            return false;
+        }
+    }
+    else if (header->OptionalMagic == NT_OPTIONAL_64_MAGIC)
+    {
+        // Assumes a corresponding write function for 64-bit optional headers
+        if (!writeOptionalHeader64(ohb, header->OptionalHeader64))
+        {
+            deleteBuffer(ohb);
+            deleteBuffer(fhb);
+            return false;
+        }
+    }
+    else
+    {
+        deleteBuffer(ohb);
+        deleteBuffer(fhb);
+        return false;
+    }
+
+    // Cleanup temporary split buffers
+    deleteBuffer(ohb);
+    deleteBuffer(fhb);
+
+    return true;
+}
+
 bool writeHeader(bounded_buffer* file, pe_header* p)
 {
     if (file == NULL || p == NULL)
@@ -2446,7 +3061,7 @@ bool writeHeader(bounded_buffer* file, pe_header* p)
     {
         // Note: Writing a Rich Header usually involves re-encoding it with 
         // the XOR key. This assumes a helper function handles that logic.
-        if (!writeRichHeader(file, RICH_OFFSET, p->rich))
+        if (!writeRichHeader(file, p->rich->DecryptionKey, p->rich))
         {
             return false;
         }
