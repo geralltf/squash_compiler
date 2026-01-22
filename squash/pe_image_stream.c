@@ -2331,7 +2331,7 @@ bool readNtHeader(bounded_buffer* b, struct nt_header_32* header)
 }
 
 // zero extends its first argument to 32 bits and then performs a rotate left
-// operation equal to the second arguments value of the first argument’s bits
+// operation equal to the second arguments value of the first argumentï¿½s bits
 static inline uint32_t rol(uint32_t val, uint32_t num)
 {
     //assert(num < 32);
@@ -2702,7 +2702,7 @@ bool writeDosHeader(bounded_buffer* file, struct dos_header* dos_hdr)
         return false;
     }
 
-    if (!readDword(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[5])), dos_hdr->e_res2[5]))
+    if (!writeDword(file, 0 + (uint32_t)(offsetof(struct dos_header, e_res2[5])), dos_hdr->e_res2[5]))
     {
         //PE_ERR(PEERR_READ);
         return false;
@@ -2738,7 +2738,7 @@ bool writeDosHeader(bounded_buffer* file, struct dos_header* dos_hdr)
         return false;
     }
 
-    if (!readDword(file, 0 + (uint32_t)(offsetof(struct dos_header, e_lfanew)), dos_hdr->e_lfanew))
+    if (!writeDword(file, 0 + (uint32_t)(offsetof(struct dos_header, e_lfanew)), dos_hdr->e_lfanew))
     {
         //PE_ERR(PEERR_READ);
         return false;
