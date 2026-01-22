@@ -2331,7 +2331,7 @@ bool readNtHeader(bounded_buffer* b, struct nt_header_32* header)
 }
 
 // zero extends its first argument to 32 bits and then performs a rotate left
-// operation equal to the second arguments value of the first argumentï¿½s bits
+// operation equal to the second arguments value of the first argument’s bits
 static inline uint32_t rol(uint32_t val, uint32_t num)
 {
     //assert(num < 32);
@@ -5304,6 +5304,11 @@ bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image
             program_pe->peHeader->dos = (struct dos_header*)malloc(sizeof(struct dos_header));
             program_pe->peHeader->nt = (struct nt_header_32*)malloc(sizeof(struct nt_header_32));
             program_pe->peHeader->rich = (struct rich_header*)malloc(sizeof(struct rich_header));
+
+            program_pe->peHeader->dos->e_magic = MZ_MAGIC;
+            //program_pe->peHeader->dos->e_lfanew = ;
+
+            writeHeader(program_pe->fileBuffer, program_pe->peHeader);
         }
     }
 
