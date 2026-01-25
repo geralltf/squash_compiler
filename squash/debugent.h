@@ -8,15 +8,18 @@
 
 struct buffer_detail;
 
-typedef struct _bounded_buffer {
+typedef struct _bounded_buffer
+{
     uint8_t* buf;
     uint32_t bufLen;
+    uint32_t bufCapacity;
     bool copy;
     bool swapBytes;
     struct buffer_detail* detail;
 } bounded_buffer;
 
-struct debugent {
+struct debugent
+{
     uint32_t type;
     bounded_buffer* data;
 };

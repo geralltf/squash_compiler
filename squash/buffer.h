@@ -20,5 +20,7 @@ bounded_buffer* makeBufferFromPointer(uint8_t* data, uint32_t sz);
 bounded_buffer* splitBuffer(bounded_buffer* b, uint32_t from, uint32_t to);
 void deleteBuffer(bounded_buffer* b);
 uint64_t bufLen(bounded_buffer* b);
+bool bufferGrow(bounded_buffer* buf, size_t min_capacity);
+void bufferAppend(bounded_buffer* buf, uint8_t data);
 
 #endif

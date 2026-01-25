@@ -5295,7 +5295,12 @@ bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image
 
     if (program_pe != NULL)
     {
-        program_pe->fileBuffer = NULL;
+        // bounded_buffer is an auto expanding buffer..
+        program_pe->fileBuffer = (bounded_buffer*)malloc(sizeof(bounded_buffer));
+        program_pe->fileBuffer->bufLen = 1;
+        program_pe->fileBuffer->bufCapacity = 1;
+        program_pe->fileBuffer->buf = (uint8_t*)malloc(sizeof(uint8_t));
+
         program_pe->internal = (struct parsed_pe_internal*)malloc(sizeof(struct parsed_pe_internal));
         program_pe->peHeader = (pe_header*)malloc(sizeof(pe_header));
 

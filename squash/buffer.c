@@ -94,10 +94,18 @@ bool writeByte(bounded_buffer* b, uint32_t offset, uint8_t value)
     // Ensure the offset + 2 bytes (size of uint16_t) does not exceed buffer length
     if ((uint64_t)offset + sizeof(uint8_t) > b->bufLen)
     {
-        return false;
+        if (!bufferGrow(b, offset))
+        {
+            return false;
+        }
     }
 
     uint8_t tmp = value;
+
+    if (!bufferGrow(b, offset + sizeof(uint8_t)))
+    {
+        return false;
+    }
 
     // Write the data to the buffer at the specified offset
     memcpy((b->buf + offset), &tmp, sizeof(uint8_t));
@@ -115,7 +123,10 @@ bool writeWord(bounded_buffer* b, uint32_t offset, uint16_t value)
     // Ensure the offset + 2 bytes (size of uint16_t) does not exceed buffer length
     if ((uint64_t)offset + sizeof(uint16_t) > b->bufLen)
     {
-        return false;
+        if (!bufferGrow(b, offset))
+        {
+            return false;
+        }
     }
 
     uint16_t tmp = value;
@@ -124,6 +135,11 @@ bool writeWord(bounded_buffer* b, uint32_t offset, uint16_t value)
     if (b->swapBytes)
     {
         tmp = byteSwapUint16(value);
+    }
+
+    if (!bufferGrow(b, offset + sizeof(uint16_t)))
+    {
+        return false;
     }
 
     // Write the data to the buffer at the specified offset
@@ -142,7 +158,10 @@ bool writeDword(bounded_buffer* b, uint32_t offset, uint32_t value)
     // Ensure the offset + 2 bytes (size of uint16_t) does not exceed buffer length
     if ((uint64_t)offset + sizeof(uint32_t) > b->bufLen)
     {
-        return false;
+        if (!bufferGrow(b, offset))
+        {
+            return false;
+        }
     }
 
     uint32_t tmp = value;
@@ -151,6 +170,11 @@ bool writeDword(bounded_buffer* b, uint32_t offset, uint32_t value)
     if (b->swapBytes)
     {
         tmp = byteSwapUint32(value);
+    }
+
+    if (!bufferGrow(b, offset + sizeof(uint32_t)))
+    {
+        return false;
     }
 
     // Write the data to the buffer at the specified offset
@@ -169,7 +193,10 @@ bool writeQword(bounded_buffer* b, uint32_t offset, uint64_t value)
     // Ensure the offset + 2 bytes (size of uint16_t) does not exceed buffer length
     if ((uint64_t)offset + sizeof(uint64_t) > b->bufLen)
     {
-        return false;
+        if (!bufferGrow(b, offset))
+        {
+            return false;
+        }
     }
 
     uint64_t tmp = value;
@@ -178,6 +205,11 @@ bool writeQword(bounded_buffer* b, uint32_t offset, uint64_t value)
     if (b->swapBytes)
     {
         tmp = byteSwapUint64(value);
+    }
+
+    if (!bufferGrow(b, offset + sizeof(uint64_t)))
+    {
+        return false;
     }
 
     // Write the data to the buffer at the specified offset
@@ -196,11 +228,19 @@ bool writeChar16(bounded_buffer* b, uint32_t offset, char16_t value)
     // Ensure the offset + 2 bytes does not exceed buffer length
     if ((uint64_t)offset + sizeof(char16_t) > b->bufLen)
     {
-        return false;
+        if (!bufferGrow(b, offset))
+        {
+            return false;
+        }
     }
 
     if (b->swapBytes)
     {
+        if (!bufferGrow(b, offset + (sizeof(uint8_t) * 2)))
+        {
+            return false;
+        }
+
         // Manually swap bytes and write to the buffer
         uint8_t* dest = b->buf + offset;
         dest[0] = (uint8_t)((value & 0xFF00) >> 8);
@@ -208,6 +248,11 @@ bool writeChar16(bounded_buffer* b, uint32_t offset, char16_t value)
     }
     else
     {
+        if (!bufferGrow(b, offset + sizeof(char16_t)))
+        {
+            return false;
+        }
+
         // Copy memory directly if no swap is required
         memcpy((b->buf + offset), &value, sizeof(char16_t));
     }
@@ -548,4 +593,40 @@ void deleteBuffer(bounded_buffer* b)
 uint64_t bufLen(bounded_buffer* b)
 {
     return b->bufLen;
+}
+
+bool bufferGrow(bounded_buffer* buf, size_t min_capacity)
+{
+    if (min_capacity <= buf->bufCapacity)
+    {
+        return false;
+    }
+
+    size_t new_capacity = buf->bufCapacity == 0 ? 1 : buf->bufCapacity; // Initial capacity of 1 if empty
+    while (new_capacity < min_capacity)
+    {
+        // Double the capacity or grow by a fixed factor (e.g., 1.5x or 2x)
+        // Doubling is efficient to reduce realloc calls
+        new_capacity *= 2;
+    }
+
+    char* new_buffer = realloc(buf->buf, new_capacity * sizeof(char));
+
+    if (new_buffer == NULL)
+    {
+        // Failed to reallocate buffer.
+        return false;
+    }
+    buf->buf = new_buffer;
+    buf->bufCapacity = new_capacity;
+
+    return true;
+}
+
+void bufferAppend(bounded_buffer* buf, uint8_t data)
+{
+    // Ensure enough capacity before appending
+    bufferGrow(buf, buf->bufLen + 1);
+
+    buf->buf[buf->bufLen++] = data;
 }
