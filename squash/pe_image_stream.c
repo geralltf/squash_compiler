@@ -1301,6 +1301,98 @@ bool getSections(bounded_buffer* b, bounded_buffer* fileBegin, struct nt_header_
     return true;
 }
 
+bool writeSections(bounded_buffer* b, uint32_t ntheader_offset, struct nt_header_32* nthdr, list_t* secs) // std::vector<section>& secs
+{
+    if (b == NULL)
+    {
+        return false;
+    }
+
+    list_t* c = secs;
+    struct section* thisSec;
+    struct image_section_header* curSec;
+    int i = 0;
+
+    while(c != NULL)
+    {
+        thisSec = (struct section*)c->data;
+        curSec = thisSec->sec;
+
+        uint32_t o = i * sizeof(struct image_section_header);
+        for (uint32_t k = 0; k < NT_SHORT_NAME_LEN; k++)
+        {
+            if (!writeByte(b, o + k, curSec->Name[k]))
+            {
+                return false;
+            }
+        }
+
+        if (!writeDword(b, o + (uint32_t)(offsetof(struct image_section_header, Misc.VirtualSize)), curSec->Misc.VirtualSize))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!writeDword(b, o + (uint32_t)(offsetof(struct image_section_header, VirtualAddress)), curSec->VirtualAddress))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!writeDword(b, o + (uint32_t)(offsetof(struct image_section_header, SizeOfRawData)), curSec->SizeOfRawData))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!writeDword(b, o + (uint32_t)(offsetof(struct image_section_header, PointerToRawData)), curSec->PointerToRawData))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!writeDword(b, o + (uint32_t)(offsetof(struct image_section_header, PointerToRelocations)), curSec->PointerToRelocations))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!writeDword(b, o + (uint32_t)(offsetof(struct image_section_header, PointerToLinenumbers)), curSec->PointerToLinenumbers))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!writeWord(b, o + (uint32_t)(offsetof(struct image_section_header, NumberOfRelocations)), curSec->NumberOfRelocations))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!writeWord(b, o + (uint32_t)(offsetof(struct image_section_header, NumberOfLinenumbers)), curSec->NumberOfLinenumbers))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        if (!writeDword(b, o + (uint32_t)(offsetof(struct image_section_header, Characteristics)), curSec->Characteristics))
+        {
+            //PE_ERR(PEERR_READ);
+            return false;
+        }
+
+        uint32_t lowOff = curSec->PointerToRawData;
+        uint32_t highOff = lowOff + curSec->SizeOfRawData;
+
+        memcpy(b->buf + ntheader_offset + lowOff, thisSec->sectionData->buf, highOff);
+
+        c = c->next;
+        i++;
+    }
+
+    return true;
+}
+
 bool writeOptionalHeader(bounded_buffer* b, struct optional_header_32* header)
 {
     if (!writeWord(b, 0 + (uint32_t)(offsetof(struct optional_header_32, Magic)), header->Magic))
@@ -5189,107 +5281,7 @@ bool GetDataDirectoryEntry(parsed_pe* pe, enum data_directory_kind dirnum, uint8
     return true;
 }
 
-bool WritePEFile(const char* fileName, parsed_pe* program_pe)
-{
-    return true;
-    //    // First, create a new parsed_pe structure
-    //// We pass std::nothrow parameter to new so in case of failure it returns
-    //// nullptr instead of throwing exception std::bad_alloc.
-    ////parsed_pe* p = new (std::nothrow) parsed_pe();
-    //    parsed_pe* p = (parsed_pe*)malloc(sizeof(parsed_pe));
-    //
-    //    if (p == NULL)
-    //    {
-    //        //PE_ERR(PEERR_MEM);
-    //        return NULL;
-    //    }
-    //
-    //    // Make a new buffer object to hold just our file data
-    //    p->fileBuffer = buffer;
-    //
-    //    p->internal = (struct parsed_pe_internal*)malloc(sizeof(struct parsed_pe_internal));
-    //
-    //    if (p->internal == NULL)
-    //    {
-    //        deleteBuffer(p->fileBuffer);
-    //        free(p);
-    //        //PE_ERR(PEERR_MEM);
-    //        return NULL;
-    //    }
-    //
-    //    // get header information
-    //    bounded_buffer* remaining = NULL;
-    //    if (!getHeader(p->fileBuffer, p->peHeader, remaining))
-    //    {
-    //        deleteBuffer(remaining);
-    //        DestructParsedPE(p);
-    //        // err is set by getHeader
-    //        return NULL;
-    //    }
-    //
-    //    bounded_buffer* file = p->fileBuffer;
-    //    if (!getSections(remaining, file, p->peHeader->nt, p->internal->secs))
-    //    {
-    //        deleteBuffer(remaining);
-    //        DestructParsedPE(p);
-    //        //PE_ERR(PEERR_SECT);
-    //        return NULL;
-    //    }
-    //
-    //    if (!getResources(remaining, file, p->internal->secs, p->internal->rsrcs))
-    //    {
-    //        deleteBuffer(remaining);
-    //        DestructParsedPE(p);
-    //        //PE_ERR(PEERR_RESC);
-    //        return NULL;
-    //    }
-    //
-    //    // Get exports
-    //    if (!getExports(p))
-    //    {
-    //        deleteBuffer(remaining);
-    //        DestructParsedPE(p);
-    //        //PE_ERR(PEERR_MAGIC);
-    //        return NULL;
-    //    }
-    //
-    //    // Get relocations, if exist
-    //    if (!getRelocations(p))
-    //    {
-    //        deleteBuffer(remaining);
-    //        DestructParsedPE(p);
-    //        //PE_ERR(PEERR_MAGIC);
-    //        return NULL;
-    //    }
-    //
-    //    if (!getDebugDir(p))
-    //    {
-    //        deleteBuffer(remaining);
-    //        DestructParsedPE(p);
-    //        //PE_ERR(PEERR_MAGIC);
-    //        return NULL;
-    //    }
-    //
-    //    // Get imports
-    //    if (!getImports(p))
-    //    {
-    //        deleteBuffer(remaining);
-    //        DestructParsedPE(p);
-    //        return NULL;
-    //    }
-    //
-    //    // Get symbol table
-    //    if (!getSymbolTable(p))
-    //    {
-    //        deleteBuffer(remaining);
-    //        DestructParsedPE(p);
-    //        return NULL;
-    //    }
-    //
-    //    deleteBuffer(remaining);
-}
-
-bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image, int encoded_length)
+bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image, int sq_program_image_length)
 {
     parsed_pe* program_pe = (parsed_pe*)malloc(sizeof(parsed_pe));
 
@@ -5310,12 +5302,124 @@ bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image
             program_pe->peHeader->nt = (struct nt_header_32*)malloc(sizeof(struct nt_header_32));
             program_pe->peHeader->rich = (struct rich_header*)malloc(sizeof(struct rich_header));
 
-            program_pe->peHeader->dos->e_magic = MZ_MAGIC;
-            //program_pe->peHeader->dos->e_lfanew = ;
+            if (program_pe->peHeader->dos != NULL)
+            {
+                program_pe->peHeader->dos->e_magic = MZ_MAGIC;
+                //program_pe->peHeader->dos->e_lfanew = ;
+            }
 
             writeHeader(program_pe->fileBuffer, program_pe->peHeader);
+
+            if (program_pe->peHeader->nt != NULL)
+            {
+                program_pe->peHeader->nt->OptionalMagic = NT_OPTIONAL_64_MAGIC;
+            }
+            
+            uint32_t ntheader_offset = 0; //TODO: advance buffer index as it writes to get nt header ofset and other offsets.
+
+            if (!writeSections(program_pe->fileBuffer, ntheader_offset, program_pe->peHeader->nt, program_pe->internal->secs))
+            {
+                //PE_ERR(PEERR_SECT);
+                return false;
+            }
         }
     }
+
+    //    // First, create a new parsed_pe structure
+//// We pass std::nothrow parameter to new so in case of failure it returns
+//// nullptr instead of throwing exception std::bad_alloc.
+////parsed_pe* p = new (std::nothrow) parsed_pe();
+//    parsed_pe* p = (parsed_pe*)malloc(sizeof(parsed_pe));
+//
+//    if (p == NULL)
+//    {
+//        //PE_ERR(PEERR_MEM);
+//        return NULL;
+//    }
+//
+//    // Make a new buffer object to hold just our file data
+//    p->fileBuffer = buffer;
+//
+//    p->internal = (struct parsed_pe_internal*)malloc(sizeof(struct parsed_pe_internal));
+//
+//    if (p->internal == NULL)
+//    {
+//        deleteBuffer(p->fileBuffer);
+//        free(p);
+//        //PE_ERR(PEERR_MEM);
+//        return NULL;
+//    }
+//
+//    // get header information
+//    bounded_buffer* remaining = NULL;
+//    if (!getHeader(p->fileBuffer, p->peHeader, remaining))
+//    {
+//        deleteBuffer(remaining);
+//        DestructParsedPE(p);
+//        // err is set by getHeader
+//        return NULL;
+//    }
+//
+//    bounded_buffer* file = p->fileBuffer;
+//    if (!getSections(remaining, file, p->peHeader->nt, p->internal->secs))
+//    {
+//        deleteBuffer(remaining);
+//        DestructParsedPE(p);
+//        //PE_ERR(PEERR_SECT);
+//        return NULL;
+//    }
+//
+//    if (!getResources(remaining, file, p->internal->secs, p->internal->rsrcs))
+//    {
+//        deleteBuffer(remaining);
+//        DestructParsedPE(p);
+//        //PE_ERR(PEERR_RESC);
+//        return NULL;
+//    }
+//
+//    // Get exports
+//    if (!getExports(p))
+//    {
+//        deleteBuffer(remaining);
+//        DestructParsedPE(p);
+//        //PE_ERR(PEERR_MAGIC);
+//        return NULL;
+//    }
+//
+//    // Get relocations, if exist
+//    if (!getRelocations(p))
+//    {
+//        deleteBuffer(remaining);
+//        DestructParsedPE(p);
+//        //PE_ERR(PEERR_MAGIC);
+//        return NULL;
+//    }
+//
+//    if (!getDebugDir(p))
+//    {
+//        deleteBuffer(remaining);
+//        DestructParsedPE(p);
+//        //PE_ERR(PEERR_MAGIC);
+//        return NULL;
+//    }
+//
+//    // Get imports
+//    if (!getImports(p))
+//    {
+//        deleteBuffer(remaining);
+//        DestructParsedPE(p);
+//        return NULL;
+//    }
+//
+//    // Get symbol table
+//    if (!getSymbolTable(p))
+//    {
+//        deleteBuffer(remaining);
+//        DestructParsedPE(p);
+//        return NULL;
+//    }
+//
+//    deleteBuffer(remaining);
 
     return true;
 }
