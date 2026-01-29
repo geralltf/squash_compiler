@@ -821,6 +821,125 @@ bool parse_resource_id(bounded_buffer* data, uint32_t id, char** result)
     return true;
 }
 
+bool write_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, const resource_dir_entry_t* dirent, struct resource_dir_table* rdt, const list_t* rsrcs)
+{
+    if (sectionData == NULL || dirent == NULL)
+    {
+        return false;
+    }
+        
+    struct resource* r;
+    list_t* c;
+
+    if (!writeDword(sectionData, o + offsetof(struct resource_dir_table, Characteristics), rdt->Characteristics))
+    {
+        return false;
+    }
+
+    if (!writeDword(sectionData, o + offsetof(struct resource_dir_table, TimeDateStamp), rdt->TimeDateStamp))
+    {
+        return false;
+    }
+
+    if (!writeWord(sectionData, o + offsetof(struct resource_dir_table, MajorVersion), rdt->MajorVersion))
+    {
+        return false;
+    }
+
+    if (!writeWord(sectionData, o + offsetof(struct resource_dir_table, MinorVersion), rdt->MinorVersion))
+    {
+        return false;
+    }
+
+    if (!writeWord(sectionData, o + offsetof(struct resource_dir_table, NameEntries), rdt->NameEntries))
+    {
+        return false;
+    }
+
+    if (!writeWord(sectionData, o + offsetof(struct resource_dir_table, IDEntries), rdt->IDEntries))
+    {
+        return false;
+    }
+
+    o += sizeof(struct resource_dir_table);
+
+    c = rsrcs;
+
+    while (c != NULL)
+    {
+        r = (struct resource*)c->data;
+
+        for (uint32_t i = 0; i < rdt->NameEntries + rdt->IDEntries; i++)
+        {
+            const struct resource_dir_entry* rde = &dirent[i];
+
+            if (!writeDword(sectionData, o + offsetof(struct resource_dir_entry, ID), rde->ID))
+            {
+                return false;
+            }
+
+            if (!writeDword(sectionData, o + offsetof(struct resource_dir_entry, RVA), rde->RVA))
+            {
+                return false;
+            }
+
+            o += sizeof(struct resource_dir_entry);
+
+            if (rde->RVA & 0x80000000)
+            {
+                if (!write_resource_table(sectionData, (uint32_t)(rde->RVA & 0x0FFFFFFF), virtaddr, depth + 1, rde, rdt, rsrcs))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+
+                struct resource_dat_entry rdat;
+
+                rdat.RVA = rde->RVA;
+                rdat.size = r->size;
+                rdat.codepage = r->codepage;
+                rdat.reserved = 0;
+
+
+                if (!writeDword(sectionData, rde->RVA + offsetof(struct resource_dat_entry, RVA), rdat.RVA))
+                {
+                    return false;
+                }
+
+                if (!writeDword(sectionData, rde->RVA + offsetof(struct resource_dat_entry, size), rdat.size))
+                {
+                    return false;
+                }
+
+                if (!writeDword(sectionData, rde->RVA + offsetof(struct resource_dat_entry, codepage), rdat.codepage))
+                {
+                    return false;
+                }
+
+                if (!writeDword(sectionData, rde->RVA + offsetof(struct resource_dat_entry, reserved), rdat.reserved))
+                {
+                    return false;
+                }
+
+                uint32_t start = rdat.RVA - virtaddr;
+
+                memcpy(sectionData->buf, r->buf->buf, start + rdat.size);
+
+                //if (!writeBuffer(sectionData, start, r->buf, rdat.size))
+                //{
+                //    return false;
+                //}
+            }
+        }
+
+        c = c->next;
+    }
+
+    return true;
+}
+
 bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, resource_dir_entry_t* dirent, list_t* rsrcs) // std::vector<resource>& rsrcs
 {
     struct resource_dir_table rdt;
@@ -961,9 +1080,6 @@ bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virt
             return false;
         }
 
-
-        // bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, struct resource_dir_entry* dirent, list_t* rsrcs)
-       
         // High bit 0 = RVA to RDT.
         // High bit 1 = RVA to RDE.
         if (rde->RVA & 0x80000000)
@@ -989,7 +1105,6 @@ bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virt
                 * We could store the original o value and reset it when we are done,
                 * but meh.
                 */
-
             if (!readDword(sectionData, rde->RVA + offsetof(struct resource_dat_entry, RVA), &rdat.RVA))
             {
                 //PE_ERR(PEERR_READ);
@@ -1154,13 +1269,20 @@ bool getResources(bounded_buffer* b, bounded_buffer* fileBegin, list_t* secs, li
     return true;
 }
 
-// Assuming 'section' is defined as a struct
-int compare_sections(const void* a, const void* b) {
+int compare_sections(const void* a, const void* b)
+{
     const struct section* lhs = (const struct section*)a;
     const struct section* rhs = (const struct section*)b;
 
-    if (lhs->sec->PointerToRawData < rhs->sec->PointerToRawData) return -1;
-    if (lhs->sec->PointerToRawData > rhs->sec->PointerToRawData) return 1;
+    if (lhs->sec->PointerToRawData < rhs->sec->PointerToRawData)
+    {
+        return -1;
+    }
+    if (lhs->sec->PointerToRawData > rhs->sec->PointerToRawData)
+    {
+        return 1;
+    }
+
     return 0;
 }
 
@@ -1297,6 +1419,49 @@ bool getSections(bounded_buffer* b, bounded_buffer* fileBegin, struct nt_header_
 
     // Assuming 'secs' is a standard C array and 'num_secs' is its length
     qsort(secs, num_secs, sizeof(struct section), &compare_sections);
+
+    return true;
+}
+
+bool writeResources(bounded_buffer* b, list_t* secs, list_t* rsrcs)
+{ //const std::vector<section> secs, std::vector<resource>& rsrcs) {
+    //static_cast<void>(fileBegin);
+
+    if (b == NULL)
+    {
+        return false;
+    }
+
+    struct section* s;
+    list_t* n = secs;
+
+    while (n != NULL)
+    {
+        s = (struct section*)n->data;
+
+        const char* left = (const char*)s->sectionName;
+        const char* right = ".rsrc";
+
+        if (strcmp(left, right) != 0)
+        {
+            n = n->next;
+
+            continue;
+        }
+
+        bounded_buffer* buff = s->sectionData;
+        uint32_t va = s->sec->VirtualAddress;
+
+
+        struct resource_dir_table* rdt;
+;
+        if (!write_resource_table(buff, (uint32_t)0, va, (uint32_t)0, NULL, rdt, rsrcs))
+        {
+            return false;
+        }
+
+        break; // Because there should only be one .rsrc
+    }
 
     return true;
 }
@@ -5308,18 +5473,31 @@ bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image
                 //program_pe->peHeader->dos->e_lfanew = ;
             }
 
-            writeHeader(program_pe->fileBuffer, program_pe->peHeader);
-
             if (program_pe->peHeader->nt != NULL)
             {
                 program_pe->peHeader->nt->OptionalMagic = NT_OPTIONAL_64_MAGIC;
             }
-            
-            uint32_t ntheader_offset = 0; //TODO: advance buffer index as it writes to get nt header ofset and other offsets.
 
-            if (!writeSections(program_pe->fileBuffer, ntheader_offset, program_pe->peHeader->nt, program_pe->internal->secs))
+            writeHeader(program_pe->fileBuffer, program_pe->peHeader);
+
+            if (program_pe->internal != NULL)
             {
-                //PE_ERR(PEERR_SECT);
+                uint32_t ntheader_offset = 0; //TODO: advance buffer index as it writes to get nt header ofset and other offsets.
+
+                if (!writeSections(program_pe->fileBuffer, ntheader_offset, program_pe->peHeader->nt, program_pe->internal->secs))
+                {
+                    //PE_ERR(PEERR_SECT);
+                    return false;
+                }
+
+                if (!writeResources(program_pe->fileBuffer, program_pe->internal->secs, program_pe->internal->rsrcs))
+                {
+                    //PE_ERR(PEERR_RESC);
+                    return false;
+                }
+            }
+            else
+            {
                 return false;
             }
         }
