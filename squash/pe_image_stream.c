@@ -821,6 +821,89 @@ bool parse_resource_id(bounded_buffer* data, uint32_t id, char** result)
     return true;
 }
 
+void build_pe(const char* outPath, section_def* sections, int sectionCount, uint64_t entryRVA)
+{
+    const uint32_t fileAlign = 0x200;
+    const uint32_t secAlign = 0x1000;
+    const uint64_t imageBase = 0x140000000;
+
+    binbuf buf;
+    bb_init(&buf, 4096);
+
+    // === DOS HEADER ===
+    IMAGE_DOS_HEADER dos = { 0 };
+    dos.e_magic = IMAGE_DOS_SIGNATURE;
+    dos.e_lfanew = 0x80;
+    bb_write(&buf, &dos, sizeof(dos));
+
+    // DOS stub padding
+    while (buf.size < 0x80)
+        bb_write(&buf, "\0", 1);
+
+    // === NT HEADERS ===
+    uint32_t ntHeaderOff = buf.size;
+
+    IMAGE_FILE_HEADER fh = { 0 };
+    fh.Machine = IMAGE_FILE_MACHINE_AMD64;
+    fh.NumberOfSections = sectionCount;
+    fh.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
+    fh.Characteristics = 0x0022;
+
+    IMAGE_OPTIONAL_HEADER64 oh = { 0 };
+    oh.Magic = 0x20B;
+    oh.ImageBase = imageBase;
+    oh.SectionAlignment = secAlign;
+    oh.FileAlignment = fileAlign;
+    oh.AddressOfEntryPoint = entryRVA;
+    oh.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
+
+    bb_write(&buf, "PE\0\0", 4);
+    bb_write(&buf, &fh, sizeof(fh));
+    bb_write(&buf, &oh, sizeof(oh));
+
+    // === SECTION TABLE ===
+    uint32_t sectionTableOff = buf.size;
+    IMAGE_SECTION_HEADER* shdrs = calloc(sectionCount, sizeof(IMAGE_SECTION_HEADER));
+
+    uint32_t rawPtr = (buf.size + sectionCount * sizeof(IMAGE_SECTION_HEADER) + fileAlign - 1) & ~(fileAlign - 1);
+    uint32_t virtAddr = secAlign;
+
+    for (int i = 0; i < sectionCount; i++) {
+        IMAGE_SECTION_HEADER* sh = &shdrs[i];
+        strncpy((char*)sh->Name, sections[i].name, 8);
+
+        sh->VirtualAddress = virtAddr;
+        sh->VirtualSize = sections[i].size;
+        sh->PointerToRawData = rawPtr;
+        sh->SizeOfRawData = (sections[i].size + fileAlign - 1) & ~(fileAlign - 1);
+        sh->Characteristics = sections[i].characteristics;
+
+        virtAddr += (sections[i].size + secAlign - 1) & ~(secAlign - 1);
+        rawPtr += sh->SizeOfRawData;
+    }
+
+    bb_write(&buf, shdrs, sectionCount * sizeof(IMAGE_SECTION_HEADER));
+    bb_align(&buf, fileAlign);
+
+    // === SECTION DATA ===
+    for (int i = 0; i < sectionCount; i++) {
+        bb_align(&buf, fileAlign);
+        bb_write(&buf, sections[i].data, sections[i].size);
+        bb_align(&buf, fileAlign);
+    }
+
+    // === FINALIZE OPTIONAL HEADER ===
+    oh.SizeOfHeaders = sectionTableOff + sectionCount * sizeof(IMAGE_SECTION_HEADER);
+    oh.SizeOfImage = virtAddr;
+
+    memcpy(buf.data + ntHeaderOff + 4 + sizeof(fh), &oh, sizeof(oh));
+
+    // === WRITE FILE ===
+    FILE* f = fopen(outPath, "wb");
+    fwrite(buf.data, 1, buf.size, f);
+    fclose(f);
+}
+
 bool write_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, const resource_dir_entry_t* dirent, struct resource_dir_table* rdt, const list_t* rsrcs)
 {
     if (sectionData == NULL || dirent == NULL)
