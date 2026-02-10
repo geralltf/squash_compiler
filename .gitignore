@@ -405,3 +405,6 @@ FodyWeavers.xsd
 ExampleCPrograms/hello.exe
 
 squash/squash.s
+
+squash/squash-test
+squash/squash-test.exe
