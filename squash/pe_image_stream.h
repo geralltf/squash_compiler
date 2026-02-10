@@ -111,6 +111,7 @@ struct section {
     char* sectionName;
     uint64_t sectionBase;
     bounded_buffer* sectionData;
+    //uint32_t size; // sectionData->bufLen
     struct image_section_header* sec;
 };
 
@@ -289,13 +290,13 @@ char* GetPEErrString();
 // get parser error location as string
 char* GetPEErrLoc();
 
-// get a PE parse context from a file
-parsed_pe* ParsePEFromFile(const char* filePath);
-
-parsed_pe* ParsePEFromPointer(uint8_t* buffer, uint32_t sz);
-parsed_pe* ParsePEFromBuffer(bounded_buffer* buffer);
-
-bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, resource_dir_entry_t* dirent, list_t* rsrcs);
+//// get a PE parse context from a file
+//parsed_pe* ParsePEFromFile(const char* filePath);
+//
+//parsed_pe* ParsePEFromPointer(uint8_t* buffer, uint32_t sz);
+//parsed_pe* ParsePEFromBuffer(bounded_buffer* buffer);
+//
+//bool parse_resource_table(bounded_buffer* sectionData, uint32_t o, uint32_t virtaddr, uint32_t depth, resource_dir_entry_t* dirent, list_t* rsrcs);
 
 // destruct a PE context
 void DestructParsedPE(parsed_pe* p);
@@ -386,6 +387,8 @@ bool GetDataDirectoryEntry(parsed_pe* pe, enum data_directory_kind dirnum, uint8
 //bool GetDataDirectoryEntry(parsed_pe* pe,
 //    data_directory_kind dirnum,
 //    std::vector<std::uint8_t>& raw_entry);
+
+void build_pe(const char* outPath, struct section* sections, int sectionCount, uint64_t entryRVA);
 
 bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image, int sq_program_image_length);
 
