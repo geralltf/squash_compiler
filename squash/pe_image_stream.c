@@ -37,6 +37,10 @@ THE SOFTWARE.
 //#include "parse.h"
 //#include "to_string.h"
 
+#define FILE_ALIGN 0x200
+#define SEC_ALIGN  0x1000
+#define IMAGE_BASE 0x140000000
+
 // String representation of Rich header object types
 char* kProdId_C = NULL;
 char* kProdId_CPP = NULL;
@@ -5759,139 +5763,332 @@ bool GetDataDirectoryEntry(parsed_pe* pe, enum data_directory_kind dirnum, uint8
     return true;
 }
 
-void bb_init(bounded_buffer* b, size_t cap)
+void bb_init(binbuf* b, size_t cap)
 {
-    b->buf = (uint8_t*)malloc(cap);
-    b->bufLen = 0;
-    b->bufCapacity = cap;
+    b->data = (uint8_t*)malloc(cap);
+    b->size = 0;
+    b->capacity = cap;
 }
 
-void bb_reserve(bounded_buffer* b, size_t add)
+void bb_reserve(binbuf* b, size_t add)
 {
-    if (b->bufLen + add > b->bufCapacity)
-    {
-        b->bufCapacity *= 2;
-
-        b->buf = (uint8_t*)realloc(b->buf, b->bufCapacity);
+    if (b->size + add > b->capacity) {
+        b->capacity *= 2;
+        b->data = (uint8_t*)realloc(b->data, b->capacity);
     }
 }
 
-size_t bb_write(bounded_buffer* b, const void* src, size_t sz)
+size_t bb_write(binbuf* b, const void* src, size_t sz)
 {
     bb_reserve(b, sz);
-    memcpy(b->buf + b->bufLen, src, sz);
-
-    size_t off = b->bufLen;
-    b->bufLen += sz;
-
+    memcpy(b->data + b->size, src, sz);
+    size_t off = b->size;
+    b->size += sz;
     return off;
 }
 
-void bb_align(bounded_buffer* b, size_t align)
+void bb_align(binbuf* b, size_t align)
 {
-    size_t pad = (align - (b->bufLen % align)) % align;
+    size_t pad = (align - (b->size % align)) % align;
     uint8_t zero[16] = { 0 };
-    while (pad) {
+    while (pad)
+    {
         size_t chunk = pad > sizeof(zero) ? sizeof(zero) : pad;
         bb_write(b, zero, chunk);
         pad -= chunk;
     }
 }
 
-void build_pe(const char* fileName, struct section* sections, int sectionCount, uint64_t entryRVA)
+dir build_imports(uint8_t* buf, uint32_t rvaBase)
+{
+    uint32_t off = 0;
+
+    IMAGE_IMPORT_DESCRIPTOR* imp = (void*)(buf + off);
+    off += sizeof(IMAGE_IMPORT_DESCRIPTOR) * 2; // one + null
+
+    uint32_t iltRVA = rvaBase + off;
+    uint64_t* ilt = (uint64_t*)(buf + off);
+    off += 8 * 4;
+
+    uint32_t iatRVA = rvaBase + off;
+    uint64_t* iat = (uint64_t*)(buf + off);
+    off += 8 * 4;
+
+    uint32_t nameRVA = rvaBase + off;
+    char* dllName = (char*)(buf + off);
+    strcpy(dllName, "KERNEL32.dll");
+    off += strlen(dllName) + 1;
+
+    const char* funcs[] = { "GetStdHandle","WriteFile","ExitProcess" };
+
+    for (int i = 0; i < 3; i++)
+    {
+        uint32_t hintNameRVA = rvaBase + off;
+        ilt[i] = hintNameRVA;
+        iat[i] = hintNameRVA;
+
+        *(uint16_t*)(buf + off) = 0;
+        off += 2;
+        strcpy((char*)(buf + off), funcs[i]);
+        off += strlen(funcs[i]) + 1;
+    }
+
+    imp[0].OriginalFirstThunk = iltRVA;
+    imp[0].FirstThunk = iatRVA;
+    imp[0].Name = nameRVA;
+
+    dir d = { rvaBase, off };
+    return d;
+}
+
+void build_pe(const char* fileName, section_def* sections, int sectionCount, uint64_t entryRVA, uint32_t idataSize, uint32_t textSize, uint32_t t)
 {
     const uint32_t fileAlign = 0x200;
     const uint32_t secAlign = 0x1000;
     const uint64_t imageBase = 0x140000000;
 
-    bounded_buffer buf;
+    binbuf buf;
     bb_init(&buf, 4096);
 
     // DOS HEADER.
-    struct dos_header dos = { 0 };
-    dos.e_magic = MZ_MAGIC;
-    dos.e_lfanew = RICH_OFFSET;
+    IMAGE_DOS_HEADER dos = { 0 };
+    dos.e_magic = MZ_MAGIC; // "MZ" 
+    dos.e_cblp = 0x0090;   // Bytes on last page
+    dos.e_cp = 0x0003;   // Pages in file
+    dos.e_crlc = 0x0000;   // No relocations
+    dos.e_cparhdr = 0x0004;   // Header size = 4 paragraphs (64 bytes)
+    dos.e_minalloc = 0x0000;   // No extra memory required
+    dos.e_maxalloc = 0xFFFF;   // Max memory
+    dos.e_ss = 0x0000;
+    dos.e_sp = 0x00B8;   // Typical DOS stub stack
+    dos.e_csum = 0x0000;
+    dos.e_ip = 0x0000;
+    dos.e_cs = 0x0000;
+    dos.e_lfarlc = 0x0040;   // Relocation table offset
+    dos.e_ovno = 0x0000;
+    dos.e_res[0] = 0; //  { 0, 0, 0, 0 };
+    dos.e_res[1] = 0;
+    dos.e_res[2] = 0;
+    dos.e_res[3] = 0;
+    dos.e_oemid = 0x0000;
+    dos.e_oeminfo = 0x0000;
+    dos.e_res2[0] = 0;
+    dos.e_lfanew = RICH_OFFSET;  // Offset to PE header
+    
+
     bb_write(&buf, &dos, sizeof(dos));
 
-    // DOS stub padding.
-    while (buf.bufLen < 0x80)
+    static const uint8_t dos_stub[] =
+    {
+        0x0E,                         // push cs
+        0x1F,                         // pop ds
+        0xBA, 0x0E, 0x00,             // mov dx, 000Eh (offset of string)
+        0xB4, 0x09,                   // mov ah, 09h (print string)
+        0xCD, 0x21,                   // int 21h
+        0xB8, 0x01, 0x4C,             // mov ax, 4C01h (exit)
+        0xCD, 0x21,                   // int 21h
+        // message:
+        'T','h','i','s',' ','p','r','o','g','r','a','m',' ',
+        'c','a','n','n','o','t',' ','b','e',' ','r','u','n',' ',
+        'i','n',' ','D','O','S',' ','m','o','d','e','.','\r','\n','$'
+    };
+
+    // Write the DOS stub program
+    bb_write(&buf, dos_stub, sizeof(dos_stub));
+
+    // DOS stub padding
+    while (buf.size < dos.e_lfanew)
     {
         bb_write(&buf, "\0", 1);
     }
 
     // NT HEADERS.
-    uint32_t ntHeaderOff = buf.bufLen;
+    uint32_t ntHeaderOff = buf.size;
 
-    struct file_header fh = { 0 };
+    IMAGE_FILE_HEADER fh = { 0 };
     fh.Machine = IMAGE_FILE_MACHINE_AMD64;
-    fh.NumberOfSections = sectionCount;
-    fh.SizeOfOptionalHeader = sizeof(struct optional_header_64);
-    fh.Characteristics = 0x0022;
-    
-    struct optional_header_64 oh = { 0 };
-    oh.Magic = 0x20B;
+    fh.NumberOfSections = sectionCount; // Update after adding sections
+    fh.TimeDateStamp = 0; // // Can be time(NULL) or 0
+    fh.PtrToSymbolTable = 0; // Deprecated for PE
+    fh.NumSymbols = 0; // Deprecated
+    fh.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
+    fh.Characteristics = 0x0002 | 0x0020; // | 0x2000; IMAGE_FILE_DLL // 0x0022 // IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE
+              
+
+    IMAGE_OPTIONAL_HEADER64 oh = { 0 };
+    oh.Magic = 0x20B; // 0x20B for PE32+
+    oh.MajorLinkerVersion = 1;
+    oh.MinorLinkerVersion = 0;
+    oh.SizeOfCode = 0; // fill later
+    oh.SizeOfInitializedData = 0; // fill later
+    oh.SizeOfUninitializedData = 0;
+
     oh.ImageBase = imageBase;
     oh.SectionAlignment = secAlign;
     oh.FileAlignment = fileAlign;
     oh.AddressOfEntryPoint = entryRVA;
-    oh.NumberOfRvaAndSizes = NUM_DIR_ENTRIES;
+    oh.BaseOfCode = entryRVA;
 
-    bb_write(&buf, "PE\0\0", 4);
-    bb_write(&buf, &fh, sizeof(fh));
-    bb_write(&buf, &oh, sizeof(oh));
+    oh.MajorOperatingSystemVersion = 6;
+    oh.MinorOperatingSystemVersion = 0;
+    oh.MajorImageVersion = 0;
+    oh.MinorImageVersion = 0;
+    oh.MajorSubsystemVersion = 6;
+    oh.MinorSubsystemVersion = 0;
+
+    oh.Win32VersionValue = 0;
+    //oh.SizeOfImage = 0;  // fill after sections
+    //oh.SizeOfHeaders = 0;  // fill after headers
+    oh.SizeOfImage = 0x3000;
+    oh.SizeOfHeaders = 0x200;
+    oh.CheckSum = 0;
+
+    // Critical:
+    oh.Subsystem = 3; // IMAGE_SUBSYSTEM_WINDOWS_CUI (console)
+    oh.SizeOfStackReserve = 0x100000;
+    oh.SizeOfStackCommit = 0x1000;
+    oh.SizeOfHeapReserve = 0x100000;
+    oh.SizeOfHeapCommit = 0x1000;
+    //oh.DllCharacteristics = 0x8160; // NX compatible, dynamic base, etc.
+    oh.DllCharacteristics =
+        0x0040 |  // IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
+        0x0100 |  // IMAGE_DLLCHARACTERISTICS_NX_COMPAT
+        0x0020;   // IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA
+
+    oh.LoaderFlags = 0;
+    oh.NumberOfRvaAndSizes = NUM_DIR_ENTRIES; // IMAGE_NUMBEROF_DIRECTORY_ENTRIES
+    //oh.DataDirectory = { 0 }; // zero all directories initially
+
+    oh.DataDirectory[1].VirtualAddress = 0x2000;
+    oh.DataDirectory[1].Size = idataSize;
+
+    bb_write(&buf, "PE\0\0", 4); // 4 bytes (DWORD)
+    bb_write(&buf, &fh, sizeof(fh)); // COFF header (20 bytes)
+    bb_write(&buf, &oh, sizeof(oh)); // Optional header
 
     // SECTION TABLE.
-    uint32_t sectionTableOff = buf.bufLen;
-    struct image_section_header* shdrs = calloc(sectionCount, sizeof(struct image_section_header));
+    uint32_t sectionTableOff = buf.size;
+    IMAGE_SECTION_HEADER* shdrs = calloc(sectionCount, sizeof(IMAGE_SECTION_HEADER));
 
-    uint32_t rawPtr = (buf.bufLen + sectionCount * sizeof(struct image_section_header) + fileAlign - 1) & ~(fileAlign - 1);
+    uint32_t rawPtr = (buf.size + sectionCount * sizeof(IMAGE_SECTION_HEADER) + fileAlign - 1) & ~(fileAlign - 1);
     uint32_t virtAddr = secAlign;
 
     for (int i = 0; i < sectionCount; i++)
     {
-        struct image_section_header* sh = &shdrs[i];
-        
-        sh->Name = (uint8_t*)malloc(sizeof(uint8_t) * 8);
+        IMAGE_SECTION_HEADER* sh = &shdrs[i];
+        strncpy((char*)sh->Name, sections[i].name, 8);
 
-        strncpy((char*)sh->Name, sections[i].sectionName, 8);
+        if (strcmp(sh->Name, ".idata") == 0)
+        {
+            sh->VirtualAddress = 0x2000;
+            sh->VirtualSize = idataSize;
+            sh->SizeOfRawData = idataSize;
+            sh->PointerToRawData = 0x200 + textSize;
+            sh->Characteristics = 0xC0000040;
+        }
+        else if (strcmp(sh->Name, ".text") == 0)
+        {
+            sh->VirtualAddress = 0x1000;
+            sh->VirtualSize = t;
+            sh->SizeOfRawData = textSize;
+            sh->PointerToRawData = 0x200;
+            sh->Characteristics = 0x60000020;
+        }
+        else
+        {
+            sh->VirtualAddress = virtAddr;
+            sh->VirtualSize = sections[i].size;
+            sh->PointerToRawData = rawPtr;
+            sh->SizeOfRawData = (sections[i].size + fileAlign - 1) & ~(fileAlign - 1);
+            sh->Characteristics = sections[i].characteristics;
+        }
 
-        sh->VirtualAddress = virtAddr;
-        sh->Misc.VirtualSize = sections[i].sectionData->bufLen;
-        sh->PointerToRawData = rawPtr;
-        sh->SizeOfRawData = (sections[i].sectionData->bufLen + fileAlign - 1) & ~(fileAlign - 1);
-        sh->Characteristics = sections[i].sec->Characteristics;
-
-        virtAddr += (sections[i].sectionData->bufLen + secAlign - 1) & ~(secAlign - 1);
+        virtAddr += (sections[i].size + secAlign - 1) & ~(secAlign - 1);
         rawPtr += sh->SizeOfRawData;
     }
 
-    bb_write(&buf, shdrs, sectionCount * sizeof(struct image_section_header));
+    bb_write(&buf, shdrs, sectionCount * sizeof(IMAGE_SECTION_HEADER));
     bb_align(&buf, fileAlign);
 
     // SECTION DATA.
     for (int i = 0; i < sectionCount; i++)
     {
         bb_align(&buf, fileAlign);
-        bb_write(&buf, sections[i].sectionData->buf, sections[i].sectionData->bufLen);
+        bb_write(&buf, sections[i].data, sections[i].size);
         bb_align(&buf, fileAlign);
     }
 
     // FINALIZE OPTIONAL HEADER.
-    oh.SizeOfHeaders = sectionTableOff + sectionCount * sizeof(struct image_section_header);
-    oh.SizeOfImage = virtAddr;
+    //oh.SizeOfHeaders = sectionTableOff + sectionCount * sizeof(IMAGE_SECTION_HEADER);
+    //oh.SizeOfImage = virtAddr;
+    oh.SizeOfImage = 0x3000;
+    oh.SizeOfHeaders = 0x200;
 
-    memcpy(buf.buf + ntHeaderOff + 4 + sizeof(fh), &oh, sizeof(oh));
+    memcpy(buf.data + ntHeaderOff + 4 + sizeof(fh), &oh, sizeof(oh));
 
     // WRITE FILE.
     FILE* f = fopen(fileName, "wb");
-    fwrite(buf.buf, 1, buf.bufLen, f);
+    fwrite(buf.data, 1, buf.size, f);
     fclose(f);
-}
 
+
+    //IMAGE_NT_HEADERS64 nt = { 0 };
+    //nt.Signature = 0x4550;
+
+    //nt.FileHeader.Machine = 0x8664;
+    //nt.FileHeader.NumberOfSections = 2;
+    //nt.FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
+    //nt.FileHeader.Characteristics = 0x0022;
+
+    //nt.OptionalHeader.Magic = 0x20B;
+    //nt.OptionalHeader.AddressOfEntryPoint = 0x1000;
+    //nt.OptionalHeader.BaseOfCode = 0x1000;
+    //nt.OptionalHeader.ImageBase = IMAGE_BASE;
+    //nt.OptionalHeader.SectionAlignment = SEC_ALIGN;
+    //nt.OptionalHeader.FileAlignment = FILE_ALIGN;
+    //nt.OptionalHeader.SizeOfImage = 0x3000;
+    //nt.OptionalHeader.SizeOfHeaders = 0x200;
+    //nt.OptionalHeader.Subsystem = 3;
+    //nt.OptionalHeader.SizeOfStackReserve = 0x100000;
+    //nt.OptionalHeader.SizeOfStackCommit = 0x1000;
+    //nt.OptionalHeader.SizeOfHeapReserve = 0x100000;
+    //nt.OptionalHeader.SizeOfHeapCommit = 0x1000;
+    //nt.OptionalHeader.NumberOfRvaAndSizes = 16;
+
+
+
+    //fwrite(&nt, sizeof(nt), 1, f);
+
+    //IMAGE_SECTION_HEADER sh[2] = { 0 };
+
+    //memcpy(sh[0].Name, ".text", 5);
+    //sh[0].VirtualAddress = 0x1000;
+    //sh[0].VirtualSize = t;
+    //sh[0].SizeOfRawData = textSize;
+    //sh[0].PointerToRawData = 0x200;
+    //sh[0].Characteristics = 0x60000020;
+
+    //memcpy(sh[1].Name, ".idata", 6);
+    //sh[1].VirtualAddress = 0x2000;
+    //sh[1].VirtualSize = idataSize;
+    //sh[1].SizeOfRawData = idataSize;
+    //sh[1].PointerToRawData = 0x200 + textSize;
+    //sh[1].Characteristics = 0xC0000040;
+
+    //fwrite(sh, sizeof(sh), 1, f);
+
+    //uint32_t headerPad = 0x200 - (ftell(f));
+    //fwrite(pad, headerPad, 1, f);
+
+    //fwrite(text, textSize, 1, f);
+    //fwrite(idata, idataSize, 1, f);
+
+    //fclose(f);
+}
 
 bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image, int sq_program_image_length)
 {
-    parsed_pe* program_pe = (parsed_pe*)malloc(sizeof(parsed_pe));
+    //parsed_pe* program_pe = (parsed_pe*)malloc(sizeof(parsed_pe));
 
     //if (program_pe != NULL)
     //{
@@ -5957,24 +6154,103 @@ bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image
     //    }
     //}
 
+    // --------------------------------------------------------
+    // TEXT SECTION (code + data)
+    // --------------------------------------------------------
+
+    uint8_t text[512] = { 0 };
+    uint32_t t = 0;
+
+    // x64 machine code
+    uint8_t code[] = {
+        0x48,0x83,0xEC,0x28,
+        0x48,0xC7,0xC1,0xF5,0xFF,0xFF,0xFF,
+        0x48,0x8B,0x05,0,0,0,0,
+        0xFF,0xD0,
+
+        0x48,0x89,0xC1,
+        0x48,0x8D,0x15,0,0,0,0,
+        0x41,0xB8,16,0,0,0,
+        0x4C,0x8D,0x0D,0,0,0,0,
+        0x48,0xC7,0x44,0x24,0x20,0,0,0,0,
+        0x48,0x8B,0x05,0,0,0,0,
+        0xFF,0xD0,
+
+        0x31,0xC9,
+        0x48,0x8B,0x05,0,0,0,0,
+        0xFF,0xD0
+    };
+
+    memcpy(text + t, code, sizeof(code));
+    t += sizeof(code);
+
+    uint32_t msg_off = t;
+    char msg[] = "Hello from PE!\r\n";
+    memcpy(text + t, msg, sizeof(msg));
+    t += sizeof(msg);
+
+    uint32_t written_off = t;
+    *(uint32_t*)(text + t) = 0;
+    t += 4;
+
+    #define FILE_ALIGN  0x200
+
+    uint32_t textSize = ALIGN(t, FILE_ALIGN);
+
+    // --------------------------------------------------------
+    // IDATA SECTION
+    // --------------------------------------------------------
+
+    uint8_t idata[512] = { 0 };
+    uint32_t i = 0;
+
+    IMAGE_IMPORT_DESCRIPTOR* imp = (void*)idata;
+
+    uint32_t iltRVA = 0x2000 + 0x28;
+    uint32_t iatRVA = iltRVA + 32;
+    uint32_t nameRVA = iatRVA + 32;
+    uint32_t hintRVA = nameRVA + 14;
+
+    imp->OriginalFirstThunk = iltRVA;
+    imp->FirstThunk = iatRVA;
+    imp->Name = nameRVA;
+    imp->ForwarderChain = 0xFFFFFFFF;
+
+    uint64_t* ilt = (uint64_t*)(idata + 0x28);
+    uint64_t* iat = (uint64_t*)(idata + 0x48);
+
+    strcpy((char*)(idata + 0x68), "KERNEL32.dll");
+
+    const char* names[] = { "GetStdHandle","WriteFile","ExitProcess" };
+    uint32_t off = 0x76;
+
+    for (int n = 0; n < 3; n++) {
+        ilt[n] = 0x2000 + off;
+        iat[n] = 0x2000 + off;
+        *(uint16_t*)(idata + off) = 0;
+        strcpy((char*)(idata + off + 2), names[n]);
+        off += 2 + strlen(names[n]) + 1;
+    }
+
+    uint32_t idataSize = ALIGN(off, FILE_ALIGN);
+
     //uint8_t code[] = { 0xC3 }; // ret
-    struct section secs[1];
-    secs[0].sectionName = create_heap_string(".text");
-    secs[0].sectionData = (bounded_buffer*)malloc(sizeof(bounded_buffer));
-    secs[0].sectionData->buf = (uint8_t*)sq_program_image;
-    secs[0].sectionData->bufLen = sizeof(uint8_t) * sq_program_image_length;
-    secs[0].sectionData->bufCapacity = sizeof(uint8_t) * sq_program_image_length;
-    secs[0].sectionData->copy = false;
-    secs[0].sectionData->swapBytes = false;
-    secs[0].sectionData->detail = NULL;
+    section_def secs[2];
+    secs[0].name = ".text";
+    secs[0].data = text;
+    secs[0].size = sizeof(uint8_t) * 512;
+    //secs[0].data = (uint8_t*)sq_program_image;
+    //secs[0].size = sizeof(uint8_t) * sq_program_image_length;
+    //secs[0].data = code;
+    //secs[0].size = sizeof(code);
+    secs[0].characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ;
 
-    secs[0].sec = (struct image_section_header*)malloc(sizeof(struct image_section_header));
-    
-    memset(secs[0].sec, 0, sizeof(struct image_section_header));
+    secs[1].name = ".idata";
+    secs[1].data = idata;
+    secs[1].size = sizeof(uint8_t) * 512;
+    secs[1].characteristics = IMAGE_SCN_MEM_READ;
 
-    secs[0].sec->Characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ;
-
-    build_pe(fileName, secs, 1, 0x1000);
+    build_pe(fileName, secs, 2, 0x1000, idataSize, textSize, t);
 
     return true;
 }

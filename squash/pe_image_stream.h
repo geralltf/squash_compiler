@@ -107,6 +107,8 @@ THE SOFTWARE.
 #define SYMBOL_NAME_OFFSET(sn) ((uint32_t)(sn->data >> 32))
 #define SYMBOL_TYPE_HI(x) (x->type >> 8)
 
+#define ALIGN(x,a) (((x)+(a-1))&~(a-1))
+
 struct section {
     char* sectionName;
     uint64_t sectionBase;
@@ -275,6 +277,136 @@ typedef struct _parsed_pe {
     pe_header* peHeader;
 } parsed_pe;
 
+////////////////////////////////////////////////////
+
+//#define IMAGE_NUMBEROF_DIRECTORY_ENTRIES 16
+
+typedef struct
+{
+    uint16_t e_magic;      // Magic number ("MZ")
+    uint16_t e_cblp;       // Bytes on last page of file
+    uint16_t e_cp;         // Pages in file
+    uint16_t e_crlc;       // Relocations
+    uint16_t e_cparhdr;    // Size of header in paragraphs
+    uint16_t e_minalloc;   // Minimum extra paragraphs needed
+    uint16_t e_maxalloc;   // Maximum extra paragraphs needed
+    uint16_t e_ss;         // Initial (relative) SS
+    uint16_t e_sp;         // Initial SP
+    uint16_t e_csum;       // Checksum
+    uint16_t e_ip;         // Initial IP
+    uint16_t e_cs;         // Initial (relative) CS
+    uint16_t e_lfarlc;     // File address of relocation table
+    uint16_t e_ovno;       // Overlay number
+    uint16_t e_res[4];     // Reserved words
+    uint16_t e_oemid;      // OEM identifier
+    uint16_t e_oeminfo;    // OEM information
+    uint16_t e_res2[10];   // Reserved words
+    int32_t  e_lfanew;     // File address of PE header
+} IMAGE_DOS_HEADER;
+
+typedef struct
+{
+    //uint32_t Signature;
+    uint16_t Machine;
+    uint16_t NumberOfSections;
+    uint32_t TimeDateStamp;
+    uint32_t PtrToSymbolTable;
+    uint32_t NumSymbols;
+    uint16_t SizeOfOptionalHeader;
+    uint16_t Characteristics;
+} IMAGE_FILE_HEADER;
+
+typedef struct
+{
+    uint32_t VirtualAddress;
+    uint32_t Size;
+} IMAGE_DATA_DIRECTORY;
+
+typedef struct
+{
+    uint16_t Magic;
+    uint8_t  MajorLinkerVersion;
+    uint8_t  MinorLinkerVersion;
+    uint32_t SizeOfCode;
+    uint32_t SizeOfInitializedData;
+    uint32_t SizeOfUninitializedData;
+    uint32_t AddressOfEntryPoint;
+    uint32_t BaseOfCode;
+
+    uint64_t ImageBase;
+    uint32_t SectionAlignment;
+    uint32_t FileAlignment;
+
+    uint16_t MajorOperatingSystemVersion;
+    uint16_t MinorOperatingSystemVersion;
+    uint16_t MajorImageVersion;
+    uint16_t MinorImageVersion;
+    uint16_t MajorSubsystemVersion;
+    uint16_t MinorSubsystemVersion;
+
+    uint32_t Win32VersionValue;
+    uint32_t SizeOfImage;
+    uint32_t SizeOfHeaders;
+    uint32_t CheckSum;
+
+    uint16_t Subsystem;
+    uint16_t DllCharacteristics;
+
+    uint64_t SizeOfStackReserve;
+    uint64_t SizeOfStackCommit;
+    uint64_t SizeOfHeapReserve;
+    uint64_t SizeOfHeapCommit;
+
+    uint32_t LoaderFlags;
+    uint32_t NumberOfRvaAndSizes;
+
+    IMAGE_DATA_DIRECTORY DataDirectory[NUM_DIR_ENTRIES];
+} IMAGE_OPTIONAL_HEADER64;
+
+typedef struct
+{
+    uint8_t  Name[8];
+    uint32_t VirtualSize;
+    uint32_t VirtualAddress;
+    uint32_t SizeOfRawData;
+    uint32_t PointerToRawData;
+    uint8_t  pad[16];
+    uint32_t Characteristics;
+} IMAGE_SECTION_HEADER;
+
+typedef struct
+{
+    const char* name;
+    uint8_t* data;
+    uint32_t size;
+    uint32_t characteristics;
+} section_def;
+
+typedef struct _IMAGE_IMPORT_DESCRIPTOR {
+    union {
+        uint32_t Characteristics;      // 0 for terminating null descriptor
+        uint32_t OriginalFirstThunk;   // RVA to Import Lookup Table (ILT)
+    };
+    uint32_t TimeDateStamp;            // 0 if not bound
+    uint32_t ForwarderChain;           // -1 if no forwarders
+    uint32_t Name;                     // RVA of DLL name string
+    uint32_t FirstThunk;               // RVA to Import Address Table (IAT)
+} IMAGE_IMPORT_DESCRIPTOR;
+
+typedef struct 
+{
+    uint32_t rva; 
+    uint32_t size; 
+} dir;
+
+typedef struct {
+    uint8_t* data;
+    size_t   size;
+    size_t   capacity;
+} binbuf;
+
+///////////////////////////////////////////////////
+
 // Resolve a Rich header product id / build number pair to a known
 // product name
 //typedef std::pair<std::uint16_t, std::uint16_t> ProductKey;
@@ -388,7 +520,7 @@ bool GetDataDirectoryEntry(parsed_pe* pe, enum data_directory_kind dirnum, uint8
 //    data_directory_kind dirnum,
 //    std::vector<std::uint8_t>& raw_entry);
 
-void build_pe(const char* outPath, struct section* sections, int sectionCount, uint64_t entryRVA);
+void build_pe(const char* outPath, section_def* sections, int sectionCount, uint64_t entryRVA, uint32_t idataSize, uint32_t textSize, uint32_t t);
 
 bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image, int sq_program_image_length);
 
