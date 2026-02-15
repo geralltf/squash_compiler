@@ -243,9 +243,9 @@ int main(){
     op->SizeOfImage=0x3000;
     op->SizeOfHeaders=0x200;
     op->Subsystem=3;
-    op->SizeOfStackReserve=0x1000;
+    op->SizeOfStackReserve=0x100000;
     op->SizeOfStackCommit=0x1000;
-    op->SizeOfHeapReserve=0x1000;
+    op->SizeOfHeapReserve=0x100000;
     op->SizeOfHeapCommit=0x1000;
     op->NumberOfRvaAndSizes=16;
 
