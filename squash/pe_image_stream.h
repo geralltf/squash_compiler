@@ -500,56 +500,90 @@ THE SOFTWARE.
 #define SEC_ALIGN  0x1000
 #define IMAGE_BASE 0x140000000ULL
 
-// ------------------------------------------------
-// STRUCTS
-// ------------------------------------------------
+#define FA 0x200
+#define SA 0x1000
+#define IMAGE_BASE 0x140000000ULL
+#define ALIGN(x,a) (((x)+(a-1))&~(a-1))
+
+// ------------------------------------------------------------
+// PE STRUCTS
+// ------------------------------------------------------------
 
 typedef struct {
     uint16_t e_magic;
     uint8_t  pad[58];
     uint32_t e_lfanew;
-} DOS;
-
-typedef struct { uint32_t VA, Size; } DIR;
+} IMAGE_DOS_HEADER;
 
 typedef struct {
-    uint16_t Machine, Sections;
-    uint32_t Time;
-    uint32_t SymPtr, NumSyms;
-    uint16_t OptSize, Chars;
-} FILEHDR;
+    uint32_t VirtualAddress;
+    uint32_t Size;
+} IMAGE_DATA_DIRECTORY;
+
+typedef struct {
+    uint16_t Machine;
+    uint16_t NumberOfSections;
+    uint32_t TimeDateStamp;
+    uint32_t PtrToSymbolTable;
+    uint32_t NumSymbols;
+    uint16_t SizeOfOptionalHeader;
+    uint16_t Characteristics;
+} IMAGE_FILE_HEADER;
 
 typedef struct {
     uint16_t Magic;
-    uint8_t  MajL, MinL;
-    uint32_t CodeSz, InitSz, UninitSz;
-    uint32_t Entry, BaseCode;
+    uint8_t  MajorLinkerVersion;
+    uint8_t  MinorLinkerVersion;
+    uint32_t SizeOfCode;
+    uint32_t SizeOfInitializedData;
+    uint32_t SizeOfUninitializedData;
+    uint32_t AddressOfEntryPoint;
+    uint32_t BaseOfCode;
     uint64_t ImageBase;
-    uint32_t SecAlign, FileAlign;
-    uint16_t OSv1, OSv2, ImgV1, ImgV2, SubV1, SubV2;
-    uint32_t Win32Ver;
-    uint32_t ImgSz, HdrSz, Chk;
-    uint16_t Subsys, DllChars;
-    uint64_t StkRes, StkCom, HeapRes, HeapCom;
-    uint32_t Loader, Dirs;
-    DIR Dir[16];
-} OPT64;
-
-typedef struct { uint32_t Sig; FILEHDR F; OPT64 O; } NT64;
+    uint32_t SectionAlignment;
+    uint32_t FileAlignment;
+    uint16_t MajorOSVersion, MinorOSVersion;
+    uint16_t MajorImageVersion, MinorImageVersion;
+    uint16_t MajorSubsystemVersion, MinorSubsystemVersion;
+    uint32_t Win32VersionValue;
+    uint32_t SizeOfImage;
+    uint32_t SizeOfHeaders;
+    uint32_t CheckSum;
+    uint16_t Subsystem;
+    uint16_t DllCharacteristics;
+    uint64_t SizeOfStackReserve, SizeOfStackCommit;
+    uint64_t SizeOfHeapReserve, SizeOfHeapCommit;
+    uint32_t LoaderFlags;
+    uint32_t NumberOfRvaAndSizes;
+    IMAGE_DATA_DIRECTORY DataDirectory[16];
+} IMAGE_OPTIONAL_HEADER64;
 
 typedef struct {
-    uint8_t Name[8];
-    uint32_t VSize, VA, RawSize, RawPtr;
-    uint8_t pad[12];
-    uint32_t Chars;
-} SECT;
+    uint32_t Signature;
+    IMAGE_FILE_HEADER FileHeader;
+    IMAGE_OPTIONAL_HEADER64 OptionalHeader;
+} IMAGE_NT_HEADERS64;
 
 typedef struct {
-    uint32_t ILT;
-    uint32_t Time;
-    uint32_t Fwd;
+    uint8_t  Name[8];
+    uint32_t VirtualSize;
+    uint32_t VirtualAddress;
+    uint32_t SizeOfRawData;
+    uint32_t PointerToRawData;
+    uint8_t  pad[12];
+    uint32_t Characteristics;
+} IMAGE_SECTION_HEADER;
+
+typedef struct {
+    uint32_t OriginalFirstThunk;
+    uint32_t TimeDateStamp;
+    uint32_t ForwarderChain;
     uint32_t Name;
-    uint32_t IAT;
+    uint32_t FirstThunk;
+} IMAGE_IMPORT_DESCRIPTOR;
+
+typedef struct {
+    uint32_t OFT, Time, Fwd, Name, FT;
 } IMPDESC;
 
 ///////////////////////////////////////////////////
@@ -575,7 +609,7 @@ char* GetPEErrLoc();
 //// get subsystem as human readable string
 //const char* GetSubsystemAsString(parsed_pe* pe);
 
-void build_pe(const char* outPath);
+void build_pe(const char* fileName);
 
 bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image, int sq_program_image_length);
 

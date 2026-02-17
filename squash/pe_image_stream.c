@@ -740,197 +740,173 @@ char* GetSymbolTableStorageClassName(uint8_t id)
 //    return d;
 //}
 
-static const uint8_t dos_stub[] = {
-  0x0E,0x1F,0xBA,0x0E,0x00,0xB4,0x09,0xCD,0x21,
-  0xB8,0x01,0x4C,0xCD,0x21,
-  'T','h','i','s',' ','p','r','o','g','r','a','m',' ',
-  'c','a','n','n','o','t',' ','b','e',' ','r','u','n',' ',
-  'i','n',' ','D','O','S',' ','m','o','d','e','.','\r','\n','$'
-};
-
-//uint32_t build_imports(uint8_t* buf, uint32_t rvaBase)
-//{
-//    memset(buf, 0, 512);
-//
-//    IMAGE_IMPORT_DESCRIPTOR* imp = (void*)buf;
-//
-//    uint32_t off = sizeof(IMAGE_IMPORT_DESCRIPTOR) * 2;
-//
-//    uint32_t iltRVA = rvaBase + off;
-//    uint64_t* ilt = (uint64_t*)(buf + off);
-//    off += 32;
-//
-//    uint32_t iatRVA = rvaBase + off;
-//    uint64_t* iat = (uint64_t*)(buf + off);
-//    off += 32;
-//
-//    uint32_t nameRVA = rvaBase + off;
-//    strcpy((char*)(buf + off), "KERNEL32.dll");
-//    off += 13;
-//
-//    const char* names[] = { "GetStdHandle","WriteFile","ExitProcess" };
-//
-//    for (int i = 0; i < 3; i++) {
-//        uint32_t hintNameRVA = rvaBase + off;
-//
-//        ilt[i] = hintNameRVA;
-//        iat[i] = hintNameRVA;
-//
-//        *(uint16_t*)(buf + off) = 0;
-//        off += 2;
-//        strcpy((char*)(buf + off), names[i]);
-//        off += strlen(names[i]) + 1;
-//    }
-//
-//    imp->OriginalFirstThunk = iltRVA;
-//    imp->FirstThunk = iatRVA;
-//    imp->Name = nameRVA;
-//    imp->ForwarderChain = 0xFFFFFFFF;
-//
-//    return ALIGN(off, FILE_ALIGN);
-//}
-
-uint8_t code[] = {
-    0x48,0x83,0xEC,0x28,
-
-    // GetStdHandle(-11)
-    0x48,0xC7,0xC1,0xF5,0xFF,0xFF,0xFF,
-    0xFF,0x15,0,0,0,0,
-
-    // WriteFile(...)
-    0x48,0x89,0xC1,
-    0x48,0x8D,0x15,0,0,0,0,
-    0x41,0xB8,16,0,0,0,
-    0x4C,0x8D,0x0D,0,0,0,0,
-    0x48,0xC7,0x44,0x24,0x20,0,0,0,0,
-    0xFF,0x15,0,0,0,0,
-
-    // ExitProcess(0)
-    0x31,0xC9,
-    0xFF,0x15,0,0,0,0
-};
-
-#define FA 0x200
-#define SA 0x1000
-
-void build_pe(const char* path)
+static const uint8_t dos_stub[] = 
 {
-    FILE* f = fopen(path, "wb");
+    0x0E,0x1F,0xBA,0x0E,0x00,0xB4,0x09,0xCD,0x21,
+    0xB8,0x01,0x4C,0xCD,0x21,
+    'T','h','i','s',' ','p','r','o','g','r','a','m',' ',
+    'c','a','n','n','o','t',' ','b','e',' ','r','u','n',' ',
+    'i','n',' ','D','O','S',' ','m','o','d','e','.','\r','\n','$'
+};
 
-    // ---------------- TEXT ----------------
+uint32_t build_imports(uint8_t* buf, uint32_t rvaBase)
+{
+    memset(buf, 0, 512);
 
-    uint8_t text[512] = { 0 };
-    memcpy(text, code, sizeof(code));
-    uint32_t t = sizeof(code);
+    const char* dll = "kernel32.dll";
+    const char* fn[] = {
+        "GetStdHandle",
+        "WriteFile",
+        "ExitProcess"
+    };
 
-    uint32_t msgOff = t;
-    memcpy(text + t, "Hello from PE!\r\n", 16);
-    t += 16;
+    uint32_t off = 0;
 
-    uint32_t wrOff = t;
-    *(uint32_t*)(text + t) = 0;
-    t += 4;
+    IMPDESC* d = (IMPDESC*)buf;
+    off += sizeof(IMPDESC) * 2;
 
-    // Patch RIP-rel to msg/written later...
+    uint32_t iltRVA = rvaBase + off;
+    uint64_t* ilt = (uint64_t*)(buf + off);
+    off += 8 * (3 + 1);
 
-    uint32_t textSize = ALIGN(t, FILE_ALIGN);
+    uint32_t iatRVA = rvaBase + off;
+    uint64_t* iat = (uint64_t*)(buf + off);
+    off += 8 * (3 + 1);
 
-    // ---------------- IDATA ----------------
+    uint32_t nameRVA = rvaBase + off;
+    strcpy((char*)(buf + off), dll);
+    off += strlen(dll) + 1;
 
-    uint8_t id[512] = { 0 };
-    IMPDESC* d = (void*)id;
-
-    uint32_t off = sizeof(IMPDESC) * 2;
-
-    uint64_t* ilt = (uint64_t*)(id + off);
-    uint32_t iltRVA = 0x2000 + off;
-    off += 32;
-
-    uint64_t* iat = (uint64_t*)(id + off);
-    uint32_t iatRVA = 0x2000 + off;
-    off += 32;
-
-    uint32_t nameRVA = 0x2000 + off;
-    strcpy((char*)(id + off), "KERNEL32.dll");
-    off += 13;
-
-    const char* nms[] = { "GetStdHandle","WriteFile","ExitProcess" };
+    uint32_t hnRVA[3];
 
     for (int i = 0; i < 3; i++) {
-        uint32_t rva = 0x2000 + off;
-        ilt[i] = rva;
-        iat[i] = rva;
-        *(uint16_t*)(id + off) = 0;
-        strcpy((char*)(id + off + 2), nms[i]);
-        off += 2 + strlen(nms[i]) + 1;
+        off = ALIGN(off, 2);
+        hnRVA[i] = rvaBase + off;
+
+        *(uint16_t*)(buf + off) = 0;
+        strcpy((char*)(buf + off + 2), fn[i]);
+
+        off += 2 + strlen(fn[i]) + 1;
     }
 
-    d->ILT = iltRVA;
-    d->IAT = iatRVA;
+    for (int i = 0; i < 3; i++) {
+        ilt[i] = hnRVA[i];
+        iat[i] = hnRVA[i];
+    }
+
+    d->OFT = iltRVA;
     d->Name = nameRVA;
-    d->Fwd = 0;
+    d->FT = iatRVA;
 
-    uint32_t idSize = ALIGN(off, FILE_ALIGN);
+    return ALIGN(off, 16);
+}
 
-    // ---------------- HEADERS ----------------
 
-    DOS dos = { 0 };
+void build_pe(const char* fileName)
+{
+    FILE* f = fopen(fileName, "wb");
+
+    uint8_t buf[8192];
+    memset(buf, 0, sizeof(buf));
+
+    uint32_t textRaw = 0x200;
+    uint32_t idataRaw = 0x400;
+
+    uint32_t textRVA = 0x1000;
+    uint32_t idataRVA = 0x2000;
+
+    IMAGE_DOS_HEADER dos = { 0 };
     dos.e_magic = 0x5A4D;
     dos.e_lfanew = 0x80;
+    memcpy(buf, &dos, sizeof(dos));
 
-    fwrite(&dos, sizeof(dos), 1, f);
-    uint8_t z[256] = { 0 };
-    fwrite(z, 0x80 - sizeof(dos), 1, f);
+    IMAGE_NT_HEADERS64 nt = { 0 };
+    nt.Signature = 0x4550;
 
-    NT64 nt = { 0 };
-    nt.Sig = 0x4550;
+    nt.FileHeader.Machine = 0x8664;
+    nt.FileHeader.NumberOfSections = 2;
+    nt.FileHeader.SizeOfOptionalHeader =
+        sizeof(IMAGE_OPTIONAL_HEADER64);
+    nt.FileHeader.Characteristics = 0x22;
 
-    nt.F.Machine = 0x8664;
-    nt.F.Sections = 2;
-    nt.F.OptSize = sizeof(OPT64);
-    nt.F.Chars = 0x22;
+    IMAGE_OPTIONAL_HEADER64* op = &nt.OptionalHeader;
 
-    nt.O.Magic = 0x20B;
-    nt.O.Entry = 0x1000;
-    nt.O.BaseCode = 0x1000;
-    nt.O.ImageBase = IMAGE_BASE;
-    nt.O.SecAlign = SEC_ALIGN;
-    nt.O.FileAlign = FILE_ALIGN;
-    nt.O.ImgSz = 0x3000;
-    nt.O.HdrSz = 0x200;
-    nt.O.Subsys = 3;
-    nt.O.StkRes = 0x100000;
-    nt.O.StkCom = 0x1000;
-    nt.O.HeapRes = 0x100000;
-    nt.O.HeapCom = 0x1000;
-    nt.O.Dirs = 16;
+    op->Magic = NT_OPTIONAL_64_MAGIC;
+    op->AddressOfEntryPoint = textRVA;
+    op->BaseOfCode = textRVA;
+    op->ImageBase = IMAGE_BASE;
+    op->SectionAlignment = SA;
+    op->FileAlignment = FA;
+    op->SizeOfImage = 0x3000;
+    op->SizeOfHeaders = 0x200;
+    op->Subsystem = 3;
+    op->MajorOSVersion = 0004; // Needed otherwise loader wont load executable.
+    op->MajorSubsystemVersion = 0004; // Needed otherwise loader wont load executable.
+    op->SizeOfStackReserve = 0x100000;
+    op->SizeOfStackCommit = 0x1000;
+    op->SizeOfHeapReserve = 0x100000;
+    op->SizeOfHeapCommit = 0x1000;
+    op->NumberOfRvaAndSizes = 16;
 
-    nt.O.Dir[1].VA = 0x2000;
-    nt.O.Dir[1].Size = idSize;
+    uint8_t idata[512];
+    uint32_t idSz = build_imports(idata, idataRVA);
 
-    fwrite(&nt, sizeof(nt), 1, f);
+    op->DataDirectory[1].VirtualAddress = idataRVA;
+    op->DataDirectory[1].Size = idSz;
 
-    SECT s[2] = { 0 };
+    memcpy(buf + 0x80, &nt, sizeof(nt));
 
-    memcpy(s[0].Name, ".text", 5);
-    s[0].VA = 0x1000;
-    s[0].VSize = t;
-    s[0].RawSize = textSize;
-    s[0].RawPtr = 0x200;
-    s[0].Chars = 0x60000020;
+    IMAGE_SECTION_HEADER sh[2] = { 0 };
 
-    memcpy(s[1].Name, ".idata", 6);
-    s[1].VA = 0x2000;
-    s[1].VSize = idSize;
-    s[1].RawSize = idSize;
-    s[1].RawPtr = 0x200 + textSize;
-    s[1].Chars = 0xC0000040;
+    memcpy(sh[0].Name, ".text", 5);
+    sh[0].VirtualAddress = textRVA;
+    sh[0].VirtualSize = 0x100;
+    sh[0].SizeOfRawData = FA;
+    sh[0].PointerToRawData = textRaw;
+    sh[0].Characteristics = 0x60000020;
 
-    fwrite(s, sizeof(s), 1, f);
+    memcpy(sh[1].Name, ".idata", 6);
+    sh[1].VirtualAddress = idataRVA;
+    sh[1].VirtualSize = idSz;
+    sh[1].SizeOfRawData = FA;
+    sh[1].PointerToRawData = idataRaw;
+    sh[1].Characteristics = 0xC0000040;
 
-    fwrite(z, 0x200 - ftell(f), 1, f);
-    fwrite(text, textSize, 1, f);
-    fwrite(id, idSize, 1, f);
+    memcpy(buf + 0x80 + sizeof(nt), sh, sizeof(sh));
+
+    uint8_t code[] = // Win64 ABI.
+    {
+        0x48,0x83,0xEC,0x28,          // shadow space
+
+        // GetStdHandle(-11)
+        0xB9,0xF5,0xFF,0xFF,0xFF,
+        0xFF,0x15,0,0,0,0,
+
+        // WriteFile
+        0x48,0x89,0xC1,
+        0x48,0x8D,0x15,0,0,0,0,
+        0x41,0xB8,18,0,0,0,
+        0x4C,0x8D,0x0D,0,0,0,0,
+        0x48,0xC7,0x44,0x24,0x20,0,0,0,0,
+        0xFF,0x15,0,0,0,0,
+
+        // ExitProcess
+        0x31,0xC9,
+        0xFF,0x15,0,0,0,0
+    };
+
+    memcpy(buf + textRaw, code, sizeof(code));
+
+    // RIP-relative call to IAT
+    uint64_t callVA = IMAGE_BASE + textRVA + 10;
+    uint64_t iatVA = IMAGE_BASE + idataRVA + sizeof(IMAGE_IMPORT_DESCRIPTOR) * 2 + 8;
+    int32_t disp = (int32_t)(iatVA - callVA);
+
+    *(int32_t*)(buf + textRaw + 8) = disp;
+
+    memcpy(buf + idataRaw, idata, idSz);
+
+    fwrite(buf, 1, 0x600, f);
 
     fclose(f);
 }
@@ -938,57 +914,6 @@ void build_pe(const char* path)
 bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image, int sq_program_image_length)
 {
     build_pe(fileName);
-
-    //FILE* f = fopen(fileName, "wb");
-
-    //uint8_t buf[4096] = { 0 };
-
-    //// ---------------- DOS ----------------
-    //*(uint16_t*)(buf) = 0x5A4D;
-    //*(uint32_t*)(buf + 0x3C) = 0x80;
-
-    //// ---------------- NT ----------------
-    //uint8_t* nt = buf + 0x80;
-    //*(uint32_t*)nt = 0x4550; // PE
-
-    //// FILE HEADER
-    //*(uint16_t*)(nt + 4) = 0x8664;
-    //*(uint16_t*)(nt + 6) = 1;
-    //*(uint16_t*)(nt + 20) = 0xF0;
-    //*(uint16_t*)(nt + 22) = 0x22;
-
-    //// OPTIONAL HEADER
-    //uint8_t* op = nt + 24;
-    //*(uint16_t*)op = 0x20B;
-    //*(uint32_t*)(op + 16) = 0x1000; // entry
-    //*(uint32_t*)(op + 20) = 0x1000;
-    //*(uint64_t*)(op + 24) = 0x400000;
-    //*(uint32_t*)(op + 32) = SA;
-    //*(uint32_t*)(op + 36) = FA;
-    //*(uint32_t*)(op + 56) = 0x2000;
-    //*(uint32_t*)(op + 60) = 0x200;
-    //*(uint16_t*)(op + 68) = 3;
-    //*(uint64_t*)(op + 72) = 0x100000;
-    //*(uint64_t*)(op + 80) = 0x1000;
-    //*(uint64_t*)(op + 88) = 0x100000;
-    //*(uint64_t*)(op + 96) = 0x1000;
-    //*(uint32_t*)(op + 108) = 16;
-
-    //// SECTION
-    //uint8_t* s = nt + 24 + 0xF0;
-    //memcpy(s, ".text", 5);
-    //*(uint32_t*)(s + 8) = 1;
-    //*(uint32_t*)(s + 12) = 0x1000;
-    //*(uint32_t*)(s + 16) = FA;
-    //*(uint32_t*)(s + 20) = 0x200;
-    //*(uint32_t*)(s + 36) = 0x60000020;
-
-    //// ---------------- CODE ----------------
-    //uint8_t code[] = { 0xC3 }; // ret
-    //memcpy(buf + 0x200, code, sizeof(code));
-
-    //fwrite(buf, 1, 0x400, f);
-    //fclose(f);
 
     return true;
 }
