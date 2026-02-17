@@ -532,6 +532,29 @@ typedef struct {
 
 typedef struct {
     uint16_t Magic;
+    uint8_t MajorLinkerVersion, MinorLinkerVersion;
+    uint32_t SizeOfCode, SizeOfInitializedData, SizeOfUninitializedData;
+    uint32_t AddressOfEntryPoint, BaseOfCode, BaseData;
+    uint32_t ImageBase;
+    uint32_t SectionAlignment, FileAlignment;
+    uint16_t MajorOSVersion, MinorOSVersion, MajorImageVersion, MinorImageVersion, MajorSubsystemVersion, MinorSubsystemVersion;
+    uint32_t Win32VersionValue;
+    uint32_t SizeOfImage, SizeOfHeaders, CheckSum;
+    uint16_t Subsystem, DllCharacteristics;
+    uint32_t SizeOfStackReserve, SizeOfStackCommit, SizeOfHeapReserve, SizeOfHeapCommit;
+    uint32_t LoaderFlags;
+    uint32_t Dirs;
+    IMAGE_DATA_DIRECTORY DataDirectory[16];
+} OPT32;
+
+typedef struct {
+    uint32_t Signature;
+    IMAGE_FILE_HEADER FileHeader;
+    OPT32 OptionalHeader;
+} IMAGE_NT_HEADERS32;
+
+typedef struct {
+    uint16_t Magic;
     uint8_t  MajorLinkerVersion;
     uint8_t  MinorLinkerVersion;
     uint32_t SizeOfCode;
@@ -587,27 +610,6 @@ typedef struct {
 } IMPDESC;
 
 ///////////////////////////////////////////////////
-
-// Resolve a Rich header product id / build number pair to a known
-// product name
-//typedef std::pair<std::uint16_t, std::uint16_t> ProductKey;
-const char* GetRichObjectType(uint16_t prodId);
-const char* GetRichProductName(uint16_t buildNum);
-
-// get parser error status as integer
-uint32_t GetPEErr();
-
-// get parser error status as string
-char* GetPEErrString();
-
-// get parser error location as string
-char* GetPEErrLoc();
-
-//// get machine as human readable string
-//const char* GetMachineAsString(parsed_pe* pe);
-//
-//// get subsystem as human readable string
-//const char* GetSubsystemAsString(parsed_pe* pe);
 
 void build_pe(const char* fileName);
 
