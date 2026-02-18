@@ -510,9 +510,33 @@ THE SOFTWARE.
 // ------------------------------------------------------------
 
 typedef struct {
-    uint16_t e_magic;
-    uint8_t  pad[58];
-    uint32_t e_lfanew;
+    //uint16_t e_magic;
+    //uint8_t  pad[58];
+    //uint32_t e_lfanew;
+
+    uint16_t e_magic;      // MZ signature (0x5A4D)
+
+    uint16_t e_cblp;       // Bytes on last page of file
+    uint16_t e_cp;         // Pages in file
+    uint16_t e_crlc;       // Relocations
+    uint16_t e_cparhdr;    // Size of header in paragraphs
+    uint16_t e_minalloc;   // Minimum extra paragraphs needed
+    uint16_t e_maxalloc;   // Maximum extra paragraphs needed
+    uint16_t e_ss;         // Initial SS
+    uint16_t e_sp;         // Initial SP
+    uint16_t e_csum;       // Checksum
+    uint16_t e_ip;         // Initial IP
+    uint16_t e_cs;         // Initial CS
+    uint16_t e_lfarlc;     // File addr of relocation table
+    uint16_t e_ovno;       // Overlay number
+
+    uint16_t e_res[4];     // Reserved
+
+    uint16_t e_oemid;      // OEM identifier
+    uint16_t e_oeminfo;    // OEM info
+    uint16_t e_res2[10];   // Reserved
+
+    uint32_t e_lfanew;     // Offset to NT headers
 } IMAGE_DOS_HEADER;
 
 typedef struct {

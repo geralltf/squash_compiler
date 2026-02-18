@@ -188,8 +188,28 @@ void build_pe32(const char* fileName)
     uint32_t idataRaw = 0x400;
 
     IMAGE_DOS_HEADER dos = { 0 };
-    dos.e_magic = 0x5A4D;
+    dos.e_magic = 0x5A4D; // "MZ"
     dos.e_lfanew = RICH_OFFSET;
+
+    dos.e_cblp = 0x0090;
+    dos.e_cp = 0x0003;
+    dos.e_crlc = 0x0000;
+    dos.e_cparhdr = 0x0004;
+    dos.e_minalloc = 0x0000;
+    dos.e_maxalloc = 0xFFFF;
+    dos.e_ss = 0x0000;
+    dos.e_sp = 0x00B8;
+    dos.e_csum = 0x0000;
+    dos.e_ip = 0x0000;
+    dos.e_cs = 0x0000;
+    dos.e_lfarlc = 0x0040;
+    dos.e_ovno = 0x0000;
+
+    //dos.e_res = { 0,0,0,0 };
+
+    dos.e_oemid = 0;
+    dos.e_oeminfo = 0;
+    //dos.e_res2 = { 0 };
     memcpy(buf, &dos, sizeof(dos));
 
     // dos 16bit executable stub.
