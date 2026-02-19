@@ -363,15 +363,36 @@ void build_pe(const char* fileName)
     uint32_t idataRaw = 0x400;
 
     IMAGE_DOS_HEADER dos = { 0 };
-    dos.e_magic = 0x5A4D;
+    dos.e_magic = 0x5A4D; // "MZ"
     dos.e_lfanew = RICH_OFFSET;
+
+    dos.e_cblp = 0x0090;
+    dos.e_cp = 0x0003;
+    dos.e_crlc = 0x0000;
+    dos.e_cparhdr = 0x0004;
+    dos.e_minalloc = 0x0000;
+    dos.e_maxalloc = 0xFFFF;
+    dos.e_ss = 0x0000;
+    dos.e_sp = 0x00B8;
+    dos.e_csum = 0x0000;
+    dos.e_ip = 0x0000;
+    dos.e_cs = 0x0000;
+    dos.e_lfarlc = 0x0040;
+    dos.e_ovno = 0x0000;
+
+    //dos.e_res = { 0,0,0,0 };
+
+    dos.e_oemid = 0;
+    dos.e_oeminfo = 0;
+    //dos.e_res2 = { 0 };
+
     memcpy(buf, &dos, sizeof(dos));
 
     // dos 16bit executable stub.
     //memcpy(buf + sizeof(dos), &dos_stub, sizeof(dos_stub));
 
     // copy stub right after DOS header
-    //memcpy(buf + sizeof(IMAGE_DOS_HEADER), dos_stub, sizeof(dos_stub));
+    memcpy(buf + sizeof(IMAGE_DOS_HEADER), &dos_stub, sizeof(dos_stub));
 
     IMAGE_NT_HEADERS64 nt = { 0 };
     nt.Signature = 0x4550;
@@ -379,8 +400,8 @@ void build_pe(const char* fileName)
     nt.FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
     nt.FileHeader.NumberOfSections = 2;
     nt.FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
-    nt.FileHeader.Characteristics = 0x22;
-    //nt.FileHeader.Characteristics = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE;
+    //nt.FileHeader.Characteristics = 0x22;
+    nt.FileHeader.Characteristics = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE;
     //nt.FileHeader.Characteristics = IMAGE_FILE_32BIT_MACHINE | IMAGE_FILE_EXECUTABLE_IMAGE;
 
     IMAGE_OPTIONAL_HEADER64* op = &nt.OptionalHeader;
@@ -426,7 +447,7 @@ void build_pe(const char* fileName)
     sh[1].PointerToRawData = idataRaw;
     sh[1].Characteristics = 0xC0000040;
 
-    memcpy(buf + 0x80 + sizeof(nt), sh, sizeof(sh));
+    memcpy(buf + RICH_OFFSET + sizeof(nt), sh, sizeof(sh));
 
     uint8_t code[] = // Win64 ABI.
     {
@@ -498,7 +519,7 @@ void build_pe(const char* fileName)
 
 bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image, int sq_program_image_length)
 {
-    build_pe32(fileName);
+    build_pe(fileName);
 
     return true;
 }
