@@ -30,8 +30,10 @@ THE SOFTWARE.
 //#include <string>
 #include <stdbool.h>
 #include <uchar.h>
-#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "debugent.h"
 #include "exportent.h"
@@ -39,546 +41,61 @@ THE SOFTWARE.
 #include "nt-headers.h"
 #include "List.h"
 
-//#include <sstream>
-//#include <string>
+/* ===========================================================================
+ * Shared PE structure definitions
+ * ========================================================================= */
 
-//#if defined(_MSC_VER)
-//typedef std::basic_string<wchar_t> UCharString;
-//#else
-//typedef std::u16string UCharString;
-//#endif
-
-//template <class T>
-//static std::string to_string(T t, std::ios_base& (*f)(std::ios_base&)) {
-//    std::ostringstream oss;
-//    oss << f << t;
-//    return oss.str();
-//}
-//
-//std::string from_utf16(const std::u16string& utf16_str);
-////std::string from_utf16(const UCharString& u);
-
-//#ifdef _MSC_VER
-//#define __typeof__(x) std::remove_reference<decltype(x)>::type
-//#endif
-//
-//#define PE_ERR(x)               \
-//  err = static_cast<pe_err>(x); \
-//  err_loc.assign(__func__);     \
-//  err_loc += ":" + to_string<std::uint32_t>(__LINE__, std::dec);
-//
-//#define READ_WORD(b, o, inst, member)                                          \
-//  if (!readWord(b,                                                             \
-//                o + static_cast<uint32_t>(offsetof(__typeof__(inst), member)), \
-//                inst.member)) {                                                \
-//    PE_ERR(PEERR_READ);                                                        \
-//    return false;                                                              \
-//  }
-//
-//#define READ_DWORD(b, o, inst, member)                                   \
-//  if (!readDword(                                                        \
-//          b,                                                             \
-//          o + static_cast<uint32_t>(offsetof(__typeof__(inst), member)), \
-//          inst.member)) {                                                \
-//    PE_ERR(PEERR_READ);                                                  \
-//    return false;                                                        \
-//  }
-//
-//#define READ_QWORD(b, o, inst, member)                                   \
-//  if (!readQword(                                                        \
-//          b,                                                             \
-//          o + static_cast<uint32_t>(offsetof(__typeof__(inst), member)), \
-//          inst.member)) {                                                \
-//    PE_ERR(PEERR_READ);                                                  \
-//    return false;                                                        \
-//  }
-//
-//#define READ_BYTE(b, o, inst, member)                                          \
-//  if (!readByte(b,                                                             \
-//                o + static_cast<uint32_t>(offsetof(__typeof__(inst), member)), \
-//                inst.member)) {                                                \
-//    PE_ERR(PEERR_READ);                                                        \
-//    return false;                                                              \
-//  }
-//
-#define TEST_MACHINE_CHARACTERISTICS(h, m, ch) \
-  ((h->FileHeader->Machine == m) && (h->FileHeader->Characteristics & ch))
-
-#define SYMBOL_NAME_OFFSET(sn) ((uint32_t)(sn->data >> 32))
-#define SYMBOL_TYPE_HI(x) (x->type >> 8)
-
-
-#define FILE_ALIGN 0x200
-#define SEC_ALIGN  0x1000
-#define IMAGE_BASE 0x140000000ULL
-#define ALIGN(x,a) (((x)+(a-1))&~(a-1))
-
-//struct section {
-//    char* sectionName;
-//    uint64_t sectionBase;
-//    bounded_buffer* sectionData;
-//    //uint32_t size; // sectionData->bufLen
-//    struct image_section_header* sec;
-//};
-//
-//struct importent {
-//    VA addr;
-//    char* symbolName;
-//    char* moduleName;
-//};
-//
-//struct reloc {
-//    VA shiftedAddr;
-//    enum reloc_type type;
-//};
-//
-//union symbol_name {
-//    uint8_t* shortName;// [NT_SHORT_NAME_LEN] ;
-//    uint32_t zeroes;
-//    uint64_t data;
-//};
-//
-//struct aux_symbol_f1 {
-//    uint32_t tagIndex;
-//    uint32_t totalSize;
-//    uint32_t pointerToLineNumber;
-//    uint32_t pointerToNextFunction;
-//};
-//
-//struct aux_symbol_f2 {
-//    uint16_t lineNumber;
-//    uint32_t pointerToNextFunction;
-//};
-//
-//struct aux_symbol_f3 {
-//    uint32_t tagIndex;
-//    uint32_t characteristics;
-//};
-//
-//struct aux_symbol_f4 {
-//    uint8_t* filename;// [SYMTAB_RECORD_LEN] ;
-//    char* strFilename;
-//};
-//
-//struct aux_symbol_f5 {
-//    uint32_t length;
-//    uint16_t numberOfRelocations;
-//    uint16_t numberOfLineNumbers;
-//    uint32_t checkSum;
-//    uint16_t number;
-//    uint8_t selection;
-//};
-//
-//struct symbol {
-//    char* strName;
-//    union symbol_name* name;
-//    uint32_t value;
-//    int16_t sectionNumber;
-//    uint16_t type;
-//    uint8_t storageClass;
-//    uint8_t numberOfAuxSymbols;
-//    //std::vector<aux_symbol_f1> aux_symbols_f1;
-//    //std::vector<aux_symbol_f2> aux_symbols_f2;
-//    //std::vector<aux_symbol_f3> aux_symbols_f3;
-//    //std::vector<aux_symbol_f4> aux_symbols_f4;
-//    //std::vector<aux_symbol_f5> aux_symbols_f5;
-//
-//    list_t* aux_symbols_f1;
-//    list_t* aux_symbols_f2;
-//    list_t* aux_symbols_f3;
-//    list_t* aux_symbols_f4;
-//    list_t* aux_symbols_f5;
-//};
-//
-//struct parsed_pe_internal {
-//    //std::vector<section> secs;
-//    //std::vector<resource> rsrcs;
-//    //std::vector<importent> imports;
-//    //std::vector<reloc> relocs;
-//    //std::vector<exportent> exports;
-//    //std::vector<symbol> symbols;
-//    //std::vector<debugent> debugdirs;
-//    list_t* secs;
-//    list_t* rsrcs;
-//    list_t* imports;
-//    list_t* relocs;
-//    list_t* exports;
-//    list_t* symbols;
-//    list_t* debugdirs;
-//};
-//
-//struct resource {
-//    //resource()
-//    //    : type(0), name(0), lang(0), codepage(0), RVA(0), size(0), buf(nullptr) {
-//    //}
-//
-//    char* type_str;
-//    char* name_str;
-//    char* lang_str;
-//    uint32_t type;
-//    uint32_t name;
-//    uint32_t lang;
-//    uint32_t codepage;
-//    uint32_t RVA;
-//    uint32_t size;
-//    bounded_buffer* buf;
-//};
-//
-//#ifndef _PEPARSE_WINDOWS_CONFLICTS
-//// http://msdn.microsoft.com/en-us/library/ms648009(v=vs.85).aspx
-//enum resource_type {
-//    RT_CURSOR = 1,
-//    RT_BITMAP = 2,
-//    RT_ICON = 3,
-//    RT_MENU = 4,
-//    RT_DIALOG = 5,
-//    RT_STRING = 6,
-//    RT_FONTDIR = 7,
-//    RT_FONT = 8,
-//    RT_ACCELERATOR = 9,
-//    RT_RCDATA = 10,
-//    RT_MESSAGETABLE = 11,
-//    RT_GROUP_CURSOR = 12, // MAKEINTRESOURCE((ULONG_PTR)(RT_CURSOR) + 11)
-//    RT_GROUP_ICON = 14,   // MAKEINTRESOURCE((ULONG_PTR)(RT_ICON) + 11)
-//    RT_VERSION = 16,
-//    RT_DLGINCLUDE = 17,
-//    RT_PLUGPLAY = 19,
-//    RT_VXD = 20,
-//    RT_ANICURSOR = 21,
-//    RT_ANIICON = 22,
-//    RT_HTML = 23,
-//    RT_MANIFEST = 24
-//};
-//#endif
-//
-//enum pe_err {
-//    PEERR_NONE = 0,
-//    PEERR_MEM = 1,
-//    PEERR_HDR = 2,
-//    PEERR_SECT = 3,
-//    PEERR_RESC = 4,
-//    PEERR_SECTVA = 5,
-//    PEERR_READ = 6,
-//    PEERR_OPEN = 7,
-//    PEERR_STAT = 8,
-//    PEERR_MAGIC = 9,
-//    PEERR_BUFFER = 10,
-//    PEERR_ADDRESS = 11,
-//    PEERR_SIZE = 12,
-//};
-//
-//struct parsed_pe_internal;
-//
-//typedef struct _pe_header {
-//    struct dos_header* dos;
-//    struct rich_header* rich;
-//    struct nt_header_32* nt;
-//} pe_header;
-//
-//typedef struct _parsed_pe {
-//    bounded_buffer* fileBuffer;
-//    struct parsed_pe_internal* internal;
-//    pe_header* peHeader;
-//} parsed_pe;
-
-////////////////////////////////////////////////////
-
-//#define IMAGE_NUMBEROF_DIRECTORY_ENTRIES 16
-
-//typedef struct
-//{
-//    uint16_t e_magic;      // Magic number ("MZ")
-//    uint16_t e_cblp;       // Bytes on last page of file
-//    uint16_t e_cp;         // Pages in file
-//    uint16_t e_crlc;       // Relocations
-//    uint16_t e_cparhdr;    // Size of header in paragraphs
-//    uint16_t e_minalloc;   // Minimum extra paragraphs needed
-//    uint16_t e_maxalloc;   // Maximum extra paragraphs needed
-//    uint16_t e_ss;         // Initial (relative) SS
-//    uint16_t e_sp;         // Initial SP
-//    uint16_t e_csum;       // Checksum
-//    uint16_t e_ip;         // Initial IP
-//    uint16_t e_cs;         // Initial (relative) CS
-//    uint16_t e_lfarlc;     // File address of relocation table
-//    uint16_t e_ovno;       // Overlay number
-//    uint16_t e_res[4];     // Reserved words
-//    uint16_t e_oemid;      // OEM identifier
-//    uint16_t e_oeminfo;    // OEM information
-//    uint16_t e_res2[10];   // Reserved words
-//    int32_t  e_lfanew;     // File address of PE header
-//} IMAGE_DOS_HEADER;
-//
-//typedef struct
-//{
-//    //uint32_t Signature;
-//    uint16_t Machine;
-//    uint16_t NumberOfSections;
-//    uint32_t TimeDateStamp;
-//    uint32_t PtrToSymbolTable;
-//    uint32_t NumSymbols;
-//    uint16_t SizeOfOptionalHeader;
-//    uint16_t Characteristics;
-//} IMAGE_FILE_HEADER;
-//
-//typedef struct
-//{
-//    uint32_t VirtualAddress;
-//    uint32_t Size;
-//} IMAGE_DATA_DIRECTORY;
-//
-//typedef struct
-//{
-//    uint16_t Magic;
-//    uint8_t  MajorLinkerVersion;
-//    uint8_t  MinorLinkerVersion;
-//    uint32_t SizeOfCode;
-//    uint32_t SizeOfInitializedData;
-//    uint32_t SizeOfUninitializedData;
-//    uint32_t AddressOfEntryPoint;
-//    uint32_t BaseOfCode;
-//
-//    uint64_t ImageBase;
-//    uint32_t SectionAlignment;
-//    uint32_t FileAlignment;
-//
-//    uint16_t MajorOperatingSystemVersion;
-//    uint16_t MinorOperatingSystemVersion;
-//    uint16_t MajorImageVersion;
-//    uint16_t MinorImageVersion;
-//    uint16_t MajorSubsystemVersion;
-//    uint16_t MinorSubsystemVersion;
-//
-//    uint32_t Win32VersionValue;
-//    uint32_t SizeOfImage;
-//    uint32_t SizeOfHeaders;
-//    uint32_t CheckSum;
-//
-//    uint16_t Subsystem;
-//    uint16_t DllCharacteristics;
-//
-//    uint64_t SizeOfStackReserve;
-//    uint64_t SizeOfStackCommit;
-//    uint64_t SizeOfHeapReserve;
-//    uint64_t SizeOfHeapCommit;
-//
-//    uint32_t LoaderFlags;
-//    uint32_t NumberOfRvaAndSizes;
-//
-//    IMAGE_DATA_DIRECTORY DataDirectory[NUM_DIR_ENTRIES];
-//} IMAGE_OPTIONAL_HEADER64;
-//
-//typedef struct {
-//    uint32_t Signature;
-//    IMAGE_FILE_HEADER FileHeader;
-//    IMAGE_OPTIONAL_HEADER64 OptionalHeader;
-//} IMAGE_NT_HEADERS64;
-//
-//typedef struct
-//{
-//    uint8_t  Name[8];
-//    uint32_t VirtualSize;
-//    uint32_t VirtualAddress;
-//    uint32_t SizeOfRawData;
-//    uint32_t PointerToRawData;
-//    uint8_t  pad[16];
-//    uint32_t Characteristics;
-//} IMAGE_SECTION_HEADER;
-//
-//typedef struct
-//{
-//    const char* name;
-//    uint8_t* data;
-//    uint32_t size;
-//    uint32_t characteristics;
-//} section_def;
-//
-//typedef struct _IMAGE_IMPORT_DESCRIPTOR {
-//    union {
-//        uint32_t Characteristics;      // 0 for terminating null descriptor
-//        uint32_t OriginalFirstThunk;   // RVA to Import Lookup Table (ILT)
-//    };
-//    uint32_t TimeDateStamp;            // 0 if not bound
-//    uint32_t ForwarderChain;           // -1 if no forwarders
-//    uint32_t Name;                     // RVA of DLL name string
-//    uint32_t FirstThunk;               // RVA to Import Address Table (IAT)
-//} IMAGE_IMPORT_DESCRIPTOR;
-//
-//typedef struct 
-//{
-//    uint32_t rva; 
-//    uint32_t size; 
-//} dir;
-//
-//typedef struct {
-//    uint8_t* data;
-//    size_t   size;
-//    size_t   capacity;
-//} binbuf;
-/////////////////////////////////////////////////////////
-//typedef struct {
-//    uint16_t e_magic;
-//    uint8_t  pad[58];
-//    uint32_t e_lfanew;
-//} IMAGE_DOS_HEADER;
-//
-//typedef struct {
-//    uint32_t VirtualAddress;
-//    uint32_t Size;
-//} IMAGE_DATA_DIRECTORY;
-//
-//typedef struct {
-//    uint16_t Machine;
-//    uint16_t NumberOfSections;
-//    uint32_t TimeDateStamp;
-//    uint32_t PtrToSymbolTable;
-//    uint32_t NumSymbols;
-//    uint16_t SizeOfOptionalHeader;
-//    uint16_t Characteristics;
-//} IMAGE_FILE_HEADER;
-//
-//typedef struct {
-//    uint16_t Magic;
-//    uint8_t  MajorLinkerVersion;
-//    uint8_t  MinorLinkerVersion;
-//    uint32_t SizeOfCode;
-//    uint32_t SizeOfInitializedData;
-//    uint32_t SizeOfUninitializedData;
-//    uint32_t AddressOfEntryPoint;
-//    uint32_t BaseOfCode;
-//    uint64_t ImageBase;
-//    uint32_t SectionAlignment;
-//    uint32_t FileAlignment;
-//    uint16_t MajorOSVersion;
-//    uint16_t MinorOSVersion;
-//    uint16_t MajorImageVersion;
-//    uint16_t MinorImageVersion;
-//    uint16_t MajorSubsystemVersion;
-//    uint16_t MinorSubsystemVersion;
-//    uint32_t Win32VersionValue;
-//    uint32_t SizeOfImage;
-//    uint32_t SizeOfHeaders;
-//    uint32_t CheckSum;
-//    uint16_t Subsystem;
-//    uint16_t DllCharacteristics;
-//    uint64_t SizeOfStackReserve;
-//    uint64_t SizeOfStackCommit;
-//    uint64_t SizeOfHeapReserve;
-//    uint64_t SizeOfHeapCommit;
-//    uint32_t LoaderFlags;
-//    uint32_t NumberOfRvaAndSizes;
-//    IMAGE_DATA_DIRECTORY DataDirectory[16];
-//} IMAGE_OPTIONAL_HEADER64;
-//
-//typedef struct {
-//    uint32_t Signature;
-//    IMAGE_FILE_HEADER FileHeader;
-//    IMAGE_OPTIONAL_HEADER64 OptionalHeader;
-//} IMAGE_NT_HEADERS64;
-//
-//typedef struct {
-//    uint8_t  Name[8];
-//    uint32_t VirtualSize;
-//    uint32_t VirtualAddress;
-//    uint32_t SizeOfRawData;
-//    uint32_t PointerToRawData;
-//    uint8_t  pad[12];
-//    uint32_t Characteristics;
-//} IMAGE_SECTION_HEADER;
-//
-//typedef struct {
-//    uint32_t OriginalFirstThunk;
-//    uint32_t TimeDateStamp;
-//    uint32_t ForwarderChain;
-//    uint32_t Name;
-//    uint32_t FirstThunk;
-//} IMAGE_IMPORT_DESCRIPTOR;
-//////////////////////////////////////////////////
-// 
-// 
-
-#define FILE_ALIGN 0x200
-#define SEC_ALIGN  0x1000
-#define IMAGE_BASE 0x140000000ULL
-
-#define FA 0x200
-#define SA 0x1000
-#define IMAGE_BASE 0x140000000ULL
-#define ALIGN(x,a) (((x)+(a-1))&~(a-1))
-
-// ------------------------------------------------------------
-// PE STRUCTS
-// ------------------------------------------------------------
-
+ /* IMAGE_DOS_HEADER  (identical layout in PE32 and PE32+) */
 typedef struct {
-    //uint16_t e_magic;
-    //uint8_t  pad[58];
-    //uint32_t e_lfanew;
+    uint16_t e_magic;       /* "MZ" = 0x5A4D                                 */
+    uint16_t e_cblp;        /* Bytes on last page of file                     */
+    uint16_t e_cp;          /* Pages in file                                  */
+    uint16_t e_crlc;        /* Relocations                                    */
+    uint16_t e_cparhdr;     /* Size of header in paragraphs                   */
+    uint16_t e_minalloc;    /* Minimum extra paragraphs                       */
+    uint16_t e_maxalloc;    /* Maximum extra paragraphs                       */
+    uint16_t e_ss;          /* Initial (relative) SS value                    */
+    uint16_t e_sp;          /* Initial SP value                               */
+    uint16_t e_csum;        /* Checksum                                       */
+    uint16_t e_ip;          /* Initial IP value                               */
+    uint16_t e_cs;          /* Initial (relative) CS value                    */
+    uint16_t e_lfarlc;      /* File offset of relocation table                */
+    uint16_t e_ovno;        /* Overlay number                                 */
+    uint16_t e_res[4];      /* Reserved                                       */
+    uint16_t e_oemid;       /* OEM identifier                                 */
+    uint16_t e_oeminfo;     /* OEM information                                */
+    uint16_t e_res2[10];    /* Reserved                                       */
+    uint32_t e_lfanew;      /* File offset of PE signature ("PE\0\0")         */
+} DOSHeader;
 
-    uint16_t e_magic;      // MZ signature (0x5A4D)
+/* IMAGE_FILE_HEADER  (identical layout; machine type differs by target) */
+typedef struct {
+    uint16_t Machine;               /* 0x014C=x86  0x8664=x86-64             */
+    uint16_t NumberOfSections;
+    uint32_t TimeDateStamp;
+    uint32_t PointerToSymbolTable;  /* 0 for images                           */
+    uint32_t NumberOfSymbols;       /* 0 for images                           */
+    uint16_t SizeOfOptionalHeader;  /* 224 for PE32 / 240 for PE32+           */
+    uint16_t Characteristics;
+} FileHeader;
 
-    uint16_t e_cblp;       // Bytes on last page of file
-    uint16_t e_cp;         // Pages in file
-    uint16_t e_crlc;       // Relocations
-    uint16_t e_cparhdr;    // Size of header in paragraphs
-    uint16_t e_minalloc;   // Minimum extra paragraphs needed
-    uint16_t e_maxalloc;   // Maximum extra paragraphs needed
-    uint16_t e_ss;         // Initial SS
-    uint16_t e_sp;         // Initial SP
-    uint16_t e_csum;       // Checksum
-    uint16_t e_ip;         // Initial IP
-    uint16_t e_cs;         // Initial CS
-    uint16_t e_lfarlc;     // File addr of relocation table
-    uint16_t e_ovno;       // Overlay number
-
-    uint16_t e_res[4];     // Reserved
-
-    uint16_t e_oemid;      // OEM identifier
-    uint16_t e_oeminfo;    // OEM info
-    uint16_t e_res2[10];   // Reserved
-
-    uint32_t e_lfanew;     // Offset to NT headers
-} IMAGE_DOS_HEADER;
-
+/* Data directory entry  (same in PE32 and PE32+) */
 typedef struct {
     uint32_t VirtualAddress;
     uint32_t Size;
-} IMAGE_DATA_DIRECTORY;
+} DataDirectory;
 
+/*
+ * IMAGE_OPTIONAL_HEADER  (PE32 / 32-bit)
+ * Notable differences from PE32+:
+ *   - Magic         = 0x010B
+ *   - BaseOfData    field present (removed in PE32+)
+ *   - ImageBase     is 32-bit
+ *   - Stack/heap    fields are 32-bit
+ *   - sizeof        = 224 bytes
+ */
 typedef struct {
-    uint16_t Machine;
-    uint16_t NumberOfSections;
-    uint32_t TimeDateStamp;
-    uint32_t PtrToSymbolTable;
-    uint32_t NumSymbols;
-    uint16_t SizeOfOptionalHeader;
-    uint16_t Characteristics;
-} IMAGE_FILE_HEADER;
-
-typedef struct {
-    uint16_t Magic;
-    uint8_t MajorLinkerVersion, MinorLinkerVersion;
-    uint32_t SizeOfCode, SizeOfInitializedData, SizeOfUninitializedData;
-    uint32_t AddressOfEntryPoint, BaseOfCode, BaseData;
-    uint32_t ImageBase;
-    uint32_t SectionAlignment, FileAlignment;
-    uint16_t MajorOSVersion, MinorOSVersion, MajorImageVersion, MinorImageVersion, MajorSubsystemVersion, MinorSubsystemVersion;
-    uint32_t Win32VersionValue;
-    uint32_t SizeOfImage, SizeOfHeaders, CheckSum;
-    uint16_t Subsystem, DllCharacteristics;
-    uint32_t SizeOfStackReserve, SizeOfStackCommit, SizeOfHeapReserve, SizeOfHeapCommit;
-    uint32_t LoaderFlags;
-    uint32_t Dirs;
-    IMAGE_DATA_DIRECTORY DataDirectory[16];
-} OPT32;
-
-typedef struct {
-    uint32_t Signature;
-    IMAGE_FILE_HEADER FileHeader;
-    OPT32 OptionalHeader;
-} IMAGE_NT_HEADERS32;
-
-typedef struct {
-    uint16_t Magic;
+    uint16_t Magic;                         /* 0x010B                        */
     uint8_t  MajorLinkerVersion;
     uint8_t  MinorLinkerVersion;
     uint32_t SizeOfCode;
@@ -586,56 +103,134 @@ typedef struct {
     uint32_t SizeOfUninitializedData;
     uint32_t AddressOfEntryPoint;
     uint32_t BaseOfCode;
-    uint64_t ImageBase;
+    uint32_t BaseOfData;                    /* PE32 only                     */
+    uint32_t ImageBase;                     /* 32-bit preferred base         */
     uint32_t SectionAlignment;
     uint32_t FileAlignment;
-    uint16_t MajorOSVersion, MinorOSVersion;
-    uint16_t MajorImageVersion, MinorImageVersion;
-    uint16_t MajorSubsystemVersion, MinorSubsystemVersion;
-    uint32_t Win32VersionValue;
+    uint16_t MajorOperatingSystemVersion;
+    uint16_t MinorOperatingSystemVersion;
+    uint16_t MajorImageVersion;
+    uint16_t MinorImageVersion;
+    uint16_t MajorSubsystemVersion;
+    uint16_t MinorSubsystemVersion;
+    uint32_t Win32VersionValue;             /* reserved, 0                   */
     uint32_t SizeOfImage;
     uint32_t SizeOfHeaders;
     uint32_t CheckSum;
     uint16_t Subsystem;
     uint16_t DllCharacteristics;
-    uint64_t SizeOfStackReserve, SizeOfStackCommit;
-    uint64_t SizeOfHeapReserve, SizeOfHeapCommit;
-    uint32_t LoaderFlags;
+    uint32_t SizeOfStackReserve;            /* 32-bit in PE32                */
+    uint32_t SizeOfStackCommit;
+    uint32_t SizeOfHeapReserve;
+    uint32_t SizeOfHeapCommit;
+    uint32_t LoaderFlags;                   /* reserved, 0                   */
     uint32_t NumberOfRvaAndSizes;
-    IMAGE_DATA_DIRECTORY DataDirectory[16];
-} IMAGE_OPTIONAL_HEADER64;
+    DataDirectory DataDirectory[16];
+} OptionalHeader32;
 
+/*
+ * IMAGE_OPTIONAL_HEADER64  (PE32+ / 64-bit)
+ * Notable differences from PE32:
+ *   - Magic         = 0x020B
+ *   - No BaseOfData field
+ *   - ImageBase     is 64-bit
+ *   - Stack/heap    fields are 64-bit
+ *   - sizeof        = 240 bytes
+ */
 typedef struct {
-    uint32_t Signature;
-    IMAGE_FILE_HEADER FileHeader;
-    IMAGE_OPTIONAL_HEADER64 OptionalHeader;
-} IMAGE_NT_HEADERS64;
+    uint16_t Magic;                         /* 0x020B                        */
+    uint8_t  MajorLinkerVersion;
+    uint8_t  MinorLinkerVersion;
+    uint32_t SizeOfCode;
+    uint32_t SizeOfInitializedData;
+    uint32_t SizeOfUninitializedData;
+    uint32_t AddressOfEntryPoint;
+    uint32_t BaseOfCode;
+    uint64_t ImageBase;                     /* 64-bit preferred base         */
+    uint32_t SectionAlignment;
+    uint32_t FileAlignment;
+    uint16_t MajorOperatingSystemVersion;
+    uint16_t MinorOperatingSystemVersion;
+    uint16_t MajorImageVersion;
+    uint16_t MinorImageVersion;
+    uint16_t MajorSubsystemVersion;
+    uint16_t MinorSubsystemVersion;
+    uint32_t Win32VersionValue;             /* reserved, 0                   */
+    uint32_t SizeOfImage;
+    uint32_t SizeOfHeaders;
+    uint32_t CheckSum;
+    uint16_t Subsystem;
+    uint16_t DllCharacteristics;
+    uint64_t SizeOfStackReserve;            /* 64-bit in PE32+               */
+    uint64_t SizeOfStackCommit;
+    uint64_t SizeOfHeapReserve;
+    uint64_t SizeOfHeapCommit;
+    uint32_t LoaderFlags;                   /* reserved, 0                   */
+    uint32_t NumberOfRvaAndSizes;
+    DataDirectory DataDirectory[16];
+} OptionalHeader64;
 
+/* IMAGE_SECTION_HEADER  (identical layout in PE32 and PE32+) */
 typedef struct {
-    uint8_t  Name[8];
+    char     Name[8];
     uint32_t VirtualSize;
     uint32_t VirtualAddress;
     uint32_t SizeOfRawData;
     uint32_t PointerToRawData;
-    uint8_t  pad[12];
+    uint32_t PointerToRelocations;
+    uint32_t PointerToLinenumbers;
+    uint16_t NumberOfRelocations;
+    uint16_t NumberOfLinenumbers;
     uint32_t Characteristics;
-} IMAGE_SECTION_HEADER;
+} SectionHeader;
 
+/* IMAGE_IMPORT_DESCRIPTOR  (identical; IAT/INT thunk *width* differs) */
 typedef struct {
-    uint32_t OriginalFirstThunk;
+    uint32_t OriginalFirstThunk;  /* RVA of INT                               */
     uint32_t TimeDateStamp;
     uint32_t ForwarderChain;
-    uint32_t Name;
-    uint32_t FirstThunk;
-} IMAGE_IMPORT_DESCRIPTOR;
+    uint32_t Name;                /* RVA of DLL name string                   */
+    uint32_t FirstThunk;          /* RVA of IAT                               */
+} ImportDescriptor;
 
-typedef struct {
-    uint32_t OFT, Time, Fwd, Name, FT;
-} IMPDESC;
+/* ===========================================================================
+ * Shared constants
+ * ========================================================================= */
+
+#define IMAGE_DOS_SIGNATURE              0x5A4D
+#define IMAGE_FILE_MACHINE_I386          0x014C
+#define IMAGE_FILE_MACHINE_AMD64         0x8664
+#define IMAGE_FILE_EXECUTABLE_IMAGE      0x0002
+#define IMAGE_FILE_32BIT_MACHINE         0x0100
+#define IMAGE_FILE_LARGE_ADDRESS_AWARE   0x0020
+#define IMAGE_NT_OPTIONAL_HDR32_MAGIC    0x010B
+#define IMAGE_NT_OPTIONAL_HDR64_MAGIC    0x020B
+#define IMAGE_SUBSYSTEM_WINDOWS_CUI      3
+
+#define IMAGE_SCN_CNT_CODE               0x00000020
+#define IMAGE_SCN_CNT_INITIALIZED_DATA   0x00000040
+#define IMAGE_SCN_MEM_EXECUTE            0x20000000
+#define IMAGE_SCN_MEM_READ               0x40000000
+#define IMAGE_SCN_MEM_WRITE              0x80000000
+
+#define IMAGE_DIRECTORY_ENTRY_IMPORT     1
+#define IMAGE_DIRECTORY_ENTRY_IAT        12
+
+#define FILE_ALIGNMENT                   0x200
+#define SECTION_ALIGNMENT                0x1000
+#define RAW_SECTION_SIZE                 0x200
+
+#define ALIGN_UP(val, align) (((val) + (align) - 1) & ~((align) - 1))
+
+ /* Message shared by both build targets */
+static const char    HELLO_MSG[] = "Hello, World!\r\n";
+static const uint32_t MSG_LEN = 15;
 
 ///////////////////////////////////////////////////
 
-void build_pe(const char* fileName);
+int build_pe32(const char* outfile);
+int build_pe64(const char* outfile);
+void build_pe_console(const char* outfile, bool is64bit);
 
 bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image, int sq_program_image_length);
 
