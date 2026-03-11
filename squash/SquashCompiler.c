@@ -36,6 +36,10 @@ void squash_compiler_init(struct SquashCompiler* squash_compiler, char* input, i
 
     //squash_compiler->rootAST = new AbstractSyntaxTree();
     squash_compiler->asm0 = assembler_new(); // new Assembler(rootAST)
+
+    int Bitness = 64;
+
+    assembler(squash_compiler->asm0, Bitness);
 }
 
 void CompileExpression(struct SquashCompiler* squash_compiler, char* output_file_name, char* output_binary_file_name, bool enable_tracing)

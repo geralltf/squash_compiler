@@ -473,44 +473,47 @@ static void build_optional_header_32(uint8_t* buf,
  *
  * Dedicated to: build_pe32()
  * ------------------------------------------------------------------------- */
-static uint8_t* build_text_section_32(uint32_t* out_size) {
-	uint8_t* buf = (uint8_t*)calloc(RAW_SECTION_SIZE, 1);
-	uint8_t* p;
-	if (!buf) { perror("calloc"); exit(1); }
-	p = buf;
+static uint8_t* build_text_section_32(unsigned char* sq_program_image, int sq_program_image_length, uint32_t* out_size) {
+	//uint8_t* buf = (uint8_t*)calloc(RAW_SECTION_SIZE, 1);
+	//uint8_t* p;
+	//if (!buf) { perror("calloc"); exit(1); }
+	//p = buf;
 
-	/* --- GetStdHandle(STD_OUTPUT_HANDLE) --- */
-	*p++ = 0x68;                         /* push imm32                       */
-	write_u32(p, 0xFFFFFFF5); p += 4;    /*   STD_OUTPUT_HANDLE = -11        */
-	*p++ = 0xFF; *p++ = 0x15;            /* call dword ptr [abs_va]          */
-	write_u32(p, VA32_IAT_GSH); p += 4;
-	*p++ = 0x89; *p++ = 0xC3;            /* mov ebx, eax  (save handle)      */
+	///* --- GetStdHandle(STD_OUTPUT_HANDLE) --- */
+	//*p++ = 0x68;                         /* push imm32                       */
+	//write_u32(p, 0xFFFFFFF5); p += 4;    /*   STD_OUTPUT_HANDLE = -11        */
+	//*p++ = 0xFF; *p++ = 0x15;            /* call dword ptr [abs_va]          */
+	//write_u32(p, VA32_IAT_GSH); p += 4;
+	//*p++ = 0x89; *p++ = 0xC3;            /* mov ebx, eax  (save handle)      */
 
-	/* --- Allocate bytesWritten on stack, get its address into ECX --- */
-	*p++ = 0x6A; *p++ = 0x00;            /* push 0  (bytesWritten slot)      */
-	*p++ = 0x89; *p++ = 0xE1;            /* mov ecx, esp                     */
+	///* --- Allocate bytesWritten on stack, get its address into ECX --- */
+	//*p++ = 0x6A; *p++ = 0x00;            /* push 0  (bytesWritten slot)      */
+	//*p++ = 0x89; *p++ = 0xE1;            /* mov ecx, esp                     */
 
-	/* --- WriteFile(hFile, lpBuf, nBytes, &bw, NULL) --- */
-	*p++ = 0x6A; *p++ = 0x00;            /* push 0     arg5: lpOverlapped    */
-	*p++ = 0x51;                         /* push ecx   arg4: &bytesWritten   */
-	*p++ = 0x68;                         /* push imm32 arg3: nBytes          */
-	write_u32(p, MSG_LEN); p += 4;
-	*p++ = 0x68;                         /* push imm32 arg2: lpBuffer        */
-	write_u32(p, VA32_MSG); p += 4;
-	*p++ = 0x53;                         /* push ebx   arg1: hFile           */
-	*p++ = 0xFF; *p++ = 0x15;            /* call dword ptr [abs_va]          */
-	write_u32(p, VA32_IAT_WF); p += 4;
-	*p++ = 0x83; *p++ = 0xC4; *p++ = 0x04; /* add esp, 4  clean up bw slot  */
+	///* --- WriteFile(hFile, lpBuf, nBytes, &bw, NULL) --- */
+	//*p++ = 0x6A; *p++ = 0x00;            /* push 0     arg5: lpOverlapped    */
+	//*p++ = 0x51;                         /* push ecx   arg4: &bytesWritten   */
+	//*p++ = 0x68;                         /* push imm32 arg3: nBytes          */
+	//write_u32(p, MSG_LEN); p += 4;
+	//*p++ = 0x68;                         /* push imm32 arg2: lpBuffer        */
+	//write_u32(p, VA32_MSG); p += 4;
+	//*p++ = 0x53;                         /* push ebx   arg1: hFile           */
+	//*p++ = 0xFF; *p++ = 0x15;            /* call dword ptr [abs_va]          */
+	//write_u32(p, VA32_IAT_WF); p += 4;
+	//*p++ = 0x83; *p++ = 0xC4; *p++ = 0x04; /* add esp, 4  clean up bw slot  */
 
-	/* --- ExitProcess(0) --- */
-	*p++ = 0x6A; *p++ = 0x00;            /* push 0                           */
-	*p++ = 0xFF; *p++ = 0x15;            /* call dword ptr [abs_va]          */
-	write_u32(p, VA32_IAT_EP); p += 4;
+	///* --- ExitProcess(0) --- */
+	//*p++ = 0x6A; *p++ = 0x00;            /* push 0                           */
+	//*p++ = 0xFF; *p++ = 0x15;            /* call dword ptr [abs_va]          */
+	//write_u32(p, VA32_IAT_EP); p += 4;
 
-	*p++ = 0xCC;                         /* INT3 — unreachable safety guard  */
+	//*p++ = 0xCC;                         /* INT3 — unreachable safety guard  */
 
-	*out_size = (uint32_t)(p - buf);
-	return buf;
+	//*out_size = (uint32_t)(p - buf);
+	//return buf;
+
+	*out_size = sq_program_image_length;
+	return sq_program_image;
 }
 
 /* ---------------------------------------------------------------------------
@@ -598,7 +601,7 @@ static uint8_t* build_data_section_32(uint32_t* out_vsize) {
  *
  * Dedicated to: 32-bit PE generation
  * ------------------------------------------------------------------------- */
-int build_pe32(const char* outfile) {
+int build_pe32(const char* outfile, unsigned char* sq_program_image, int sq_program_image_length) {
 	uint8_t* image, * shtab;
 	uint8_t* text_buf, * rdata_buf, * data_buf;
 	uint32_t      text_vsize, rdata_vsize, data_vsize;
@@ -643,7 +646,7 @@ int build_pe32(const char* outfile) {
 		IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE);
 
 	/* Build and copy each section, then patch its VirtualSize */
-	text_buf = build_text_section_32(&text_vsize);
+	text_buf = build_text_section_32(sq_program_image, sq_program_image_length, &text_vsize);
 	rdata_buf = build_rdata_section_32(&rdata_vsize);
 	data_buf = build_data_section_32(&data_vsize);
 
@@ -824,78 +827,82 @@ static void build_optional_header_64(uint8_t* buf,
  *
  * Dedicated to: build_pe64()
  * ------------------------------------------------------------------------- */
-static uint8_t* build_text_section_64(uint32_t* out_size) {
-	uint8_t* buf = (uint8_t*)calloc(RAW_SECTION_SIZE, 1);
-	uint8_t* p;
-	uint64_t  next_rip;
-	int64_t   disp;
-	if (!buf) { perror("calloc"); exit(1); }
-	p = buf;
+static uint8_t* build_text_section_64(unsigned char* sq_program_image, int sq_program_image_length, uint32_t* out_size) {
+	//uint8_t* buf = (uint8_t*)calloc(RAW_SECTION_SIZE, 1);
+	//uint8_t* p;
+	//uint64_t  next_rip;
+	//int64_t   disp;
+	//if (!buf) { perror("calloc"); exit(1); }
+	//p = buf;
 
-	/* sub rsp, 0x28  (48 83 EC 28) */
-	*p++ = 0x48; *p++ = 0x83; *p++ = 0xEC; *p++ = 0x28;
+	///* sub rsp, 0x28  (48 83 EC 28) */
+	//*p++ = 0x48; *p++ = 0x83; *p++ = 0xEC; *p++ = 0x28;
 
-	/* --- GetStdHandle(STD_OUTPUT_HANDLE) ---
-	 *   mov ecx, -11            ; STD_OUTPUT_HANDLE
-	 *   call [RIP+disp]         ; IAT slot 0 = GetStdHandle
-	 *   mov rbx, rax            ; save handle; RBX is non-volatile
-	 */
-	*p++ = 0xB9; write_u32(p, 0xFFFFFFF5); p += 4; /* mov ecx, imm32 */
+	///* --- GetStdHandle(STD_OUTPUT_HANDLE) ---
+	// *   mov ecx, -11            ; STD_OUTPUT_HANDLE
+	// *   call [RIP+disp]         ; IAT slot 0 = GetStdHandle
+	// *   mov rbx, rax            ; save handle; RBX is non-volatile
+	// */
+	//*p++ = 0xB9; write_u32(p, 0xFFFFFFF5); p += 4; /* mov ecx, imm32 */
 
-	next_rip = IMAGEBASE_64 + TEXT_RVA_64 + (uint32_t)(p - buf) + 6;
-	disp = (int64_t)(IMAGEBASE_64 + R64_RVA_IAT + 0) - (int64_t)next_rip;
-	*p++ = 0xFF; *p++ = 0x15; write_u32(p, (uint32_t)(int32_t)disp); p += 4;
+	//next_rip = IMAGEBASE_64 + TEXT_RVA_64 + (uint32_t)(p - buf) + 6;
+	//disp = (int64_t)(IMAGEBASE_64 + R64_RVA_IAT + 0) - (int64_t)next_rip;
+	//*p++ = 0xFF; *p++ = 0x15; write_u32(p, (uint32_t)(int32_t)disp); p += 4;
 
-	*p++ = 0x48; *p++ = 0x89; *p++ = 0xC3;         /* mov rbx, rax */
+	//*p++ = 0x48; *p++ = 0x89; *p++ = 0xC3;         /* mov rbx, rax */
 
-	/* Zero the bytesWritten slot at [rsp+0x10]
-	 *   mov dword ptr [rsp+0x10], 0   (C7 44 24 10 00 00 00 00)
-	 */
-	*p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x10;
-	write_u32(p, 0); p += 4;
+	///* Zero the bytesWritten slot at [rsp+0x10]
+	// *   mov dword ptr [rsp+0x10], 0   (C7 44 24 10 00 00 00 00)
+	// */
+	//*p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x10;
+	//write_u32(p, 0); p += 4;
 
-	/* Zero the lpOverlapped slot at [rsp+0x20] (5th arg for WriteFile)
-	 *   mov qword ptr [rsp+0x20], 0   (48 C7 44 24 20 00 00 00 00)
-	 */
-	*p++ = 0x48; *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x20;
-	write_u32(p, 0); p += 4;
+	///* Zero the lpOverlapped slot at [rsp+0x20] (5th arg for WriteFile)
+	// *   mov qword ptr [rsp+0x20], 0   (48 C7 44 24 20 00 00 00 00)
+	// */
+	//*p++ = 0x48; *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x20;
+	//write_u32(p, 0); p += 4;
 
-	/* --- WriteFile(hFile, lpBuffer, nBytes, &bytesWritten, NULL) ---
-	 *   mov  rcx, rbx                  arg1: hFile
-	 *   lea  rdx, [RIP+disp]           arg2: lpBuffer -> .data message
-	 *   mov  r8d, MSG_LEN              arg3: nNumberOfBytesToWrite
-	 *   lea  r9,  [rsp+0x10]           arg4: &bytesWritten
-	 *   ; [rsp+0x20] already = 0       arg5: lpOverlapped = NULL
-	 *   call [RIP+disp]                IAT slot 1 = WriteFile
-	 */
-	*p++ = 0x48; *p++ = 0x89; *p++ = 0xD9;         /* mov rcx, rbx */
+	///* --- WriteFile(hFile, lpBuffer, nBytes, &bytesWritten, NULL) ---
+	// *   mov  rcx, rbx                  arg1: hFile
+	// *   lea  rdx, [RIP+disp]           arg2: lpBuffer -> .data message
+	// *   mov  r8d, MSG_LEN              arg3: nNumberOfBytesToWrite
+	// *   lea  r9,  [rsp+0x10]           arg4: &bytesWritten
+	// *   ; [rsp+0x20] already = 0       arg5: lpOverlapped = NULL
+	// *   call [RIP+disp]                IAT slot 1 = WriteFile
+	// */
+	//*p++ = 0x48; *p++ = 0x89; *p++ = 0xD9;         /* mov rcx, rbx */
 
-	next_rip = IMAGEBASE_64 + TEXT_RVA_64 + (uint32_t)(p - buf) + 7;
-	disp = (int64_t)(IMAGEBASE_64 + DATA_RVA_64) - (int64_t)next_rip;
-	*p++ = 0x48; *p++ = 0x8D; *p++ = 0x15;          /* lea rdx, [RIP+disp32] */
-	write_u32(p, (uint32_t)(int32_t)disp); p += 4;
+	//next_rip = IMAGEBASE_64 + TEXT_RVA_64 + (uint32_t)(p - buf) + 7;
+	//disp = (int64_t)(IMAGEBASE_64 + DATA_RVA_64) - (int64_t)next_rip;
+	//*p++ = 0x48; *p++ = 0x8D; *p++ = 0x15;          /* lea rdx, [RIP+disp32] */
+	//write_u32(p, (uint32_t)(int32_t)disp); p += 4;
 
-	*p++ = 0x41; *p++ = 0xB8; write_u32(p, MSG_LEN); p += 4; /* mov r8d, imm32 */
-	*p++ = 0x4C; *p++ = 0x8D; *p++ = 0x4C; *p++ = 0x24; *p++ = 0x10; /* lea r9,[rsp+0x10] */
+	//*p++ = 0x41; *p++ = 0xB8; write_u32(p, MSG_LEN); p += 4; /* mov r8d, imm32 */
+	//*p++ = 0x4C; *p++ = 0x8D; *p++ = 0x4C; *p++ = 0x24; *p++ = 0x10; /* lea r9,[rsp+0x10] */
 
-	next_rip = IMAGEBASE_64 + TEXT_RVA_64 + (uint32_t)(p - buf) + 6;
-	disp = (int64_t)(IMAGEBASE_64 + R64_RVA_IAT + 8) - (int64_t)next_rip;
-	*p++ = 0xFF; *p++ = 0x15; write_u32(p, (uint32_t)(int32_t)disp); p += 4;
+	//next_rip = IMAGEBASE_64 + TEXT_RVA_64 + (uint32_t)(p - buf) + 6;
+	//disp = (int64_t)(IMAGEBASE_64 + R64_RVA_IAT + 8) - (int64_t)next_rip;
+	//*p++ = 0xFF; *p++ = 0x15; write_u32(p, (uint32_t)(int32_t)disp); p += 4;
 
-	/* --- ExitProcess(0) ---
-	 *   xor ecx, ecx
-	 *   call [RIP+disp]         ; IAT slot 2 = ExitProcess
-	 */
-	*p++ = 0x31; *p++ = 0xC9;                        /* xor ecx, ecx */
+	///* --- ExitProcess(0) ---
+	// *   xor ecx, ecx
+	// *   call [RIP+disp]         ; IAT slot 2 = ExitProcess
+	// */
+	//*p++ = 0x31; *p++ = 0xC9;                        /* xor ecx, ecx */
 
-	next_rip = IMAGEBASE_64 + TEXT_RVA_64 + (uint32_t)(p - buf) + 6;
-	disp = (int64_t)(IMAGEBASE_64 + R64_RVA_IAT + 16) - (int64_t)next_rip;
-	*p++ = 0xFF; *p++ = 0x15; write_u32(p, (uint32_t)(int32_t)disp); p += 4;
+	//next_rip = IMAGEBASE_64 + TEXT_RVA_64 + (uint32_t)(p - buf) + 6;
+	//disp = (int64_t)(IMAGEBASE_64 + R64_RVA_IAT + 16) - (int64_t)next_rip;
+	//*p++ = 0xFF; *p++ = 0x15; write_u32(p, (uint32_t)(int32_t)disp); p += 4;
 
-	*p++ = 0xCC;  /* INT3 — unreachable safety guard */
+	//*p++ = 0xCC;  /* INT3 — unreachable safety guard */
 
-	*out_size = (uint32_t)(p - buf);
-	return buf;
+	//*out_size = (uint32_t)(p - buf);
+
+	//return buf;
+
+	*out_size = sq_program_image_length;
+	return sq_program_image;
 }
 
 /* ---------------------------------------------------------------------------
@@ -983,7 +990,7 @@ static uint8_t* build_data_section_64(uint32_t* out_vsize) {
  *
  * Dedicated to: 64-bit PE generation
  * ------------------------------------------------------------------------- */
-int build_pe64(const char* outfile) {
+int build_pe64(const char* outfile, unsigned char* sq_program_image, int sq_program_image_length) {
 	uint8_t* image, * shtab;
 	uint8_t* text_buf, * rdata_buf, * data_buf;
 	uint32_t      text_vsize, rdata_vsize, data_vsize;
@@ -1027,7 +1034,7 @@ int build_pe64(const char* outfile) {
 		IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE);
 
 	/* Build and copy each section, then patch its VirtualSize */
-	text_buf = build_text_section_64(&text_vsize);
+	text_buf = build_text_section_64(sq_program_image, sq_program_image_length, &text_vsize);
 	rdata_buf = build_rdata_section_64(&rdata_vsize);
 	data_buf = build_data_section_64(&data_vsize);
 
@@ -1065,7 +1072,7 @@ int build_pe64(const char* outfile) {
 	return 0;
 }
 
-void build_pe_console(const char* outfile, bool is64bit)
+int build_pe_console(const char* outfile, bool is64bit, unsigned char* sq_program_image, int sq_program_image_length)
 {
 	int rc = 0;
 
@@ -1088,11 +1095,11 @@ void build_pe_console(const char* outfile, bool is64bit)
 
 	if (is64bit == false)
 	{
-		rc = build_pe32(outfile);
+		rc = build_pe32(outfile, sq_program_image, sq_program_image_length);
 	}
 	else
 	{
-		rc = build_pe64(outfile);
+		rc = build_pe64(outfile, sq_program_image, sq_program_image_length);
 	}
 
 	if (rc == 0)
@@ -1110,7 +1117,7 @@ bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image
 {
 	bool is64bit = true;
 
-	build_pe_console(fileName, is64bit);
+	build_pe_console(fileName, is64bit, sq_program_image, sq_program_image_length);
 
 	return true;
 }

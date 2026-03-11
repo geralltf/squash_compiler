@@ -228,9 +228,9 @@ static const uint32_t MSG_LEN = 15;
 
 ///////////////////////////////////////////////////
 
-int build_pe32(const char* outfile);
-int build_pe64(const char* outfile);
-void build_pe_console(const char* outfile, bool is64bit);
+int build_pe32(const char* outfile, unsigned char* sq_program_image, int sq_program_image_length);
+int build_pe64(const char* outfile, unsigned char* sq_program_image, int sq_program_image_length);
+int build_pe_console(const char* outfile, bool is64bit, unsigned char* sq_program_image, int sq_program_image_length);
 
 bool WritePEProgramSQImage(const char* fileName, unsigned char* sq_program_image, int sq_program_image_length);
 
