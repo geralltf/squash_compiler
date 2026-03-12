@@ -6,7 +6,7 @@ struct SquashCompiler* squash_compiler_new()
     return squash_compiler;
 }
 
-void squash_compiler_init(struct SquashCompiler* squash_compiler, char* input, int inputLength)
+void squash_compiler_init(struct SquashCompiler* squash_compiler, char* input, int inputLength, int Bitness)
 {
     LogInformation("SquashCompiler(): ctor");
 
@@ -37,12 +37,10 @@ void squash_compiler_init(struct SquashCompiler* squash_compiler, char* input, i
     //squash_compiler->rootAST = new AbstractSyntaxTree();
     squash_compiler->asm0 = assembler_new(); // new Assembler(rootAST)
 
-    int Bitness = 64;
-
     assembler(squash_compiler->asm0, Bitness);
 }
 
-void CompileExpression(struct SquashCompiler* squash_compiler, char* output_file_name, char* output_binary_file_name, bool enable_tracing)
+void CompileExpression(struct SquashCompiler* squash_compiler, const unsigned long RIP_program_start_addr, char* output_file_name, char* output_binary_file_name, bool enable_tracing)
 {
     astnode_t* expression = ParseStatements(squash_compiler);
 
@@ -60,7 +58,7 @@ void CompileExpression(struct SquashCompiler* squash_compiler, char* output_file
     //squash_compiler->asm->Is_Linux = true;
     squash_compiler->asm0->Is_Windows = true;
 
-    GenerateCode(squash_compiler->asm0, expression, output_file_name, output_binary_file_name, enable_tracing);
+    GenerateCode(squash_compiler->asm0, RIP_program_start_addr, expression, output_file_name, output_binary_file_name, enable_tracing);
 }
 
 astnode_t* ParseStatements(struct SquashCompiler* squash_compiler)

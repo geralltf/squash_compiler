@@ -23,8 +23,8 @@ struct SquashCompiler
 };
 
 struct SquashCompiler* squash_compiler_new();
-void squash_compiler_init(struct SquashCompiler* squash_compiler, char* input, int inputLength);
-void CompileExpression(struct SquashCompiler* squash_compiler, char* output_file_name, char* output_binary_file_name, bool enable_tracing);
+void squash_compiler_init(struct SquashCompiler* squash_compiler, char* input, int inputLength, int Bitness);
+void CompileExpression(struct SquashCompiler* squash_compiler, const unsigned long RIP_program_start_addr, char* output_file_name, char* output_binary_file_name, bool enable_tracing);
 astnode_t* ParseStatements(struct SquashCompiler* squash_compiler);
 astnode_t* ParseVariableDeclaration(struct SquashCompiler* squash_compiler, enum VarType varType);
 astnode_t* ParseVariableDefine(struct SquashCompiler* squash_compiler, enum VarType varType);

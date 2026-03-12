@@ -6,8 +6,17 @@
 #include <stdio.h>
 #include <string.h>
 
+// Also in pe_image_stream.c:
+#define IMAGEBASE_64         UINT64_C(0x140000000)
+#define TOTAL_SIZE_64        0x800
+#define TEXT_RVA_64          0x1000u
+#define RDATA_RVA_64         0x2000u
+#define DATA_RVA_64          0x3000u
+
 int main(int argc, char* argv[])
 {
+    int Bitness = 64;
+    const unsigned long RIP = IMAGEBASE_64 + TEXT_RVA_64; // Start address of program.
     void* buffer = NULL;
     size_t length = 0;
     struct SquashCompiler* squash_compiler = NULL; // squash_compiler_t
@@ -167,9 +176,9 @@ int main(int argc, char* argv[])
         if (FileReadString(input_file_name, &buffer, &length) && buffer)
         {
             squash_compiler = squash_compiler_new();
-            squash_compiler_init(squash_compiler, (char*)buffer, length);
+            squash_compiler_init(squash_compiler, (char*)buffer, length, Bitness);
 
-            CompileExpression(squash_compiler, output_file_name, output_bin_file_name, enable_tracing);
+            CompileExpression(squash_compiler, RIP, output_file_name, output_bin_file_name, enable_tracing);
         }
     }
 
@@ -187,9 +196,9 @@ int main(int argc, char* argv[])
             LogInformation("\t begin compilation.");
 
             squash_compiler = squash_compiler_new();
-            squash_compiler_init(squash_compiler, (char*)buffer, length);
+            squash_compiler_init(squash_compiler, (char*)buffer, length, Bitness);
 
-            CompileExpression(squash_compiler, output_file_name, output_bin_file_name, enable_tracing);
+            CompileExpression(squash_compiler, RIP, output_file_name, output_bin_file_name, enable_tracing);
         }
     }
 

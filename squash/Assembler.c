@@ -137,7 +137,7 @@ struct Label* use_andor_define_variable(struct Assembler* assembler, char* var_n
 /// <exception cref="Exception">
 /// Underlying Assemble() method can throw exceptions as well as this method.
 /// </exception>
-void GenerateCode(struct Assembler* assembler, astnode_t* astNode, char* output_file_name, char* output_binary_file_name, bool enable_tracing)
+void GenerateCode(struct Assembler* assembler, const unsigned long RIP_program_start_addr, astnode_t* astNode, char* output_file_name, char* output_binary_file_name, bool enable_tracing)
 {
     char* astnode_str;
     if (astNode != NULL)
@@ -211,7 +211,7 @@ void GenerateCode(struct Assembler* assembler, astnode_t* astNode, char* output_
 
             if (output_binary_file_name != NULL)
             {
-                test_assembler(assembler, output_binary_file_name);
+                test_assembler(assembler, RIP_program_start_addr, output_binary_file_name);
             }
             else
             {
@@ -1593,9 +1593,9 @@ unsigned char* squash_assemble(struct Assembler* assembler, unsigned long RIP_pr
 #define IMAGEBASE_64         UINT64_C(0x140000000)
 #define TEXT_RVA_64          0x1000u
 
-void test_assembler(struct Assembler* c, const char* binaryFileName)
+void test_assembler(struct Assembler* c, const unsigned long RIP_program_start_addr, const char* binaryFileName)
 {
-    const unsigned long RIP = IMAGEBASE_64 + TEXT_RVA_64;
+    //const unsigned long RIP = IMAGEBASE_64 + TEXT_RVA_64;
     //int Bitness = 64;
     // The assembler supports all modes: 16-bit, 32-bit and 64-bit.
     //c = assembler_new();
@@ -1712,7 +1712,7 @@ void test_assembler(struct Assembler* c, const char* binaryFileName)
     //db_imm2(c, 0xF3, 0x90); // pause
 
     int encoded_length;
-    unsigned char* sq_program_image = squash_assemble(c, RIP, &encoded_length);
+    unsigned char* sq_program_image = squash_assemble(c, RIP_program_start_addr, &encoded_length);
     //Assemble(c, new StreamCodeWriter(stream), RIP);
 
     // Print out program buffer machine code:

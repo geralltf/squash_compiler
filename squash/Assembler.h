@@ -20,7 +20,7 @@ struct Assembler* assembler_new();
 /// <exception cref="Exception">
 /// Underlying Assemble() method can throw exceptions as well as this method.
 /// </exception>
-void GenerateCode(struct Assembler* assembler, astnode_t* astNode, char* output_file_name, char* output_binary_file_name, bool enable_tracing);
+void GenerateCode(struct Assembler* assembler, const unsigned long RIP_program_start_addr, astnode_t* astNode, char* output_file_name, char* output_binary_file_name, bool enable_tracing);
 
 void functionbody_assemble(astnode_t* node, StringBuilder* sb, struct Assembler* assembler);
 
@@ -108,7 +108,7 @@ void nop(struct Assembler* assembler, int sizeInBytes);
 /// </returns>
 unsigned char* squash_assemble(struct Assembler* assembler, unsigned long RIP_program_start_addr, int* encoder_length);
 
-void test_assembler(struct Assembler* c, const char* binaryFileName);
+void test_assembler(struct Assembler* c, const unsigned long RIP_program_start_addr, const char* binaryFileName);
 
 //void squash_assembler(struct Assembler* assembler, char* source_asm, int source_size, char* output_binary_file_name);
 
