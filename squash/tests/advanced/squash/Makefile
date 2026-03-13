@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-I. -Wall -pedantic -std=c23
+CFLAGS=-I. -Wall -pedantic
 DEPS = 
 HEADERS =
 OBJ = compiler.o assembler.o ast.o codegen.o lexer.o parser.o pe_builder.o symtable.o
