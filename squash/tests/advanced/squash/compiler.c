@@ -25,6 +25,10 @@
 #include "codegen.h"
 #include "pe_builder.h"
 
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 /* =========================================================================
  * Read entire file into heap buffer
  * ========================================================================= */

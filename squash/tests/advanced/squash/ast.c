@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 static ASTNode *alloc_node(ASTKind kind, int line) {
     ASTNode *n = calloc(1, sizeof(ASTNode));
     if (!n) { perror("calloc"); exit(1); }
