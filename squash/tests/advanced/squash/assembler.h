@@ -1,0 +1,180 @@
+#ifndef ASSEMBLER_H
+#define ASSEMBLER_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+/* =========================================================================
+ * Register IDs (shared subset; 64-bit names used for 32-bit low-halves too)
+ * ========================================================================= */
+typedef enum {
+    /* 64-bit general purpose */
+    REG_RAX=0, REG_RCX, REG_RDX, REG_RBX,
+    REG_RSP,   REG_RBP, REG_RSI, REG_RDI,
+    REG_R8,    REG_R9,  REG_R10, REG_R11,
+    REG_R12,   REG_R13, REG_R14, REG_R15,
+    /* 32-bit aliases (same encoding, different REX) */
+    REG_EAX=0, REG_ECX=1, REG_EDX=2, REG_EBX=3,
+    REG_ESP=4, REG_EBP=5, REG_ESI=6, REG_EDI=7,
+    REG_NONE = 255
+} Reg;
+
+/* =========================================================================
+ * Condition codes
+ * ========================================================================= */
+typedef enum {
+    CC_E=4, CC_NE=5, CC_L=12, CC_GE=13, CC_LE=14, CC_G=15,
+    CC_B=2, CC_AE=3, CC_Z=4,  CC_NZ=5
+} CondCode;
+
+/* =========================================================================
+ * Relocation kinds
+ * ========================================================================= */
+typedef enum {
+    RELOC_ABS32,       /* 32-bit absolute VA of IAT slot (32-bit PE)  */
+    RELOC_DATA_ABS32,  /* 32-bit absolute VA of data label (32-bit PE) */
+    RELOC_REL32,       /* 32-bit PC-relative (branch/call)             */
+    RELOC_IAT_REL32,   /* 32-bit RIP-relative to IAT slot (64-bit)    */
+    RELOC_DATA_REL32,  /* 32-bit RIP-relative to data symbol (64-bit) */
+} RelocKind;
+
+/* =========================================================================
+ * A relocation entry: patch emitted code at 'offset' after linking
+ * ========================================================================= */
+typedef struct {
+    int        offset;     /* offset in code buffer of the 4-byte field  */
+    RelocKind  kind;
+    char      *symbol;     /* import name "WriteFile" or data label       */
+    int        addend;     /* value to add after resolving                */
+} Relocation;
+
+/* =========================================================================
+ * Label (for jump targets)
+ * ========================================================================= */
+typedef struct {
+    char *name;
+    int   offset;   /* -1 = not yet defined (forward reference)          */
+} Label;
+
+/* =========================================================================
+ * Fixup: a forward-reference branch that needs patching
+ * ========================================================================= */
+typedef struct {
+    int   patch_offset;  /* where in code[] to write the 4-byte disp     */
+    int   label_id;
+} Fixup;
+
+/* =========================================================================
+ * Assembler context
+ * ========================================================================= */
+#define ASM_BUF_INIT  65536
+#define ASM_MAX_RELOC 4096
+#define ASM_MAX_LABEL 1024
+
+typedef struct {
+    uint8_t   *code;
+    int        code_len;
+    int        code_cap;
+
+    Relocation *relocs;
+    int         reloc_count;
+    int         reloc_cap;
+
+    Label      *labels;
+    int         label_count;
+    int         label_cap;
+
+    Fixup      *fixups;
+    int         fixup_count;
+    int         fixup_cap;
+
+    int         is_64bit;
+} Assembler;
+
+/* =========================================================================
+ * Core assembler API
+ * ========================================================================= */
+void asm_init   (Assembler *a, int is_64bit);
+void asm_free   (Assembler *a);
+
+/* Raw emission */
+void asm_emit1  (Assembler *a, uint8_t b);
+void asm_emit2  (Assembler *a, uint8_t b0, uint8_t b1);
+void asm_emit3  (Assembler *a, uint8_t b0, uint8_t b1, uint8_t b2);
+void asm_emit4  (Assembler *a, uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3);
+void asm_emit_u16(Assembler *a, uint16_t v);
+void asm_emit_u32(Assembler *a, uint32_t v);
+void asm_emit_u64(Assembler *a, uint64_t v);
+void asm_emit_bytes(Assembler *a, const uint8_t *buf, int len);
+
+/* Labels & fixups */
+int  asm_new_label (Assembler *a, const char *name);  /* allocate label */
+void asm_def_label (Assembler *a, int id);             /* define at current pos */
+void asm_emit_fixup(Assembler *a, int label_id);       /* emit placeholder + register fixup */
+void asm_resolve   (Assembler *a);                     /* patch all fixups */
+
+/* Relocations (for imports / data) */
+void asm_reloc_iat (Assembler *a, const char *sym);    /* import call slot */
+void asm_reloc_data(Assembler *a, const char *sym);    /* data label */
+
+/* =========================================================================
+ * High-level instruction emitters
+ * ========================================================================= */
+
+/* ---- Stack frame ---- */
+void asm_push_reg   (Assembler *a, Reg r);
+void asm_pop_reg    (Assembler *a, Reg r);
+void asm_push_imm32 (Assembler *a, int32_t v);
+void asm_sub_rsp    (Assembler *a, int32_t n);      /* sub rsp/esp, imm  */
+void asm_add_rsp    (Assembler *a, int32_t n);      /* add rsp/esp, imm  */
+void asm_enter      (Assembler *a, int local_bytes); /* push rbp; mov rbp,rsp; sub rsp,N */
+void asm_leave      (Assembler *a);                  /* leave             */
+void asm_ret        (Assembler *a);                  /* ret               */
+
+/* ---- Data movement ---- */
+void asm_mov_reg_imm  (Assembler *a, Reg dst, long long imm);   /* mov reg, imm */
+void asm_mov_reg_reg  (Assembler *a, Reg dst, Reg src);          /* mov reg, reg */
+void asm_mov_mem_reg  (Assembler *a, Reg base, int disp, Reg src);/* [base+d]=src */
+void asm_mov_reg_mem  (Assembler *a, Reg dst, Reg base, int disp);/* dst=[base+d] */
+void asm_lea_rip_data (Assembler *a, Reg dst, const char *sym);  /* lea reg,[rip+sym] */
+void asm_lea_rbp_disp (Assembler *a, Reg dst, int disp);         /* lea reg,[rbp+d] */
+
+/* ---- Arithmetic ---- */
+void asm_add_reg_reg(Assembler *a, Reg dst, Reg src);
+void asm_sub_reg_reg(Assembler *a, Reg dst, Reg src);
+void asm_imul_reg_reg(Assembler *a, Reg dst, Reg src);
+void asm_idiv_reg  (Assembler *a, Reg src);          /* cdq; idiv src     */
+void asm_neg_reg   (Assembler *a, Reg r);
+void asm_not_reg   (Assembler *a, Reg r);
+
+/* ---- Bitwise ---- */
+void asm_and_reg_reg(Assembler *a, Reg dst, Reg src);
+void asm_or_reg_reg (Assembler *a, Reg dst, Reg src);
+void asm_xor_reg_reg(Assembler *a, Reg dst, Reg src);
+void asm_shl_reg_cl (Assembler *a, Reg r);
+void asm_shr_reg_cl (Assembler *a, Reg r);
+
+/* ---- Comparison & logical ---- */
+void asm_cmp_reg_reg(Assembler *a, Reg a_, Reg b);
+void asm_test_reg_reg(Assembler *a, Reg a_, Reg b);
+void asm_setcc_al   (Assembler *a, CondCode cc);     /* setcc al          */
+void asm_movzx_rax_al(Assembler *a);                 /* movzx rax, al     */
+
+/* ---- Control flow ---- */
+void asm_jmp_label  (Assembler *a, int label_id);
+void asm_jcc_label  (Assembler *a, CondCode cc, int label_id);
+void asm_call_import(Assembler *a, const char *sym);  /* call [IAT_sym]   */
+void asm_call_direct(Assembler *a, int label_id);     /* call label        */
+void asm_int3       (Assembler *a);
+
+/* ---- x64 Windows ABI helpers ---- */
+/* Pass arg N (0-based) into the right register/stack slot.
+   Value is already in RAX; this moves it to the right place. */
+void asm_arg_from_rax(Assembler *a, int arg_index);
+/* After all args are set, call an import */
+void asm_call_import_with_args(Assembler *a, const char *sym, int argc);
+
+/* ---- x86 32-bit helpers ---- */
+void asm_call_import32(Assembler *a, const char *sym); /* call [abs_iat]  */
+
+#endif /* ASSEMBLER_H */
