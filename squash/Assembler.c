@@ -1728,6 +1728,7 @@ void test_assembler(struct Assembler* c, const unsigned long RIP_program_start_a
         //printf("%02X ", (unsigned int)byte_value);
 
         printf("%02X ", (unsigned int)sq_program_image[buffer_index]);
+        //printf("%02X ", sq_program_image[buffer_index]);
     }
 
     printf("\n");

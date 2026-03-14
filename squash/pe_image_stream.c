@@ -167,7 +167,7 @@
 //}
 
 /* ===========================================================================
- * SHARED UTILITY — little-endian write helpers
+ * SHARED UTILITY ï¿½ little-endian write helpers
  * ========================================================================= */
 
 static void write_u16(uint8_t* p, uint16_t v) {
@@ -196,7 +196,7 @@ static void write_u64(uint8_t* p, uint64_t v) {
   * build_dos_header()
   *
   * Fills IMAGE_DOS_HEADER (64 bytes) with canonical MSVC link.exe defaults.
-  * e_lfanew = 0x80 — the PE signature begins at file offset 0x80 for both
+  * e_lfanew = 0x80 ï¿½ the PE signature begins at file offset 0x80 for both
   * the 32-bit and 64-bit layouts (DOS header 64B + DOS stub 64B = 128 = 0x80).
   *
   * Shared by: build_pe32() and build_pe64()
@@ -331,7 +331,7 @@ static void build_section_header(uint8_t* buf,
  *   0x080  PE signature          ( 4 B)
  *   0x084  FILE HEADER           (20 B)
  *   0x098  OPTIONAL HEADER 32   (224 B)   <- PE32
- *   0x178  SECTION TABLE        (120 B)   3 × 40 B
+ *   0x178  SECTION TABLE        (120 B)   3 ï¿½ 40 B
  *   0x200  .text  raw data      (512 B)   x86 machine code
  *   0x400  .rdata raw data      (512 B)   imports (4-byte thunks)
  *   0x600  .data  raw data      (512 B)   "Hello, World!\r\n"
@@ -343,8 +343,8 @@ static void build_section_header(uint8_t* buf,
  * .rdata internal layout (32-bit):
  *   [0x000]  ImportDescriptor[0]  kernel32  (20 B)
  *   [0x014]  ImportDescriptor[1]  null      (20 B)
- *   [0x028]  IAT  4 × uint32_t = 16 B       <- 4-byte thunks for PE32
- *   [0x038]  INT  4 × uint32_t = 16 B
+ *   [0x028]  IAT  4 ï¿½ uint32_t = 16 B       <- 4-byte thunks for PE32
+ *   [0x038]  INT  4 ï¿½ uint32_t = 16 B
  *   [0x048]  DLL name "KERNEL32.dll\0"
  *   [0x056]  Hint/Name: GetStdHandle
  *   [0x064]  Hint/Name: WriteFile
@@ -507,7 +507,7 @@ static uint8_t* build_text_section_32(unsigned char* sq_program_image, int sq_pr
 	//*p++ = 0xFF; *p++ = 0x15;            /* call dword ptr [abs_va]          */
 	//write_u32(p, VA32_IAT_EP); p += 4;
 
-	//*p++ = 0xCC;                         /* INT3 — unreachable safety guard  */
+	//*p++ = 0xCC;                         /* INT3 ï¿½ unreachable safety guard  */
 
 	//*out_size = (uint32_t)(p - buf);
 	//return buf;
@@ -520,7 +520,7 @@ static uint8_t* build_text_section_32(unsigned char* sq_program_image, int sq_pr
  * build_rdata_section_32()
  *
  * Builds the .rdata section for a 32-bit PE.
- * IAT and INT thunks are 4 bytes (uint32_t) — one RVA per import.
+ * IAT and INT thunks are 4 bytes (uint32_t) ï¿½ one RVA per import.
  * The loader patches each IAT entry with the resolved 32-bit function VA.
  *
  * Dedicated to: build_pe32()
@@ -541,14 +541,14 @@ static uint8_t* build_rdata_section_32(uint32_t* out_vsize) {
 	idir[0].Name = R32_RVA_DLLNAME;
 	idir[0].FirstThunk = R32_RVA_IAT;
 
-	/* IAT — 4-byte thunks (PE32) */
+	/* IAT ï¿½ 4-byte thunks (PE32) */
 	iat = (uint32_t*)(buf + R32_OFF_IAT);
 	iat[0] = R32_RVA_HN_GSH;
 	iat[1] = R32_RVA_HN_WF;
 	iat[2] = R32_RVA_HN_EP;
 	iat[3] = 0;
 
-	/* INT — identical initial values */
+	/* INT ï¿½ identical initial values */
 	intt = (uint32_t*)(buf + R32_OFF_INT);
 	intt[0] = R32_RVA_HN_GSH;
 	intt[1] = R32_RVA_HN_WF;
@@ -597,7 +597,7 @@ static uint8_t* build_data_section_32(uint32_t* out_vsize) {
  *   0x080  PE sig
  *   0x084  FileHeader         (20 B)
  *   0x098  OptionalHeader32  (224 B)    <- 0x098 + 0xE0 = 0x178
- *   0x178  SectionTable       (3×40 B)  <- 0x178 + 0x78 = 0x1F0, padded to 0x200
+ *   0x178  SectionTable       (3ï¿½40 B)  <- 0x178 + 0x78 = 0x1F0, padded to 0x200
  *
  * Dedicated to: 32-bit PE generation
  * ------------------------------------------------------------------------- */
@@ -693,7 +693,7 @@ int build_pe32(const char* outfile, unsigned char* sq_program_image, int sq_prog
  *   0x080  PE signature          ( 4 B)
  *   0x084  FILE HEADER           (20 B)
  *   0x098  OPTIONAL HEADER 64   (240 B)   <- PE32+
- *   0x188  SECTION TABLE        (120 B)   3 × 40 B
+ *   0x188  SECTION TABLE        (120 B)   3 ï¿½ 40 B
  *   0x200  .text  raw data      (512 B)   x64 machine code
  *   0x400  .rdata raw data      (512 B)   imports (8-byte thunks)
  *   0x600  .data  raw data      (512 B)   "Hello, World!\r\n"
@@ -705,8 +705,8 @@ int build_pe32(const char* outfile, unsigned char* sq_program_image, int sq_prog
  * .rdata internal layout (64-bit):
  *   [0x000]  ImportDescriptor[0]  kernel32  (20 B)
  *   [0x014]  ImportDescriptor[1]  null      (20 B)
- *   [0x028]  IAT  4 × uint64_t = 32 B       <- 8-byte thunks for PE32+
- *   [0x048]  INT  4 × uint64_t = 32 B
+ *   [0x028]  IAT  4 ï¿½ uint64_t = 32 B       <- 8-byte thunks for PE32+
+ *   [0x048]  INT  4 ï¿½ uint64_t = 32 B
  *   [0x068]  DLL name "KERNEL32.dll\0"
  *   [0x076]  Hint/Name: GetStdHandle
  *   [0x08A]  Hint/Name: WriteFile
@@ -895,7 +895,7 @@ static uint8_t* build_text_section_64(unsigned char* sq_program_image, int sq_pr
 	//disp = (int64_t)(IMAGEBASE_64 + R64_RVA_IAT + 16) - (int64_t)next_rip;
 	//*p++ = 0xFF; *p++ = 0x15; write_u32(p, (uint32_t)(int32_t)disp); p += 4;
 
-	//*p++ = 0xCC;  /* INT3 — unreachable safety guard */
+	//*p++ = 0xCC;  /* INT3 ï¿½ unreachable safety guard */
 
 	//*out_size = (uint32_t)(p - buf);
 
@@ -909,7 +909,7 @@ static uint8_t* build_text_section_64(unsigned char* sq_program_image, int sq_pr
  * build_rdata_section_64()
  *
  * Builds the .rdata section for a 64-bit PE.
- * IAT and INT thunks are 8 bytes (uint64_t) — one RVA per import.
+ * IAT and INT thunks are 8 bytes (uint64_t) ï¿½ one RVA per import.
  * The loader patches each IAT entry with the resolved 64-bit function VA.
  *
  * Dedicated to: build_pe64()
@@ -930,14 +930,14 @@ static uint8_t* build_rdata_section_64(uint32_t* out_vsize) {
 	idir[0].Name = R64_RVA_DLLNAME;
 	idir[0].FirstThunk = R64_RVA_IAT;
 
-	/* IAT — 8-byte thunks (PE32+) */
+	/* IAT ï¿½ 8-byte thunks (PE32+) */
 	iat = (uint64_t*)(buf + R64_OFF_IAT);
 	iat[0] = R64_RVA_HN_GSH;
 	iat[1] = R64_RVA_HN_WF;
 	iat[2] = R64_RVA_HN_EP;
 	iat[3] = 0;
 
-	/* INT — identical initial values */
+	/* INT ï¿½ identical initial values */
 	intt = (uint64_t*)(buf + R64_OFF_INT);
 	intt[0] = R64_RVA_HN_GSH;
 	intt[1] = R64_RVA_HN_WF;
@@ -986,7 +986,7 @@ static uint8_t* build_data_section_64(uint32_t* out_vsize) {
  *   0x080  PE sig
  *   0x084  FileHeader         (20 B)
  *   0x098  OptionalHeader64  (240 B)    <- 0x098 + 0xF0 = 0x188
- *   0x188  SectionTable      (3×40 B)  <- 0x188 + 0x78 = 0x200 (file-aligned)
+ *   0x188  SectionTable      (3ï¿½40 B)  <- 0x188 + 0x78 = 0x200 (file-aligned)
  *
  * Dedicated to: 64-bit PE generation
  * ------------------------------------------------------------------------- */
