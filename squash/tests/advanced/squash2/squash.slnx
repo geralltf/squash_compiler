@@ -1,7 +1,0 @@
-<Solution>
-  <Configurations>
-    <Platform Name="x64" />
-    <Platform Name="x86" />
-  </Configurations>
-  <Project Path="squash.vcxproj" Id="f1cd72e9-ec97-4cb6-ade8-1397f4f39b35" />
-</Solution>

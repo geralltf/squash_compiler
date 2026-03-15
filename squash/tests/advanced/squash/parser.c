@@ -1,420 +1,873 @@
-/*
- * parser.c  –  Recursive descent parser
- *
- * Operator precedence (low → high):
- *   =          (right-associative assignment)
- *   ||
- *   &&
- *   |
- *   ^
- *   &
- *   == !=
- *   < > <= >=
- *   << >>
- *   + -
- *   * / %
- *   unary: - ! ~
- *   postfix: () []
- *   primary: number, identifier, ( expr )
- */
 #include "parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+
+#ifdef _WIN32
+#define strdup _strdup
+#endif
 
 /* =========================================================================
  * Helpers
  * ========================================================================= */
-static Token cur(Parser *p)              { return lexer_peek(p->lex); }
-static Token advance(Parser *p)          { return lexer_next(p->lex); }
-static int   check(Parser *p, TokenKind k) { return lexer_check(p->lex, k); }
-static Token expect(Parser *p, TokenKind k) { return lexer_expect(p->lex, k); }
+static Token  cur(Parser *p)              { return lexer_peek(p->lex); }
+static Token  adv(Parser *p)              { return lexer_next(p->lex); }
+static int    chk(Parser *p, TokenKind k) { return lexer_check(p->lex, k); }
+static Token  eat(Parser *p, TokenKind k) { return lexer_expect(p->lex, k); }
 
-static int is_type_keyword(TokenKind k) {
-    return k==TOK_INT || k==TOK_VOID || k==TOK_CHAR;
+void parse_error(Parser *p, const char *fmt, ...) {
+    Token t = cur(p);
+    fprintf(stderr, "%s:%d:%d: error: ", p->filename?p->filename:"?", t.line, t.col);
+    va_list ap; va_start(ap,fmt); vfprintf(stderr,fmt,ap); va_end(ap);
+    fprintf(stderr, "\n");
+    p->error_count++;
+    if (p->error_count > 20) { fprintf(stderr,"Too many errors, aborting.\n"); exit(1); }
 }
 
-static const char *type_name_str(TokenKind k) {
-    switch(k){
-        case TOK_INT:  return "int";
-        case TOK_VOID: return "void";
-        case TOK_CHAR: return "char";
-        default:       return "int";
-    }
+void parse_warn(Parser *p, const char *fmt, ...) {
+    Token t = cur(p);
+    fprintf(stderr, "%s:%d:%d: warning: ", p->filename?p->filename:"?", t.line, t.col);
+    va_list ap; va_start(ap,fmt); vfprintf(stderr,fmt,ap); va_end(ap);
+    fprintf(stderr, "\n");
+}
+
+static char *tok_ident(Token t) {
+    static char buf[256];
+    snprintf(buf,sizeof buf,"%.*s",t.len,t.start);
+    return buf;
 }
 
 /* =========================================================================
  * parser_init
  * ========================================================================= */
-void parser_init(Parser *p, Lexer *l, SymTable *sym) {
-    p->lex = l;
-    p->sym = sym;
+void parser_init(Parser *p, Lexer *l, SymTable *sym, const char *filename) {
+    p->lex=l; p->sym=sym; p->filename=filename; p->error_count=0;
 }
 
 /* =========================================================================
- * ParseNumber() – parse a numeric literal from the token stream
+ * Type parsing
+ * ========================================================================= */
+
+/* is current token a type keyword or typedef name? */
+static int is_type_start(Parser *p) {
+    TokenKind k = cur(p).kind;
+    if (tok_is_type(k)) return 1;
+    /* check if it's a typedef'd name */
+    if (k==TOK_IDENT) {
+        Symbol *s = symtable_lookup(p->sym, tok_ident(cur(p)));
+        if (s && s->kind==SYM_TYPEDEF) return 1;
+    }
+    return 0;
+}
+
+TypeInfo *ParseTypeSpecifier(Parser *p) {
+    TypeInfo *ti = calloc(1, sizeof(TypeInfo));
+    ti->array_size = -1;
+
+    /* storage-class qualifiers: eaten, not stored in TypeInfo */
+    while (chk(p,TOK_CONST)||chk(p,TOK_VOLATILE)||chk(p,TOK_SIGNED)||chk(p,TOK_UNSIGNED)) {
+        if (chk(p,TOK_UNSIGNED)) ti->is_unsigned=1;
+        adv(p);
+    }
+
+    TokenKind k = cur(p).kind;
+
+    if (k==TOK_STRUCT || k==TOK_UNION) {
+        int is_union = (k==TOK_UNION);
+        adv(p);
+        char sname[256]=""; int has_name=0;
+        if (chk(p,TOK_IDENT)) {
+            strncpy(sname, tok_ident(cur(p)), sizeof sname-1);
+            has_name=1; adv(p);
+        }
+        if (chk(p,TOK_LBRACE)) {
+            /* struct definition inline */
+            adv(p);
+            ASTNode *fields[64]; int nf=0;
+            while (!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF)) {
+                TypeInfo *ft = ParseFullType(p);
+                if (!ft) { parse_error(p,"expected field type"); break; }
+                do {
+                    /* field might have pointer stars */
+                    TypeInfo *ft2 = ft;
+                    while (chk(p,TOK_STAR)) { adv(p); ft2=typeinfo_ptr(ft2); }
+                    if (!chk(p,TOK_IDENT)) { parse_error(p,"expected field name"); break; }
+                    char fn[64]; strncpy(fn,tok_ident(cur(p)),sizeof fn-1); adv(p);
+                    int arr=-1;
+                    if (chk(p,TOK_LBRACKET)) {
+                        adv(p);
+                        if (chk(p,TOK_NUMBER)) { arr=(int)cur(p).ival; adv(p); }
+                        else arr=0;
+                        eat(p,TOK_RBRACKET);
+                    }
+                    fields[nf++]=ast_field(ft2,fn,arr,cur(p).line);
+                } while (chk(p,TOK_COMMA)&&adv(p).kind!=TOK_EOF);
+                eat(p,TOK_SEMICOLON);
+            }
+            eat(p,TOK_RBRACE);
+            char key[280]; snprintf(key,sizeof key,"%s %s",is_union?"union":"struct",sname);
+            ASTNode *sd=ast_struct_decl(sname,is_union,fields,nf,cur(p).line);
+            /* compute rough size */
+            int sz=0;
+            for (int i=0;i<nf;i++) {
+                int fs=typeinfo_size(fields[i]->field.type,p->sym->is_64bit);
+                if (fields[i]->field.array_size>0) fs*=fields[i]->field.array_size;
+                if (is_union) sz = fs>sz?fs:sz;
+                else sz+=fs;
+            }
+            if (has_name) symtable_define_struct(p->sym, sname, sd, sz);
+            ti->base = strdup(sname[0] ? key : (is_union?"union anon":"struct anon"));
+        } else {
+            char key[280]; snprintf(key,sizeof key,"%s %s",is_union?"union":"struct",sname);
+            ti->base = strdup(key);
+        }
+        return ti;
+    }
+
+    if (k==TOK_ENUM) {
+        adv(p);
+        char ename[256]="";
+        if (chk(p,TOK_IDENT)) { strncpy(ename,tok_ident(cur(p)),sizeof ename-1); adv(p); }
+        if (chk(p,TOK_LBRACE)) {
+            adv(p);
+            long long next_val=0;
+            ASTNode *vals[256]; int nv=0;
+            while (!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF)) {
+                if (!chk(p,TOK_IDENT)) { parse_error(p,"expected enum name"); break; }
+                char vn[256]; strncpy(vn,tok_ident(cur(p)),sizeof vn-1); adv(p);
+                long long val=next_val;
+                if (chk(p,TOK_ASSIGN)) { adv(p); val=cur(p).ival; adv(p); }
+                next_val=val+1;
+                symtable_define_enum_val(p->sym, vn, val);
+                vals[nv++]=ast_enum_val(vn,val,1,cur(p).line);
+                if (!chk(p,TOK_COMMA)) break; adv(p);
+            }
+            eat(p,TOK_RBRACE);
+        }
+        ti->base = strdup(ename[0] ? ename : "int");
+        return ti;
+    }
+
+    /* Check for typedef name */
+    if (k==TOK_IDENT) {
+        Symbol *s = symtable_lookup(p->sym, tok_ident(cur(p)));
+        if (s && s->kind==SYM_TYPEDEF) {
+            ti->base = strdup(tok_ident(cur(p))); adv(p);
+            return ti;
+        }
+    }
+
+    /* Primitive types — accumulate qualifiers */
+    char base[64]=""; int has_long=0, has_short=0;
+    while (1) {
+        k=cur(p).kind;
+        if (k==TOK_UNSIGNED) { ti->is_unsigned=1; adv(p); continue; }
+        if (k==TOK_SIGNED)   { adv(p); continue; }
+        if (k==TOK_LONG)     { has_long++; adv(p); continue; }
+        if (k==TOK_SHORT)    { has_short=1; adv(p); continue; }
+        if (k==TOK_INT)      { strncpy(base,"int",sizeof base-1); adv(p); break; }
+        if (k==TOK_CHAR)     { strncpy(base,"char",sizeof base-1); adv(p); break; }
+        if (k==TOK_VOID)     { strncpy(base,"void",sizeof base-1); adv(p); break; }
+        if (k==TOK_DOUBLE)   { strncpy(base,"double",sizeof base-1); adv(p); break; }
+        if (k==TOK_FLOAT_KW) { strncpy(base,"float",sizeof base-1); adv(p); break; }
+        break;
+    }
+    if (!base[0]) {
+        if (has_long) strncpy(base,"long",sizeof base-1);
+        else if (has_short) strncpy(base,"short",sizeof base-1);
+        else strncpy(base,"int",sizeof base-1);
+    } else if (has_long==2) strncpy(base,"long long",sizeof base-1);
+    else if (has_long==1 && strcmp(base,"int")==0) strncpy(base,"long",sizeof base-1);
+    else if (has_short && strcmp(base,"int")==0) strncpy(base,"short",sizeof base-1);
+
+    ti->base = strdup(base);
+    return ti;
+}
+
+TypeInfo *ParseFullType(Parser *p) {
+    if (!is_type_start(p)) return NULL;
+    /* eat storage class separately */
+    while (chk(p,TOK_STATIC)||chk(p,TOK_EXTERN)||chk(p,TOK_AUTO)||
+           chk(p,TOK_REGISTER)) adv(p);
+    TypeInfo *ti = ParseTypeSpecifier(p);
+    if (!ti) return NULL;
+    while (chk(p,TOK_STAR)) { adv(p); ti->pointer_depth++; }
+    return ti;
+}
+
+/* =========================================================================
+ * ParseNumber
  * ========================================================================= */
 ASTNode *ParseNumber(Parser *p) {
-    Token t = expect(p, TOK_NUMBER);
+    Token t = cur(p);
+    if (t.kind==TOK_FLOAT) { adv(p); return ast_float(t.fval, t.line); }
+    eat(p,TOK_NUMBER);
     return ast_number(t.ival, t.line);
 }
 
 /* =========================================================================
- * ParseIdentifier() – parse an identifier, distinguishing variable vs call
+ * ParseIdentifier
  * ========================================================================= */
 ASTNode *ParseIdentifier(Parser *p) {
-    Token t = expect(p, TOK_IDENT);
-    char name[256];
-    snprintf(name, sizeof name, "%.*s", t.len, t.start);
+    Token t = eat(p, TOK_IDENT);
+    char name[256]; snprintf(name,sizeof name,"%.*s",t.len,t.start);
 
-    /* Is it a function call? */
-    if (check(p, TOK_LPAREN)) {
-        advance(p); /* consume '(' */
-        /* collect arguments */
-        ASTNode *args[64]; int argc = 0;
-        if (!check(p, TOK_RPAREN)) {
+    /* function call? */
+    if (chk(p,TOK_LPAREN)) {
+        adv(p);
+        ASTNode *args[128]; int argc=0;
+        if (!chk(p,TOK_RPAREN)) {
             do {
-                args[argc++] = ParseExpression(p);
-            } while (check(p, TOK_COMMA) && advance(p).kind != TOK_EOF);
+                if (argc<128) args[argc++]=ParseAssignment(p);
+                else { parse_error(p,"too many arguments"); ParseAssignment(p); }
+            } while (chk(p,TOK_COMMA)&&adv(p).kind!=TOK_EOF);
         }
-        expect(p, TOK_RPAREN);
-
-        /* Mark the function as used (for import tracking) */
+        eat(p,TOK_RPAREN);
+        /* Track Windows API imports */
         Symbol *sym = symtable_lookup(p->sym, name);
-        if (sym && sym->kind==SYM_IMPORT) {
-            char key[256];
-            snprintf(key, sizeof key, "%s:%s", sym->dll, name);
+        if (sym && sym->kind==SYM_IMPORT && sym->dll) {
+            char key[512]; snprintf(key,sizeof key,"%s:%s",sym->dll,name);
             symtable_add_import(p->sym, key);
         }
         return ast_call(name, args, argc, t.line);
     }
-
-    /* Otherwise it's a variable reference */
     return ast_var(name, t.line);
 }
 
 /* =========================================================================
- * ParseFunction() – parse a complete function definition
- *   type name ( params ) { body }
+ * ParsePrimary
  * ========================================================================= */
-ASTNode *ParseFunction(Parser *p) {
+ASTNode *ParsePrimary(Parser *p) {
     int line = cur(p).line;
-    Token type_tok = cur(p);
-    const char *ret_type = type_name_str(type_tok.kind);
-    advance(p); /* consume type */
 
-    Token name_tok = expect(p, TOK_IDENT);
-    char name[256];
-    snprintf(name, sizeof name, "%.*s", name_tok.len, name_tok.start);
+    if (chk(p,TOK_NUMBER)||chk(p,TOK_FLOAT)) return ParseNumber(p);
 
-    /* Register in symbol table at global scope */
-    symtable_define_func(p->sym, name, ret_type, 0 /* updated below */);
+    if (chk(p,TOK_CHAR_LIT)) {
+        Token t=cur(p); adv(p);
+        return ast_char_lit(t.ival, t.line);
+    }
 
-    expect(p, TOK_LPAREN);
+    if (chk(p,TOK_STRING)) {
+        Token t=cur(p); adv(p);
+        /* Adjacent string concatenation */
+        char buf[4096]; snprintf(buf,sizeof buf,"%s",t.sval?t.sval:"");
+        while (chk(p,TOK_STRING)) {
+            t=cur(p); adv(p);
+            if (t.sval) strncat(buf,t.sval,sizeof buf-strlen(buf)-1);
+        }
+        return ast_string(buf, line);
+    }
 
-    /* Parameters */
-    ASTNode *params[32]; int paramc = 0;
+    if (chk(p,TOK_LPAREN)) {
+        adv(p);
+        /* Check for cast: (type)expr */
+        if (is_type_start(p)) {
+            TypeInfo *ti = ParseFullType(p);
+            if (ti && chk(p,TOK_RPAREN)) {
+                adv(p);
+                ASTNode *expr = ParseUnary(p);
+                return ast_cast(ti, expr, line);
+            }
+            /* Not a cast — parenthesised expression, put type back somehow */
+            /* This is a parse ambiguity we resolve by just continuing as expr */
+            typeinfo_free(ti);
+        }
+        ASTNode *e = ParseExpression(p);
+        eat(p,TOK_RPAREN);
+        return e;
+    }
+
+    if (chk(p,TOK_SIZEOF)) {
+        adv(p);
+        eat(p,TOK_LPAREN);
+        if (is_type_start(p)) {
+            TypeInfo *ti = ParseFullType(p);
+            eat(p,TOK_RPAREN);
+            return ast_sizeof_type(ti, line);
+        }
+        ASTNode *e = ParseExpression(p);
+        eat(p,TOK_RPAREN);
+        return ast_sizeof_expr(e, line);
+    }
+
+    if (chk(p,TOK_IDENT)) return ParseIdentifier(p);
+
+    parse_error(p,"unexpected token '%s'", token_kind_name(cur(p).kind));
+    adv(p);
+    return ast_number(0, line); /* error recovery */
+}
+
+/* =========================================================================
+ * ParsePostfix — a[i], a.b, a->b, f(args), a++, a--
+ * ========================================================================= */
+ASTNode *ParsePostfix(Parser *p) {
+    ASTNode *n = ParsePrimary(p);
+    for (;;) {
+        int line = cur(p).line;
+        if (chk(p,TOK_LBRACKET)) {
+            adv(p);
+            ASTNode *idx = ParseExpression(p);
+            eat(p,TOK_RBRACKET);
+            n = ast_index(n, idx, line);
+        } else if (chk(p,TOK_DOT)) {
+            adv(p);
+            if (!chk(p,TOK_IDENT)) { parse_error(p,"expected field name"); break; }
+            char fn[256]; strncpy(fn,tok_ident(cur(p)),sizeof fn-1); adv(p);
+            n = ast_member(n, fn, 0, line);
+        } else if (chk(p,TOK_ARROW)) {
+            adv(p);
+            if (!chk(p,TOK_IDENT)) { parse_error(p,"expected field name"); break; }
+            char fn[256]; strncpy(fn,tok_ident(cur(p)),sizeof fn-1); adv(p);
+            n = ast_member(n, fn, 1, line);
+        } else if (chk(p,TOK_INC)) {
+            adv(p); n = ast_unary("++", n, 1, line);
+        } else if (chk(p,TOK_DEC)) {
+            adv(p); n = ast_unary("--", n, 1, line);
+        } else if (chk(p,TOK_LPAREN)) {
+            /* Function-pointer call: expr(args) */
+            adv(p);
+            ASTNode *args[64]; int argc=0;
+            if (!chk(p,TOK_RPAREN)) {
+                do {
+                    if (argc<64) args[argc++]=ParseAssignment(p);
+                    else { parse_error(p,"too many args"); ParseAssignment(p); }
+                } while (chk(p,TOK_COMMA)&&adv(p).kind!=TOK_EOF);
+            }
+            eat(p,TOK_RPAREN);
+            n = ast_fp_call(n, args, argc, line);
+        } else break;
+    }
+    return n;
+}
+
+/* =========================================================================
+ * ParseUnary — prefix: !, ~, -, +, &, *, ++, --, (cast)
+ * ========================================================================= */
+ASTNode *ParseUnary(Parser *p) {
+    int line = cur(p).line;
+    if (chk(p,TOK_BANG))  { adv(p); return ast_unary("!", ParseUnary(p), 0, line); }
+    if (chk(p,TOK_TILDE)) { adv(p); return ast_unary("~", ParseUnary(p), 0, line); }
+    if (chk(p,TOK_MINUS)) { adv(p); return ast_unary("-", ParseUnary(p), 0, line); }
+    if (chk(p,TOK_PLUS))  { adv(p); return ParseUnary(p); }
+    if (chk(p,TOK_INC))   { adv(p); return ast_unary("++",ParseUnary(p), 0, line); }
+    if (chk(p,TOK_DEC))   { adv(p); return ast_unary("--",ParseUnary(p), 0, line); }
+    if (chk(p,TOK_AMP))   { adv(p); return ast_addr(ParseUnary(p), line); }
+    if (chk(p,TOK_STAR))  { adv(p); return ast_deref(ParseUnary(p), line); }
+    return ParsePostfix(p);
+}
+
+/* =========================================================================
+ * Binary expression parsers — full precedence table
+ * ========================================================================= */
+ASTNode *ParseMulDiv(Parser *p) {
+    ASTNode *lhs = ParseUnary(p);
+    for (;;) {
+        int line=cur(p).line; const char *op=NULL;
+        if (chk(p,TOK_STAR))    op="*";
+        else if (chk(p,TOK_SLASH))   op="/";
+        else if (chk(p,TOK_PERCENT)) op="%";
+        else break;
+        adv(p); lhs = ast_binary(op, lhs, ParseUnary(p), line);
+    }
+    return lhs;
+}
+ASTNode *ParseAddSub(Parser *p) {
+    ASTNode *lhs = ParseMulDiv(p);
+    for (;;) {
+        int line=cur(p).line; const char *op=NULL;
+        if (chk(p,TOK_PLUS))  op="+";
+        else if (chk(p,TOK_MINUS)) op="-";
+        else break;
+        adv(p); lhs = ast_binary(op, lhs, ParseMulDiv(p), line);
+    }
+    return lhs;
+}
+ASTNode *ParseShift(Parser *p) {
+    ASTNode *lhs = ParseAddSub(p);
+    for (;;) {
+        int line=cur(p).line; const char *op=NULL;
+        if (chk(p,TOK_LSHIFT)) op="<<";
+        else if (chk(p,TOK_RSHIFT)) op=">>";
+        else break;
+        adv(p); lhs = ast_binary(op, lhs, ParseAddSub(p), line);
+    }
+    return lhs;
+}
+ASTNode *ParseRelational(Parser *p) {
+    ASTNode *lhs = ParseShift(p);
+    for (;;) {
+        int line=cur(p).line; const char *op=NULL;
+        if      (chk(p,TOK_LT)) op="<";
+        else if (chk(p,TOK_GT)) op=">";
+        else if (chk(p,TOK_LE)) op="<=";
+        else if (chk(p,TOK_GE)) op=">=";
+        else break;
+        adv(p); lhs = ast_binary(op, lhs, ParseShift(p), line);
+    }
+    return lhs;
+}
+ASTNode *ParseEquality(Parser *p) {
+    ASTNode *lhs = ParseRelational(p);
+    for (;;) {
+        int line=cur(p).line; const char *op=NULL;
+        if (chk(p,TOK_EQ)) op="=="; else if (chk(p,TOK_NEQ)) op="!="; else break;
+        adv(p); lhs = ast_binary(op, lhs, ParseRelational(p), line);
+    }
+    return lhs;
+}
+ASTNode *ParseBitAnd(Parser *p) {
+    ASTNode *lhs = ParseEquality(p);
+    while (chk(p,TOK_AMP)) { int l=cur(p).line; adv(p); lhs=ast_binary("&",lhs,ParseEquality(p),l); }
+    return lhs;
+}
+ASTNode *ParseBitXor(Parser *p) {
+    ASTNode *lhs = ParseBitAnd(p);
+    while (chk(p,TOK_CARET)) { int l=cur(p).line; adv(p); lhs=ast_binary("^",lhs,ParseBitAnd(p),l); }
+    return lhs;
+}
+ASTNode *ParseBitOr(Parser *p) {
+    ASTNode *lhs = ParseBitXor(p);
+    while (chk(p,TOK_PIPE)) { int l=cur(p).line; adv(p); lhs=ast_binary("|",lhs,ParseBitXor(p),l); }
+    return lhs;
+}
+ASTNode *ParseLogicalAnd(Parser *p) {
+    ASTNode *lhs = ParseBitOr(p);
+    while (chk(p,TOK_AND)) { int l=cur(p).line; adv(p); lhs=ast_binary("&&",lhs,ParseBitOr(p),l); }
+    return lhs;
+}
+ASTNode *ParseLogicalOr(Parser *p) {
+    ASTNode *lhs = ParseLogicalAnd(p);
+    while (chk(p,TOK_OR)) { int l=cur(p).line; adv(p); lhs=ast_binary("||",lhs,ParseLogicalAnd(p),l); }
+    return lhs;
+}
+ASTNode *ParseTernary(Parser *p) {
+    ASTNode *cond = ParseLogicalOr(p);
+    if (chk(p,TOK_QUESTION)) {
+        int line=cur(p).line; adv(p);
+        ASTNode *then_ = ParseExpression(p);
+        eat(p,TOK_COLON);
+        ASTNode *else_ = ParseTernary(p);
+        return ast_ternary(cond, then_, else_, line);
+    }
+    return cond;
+}
+
+ASTNode *ParseAssignment(Parser *p) {
+    ASTNode *lhs = ParseTernary(p);
+    int line = cur(p).line;
+    const char *op = NULL;
+    switch (cur(p).kind) {
+        case TOK_ASSIGN:     op="=";   break;
+        case TOK_PLUS_EQ:    op="+=";  break;
+        case TOK_MINUS_EQ:   op="-=";  break;
+        case TOK_STAR_EQ:    op="*=";  break;
+        case TOK_SLASH_EQ:   op="/=";  break;
+        case TOK_PERCENT_EQ: op="%=";  break;
+        case TOK_AMP_EQ:     op="&=";  break;
+        case TOK_PIPE_EQ:    op="|=";  break;
+        case TOK_CARET_EQ:   op="^=";  break;
+        case TOK_LSHIFT_EQ:  op="<<="; break;
+        case TOK_RSHIFT_EQ:  op=">>="; break;
+        default: return lhs;
+    }
+    adv(p);
+    ASTNode *rhs = ParseAssignment(p); /* right-associative */
+    return ast_assign(op, lhs, rhs, line);
+}
+
+ASTNode *ParseExpression(Parser *p) {
+    ASTNode *e = ParseAssignment(p);
+    /* comma operator */
+    while (chk(p,TOK_COMMA)) {
+        int line=cur(p).line; adv(p);
+        ASTNode *r = ParseAssignment(p);
+        e = ast_binary(",", e, r, line);
+    }
+    return e;
+}
+
+/* =========================================================================
+ * ParseStatement
+ * ========================================================================= */
+ASTNode *ParseBlock(Parser *p) {
+    int line=cur(p).line;
+    eat(p,TOK_LBRACE);
+    ASTNode *stmts[1024]; int count=0;
     symtable_push_scope(p->sym);
-    symtable_reset_locals(p->sym);
-
-    if (!check(p, TOK_RPAREN)) {
-        do {
-            int pline = cur(p).line;
-            Token ptype = cur(p);
-            const char *pt = type_name_str(ptype.kind);
-            advance(p);
-            Token pname = expect(p, TOK_IDENT);
-            char pn[256];
-            snprintf(pn, sizeof pn, "%.*s", pname.len, pname.start);
-
-            symtable_define_param(p->sym, pn, pt, paramc);
-            params[paramc++] = ast_param(pt, pn, pline);
-        } while (check(p, TOK_COMMA) && advance(p).kind != TOK_EOF);
-    }
-    expect(p, TOK_RPAREN);
-
-    /* Function body */
-    ASTNode *body = ParseStatement(p);
-
+    while (!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF))
+        if (count<1024) stmts[count++]=ParseStatement(p);
+        else { parse_error(p,"block too large"); break; }
     symtable_pop_scope(p->sym);
-
-    return ast_func_decl(ret_type, name, params, paramc, body, line);
+    eat(p,TOK_RBRACE);
+    return ast_block(stmts, count, line);
 }
 
-/* =========================================================================
- * ParseVariable() – parse a variable declaration statement
- *   type name [= expr] ;
- * ========================================================================= */
-ASTNode *ParseVariable(Parser *p) {
-    int line = cur(p).line;
-    Token type_tok = cur(p);
-    const char *type = type_name_str(type_tok.kind);
-    advance(p);
-
-    Token name_tok = expect(p, TOK_IDENT);
-    char name[256];
-    snprintf(name, sizeof name, "%.*s", name_tok.len, name_tok.start);
-
-    ASTNode *init = NULL;
-    if (check(p, TOK_ASSIGN)) {
-        advance(p);
-        init = ParseExpression(p);
-    }
-    expect(p, TOK_SEMICOLON);
-
-    symtable_define_var(p->sym, name, type);
-    return ast_var_decl(type, name, init, line);
-}
-
-/* =========================================================================
- * ParseStatement() – parse any statement
- * ========================================================================= */
 ASTNode *ParseStatement(Parser *p) {
     int line = cur(p).line;
 
-    /* Block: { stmt* } */
-    if (check(p, TOK_LBRACE)) {
-        advance(p);
-        ASTNode *stmts[256]; int count = 0;
-        symtable_push_scope(p->sym);
-        while (!check(p, TOK_RBRACE) && !check(p, TOK_EOF))
-            stmts[count++] = ParseStatement(p);
-        symtable_pop_scope(p->sym);
-        expect(p, TOK_RBRACE);
-        return ast_block(stmts, count, line);
-    }
+    if (chk(p,TOK_LBRACE)) return ParseBlock(p);
 
-    /* if ( cond ) then [else else_] */
-    if (check(p, TOK_IF)) {
-        advance(p);
-        expect(p, TOK_LPAREN);
-        ASTNode *cond = ParseExpression(p);
-        expect(p, TOK_RPAREN);
+    if (chk(p,TOK_IF)) {
+        adv(p); eat(p,TOK_LPAREN);
+        ASTNode *cond = ParseExpression(p); eat(p,TOK_RPAREN);
         ASTNode *then_ = ParseStatement(p);
         ASTNode *else_ = NULL;
-        if (check(p, TOK_ELSE)) {
-            advance(p);
-            else_ = ParseStatement(p);
-        }
+        if (chk(p,TOK_ELSE)) { adv(p); else_=ParseStatement(p); }
         return ast_if(cond, then_, else_, line);
     }
 
-    /* while ( cond ) body */
-    if (check(p, TOK_WHILE)) {
-        advance(p);
-        expect(p, TOK_LPAREN);
-        ASTNode *cond = ParseExpression(p);
-        expect(p, TOK_RPAREN);
-        ASTNode *body = ParseStatement(p);
+    if (chk(p,TOK_WHILE)) {
+        adv(p); eat(p,TOK_LPAREN);
+        ASTNode *cond=ParseExpression(p); eat(p,TOK_RPAREN);
+        ASTNode *body=ParseStatement(p);
         return ast_while(cond, body, line);
     }
 
-    /* return [expr] ; */
-    if (check(p, TOK_RETURN)) {
-        advance(p);
-        ASTNode *expr = NULL;
-        if (!check(p, TOK_SEMICOLON))
-            expr = ParseExpression(p);
-        expect(p, TOK_SEMICOLON);
+    if (chk(p,TOK_DO)) {
+        adv(p);
+        ASTNode *body=ParseStatement(p);
+        eat(p,TOK_WHILE); eat(p,TOK_LPAREN);
+        ASTNode *cond=ParseExpression(p); eat(p,TOK_RPAREN); eat(p,TOK_SEMICOLON);
+        return ast_do_while(body, cond, line);
+    }
+
+    if (chk(p,TOK_FOR)) {
+        adv(p); eat(p,TOK_LPAREN);
+        ASTNode *init=NULL, *cond=NULL, *step=NULL;
+        symtable_push_scope(p->sym);
+        if (!chk(p,TOK_SEMICOLON)) {
+            if (is_type_start(p)) init = ParseVariable(p); /* var decl — eats semicolon */
+            else { init=ast_expr_stmt(ParseExpression(p),line); eat(p,TOK_SEMICOLON); }
+        } else eat(p,TOK_SEMICOLON);
+        if (!chk(p,TOK_SEMICOLON)) cond=ParseExpression(p);
+        eat(p,TOK_SEMICOLON);
+        if (!chk(p,TOK_RPAREN)) step=ParseExpression(p);
+        eat(p,TOK_RPAREN);
+        ASTNode *body=ParseStatement(p);
+        symtable_pop_scope(p->sym);
+        return ast_for(init, cond, step, body, line);
+    }
+
+    if (chk(p,TOK_SWITCH)) {
+        adv(p); eat(p,TOK_LPAREN);
+        ASTNode *expr=ParseExpression(p); eat(p,TOK_RPAREN);
+        eat(p,TOK_LBRACE);
+        ASTNode *cases[256]; int nc=0;
+        while (!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF)) {
+            if (chk(p,TOK_CASE)) {
+                adv(p);
+                long long val=0;
+                /* check for enum value or number */
+                if (chk(p,TOK_NUMBER)) { val=cur(p).ival; adv(p); }
+                else if (chk(p,TOK_IDENT)) {
+                    Symbol *s=symtable_lookup(p->sym,tok_ident(cur(p)));
+                    if (s&&s->kind==SYM_ENUM_VAL) val=s->enum_value;
+                    else parse_error(p,"case value must be constant");
+                    adv(p);
+                } else if (chk(p,TOK_CHAR_LIT)) { val=cur(p).ival; adv(p); }
+                else { parse_error(p,"expected case constant"); }
+                eat(p,TOK_COLON);
+                ASTNode *body[256]; int nb=0;
+                while (!chk(p,TOK_CASE)&&!chk(p,TOK_DEFAULT)&&!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF))
+                    body[nb++]=ParseStatement(p);
+                if (nc<256) cases[nc++]=ast_case(val,body,nb,line);
+            } else if (chk(p,TOK_DEFAULT)) {
+                adv(p); eat(p,TOK_COLON);
+                ASTNode *body[256]; int nb=0;
+                while (!chk(p,TOK_CASE)&&!chk(p,TOK_DEFAULT)&&!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF))
+                    body[nb++]=ParseStatement(p);
+                if (nc<256) cases[nc++]=ast_default(body,nb,line);
+            } else {
+                parse_error(p,"expected 'case' or 'default' in switch");
+                adv(p);
+            }
+        }
+        eat(p,TOK_RBRACE);
+        return ast_switch(expr, cases, nc, line);
+    }
+
+    if (chk(p,TOK_RETURN)) {
+        adv(p);
+        ASTNode *expr=NULL;
+        if (!chk(p,TOK_SEMICOLON)) expr=ParseExpression(p);
+        eat(p,TOK_SEMICOLON);
         return ast_return(expr, line);
     }
 
-    /* Variable declaration */
-    if (is_type_keyword(cur(p).kind)) {
-        return ParseVariable(p);
+    if (chk(p,TOK_BREAK))    { adv(p); eat(p,TOK_SEMICOLON); return ast_break(line); }
+    if (chk(p,TOK_CONTINUE)) { adv(p); eat(p,TOK_SEMICOLON); return ast_continue(line); }
+
+    if (chk(p,TOK_GOTO)) {
+        adv(p);
+        if (!chk(p,TOK_IDENT)) { parse_error(p,"expected label after goto"); }
+        char lbl[256]; strncpy(lbl,tok_ident(cur(p)),sizeof lbl-1); adv(p);
+        eat(p,TOK_SEMICOLON);
+        return ast_goto(lbl, line);
     }
+
+    /* Label: ident ':' statement */
+    if (chk(p,TOK_IDENT)) {
+        /* peek one ahead to see if it's a label */
+        Token saved = cur(p);
+        char nm[256]; strncpy(nm,tok_ident(saved),sizeof nm-1);
+        adv(p);
+        if (chk(p,TOK_COLON)) {
+            adv(p);
+            ASTNode *stmt = ParseStatement(p);
+            return ast_label(nm, stmt, line);
+        }
+        /* Not a label — reconstruct expression starting with the identifier */
+        /* We consumed the ident, need to rebuild. Use ast_var and continue parsing */
+        ASTNode *base = ast_var(nm, line);
+        /* Finish any postfix */
+        ASTNode *e = base;
+        /* re-enter postfix with already-parsed base */
+        for (;;) {
+            int l2=cur(p).line;
+            if (chk(p,TOK_LBRACKET)) { adv(p); ASTNode *idx=ParseExpression(p); eat(p,TOK_RBRACKET); e=ast_index(e,idx,l2); }
+            else if (chk(p,TOK_DOT)) { adv(p); char fn[64]; strncpy(fn,tok_ident(cur(p)),sizeof fn-1); adv(p); e=ast_member(e,fn,0,l2); }
+            else if (chk(p,TOK_ARROW)) { adv(p); char fn[64]; strncpy(fn,tok_ident(cur(p)),sizeof fn-1); adv(p); e=ast_member(e,fn,1,l2); }
+            else if (chk(p,TOK_INC)) { adv(p); e=ast_unary("++",e,1,l2); }
+            else if (chk(p,TOK_DEC)) { adv(p); e=ast_unary("--",e,1,l2); }
+            else if (chk(p,TOK_LPAREN)) {
+                adv(p); ASTNode *args[64]; int argc=0;
+                if (!chk(p,TOK_RPAREN)) {
+                    do {
+                        if (argc<64) args[argc++]=ParseAssignment(p);
+                    } while (chk(p,TOK_COMMA)&&adv(p).kind!=TOK_EOF);
+                }
+                eat(p,TOK_RPAREN);
+                if (e->kind==AST_VAR) {
+                    Symbol *sym=symtable_lookup(p->sym,e->var.name);
+                    if (sym&&sym->kind==SYM_IMPORT&&sym->dll) {
+                        char key[512]; snprintf(key,sizeof key,"%s:%s",sym->dll,e->var.name);
+                        symtable_add_import(p->sym,key);
+                    }
+                    e=ast_call(e->var.name,args,argc,l2);
+                } else e=ast_fp_call(e,args,argc,l2);
+            }
+            else break;
+        }
+        /* Continue with binary/assign operators */
+        /* Temporarily create a fake parser state by injecting 'e' as the lhs */
+        /* We do this by calling a helper that takes a pre-parsed LHS */
+        /* Actually: re-enter the assignment chain */
+        int l2=cur(p).line;
+        const char *aop=NULL;
+        switch(cur(p).kind){
+            case TOK_ASSIGN: aop="="; break; case TOK_PLUS_EQ: aop="+="; break;
+            case TOK_MINUS_EQ: aop="-="; break; case TOK_STAR_EQ: aop="*="; break;
+            case TOK_SLASH_EQ: aop="/="; break; case TOK_PERCENT_EQ: aop="%="; break;
+            case TOK_AMP_EQ: aop="&="; break; case TOK_PIPE_EQ: aop="|="; break;
+            case TOK_CARET_EQ: aop="^="; break;
+            case TOK_LSHIFT_EQ: aop="<<="; break; case TOK_RSHIFT_EQ: aop=">>="; break;
+            default: break;
+        }
+        if (aop) { adv(p); ASTNode *rhs=ParseAssignment(p); e=ast_assign(aop,e,rhs,l2); }
+        eat(p,TOK_SEMICOLON);
+        return ast_expr_stmt(e, line);
+    }
+
+    /* Variable declaration */
+    if (is_type_start(p)) return ParseVariable(p);
 
     /* Expression statement */
     ASTNode *expr = ParseExpression(p);
-    expect(p, TOK_SEMICOLON);
+    eat(p,TOK_SEMICOLON);
     return ast_expr_stmt(expr, line);
 }
 
 /* =========================================================================
- * Expression parsers — precedence climbing (recursive descent)
+ * ParseVariable — [storage] type name [[N]] [= init] ;
  * ========================================================================= */
-
-/* ParseExpression: entry point */
-ASTNode *ParseExpression(Parser *p) { return ParseAssignment(p); }
-
-/* Assignment (right-associative): a = b = c  parses as  a = (b = c) */
-ASTNode *ParseAssignment(Parser *p) {
-    ASTNode *lhs = ParseLogicalOr(p);
-    if (check(p, TOK_ASSIGN)) {
-        int line = cur(p).line;
-        advance(p);
-        ASTNode *rhs = ParseAssignment(p);  /* right-recursive */
-        return ast_assign(lhs, rhs, line);
-    }
-    return lhs;
-}
-
-/* || */
-ASTNode *ParseLogicalOr(Parser *p) {
-    ASTNode *lhs = ParseLogicalAnd(p);
-    while (check(p, TOK_OR)) {
-        int line = cur(p).line; advance(p);
-        lhs = ast_binary("||", lhs, ParseLogicalAnd(p), line);
-    }
-    return lhs;
-}
-
-/* && */
-ASTNode *ParseLogicalAnd(Parser *p) {
-    ASTNode *lhs = ParseBitOr(p);
-    while (check(p, TOK_AND)) {
-        int line = cur(p).line; advance(p);
-        lhs = ast_binary("&&", lhs, ParseBitOr(p), line);
-    }
-    return lhs;
-}
-
-/* | */
-ASTNode *ParseBitOr(Parser *p) {
-    ASTNode *lhs = ParseBitXor(p);
-    while (check(p, TOK_PIPE)) {
-        int line = cur(p).line; advance(p);
-        lhs = ast_binary("|", lhs, ParseBitXor(p), line);
-    }
-    return lhs;
-}
-
-/* ^ */
-ASTNode *ParseBitXor(Parser *p) {
-    ASTNode *lhs = ParseBitAnd(p);
-    while (check(p, TOK_CARET)) {
-        int line = cur(p).line; advance(p);
-        lhs = ast_binary("^", lhs, ParseBitAnd(p), line);
-    }
-    return lhs;
-}
-
-/* & */
-ASTNode *ParseBitAnd(Parser *p) {
-    ASTNode *lhs = ParseEquality(p);
-    while (check(p, TOK_AMP)) {
-        int line = cur(p).line; advance(p);
-        lhs = ast_binary("&", lhs, ParseEquality(p), line);
-    }
-    return lhs;
-}
-
-/* == != */
-ASTNode *ParseEquality(Parser *p) {
-    ASTNode *lhs = ParseRelational(p);
-    for (;;) {
-        int line = cur(p).line;
-        if (check(p, TOK_EQ))  { advance(p); lhs=ast_binary("==",lhs,ParseRelational(p),line); }
-        else if (check(p, TOK_NEQ)){ advance(p); lhs=ast_binary("!=",lhs,ParseRelational(p),line); }
-        else break;
-    }
-    return lhs;
-}
-
-/* < > <= >= */
-ASTNode *ParseRelational(Parser *p) {
-    ASTNode *lhs = ParseShift(p);
-    for (;;) {
-        int line = cur(p).line;
-        if      (check(p, TOK_LT)) { advance(p); lhs=ast_binary("<", lhs,ParseShift(p),line); }
-        else if (check(p, TOK_GT)) { advance(p); lhs=ast_binary(">", lhs,ParseShift(p),line); }
-        else if (check(p, TOK_LE)) { advance(p); lhs=ast_binary("<=",lhs,ParseShift(p),line); }
-        else if (check(p, TOK_GE)) { advance(p); lhs=ast_binary(">=",lhs,ParseShift(p),line); }
-        else break;
-    }
-    return lhs;
-}
-
-/* << >> */
-ASTNode *ParseShift(Parser *p) {
-    ASTNode *lhs = ParseAddSub(p);
-    for (;;) {
-        int line = cur(p).line;
-        if      (check(p, TOK_LSHIFT)){ advance(p); lhs=ast_binary("<<",lhs,ParseAddSub(p),line); }
-        else if (check(p, TOK_RSHIFT)){ advance(p); lhs=ast_binary(">>",lhs,ParseAddSub(p),line); }
-        else break;
-    }
-    return lhs;
-}
-
-/* + - */
-ASTNode *ParseAddSub(Parser *p) {
-    ASTNode *lhs = ParseMulDiv(p);
-    for (;;) {
-        int line = cur(p).line;
-        if      (check(p, TOK_PLUS)) { advance(p); lhs=ast_binary("+",lhs,ParseMulDiv(p),line); }
-        else if (check(p, TOK_MINUS)){ advance(p); lhs=ast_binary("-",lhs,ParseMulDiv(p),line); }
-        else break;
-    }
-    return lhs;
-}
-
-/* * / % */
-ASTNode *ParseMulDiv(Parser *p) {
-    ASTNode *lhs = ParseUnary(p);
-    for (;;) {
-        int line = cur(p).line;
-        if      (check(p, TOK_STAR))   { advance(p); lhs=ast_binary("*",lhs,ParseUnary(p),line); }
-        else if (check(p, TOK_SLASH))  { advance(p); lhs=ast_binary("/",lhs,ParseUnary(p),line); }
-        else if (check(p, TOK_PERCENT)){ advance(p); lhs=ast_binary("%",lhs,ParseUnary(p),line); }
-        else break;
-    }
-    return lhs;
-}
-
-/* Unary prefix: - ! ~ */
-ASTNode *ParseUnary(Parser *p) {
+ASTNode *ParseVariable(Parser *p) {
     int line = cur(p).line;
-    if (check(p, TOK_MINUS)) { advance(p); return ast_unary('-', ParseUnary(p), line); }
-    if (check(p, TOK_BANG))  { advance(p); return ast_unary('!', ParseUnary(p), line); }
-    if (check(p, TOK_TILDE)) { advance(p); return ast_unary('~', ParseUnary(p), line); }
-    return ParsePostfix(p);
-}
+    char storage[32]="";
+    if (chk(p,TOK_STATIC))   { strncpy(storage,"static",sizeof storage-1);   adv(p); }
+    else if (chk(p,TOK_EXTERN))  { strncpy(storage,"extern",sizeof storage-1);   adv(p); }
+    else if (chk(p,TOK_AUTO))    { strncpy(storage,"auto",sizeof storage-1);     adv(p); }
+    else if (chk(p,TOK_REGISTER)){ strncpy(storage,"register",sizeof storage-1); adv(p); }
+    else if (chk(p,TOK_CONST))   { strncpy(storage,"const",sizeof storage-1);    adv(p); }
 
-/* Postfix — currently just wraps primary (placeholder for future [] ++ --) */
-ASTNode *ParsePostfix(Parser *p) {
-    return ParsePrimary(p);
-}
+    TypeInfo *type = ParseTypeSpecifier(p);
+    if (!type) { parse_error(p,"expected type specifier"); return ast_number(0,line); }
 
-/* Primary: number | string | identifier | ( expr ) */
-ASTNode *ParsePrimary(Parser *p) {
-    int line = cur(p).line;
+    /* Pointer stars */
+    while (chk(p,TOK_STAR)) { adv(p); type->pointer_depth++; }
 
-    if (check(p, TOK_NUMBER))
-        return ParseNumber(p);
+    if (!chk(p,TOK_IDENT)) {
+        parse_error(p,"expected variable name after type");
+        eat(p,TOK_SEMICOLON);
+        return ast_number(0,line);
+    }
+    char name[256]; strncpy(name,tok_ident(cur(p)),sizeof name-1); adv(p);
 
-    if (check(p, TOK_STRING)) {
-        Token t = cur(p); advance(p);
-        return ast_string(t.sval ? t.sval : "", line);
+    /* Array dimension */
+    int array_size = -1;
+    if (chk(p,TOK_LBRACKET)) {
+        adv(p);
+        if (chk(p,TOK_RBRACKET)) { array_size=0; }
+        else { array_size=(int)cur(p).ival; eat(p,TOK_NUMBER); }
+        eat(p,TOK_RBRACKET);
     }
 
-    if (check(p, TOK_IDENT))
-        return ParseIdentifier(p);
-
-    if (check(p, TOK_LPAREN)) {
-        advance(p);
-        ASTNode *e = ParseExpression(p);
-        expect(p, TOK_RPAREN);
-        return e;
+    ASTNode *init = NULL;
+    if (chk(p,TOK_ASSIGN)) {
+        adv(p);
+        if (chk(p,TOK_LBRACE)) {
+            /* Array initialiser {a, b, c} */
+            adv(p);
+            ASTNode *elems[256]; int ne=0;
+            while (!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF)) {
+                elems[ne++]=ParseAssignment(p);
+                if (!chk(p,TOK_COMMA)) break; adv(p);
+            }
+            eat(p,TOK_RBRACE);
+            init = ast_block(elems, ne, line); /* reuse AST_BLOCK as initialiser list */
+        } else {
+            init = ParseAssignment(p);
+        }
     }
+    eat(p,TOK_SEMICOLON);
 
-    Token bad_tok = cur(p);
-    fprintf(stderr, "Parse error: unexpected token %s at line %d\n", token_kind_name(bad_tok.kind), line);
-    exit(1);
+    symtable_define_var(p->sym, name, type);
+    return ast_var_decl(storage[0]?storage:NULL, type, name, init, array_size, line);
 }
 
 /* =========================================================================
- * parse_program – top-level: sequence of function or global var declarations
+ * ParseFunction — type name ( params ) { body } or ;
+ * ========================================================================= */
+ASTNode *ParseFunction(Parser *p, const char *storage, TypeInfo *ret, const char *name) {
+    int line=cur(p).line;
+    eat(p,TOK_LPAREN);
+    ASTNode *params[32]; int paramc=0; int variadic=0;
+    symtable_push_scope(p->sym);
+    symtable_reset_locals(p->sym);
+    if (!chk(p,TOK_RPAREN)) {
+        do {
+            if (chk(p,TOK_ELLIPSIS)) { variadic=1; adv(p); break; }
+            if (!is_type_start(p)) { parse_error(p,"expected parameter type"); break; }
+            TypeInfo *pt = ParseTypeSpecifier(p);
+            /* check for function pointer param: type (*name)(params) */
+            while (chk(p,TOK_STAR)) { adv(p); pt->pointer_depth++; }
+            char pname[256]="";
+            if (chk(p,TOK_IDENT)) { strncpy(pname,tok_ident(cur(p)),sizeof pname-1); adv(p); }
+            /* array param: name[] */
+            if (chk(p,TOK_LBRACKET)) { adv(p); if (chk(p,TOK_RBRACKET)) adv(p); pt->pointer_depth++; }
+            symtable_define_param(p->sym, pname, pt, paramc);
+            params[paramc++]=ast_param(pt, pname[0]?pname:NULL, 0, cur(p).line);
+        } while (chk(p,TOK_COMMA)&&adv(p).kind!=TOK_EOF);
+    }
+    eat(p,TOK_RPAREN);
+
+    symtable_define_func(p->sym, name, ret, paramc, NULL);
+
+    ASTNode *body=NULL;
+    if (chk(p,TOK_LBRACE)) {
+        body = ParseBlock(p);
+    } else {
+        eat(p,TOK_SEMICOLON); /* forward declaration */
+    }
+    symtable_pop_scope(p->sym);
+    return ast_func_decl(storage, ret, name, params, paramc, variadic, body, line);
+}
+
+/* =========================================================================
+ * parse_program — top-level declarations
  * ========================================================================= */
 ASTNode *parse_program(Parser *p) {
-    ASTNode *decls[256]; int count = 0;
-    while (!check(p, TOK_EOF)) {
-        if (is_type_keyword(cur(p).kind))
-            decls[count++] = ParseFunction(p);
-        else {
-            fprintf(stderr, "Parse error: expected type keyword at line %d\n",
-                    cur(p).line);
-            exit(1);
+    ASTNode *decls[1024]; int count=0;
+    while (!chk(p,TOK_EOF)) {
+        int line=cur(p).line;
+
+        /* struct / union definition at top level */
+        if (chk(p,TOK_STRUCT)||chk(p,TOK_UNION)) {
+            TypeInfo *ti = ParseTypeSpecifier(p);
+            if (chk(p,TOK_SEMICOLON)) { adv(p); typeinfo_free(ti); continue; }
+            /* struct Foo var; or struct Foo fn(...) */
+            while (chk(p,TOK_STAR)) { adv(p); ti->pointer_depth++; }
+            if (!chk(p,TOK_IDENT)) { parse_error(p,"expected identifier"); continue; }
+            char name[256]; strncpy(name,tok_ident(cur(p)),sizeof name-1); adv(p);
+            if (chk(p,TOK_LPAREN)) decls[count++]=ParseFunction(p,NULL,ti,name);
+            else {
+                /* global var */
+                int arr=-1;
+                if (chk(p,TOK_LBRACKET)) { adv(p); if (chk(p,TOK_NUMBER)){ arr=(int)cur(p).ival; adv(p); } eat(p,TOK_RBRACKET); }
+                ASTNode *init=NULL;
+                if (chk(p,TOK_ASSIGN)){adv(p); init=ParseAssignment(p);}
+                eat(p,TOK_SEMICOLON);
+                symtable_define_global(p->sym,name,ti,arr);
+                decls[count++]=ast_var_decl(NULL,ti,name,init,arr,line);
+            }
+            continue;
+        }
+
+        /* enum */
+        if (chk(p,TOK_ENUM)) {
+            TypeInfo *ti = ParseTypeSpecifier(p); /* handles enum body */
+            if (chk(p,TOK_SEMICOLON)) { adv(p); typeinfo_free(ti); continue; }
+            /* enum Foo var; */
+            while (chk(p,TOK_STAR)) { adv(p); ti->pointer_depth++; }
+            if (chk(p,TOK_IDENT)) {
+                char name[256]; strncpy(name,tok_ident(cur(p)),sizeof name-1); adv(p);
+                ASTNode *init=NULL;
+                if (chk(p,TOK_ASSIGN)){adv(p); init=ParseAssignment(p);}
+                eat(p,TOK_SEMICOLON);
+                symtable_define_global(p->sym,name,ti,-1);
+                decls[count++]=ast_var_decl(NULL,ti,name,init,-1,line);
+            } else { eat(p,TOK_SEMICOLON); typeinfo_free(ti); }
+            continue;
+        }
+
+        /* typedef */
+        if (chk(p,TOK_TYPEDEF)) {
+            adv(p);
+            TypeInfo *ti = ParseTypeSpecifier(p);
+            while (chk(p,TOK_STAR)) { adv(p); ti->pointer_depth++; }
+            if (!chk(p,TOK_IDENT)) { parse_error(p,"expected typedef name"); eat(p,TOK_SEMICOLON); continue; }
+            char alias[256]; strncpy(alias,tok_ident(cur(p)),sizeof alias-1); adv(p);
+            eat(p,TOK_SEMICOLON);
+            symtable_define_typedef(p->sym, alias, ti);
+            decls[count++]=ast_typedef_decl(ti, alias, line);
+            continue;
+        }
+
+        /* storage class */
+        char storage[32]="";
+        if (chk(p,TOK_STATIC))  { strncpy(storage,"static",sizeof storage-1);  adv(p); }
+        else if (chk(p,TOK_EXTERN)) { strncpy(storage,"extern",sizeof storage-1); adv(p); }
+
+        if (!is_type_start(p)) {
+            parse_error(p,"expected declaration at top level, got '%s'",
+                        token_kind_name(cur(p).kind));
+            adv(p); continue;
+        }
+
+        TypeInfo *ret = ParseTypeSpecifier(p);
+        while (chk(p,TOK_STAR)) { adv(p); ret->pointer_depth++; }
+
+        if (!chk(p,TOK_IDENT)) {
+            parse_error(p,"expected identifier");
+            eat(p,TOK_SEMICOLON); continue;
+        }
+        char name[256]; strncpy(name,tok_ident(cur(p)),sizeof name-1); adv(p);
+
+        if (chk(p,TOK_LPAREN)) {
+            decls[count++] = ParseFunction(p, storage[0]?storage:NULL, ret, name);
+        } else {
+            /* global variable */
+            int arr=-1;
+            if (chk(p,TOK_LBRACKET)) {
+                adv(p);
+                if (chk(p,TOK_NUMBER)) { arr=(int)cur(p).ival; adv(p); } else arr=0;
+                eat(p,TOK_RBRACKET);
+            }
+            ASTNode *init=NULL;
+            if (chk(p,TOK_ASSIGN)) { adv(p); init=ParseAssignment(p); }
+            eat(p,TOK_SEMICOLON);
+            symtable_define_global(p->sym, name, ret, arr);
+            decls[count++]=ast_var_decl(storage[0]?storage:NULL, ret, name, init, arr, line);
         }
     }
     return ast_program(decls, count, 1);

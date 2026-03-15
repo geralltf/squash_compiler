@@ -37,9 +37,8 @@
 #include <stdint.h>
 
 #ifdef _WIN32
-#define strcasecmp _stricmp
-#define strncasecmp _strnicmp
 #define strdup _strdup
+#define strcasecmp _stricmp
 #endif
 
 /* =========================================================================
