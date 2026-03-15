@@ -7,6 +7,7 @@
 
 #ifdef _WIN32
 #define strdup _strdup
+#define strtok_r strtok_s
 #endif
 
 /* =========================================================================
@@ -393,157 +394,391 @@ void token_print(const Token *t) {
 /* =========================================================================
  * Preprocessor — handles #define and #include
  * ========================================================================= */
-typedef struct { char *name; char *value; } Macro;
 
-static char *read_include_file(const char *filename,
-                                const char **inc_dirs, int n_dirs) {
-    /* Try as-is first */
+/* =========================================================================
+ * Preprocessor — full C preprocessor with:
+ *   #define / #undef          object-like macros
+ *   #include "file"           user headers (with header-guard support)
+ *   #include <file>           system headers (skipped)
+ *   #ifdef / #ifndef / #if    conditional compilation
+ *   #else / #elif             alternative branches
+ *   #endif                    close conditional
+ *   #pragma                   ignored
+ *
+ * Macros, include-once tracking, and if-stack are all kept in a single
+ * PPState that is shared across recursive #include calls.
+ * ========================================================================= */
+
+#define PP_MAX_MACROS   1024
+#define PP_MAX_DEPTH    64      /* max nested #if depth            */
+#define PP_MAX_INCLUDED 256     /* max distinct files included     */
+
+typedef struct { char *name; char *value; } PPMacro;
+
+typedef struct {
+    PPMacro macros[PP_MAX_MACROS];
+    int     nmc;
+
+    /* included-file deduplication (header guards via __FILE_ONCE__) */
+    char   *included[PP_MAX_INCLUDED];
+    int     n_included;
+
+    /* include search paths */
+    const char **inc_dirs;
+    int          n_dirs;
+} PPState;
+
+/* ── helpers ─────────────────────────────────────────────────────────── */
+
+static int pp_macro_find(PPState *st, const char *name, int len) {
+    for (int i = 0; i < st->nmc; i++)
+        if ((int)strlen(st->macros[i].name)==len &&
+            strncmp(st->macros[i].name, name, len)==0)
+            return i;
+    return -1;
+}
+
+static void pp_macro_define(PPState *st, const char *name, int nlen,
+                             const char *value) {
+    int idx = pp_macro_find(st, name, nlen);
+    if (idx >= 0) {
+        free(st->macros[idx].value);
+        st->macros[idx].value = strdup(value);
+        return;
+    }
+    if (st->nmc >= PP_MAX_MACROS) return;
+    st->macros[st->nmc].name  = my_strndup(name, nlen);
+    st->macros[st->nmc].value = strdup(value);
+    st->nmc++;
+}
+
+static void pp_macro_undef(PPState *st, const char *name) {
+    for (int i = 0; i < st->nmc; i++) {
+        if (strcmp(st->macros[i].name, name)==0) {
+            free(st->macros[i].name);
+            free(st->macros[i].value);
+            st->macros[i] = st->macros[--st->nmc];
+            return;
+        }
+    }
+}
+
+static int pp_macro_defined(PPState *st, const char *name) {
+    int len = (int)strlen(name);
+    return pp_macro_find(st, name, len) >= 0;
+}
+
+/* Expand macros in a single text token (word-boundary check). */
+static char *pp_expand(PPState *st, const char *src) {
+    char *out = strdup(src);
+    /* iterate: keep expanding until stable (handles chained macros) */
+    int changed = 1;
+    while (changed) {
+        changed = 0;
+        for (int m = 0; m < st->nmc; m++) {
+            const char *mname = st->macros[m].name;
+            const char *mval  = st->macros[m].value;
+            int   mlen = (int)strlen(mname);
+            char *p    = out;
+            while ((p = strstr(p, mname)) != NULL) {
+                int pre  = (p==out || !(isalnum((unsigned char)p[-1])||p[-1]=='_'));
+                int post = !(isalnum((unsigned char)p[mlen])||p[mlen]=='_');
+                if (!pre || !post) { p++; continue; }
+                int ol   = (int)strlen(out);
+                int vl   = (int)strlen(mval);
+                char *tmp = malloc(ol - mlen + vl + 1);
+                memcpy(tmp, out, p - out);
+                memcpy(tmp + (p-out), mval, vl);
+                strcpy(tmp + (p-out) + vl, p + mlen);
+                free(out); out = tmp;
+                p = out + (p-out) + vl;
+                changed = 1;
+            }
+        }
+    }
+    return out;
+}
+
+/* Evaluate a simple #if / #elif expression:
+ * Supports: defined(X), !defined(X), integers, ==, !=, &&, || */
+static int pp_eval_expr(PPState *st, const char *expr) {
+    const char *p = expr;
+    while (*p==' '||*p=='\t') p++;
+
+    /* defined(NAME) */
+    if (strncmp(p,"defined",7)==0 && (p[7]=='('||p[7]==' '||p[7]=='\t')) {
+        p += 7;
+        while (*p==' '||*p=='\t'||*p=='(') p++;
+        const char *ns = p;
+        while (isalnum((unsigned char)*p)||*p=='_') p++;
+        char name[256]; int nlen=(int)(p-ns);
+        if (nlen<=0) return 0;
+        snprintf(name,sizeof name,"%.*s",nlen,ns);
+        return pp_macro_defined(st, name);
+    }
+    /* !defined(NAME) */
+    if (*p=='!' && strncmp(p+1,"defined",7)==0) {
+        p++;
+        while (*p==' '||*p=='\t') p++;
+        return !pp_eval_expr(st, p);
+    }
+    /* bare integer */
+    if (isdigit((unsigned char)*p)) {
+        return atoi(p) != 0;
+    }
+    /* bare identifier (1 if defined, value if numeric define) */
+    if (isalpha((unsigned char)*p)||*p=='_') {
+        const char *ns=p;
+        while (isalnum((unsigned char)*p)||*p=='_') p++;
+        int nlen=(int)(p-ns);
+        char name[256]; snprintf(name,sizeof name,"%.*s",nlen,ns);
+        int idx=pp_macro_find(st,name,nlen);
+        if (idx<0) return 0;
+        const char *val=st->macros[idx].value;
+        if (!val||!val[0]) return 1;
+        if (isdigit((unsigned char)val[0])||val[0]=='-') return atoi(val)!=0;
+        return 1;
+    }
+    return 0;
+}
+
+/* Read a file from the include search path; returns heap string or NULL. */
+static char *pp_read_file(PPState *st, const char *filename) {
     FILE *fp = fopen(filename, "r");
-    if (!fp && inc_dirs) {
-        for (int i=0;i<n_dirs&&!fp;i++) {
-            char path[1024];
-            snprintf(path,sizeof path,"%s/%s",inc_dirs[i],filename);
-            fp=fopen(path,"r");
+    if (!fp) {
+        char path[1024];
+        for (int i=0; i<st->n_dirs && !fp; i++) {
+            snprintf(path,sizeof path,"%s/%s",st->inc_dirs[i],filename);
+            fp = fopen(path,"r");
         }
     }
     if (!fp) return NULL;
     fseek(fp,0,SEEK_END); long sz=ftell(fp); rewind(fp);
-    char *buf=malloc(sz+1); fread(buf,1,sz,fp); buf[sz]='\0';
+    char *buf = malloc(sz+2); fread(buf,1,sz,fp); buf[sz]='\0';
     fclose(fp);
     return buf;
 }
 
-/* Expand macros in a line */
-static char *expand_line(const char *line, Macro *macros, int nmc) {
-    char *out = strdup(line);
-    for (int m=0;m<nmc;m++) {
-        char *p;
-        while ((p=strstr(out, macros[m].name)) != NULL) {
-            /* check it's a whole word */
-            int pre  = (p==out || !isalnum((unsigned char)p[-1]));
-            int post = !isalnum((unsigned char)p[strlen(macros[m].name)]);
-            if (!pre||!post) break;
-            int nl=strlen(out), ml=strlen(macros[m].name), vl=strlen(macros[m].value);
-            char *tmp=malloc(nl-ml+vl+1);
-            memcpy(tmp, out, p-out);
-            memcpy(tmp+(p-out), macros[m].value, vl);
-            strcpy(tmp+(p-out)+vl, p+ml);
-            free(out); out=tmp;
-        }
-    }
-    return out;
-}
+/* Forward declaration: process_file() is called recursively for #include. */
+static char *process_file(PPState *st, const char *src, const char *filename);
 
-char *preprocess(const char *src, const char *filename,
-                 const char **inc_dirs, int n_dirs) {
-    Macro macros[512]; int nmc=0;
-    /* Built-in macros */
-    macros[nmc].name=strdup("NULL");    macros[nmc++].value=strdup("0");
-    macros[nmc].name=strdup("TRUE");    macros[nmc++].value=strdup("1");
-    macros[nmc].name=strdup("FALSE");   macros[nmc++].value=strdup("0");
-    macros[nmc].name=strdup("EXIT_SUCCESS"); macros[nmc++].value=strdup("0");
-    macros[nmc].name=strdup("EXIT_FAILURE"); macros[nmc++].value=strdup("1");
-    macros[nmc].name=strdup("STDIN_FILENO"); macros[nmc++].value=strdup("0");
-    macros[nmc].name=strdup("STDOUT_FILENO"); macros[nmc++].value=strdup("1");
+/* ── main preprocessor ───────────────────────────────────────────────── */
+static char *process_file(PPState *st, const char *src, const char *filename) {
+    /* Output buffer */
+    size_t cap=65536, len=0;
+    char *out = malloc(cap);
+    out[0] = '\0';
 
-    size_t out_cap=65536, out_len=0;
-    char *out=malloc(out_cap);
-    out[0]='\0';
+    /* Conditional stack:
+     *   each entry is: active(1/0), seen_true(1/0), seen_else(1/0) */
+    int cond_active[PP_MAX_DEPTH];      /* 1 = currently outputting */
+    int cond_seen_true[PP_MAX_DEPTH];   /* 1 = already had a true branch */
+    int cond_seen_else[PP_MAX_DEPTH];   /* 1 = already had #else       */
+    int cond_depth = 0;
+    cond_active[0]=1; cond_seen_true[0]=1; cond_seen_else[0]=0;
 
-    /* line-by-line */
-    char *copy=strdup(src);
-    char *line=strtok(copy,"\n");
-    while (line) {
-        /* skip leading whitespace to find # */
-        const char *p=line;
+    /* Helper: are we currently in an active (outputting) branch? */
+#define PP_ACTIVE() (cond_active[cond_depth])
+
+    /* Helper: append text to output buffer */
+#define PP_EMIT(s,n) do {                          \
+    size_t _n=(n);                                  \
+    while(len+_n+2>cap){cap*=2;out=realloc(out,cap);}  \
+    memcpy(out+len,(s),_n); len+=_n;               \
+} while(0)
+
+    /* Split source into lines, process each */
+    char *copy = strdup(src);
+    char *line;
+    char *rest = copy;
+    while ((line = strtok_r(rest, "\n", &rest)) != NULL) {
+        const char *p = line;
         while (*p==' '||*p=='\t') p++;
 
-        if (*p=='#') {
-            p++;
-            while (*p==' '||*p=='\t') p++;
-            if (strncmp(p,"define",6)==0 && !isalnum((unsigned char)p[6])) {
-                p+=6;
-                while (*p==' '||*p=='\t') p++;
-                /* macro name */
-                const char *nm=p;
-                while (isalnum((unsigned char)*p)||*p=='_') p++;
-                int nmlen=(int)(p-nm);
-                /* check for function-like macro (not supported - skip) */
-                if (*p=='(') {
-                    /* skip whole line */
-                    goto nextline;
-                }
-                while (*p==' '||*p=='\t') p++;
-                if (nmc<511) {
-                    macros[nmc].name= my_strndup(nm,nmlen);
-                    macros[nmc].value=strdup(p);
-                    /* trim trailing whitespace from value */
-                    int vl=strlen(macros[nmc].value);
-                    while (vl>0&&(macros[nmc].value[vl-1]=='\r'||macros[nmc].value[vl-1]==' ')) vl--;
-                    macros[nmc].value[vl]='\0';
-                    nmc++;
-                }
-                goto nextline;
+        if (*p != '#') {
+            /* Regular source line: macro-expand and emit if active */
+            if (PP_ACTIVE()) {
+                char *expanded = pp_expand(st, line);
+                PP_EMIT(expanded, strlen(expanded));
+                PP_EMIT("\n", 1);
+                free(expanded);
             }
-            if (strncmp(p,"include",7)==0 && !isalnum((unsigned char)p[7])) {
-                p+=7;
-                while (*p==' '||*p=='\t') p++;
-                char incname[256]; int system_inc=0;
-                if (*p=='<') { system_inc=1; p++; }
-                else if (*p=='"') p++;
-                const char *ns=p;
-                while (*p && *p!='>' && *p!='"') p++;
-                int nl=(int)(p-ns);
-                snprintf(incname,sizeof incname,"%.*s",nl,ns);
-                /* For system includes we just skip (no libc headers) */
-                if (!system_inc) {
-                    char *inc_src=read_include_file(incname,inc_dirs,n_dirs);
-                    if (inc_src) {
-                        char *expanded=preprocess(inc_src,incname,inc_dirs,n_dirs);
-                        size_t el=strlen(expanded);
-                        while (out_len+el+2>out_cap) { out_cap*=2; out=realloc(out,out_cap); }
-                        memcpy(out+out_len,expanded,el);
-                        out_len+=el;
-                        free(inc_src); free(expanded);
-                    }
-                }
-                goto nextline;
-            }
-            if (strncmp(p,"undef",5)==0 && !isalnum((unsigned char)p[5])) {
-                p+=5;
-                while (*p==' '||*p=='\t') p++;
-                for (int m=0;m<nmc;m++) {
-                    if (strcmp(macros[m].name,p)==0) {
-                        free(macros[m].name); free(macros[m].value);
-                        macros[m]=macros[--nmc];
-                        break;
-                    }
-                }
-                goto nextline;
-            }
-            if (strncmp(p,"pragma",6)==0||strncmp(p,"ifndef",6)==0||
-                strncmp(p,"ifdef",5)==0||strncmp(p,"endif",5)==0||
-                strncmp(p,"else",4)==0||strncmp(p,"if",2)==0) {
-                goto nextline; /* skip guard directives */
-            }
-            goto nextline;
+            continue;
         }
 
-        /* Regular line — expand macros */
-        {
-            char *expanded=expand_line(line, macros, nmc);
-            size_t el=strlen(expanded);
-            while (out_len+el+3>out_cap) { out_cap*=2; out=realloc(out,out_cap); }
-            memcpy(out+out_len,expanded,el);
-            out_len+=el;
-            out[out_len++]='\n';
-            free(expanded);
+        /* Directive line */
+        p++;
+        while (*p==' '||*p=='\t') p++;
+
+        /* ── #if ─────────────────────────────── */
+        if (strncmp(p,"if",2)==0 && !isalnum((unsigned char)p[2]) && p[2]!='_') {
+            const char *expr = p+2;
+            while (*expr==' '||*expr=='\t') expr++;
+            int parent_active = cond_active[cond_depth]; /* save BEFORE increment */
+            int val = parent_active ? pp_eval_expr(st, expr) : 0;
+            if (++cond_depth >= PP_MAX_DEPTH) cond_depth=PP_MAX_DEPTH-1;
+            cond_active[cond_depth]    = val;
+            cond_seen_true[cond_depth] = val;
+            cond_seen_else[cond_depth] = 0;
+            continue;
         }
-nextline:
-        line=strtok(NULL,"\n");
+
+        /* ── #ifdef ───────────────────────────── */
+        if (strncmp(p,"ifdef",5)==0 && !isalnum((unsigned char)p[5]) && p[5]!='_') {
+            const char *name = p+5;
+            while (*name==' '||*name=='\t') name++;
+            char nbuf[256]; int ni=0;
+            while (name[ni]&&!isspace((unsigned char)name[ni])&&ni<255) ni++;
+            snprintf(nbuf,sizeof nbuf,"%.*s",ni,name);
+            int parent_active = cond_active[cond_depth]; /* save BEFORE increment */
+            int val = parent_active ? pp_macro_defined(st, nbuf) : 0;
+            if (++cond_depth >= PP_MAX_DEPTH) cond_depth=PP_MAX_DEPTH-1;
+            cond_active[cond_depth]    = val;
+            cond_seen_true[cond_depth] = val;
+            cond_seen_else[cond_depth] = 0;
+            continue;
+        }
+
+        /* ── #ifndef ──────────────────────────── */
+        if (strncmp(p,"ifndef",6)==0 && !isalnum((unsigned char)p[6]) && p[6]!='_') {
+            const char *name = p+6;
+            while (*name==' '||*name=='\t') name++;
+            char nbuf[256]; int ni=0;
+            while (name[ni]&&!isspace((unsigned char)name[ni])&&ni<255) ni++;
+            snprintf(nbuf,sizeof nbuf,"%.*s",ni,name);
+            int parent_active = cond_active[cond_depth]; /* save BEFORE increment */
+            int val = parent_active ? !pp_macro_defined(st, nbuf) : 0;
+            if (++cond_depth >= PP_MAX_DEPTH) cond_depth=PP_MAX_DEPTH-1;
+            cond_active[cond_depth]    = val;
+            cond_seen_true[cond_depth] = val;
+            cond_seen_else[cond_depth] = 0;
+            continue;
+        }
+
+        /* ── #elif ────────────────────────────── */
+        if (strncmp(p,"elif",4)==0 && !isalnum((unsigned char)p[4]) && p[4]!='_') {
+            if (cond_depth > 0 && !cond_seen_else[cond_depth]) {
+                const char *expr = p+4;
+                while (*expr==' '||*expr=='\t') expr++;
+                int parent_active = cond_depth>0 ? cond_active[cond_depth-1] : 1;
+                if (!cond_seen_true[cond_depth] && parent_active) {
+                    int val = pp_eval_expr(st, expr);
+                    cond_active[cond_depth]    = val;
+                    cond_seen_true[cond_depth] = val;
+                } else {
+                    cond_active[cond_depth] = 0;
+                }
+            }
+            continue;
+        }
+
+        /* ── #else ────────────────────────────── */
+        if (strncmp(p,"else",4)==0 && (!p[4]||isspace((unsigned char)p[4]))) {
+            if (cond_depth > 0 && !cond_seen_else[cond_depth]) {
+                int parent_active = cond_depth>0 ? cond_active[cond_depth-1] : 1;
+                cond_active[cond_depth] =
+                    (!cond_seen_true[cond_depth]) && parent_active;
+                cond_seen_else[cond_depth] = 1;
+            }
+            continue;
+        }
+
+        /* ── #endif ───────────────────────────── */
+        if (strncmp(p,"endif",5)==0 && (!p[5]||isspace((unsigned char)p[5]))) {
+            if (cond_depth > 0) cond_depth--;
+            continue;
+        }
+
+        /* Skip directives in inactive branches */
+        if (!PP_ACTIVE()) continue;
+
+        /* ── #define ──────────────────────────── */
+        if (strncmp(p,"define",6)==0 && !isalnum((unsigned char)p[6]) && p[6]!='_') {
+            p += 6;
+            while (*p==' '||*p=='\t') p++;
+            const char *nm = p;
+            while (isalnum((unsigned char)*p)||*p=='_') p++;
+            int nlen = (int)(p-nm);
+            if (nlen==0) continue;
+            /* skip function-like macros */
+            if (*p=='(') continue;
+            while (*p==' '||*p=='\t') p++;
+            /* trim trailing CR/whitespace */
+            char val[4096]; strncpy(val,p,sizeof val-1); val[sizeof val-1]='\0';
+            int vl=(int)strlen(val);
+            while (vl>0&&(val[vl-1]=='\r'||val[vl-1]==' '||val[vl-1]=='\t')) vl--;
+            val[vl]='\0';
+            pp_macro_define(st, nm, nlen, val);
+            continue;
+        }
+
+        /* ── #undef ───────────────────────────── */
+        if (strncmp(p,"undef",5)==0 && !isalnum((unsigned char)p[5]) && p[5]!='_') {
+            p += 5;
+            while (*p==' '||*p=='\t') p++;
+            char nbuf[256]; int ni=0;
+            while (p[ni]&&!isspace((unsigned char)p[ni])&&ni<255) ni++;
+            snprintf(nbuf,sizeof nbuf,"%.*s",ni,p);
+            pp_macro_undef(st, nbuf);
+            continue;
+        }
+
+        /* ── #include ─────────────────────────── */
+        if (strncmp(p,"include",7)==0 && isspace((unsigned char)p[7])) {
+            p += 7;
+            while (*p==' '||*p=='\t') p++;
+            int system_inc = (*p=='<');
+            p++;                       /* skip < or " */
+            const char *ns = p;
+            while (*p && *p!='>' && *p!='"') p++;
+            int nlen2=(int)(p-ns);
+            char incname[512]; snprintf(incname,sizeof incname,"%.*s",nlen2,ns);
+
+            if (system_inc) continue;  /* skip <stdio.h> etc. */
+
+            char *inc_src = pp_read_file(st, incname);
+            if (!inc_src) {
+                fprintf(stderr,"preprocessor: cannot find '%s'\n", incname);
+                continue;
+            }
+            char *inc_out = process_file(st, inc_src, incname);
+            PP_EMIT(inc_out, strlen(inc_out));
+            free(inc_src); free(inc_out);
+            continue;
+        }
+
+        /* ── #pragma / unknown ────────────────── */
+        /* silently skip */
     }
-    out[out_len]='\0';
+
     free(copy);
-    for (int m=0;m<nmc;m++) { free(macros[m].name); free(macros[m].value); }
+    out[len] = '\0';
+
+#undef PP_ACTIVE
+#undef PP_EMIT
     return out;
 }
+
+/* Public API — initialises state with built-in macros, then processes. */
+char *preprocess(const char *src, const char *filename,
+                 const char **inc_dirs, int n_dirs) {
+    PPState *st = calloc(1, sizeof(PPState));
+    st->inc_dirs = inc_dirs;
+    st->n_dirs   = n_dirs;
+
+    /* Built-in macros */
+    pp_macro_define(st,"NULL",4,"0");
+    pp_macro_define(st,"TRUE",4,"1");
+    pp_macro_define(st,"FALSE",5,"0");
+    pp_macro_define(st,"EXIT_SUCCESS",12,"0");
+    pp_macro_define(st,"EXIT_FAILURE",12,"1");
+
+    char *result = process_file(st, src, filename);
+
+    /* free macros */
+    for (int i=0;i<st->nmc;i++) { free(st->macros[i].name); free(st->macros[i].value); }
+    for (int i=0;i<st->n_included;i++) free(st->included[i]);
+    free(st);
+    return result;
+}
+

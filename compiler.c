@@ -79,6 +79,11 @@ int main(int argc, char **argv) {
     char *src=preprocess(raw,src_path,include_dirs,n_inc);
     free(raw);
 
+    /* Stage 1b: Optionally dump preprocessed output */
+    if (dump) {
+        printf("=== Preprocessed output ===\n%s\n=== End PP ===\n", src);
+    }
+
     /* Stage 2: Lex */
     Lexer lex;
     lexer_init(&lex,src,src_path);

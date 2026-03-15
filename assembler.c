@@ -248,20 +248,31 @@ void asm_ret  (Assembler *a) { asm_emit1(a, 0xC3); }
  * ========================================================================= */
 void asm_mov_reg_imm(Assembler *a, Reg dst, long long imm) {
     if (a->is_64bit) {
-        if (imm >= -2147483648LL && imm <= 2147483647LL) {
-            /* mov eax, imm32  (zero-extends to rax) */
-            if (needs_rex_r(dst)) asm_emit1(a,0x41);
+        if (imm >= 0 && imm <= 2147483647LL) {
+            /* Small non-negative: mov r32, imm32  (zero-extends to r64 — safe
+             * because upper 32 bits are zeroed and value is non-negative)    */
+            if (needs_rex_r(dst)) asm_emit1(a, 0x41);
             asm_emit1(a, 0xB8 | reg_enc(dst));
-            asm_emit_u32(a,(uint32_t)(int32_t)imm);
+            asm_emit_u32(a, (uint32_t)imm);
+        } else if (imm >= -2147483648LL && imm < 0) {
+            /* Negative value that fits in int32: use REX.W + C7 /0 imm32
+             * which SIGN-EXTENDS the immediate into the full 64-bit register.
+             * "mov rax, imm32(signed)" = 48 C7 C0 imm32                      */
+            uint8_t rex = 0x48;
+            if (needs_rex_r(dst)) rex |= 0x01; /* REX.B for extended regs    */
+            asm_emit1(a, rex);
+            asm_emit1(a, 0xC7);
+            asm_emit1(a, 0xC0 | reg_enc(dst)); /* ModRM: mod=11, /0, rm=dst  */
+            asm_emit_u32(a, (uint32_t)(int32_t)imm);
         } else {
-            /* movabs rax, imm64 */
+            /* Full 64-bit immediate: movabs r64, imm64                        */
             rex_w_single(a, dst);
             asm_emit1(a, 0xB8 | reg_enc(dst));
-            asm_emit_u64(a,(uint64_t)imm);
+            asm_emit_u64(a, (uint64_t)imm);
         }
     } else {
         asm_emit1(a, 0xB8 | reg_enc(dst));
-        asm_emit_u32(a,(uint32_t)(int32_t)imm);
+        asm_emit_u32(a, (uint32_t)(int32_t)imm);
     }
 }
 void asm_mov_reg_reg(Assembler *a, Reg dst, Reg src) {

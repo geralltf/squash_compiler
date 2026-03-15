@@ -1090,10 +1090,13 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
         ASTNode *d=prog->program.decls[i];
         if (d->kind==AST_FUNC_DECL) get_func_label(cg,d->func.name);
     }
-    /* Pass 2: generate */
+    /* Pass 2: generate code for functions that have bodies.
+     * Forward declarations (body==NULL) and typedef/struct/enum nodes are skipped. */
     for (int i=0;i<prog->program.count;i++) {
         ASTNode *d=prog->program.decls[i];
-        if (d->kind==AST_FUNC_DECL) codegen_func(cg,d);
+        if (d->kind==AST_FUNC_DECL && d->func.body!=NULL)
+            codegen_func(cg,d);
+        /* VAR_DECL at top-level (global vars) — future work */
     }
     asm_resolve(cg->asm_);
 }

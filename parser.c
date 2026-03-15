@@ -137,7 +137,25 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
                 if (!chk(p,TOK_IDENT)) { parse_error(p,"expected enum name"); break; }
                 char vn[256]; strncpy(vn,tok_ident(cur(p)),sizeof vn-1); adv(p);
                 long long val=next_val;
-                if (chk(p,TOK_ASSIGN)) { adv(p); val=cur(p).ival; adv(p); }
+                if (chk(p,TOK_ASSIGN)) {
+                    adv(p); /* skip '=' */
+                    /* Handle negative literals, e.g. STR_LESS = -1 */
+                    int neg = 0;
+                    if (chk(p,TOK_MINUS)) { neg=1; adv(p); }
+                    if (chk(p,TOK_NUMBER)) {
+                        val = neg ? -(cur(p).ival) : cur(p).ival;
+                        adv(p);
+                    } else if (chk(p,TOK_IDENT)) {
+                        /* Enum referring to another enum constant */
+                        Symbol *rs = symtable_lookup(p->sym, tok_ident(cur(p)));
+                        val = (rs && rs->kind==SYM_ENUM_VAL) ? rs->enum_value : 0;
+                        if (neg) val = -val;
+                        adv(p);
+                    } else if (chk(p,TOK_CHAR_LIT)) {
+                        val = neg ? -(cur(p).ival) : cur(p).ival;
+                        adv(p);
+                    }
+                }
                 next_val=val+1;
                 symtable_define_enum_val(p->sym, vn, val);
                 vals[nv++]=ast_enum_val(vn,val,1,cur(p).line);
@@ -761,7 +779,13 @@ ASTNode *ParseFunction(Parser *p, const char *storage, TypeInfo *ret, const char
     }
     eat(p,TOK_RPAREN);
 
-    symtable_define_func(p->sym, name, ret, paramc, NULL);
+    /* Register function in symbol table.
+     * If already defined (e.g. forward declaration), don't re-add.
+     * For a full definition, update func_node to point to the body node. */
+    Symbol *existing_func = symtable_lookup(p->sym, name);
+    if (!existing_func || existing_func->kind != SYM_FUNC) {
+        symtable_define_func(p->sym, name, ret, paramc, NULL);
+    }
 
     ASTNode *body=NULL;
     if (chk(p,TOK_LBRACE)) {
