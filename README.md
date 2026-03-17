@@ -6,7 +6,7 @@ To build a 64 bit Windows compatible binary on Windows called <squash-test.exe> 
 
 `./squash.exe -64 test_program2.c -o squash-test.exe`
 
-To build a 64 bit Windows compatible binary on Linux called "squash-test.exe" do the following:
+To build a 64 bit Windows compatible binary on Linux called <squash-test.exe> do the following:
 
 `./squash -64 test_program2.c -o squash-test.exe`
 
