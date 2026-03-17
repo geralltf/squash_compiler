@@ -42,6 +42,7 @@ Applies specific header constraints (e.g., OS version = 4, subsystem version = 4
 **Handles security flags:**
 
 32-bit: DllCharacteristics = 0x8100 (NX enabled, ASLR disabled).
+
 64-bit: ASLR enabled.
 
 **Testing**
