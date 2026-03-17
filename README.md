@@ -1,5 +1,15 @@
 ### Squash Minimalist C Compiler written in C.
 
+**Usage**
+
+To build a 64 bit Windows compatible binary on Windows called <squash-test.exe> do the following:
+
+`./squash.exe -64 test_program2.c -o squash-test.exe`
+
+To build a 64 bit Windows compatible binary on Linux called "squash-test.exe" do the following:
+
+`./squash -64 test_program2.c -o squash-test.exe`
+
 I have designed and implemented a C-based compiler toolchain that can parse, analyze, and compile C code into a working Windows executable.
 
 **Core Compiler Components**
@@ -63,6 +73,9 @@ A second test program (test_program2.c) validates all new features, including:
 Preprocessor directives
 Header inclusion and guards
 Extended language constructs
+
+**Future directions**
+The plan is to eventually support a stadard library by either shims or a drop in replacement all with an open alternative (no object file binaries). The plan is to also compile to ELF format for Linux compatibility.
 
 **In short:**
 Herein is a fully functional, self-contained C compiler (subset → extended C) with a focus on minimalism in C, 
