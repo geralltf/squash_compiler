@@ -86,7 +86,7 @@ Extended language constructs
 
 **Future directions**
 
-The plan is to eventually support a stadard library by either shims or a drop in replacement all with an open alternative (no object file binaries). The plan is to also compile to ELF format for Linux compatibility, and provide optimisations (dead code elimination, constant folding, among others) for efficient compiler output.
+The plan is to eventually support a standard library by either shims or a drop in replacement all with an open alternative (no object file binaries). The plan is to also compile to ELF format for Linux compatibility, and provide optimisations (dead code elimination, constant folding, among others) for efficient compiler output.
 
 **In short:**
 
