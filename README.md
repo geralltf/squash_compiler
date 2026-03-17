@@ -21,12 +21,12 @@ Correctly handles operator precedence, associativity, and parentheses.
 Supports expressions, variables, functions, if statements, and while loops.
 Provide parsing functions such as:
 ParseNumber, ParseIdentifier, ParseFunction, ParseVariable.
-Maintain a symbol table for variables and functions.
+Maintains a symbol table for variables and functions.
 
 **Code Generation**
 
 Traverses the AST to generate code using structured, readable functions.
-Produces assembly via a custom assembler API.
+Produces assembly via a custom assembler.
 Converts assembly into machine code.
 
 **PE Executable Builder**
@@ -55,7 +55,7 @@ Function compilation
 Expressions and statements
 if and while constructs
 Windows API imports
-The test program must be compiled into a working PE executable.
+The test program compiles into a working PE executable (PE 32bit and PE 64 bit).
 
 **Extended Language Features (Enhancements)**
 
