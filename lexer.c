@@ -7,6 +7,9 @@
 
 #ifdef _WIN32
 #define strdup _strdup
+#endif
+
+#ifdef _WIN32
 #define strtok_r strtok_s
 #endif
 
@@ -42,23 +45,6 @@ static const KW KEYWORDS[] = {
     {"volatile", TOK_VOLATILE},{"while",   TOK_WHILE},
     {NULL, TOK_EOF}
 };
-
-size_t my_strnlen(const char* src, size_t n) {
-    size_t len = 0;
-    while (len < n && src[len])
-        len++;
-    return len;
-}
-
-char* my_strndup(const char* s, size_t n) {
-    size_t len = my_strnlen(s, n);
-    char* p = malloc(len + 1);
-    if (p) {
-        memcpy(p, s, len);
-        p[len] = '\0';
-    }
-    return p;
-}
 
 static TokenKind kw_lookup(const char *s, int len) {
     for (int i = 0; KEYWORDS[i].w; i++)
@@ -429,6 +415,24 @@ typedef struct {
 } PPState;
 
 /* ── helpers ─────────────────────────────────────────────────────────── */
+
+size_t my_strnlen(const char* src, size_t n) {
+    size_t len = 0;
+    while (len < n && src[len])
+        len++;
+    return len;
+}
+
+char* my_strndup(const char* s, size_t n) {
+    size_t len = my_strnlen(s, n);
+    char* p = malloc(len + 1);
+    if (p) {
+        memcpy(p, s, len);
+        p[len] = '\0';
+    }
+    return p;
+}
+
 
 static int pp_macro_find(PPState *st, const char *name, int len) {
     for (int i = 0; i < st->nmc; i++)

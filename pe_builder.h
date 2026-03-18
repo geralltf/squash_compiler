@@ -154,9 +154,16 @@ typedef struct {
     uint8_t *text;
     int      text_len;
 
-    /* .rdata string pool (from codegen) */
+    /* .rdata string pool (from codegen) — READ-ONLY */
     uint8_t *rdata_strings;
     int      rdata_strings_len;
+
+    /* .data writable pool — for mutable slots (handle cache, static vars) */
+    uint8_t *wdata_bytes;     /* raw bytes for the writable data region    */
+    int      wdata_len;       /* length of writable data                   */
+    char   **wdata_labels;    /* symbol names for writable data entries     */
+    int     *wdata_offsets;   /* byte offset within wdata_bytes            */
+    int      wdata_count;     /* number of writable data entries           */
 
     /* Relocations to patch: IAT calls and data references */
     Relocation *relocs;

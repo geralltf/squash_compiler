@@ -711,8 +711,51 @@ ASTNode *ParseVariable(Parser *p) {
     TypeInfo *type = ParseTypeSpecifier(p);
     if (!type) { parse_error(p,"expected type specifier"); return ast_number(0,line); }
 
-    /* Pointer stars */
+    /* Pointer stars directly after type */
     while (chk(p,TOK_STAR)) { adv(p); type->pointer_depth++; }
+
+    /* Function pointer declaration: type (*name)(...) or type (*name[N])(...)
+     * After the base type we see '(' '*' name ')' '(' params ')'
+     * We parse this as a plain pointer variable of the return type.        */
+    if (chk(p,TOK_LPAREN)) {
+        adv(p); /* consume '(' */
+        while (chk(p,TOK_STAR)) { adv(p); type->pointer_depth++; }
+        /* optional name */
+        char name[256]; name[0]='\0';
+        if (chk(p,TOK_IDENT)) {
+            strncpy(name, tok_ident(cur(p)), sizeof name-1);
+            adv(p);
+        }
+        /* optional array dimension: (*ops[3]) */
+        int array_size = -1;
+        if (chk(p,TOK_LBRACKET)) {
+            adv(p);
+            if (chk(p,TOK_NUMBER)) { array_size=(int)cur(p).ival; adv(p); }
+            else array_size = 0;
+            eat(p,TOK_RBRACKET);
+        }
+        eat(p,TOK_RPAREN);
+        /* skip parameter list: (...) */
+        if (chk(p,TOK_LPAREN)) {
+            adv(p);
+            int depth=1;
+            while (!chk(p,TOK_EOF) && depth>0) {
+                if (chk(p,TOK_LPAREN)) depth++;
+                else if (chk(p,TOK_RPAREN)) depth--;
+                adv(p);
+            }
+        }
+        /* optional initialiser */
+        ASTNode *init=NULL;
+        if (chk(p,TOK_ASSIGN)) { adv(p); init=ParseAssignment(p); }
+        eat(p,TOK_SEMICOLON);
+        if (name[0]) {
+            symtable_define_var(p->sym, name, type);
+            return ast_var_decl(storage[0]?storage:NULL, type, name,
+                                init, array_size, line);
+        }
+        return ast_number(0, line); /* anonymous — skip */
+    }
 
     if (!chk(p,TOK_IDENT)) {
         parse_error(p,"expected variable name after type");

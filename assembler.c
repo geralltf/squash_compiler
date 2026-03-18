@@ -22,6 +22,11 @@ void asm_init(Assembler *a, int is_64bit) {
     a->labels    = malloc(a->label_cap * sizeof(Label));
     a->fixup_cap = 256;
     a->fixups    = malloc(a->fixup_cap * sizeof(Fixup));
+    /* Static data section */
+    a->data_cap      = 4096;
+    a->data_buf      = calloc(a->data_cap, 1);
+    a->data_sym_cap  = 64;
+    a->data_syms     = malloc(a->data_sym_cap * sizeof(DataSymbol));
 }
 void asm_free(Assembler *a) {
     free(a->code);
@@ -31,6 +36,9 @@ void asm_free(Assembler *a) {
     free(a->labels);
     for (int i=0;i<a->fixup_count;i++) ; /* no heap in fixup */
     free(a->fixups);
+    free(a->data_buf);
+    for (int i=0;i<a->data_sym_count;i++) free(a->data_syms[i].name);
+    free(a->data_syms);
 }
 
 /* =========================================================================
@@ -239,6 +247,35 @@ void asm_enter(Assembler *a, int local_bytes) {
         if ((aligned & 8) == 0) aligned += 8;
     }
     asm_sub_rsp(a, aligned);
+}
+
+/* Emit prologue with a patchable frame size.
+ * Returns the byte offset of the 4-byte imm32 field in 'sub rsp, imm32'
+ * so the caller can patch it later with the actual frame size.
+ * Emits:  push rbp / mov rbp,rsp / sub rsp, 0  (placeholder = 0)    */
+int asm_enter_deferred(Assembler *a) {
+    asm_push_reg(a, REG_RBP);
+    if (a->is_64bit) {
+        asm_emit3(a, 0x48,0x89,0xE5);       /* mov rbp, rsp           */
+        asm_emit3(a, 0x48,0x81,0xEC);       /* sub rsp, imm32         */
+    } else {
+        asm_emit2(a, 0x89,0xE5);            /* mov ebp, esp           */
+        asm_emit2(a, 0x81,0xEC);            /* sub esp, imm32         */
+    }
+    int patch_off = a->code_len;            /* offset of the imm32    */
+    asm_emit_u32(a, 0);                     /* placeholder = 0        */
+    return patch_off;
+}
+
+/* Patch the frame size emitted by asm_enter_deferred.
+ * aligned_size must already be 16-byte aligned and RSP-adjusted.    */
+void asm_patch_frame(Assembler *a, int patch_off, int aligned_size) {
+    if (patch_off >= 0 && patch_off + 4 <= a->code_len) {
+        a->code[patch_off+0] = (uint8_t)(aligned_size);
+        a->code[patch_off+1] = (uint8_t)(aligned_size>>8);
+        a->code[patch_off+2] = (uint8_t)(aligned_size>>16);
+        a->code[patch_off+3] = (uint8_t)(aligned_size>>24);
+    }
 }
 void asm_leave(Assembler *a) { asm_emit1(a, 0xC9); }
 void asm_ret  (Assembler *a) { asm_emit1(a, 0xC3); }
@@ -476,5 +513,179 @@ void asm_arg_from_rax(Assembler *a, int arg_index) {
     } else {
         /* store at [RSP + 32 + (arg_index-4)*8] */
         asm_mov_mem_reg(a, REG_RSP, 32 + (arg_index-4)*8, REG_RAX);
+    }
+}
+
+/* =========================================================================
+ * asm_call_reg — call through a register (function pointer)
+ * 64-bit: FF /2 ModRM=11_010_reg  (e.g. FF D0 = call rax)
+ * 32-bit: FF /2 ModRM=11_010_reg  (e.g. FF D0 = call eax)
+ * For extended regs (r8-r15) we need a REX.B prefix.
+ * ========================================================================= */
+void asm_call_reg(Assembler *a, Reg reg) {
+    int enc = reg_enc(reg);
+    if (a->is_64bit && needs_rex_r(reg)) {
+        /* REX.B to access r8–r15 as call target */
+        asm_emit1(a, 0x41);
+    }
+    asm_emit1(a, 0xFF);
+    asm_emit1(a, (uint8_t)(0xD0 | enc));
+}
+
+/* =========================================================================
+ * Static / global data section helpers
+ * ========================================================================= */
+void asm_init_data(Assembler *a) {
+    a->data_cap = 4096;
+    a->data_buf = calloc(a->data_cap, 1);
+    a->data_len = 0;
+    a->data_sym_cap = 64;
+    a->data_syms    = malloc(a->data_sym_cap * sizeof(DataSymbol));
+    a->data_sym_count = 0;
+}
+
+int asm_data_alloc(Assembler *a, const char *name, int size) {
+    /* Grow buffer if needed */
+    while (a->data_len + size > a->data_cap) {
+        a->data_cap *= 2;
+        a->data_buf = realloc(a->data_buf, a->data_cap);
+    }
+    int off = a->data_len;
+    memset(a->data_buf + off, 0, size);
+    a->data_len += size;
+    /* Align to next 8 bytes */
+    int pad = (8 - (a->data_len & 7)) & 7;
+    while (pad-- > 0 && a->data_len < a->data_cap) a->data_buf[a->data_len++] = 0;
+
+    /* Register symbol */
+    if (name && a->data_sym_count < a->data_sym_cap) {
+        DataSymbol *ds = &a->data_syms[a->data_sym_count++];
+        ds->name   = strdup(name);
+        ds->offset = off;
+        ds->size   = size;
+    }
+    return off;
+}
+
+void asm_data_write32(Assembler *a, int offset, int32_t value) {
+    if (offset + 4 <= a->data_len)
+        memcpy(a->data_buf + offset, &value, 4);
+}
+
+void asm_data_write64(Assembler *a, int offset, int64_t value) {
+    if (offset + 8 <= a->data_len)
+        memcpy(a->data_buf + offset, &value, 8);
+}
+
+uint8_t *asm_data_bytes(Assembler *a, int *out_len) {
+    *out_len = a->data_len;
+    return a->data_buf;
+}
+
+/* =========================================================================
+ * asm_load_func_addr — load address of a code-section label into dst
+ * 64-bit: LEA dst, [RIP + disp32]  (RIP-relative, resolved as a fixup)
+ * 32-bit: MOV dst, imm32           (absolute VA, RELOC_TEXT_ABS32)
+ * ========================================================================= */
+void asm_load_func_addr(Assembler *a, Reg dst, int label_id) {
+    if (a->is_64bit) {
+        /* 48 8D 05 disp32  (for RAX; adjust REX for other regs)
+         * Encoding: REX.W + 8D /r, ModRM=00_reg_101 (RIP-relative) */
+        int enc = reg_enc(dst);
+        uint8_t rex = 0x48;
+        if (needs_rex_r(dst)) rex |= 0x04;  /* REX.R */
+        asm_emit1(a, rex);
+        asm_emit1(a, 0x8D);
+        asm_emit1(a, (uint8_t)(0x05 | (enc << 3)));  /* ModRM: RIP+disp32 */
+        /* Emit a fixup for the 4-byte disp32 field */
+        asm_emit_fixup(a, label_id);
+    } else {
+        /* MOV dst, imm32  followed by a RELOC_TEXT_ABS32 relocation */
+        int enc = reg_enc(dst);
+        asm_emit1(a, (uint8_t)(0xB8 | enc));  /* MOV r32, imm32 */
+        /* Record relocation: patch this 4-byte slot with abs VA of label.
+         * add_reloc() already emits the 4-byte placeholder internally.  */
+        char lbl_key[32]; snprintf(lbl_key, sizeof lbl_key, "__lbl_%d", label_id);
+        add_reloc(a, RELOC_TEXT_ABS32, lbl_key, 0);
+        /* NOTE: do NOT call asm_emit_u32 here — add_reloc already did it */
+    }
+}
+
+/* =========================================================================
+ * asm_resolve_text_relocs — patch RELOC_TEXT_ABS32 entries in the code buffer.
+ * Called after asm_resolve() so all label positions are final.
+ * text_rva: the .text section RVA; image_base: PE image base.
+ * For each RELOC_TEXT_ABS32 with symbol "__lbl_NNN":
+ *   parse NNN as label_id, look up its code offset, compute abs VA, patch.
+ * ========================================================================= */
+void asm_resolve_text_relocs(Assembler *a, uint32_t text_rva, uint64_t image_base) {
+    for (int i = 0; i < a->reloc_count; i++) {
+        Relocation *r = &a->relocs[i];
+        if (r->kind != RELOC_TEXT_ABS32) continue;
+
+        /* Parse label_id from symbol name "__lbl_NNN" */
+        if (strncmp(r->symbol, "__lbl_", 6) != 0) continue;
+        int label_id = atoi(r->symbol + 6);
+
+        /* Find the label's code offset.
+         * Labels are stored in array order; label_id is the index. */
+        int label_off = -1;
+        if (label_id >= 0 && label_id < a->label_count) {
+            label_off = a->labels[label_id].offset;
+        }
+        if (label_off < 0) {
+            fprintf(stderr, "asm_resolve_text_relocs: label %d not found\n", label_id);
+            continue;
+        }
+
+        /* Absolute VA = image_base + text_rva + label_off */
+        uint32_t abs_va = (uint32_t)(image_base + text_rva + label_off);
+        int patch = r->offset;
+        a->code[patch+0] = (uint8_t)(abs_va);
+        a->code[patch+1] = (uint8_t)(abs_va >> 8);
+        a->code[patch+2] = (uint8_t)(abs_va >> 16);
+        a->code[patch+3] = (uint8_t)(abs_va >> 24);
+    }
+}
+
+/* =========================================================================
+ * Writable data section relocation helpers
+ * ========================================================================= */
+void asm_reloc_wdata(Assembler *a, const char *sym) {
+    RelocKind k = a->is_64bit ? RELOC_WDATA_REL32 : RELOC_WDATA_ABS32;
+    add_reloc(a, k, sym, 0);
+}
+
+void asm_lea_rip_wdata(Assembler *a, Reg dst, const char *sym) {
+    if (!a->is_64bit) {
+        /* 32-bit: mov dst, abs_addr */
+        asm_emit1(a, (uint8_t)(0xB8 | reg_enc(dst)));
+        asm_reloc_wdata(a, sym);
+        return;
+    }
+    /* 64-bit: 48/4C 8D reg [RIP+disp32] */
+    uint8_t rex = 0x48;
+    int enc = reg_enc(dst);
+    if (needs_rex_r(dst)) rex |= 0x04;
+    asm_emit1(a, rex);
+    asm_emit1(a, 0x8D);
+    asm_emit1(a, (uint8_t)(0x05 | (enc << 3)));
+    asm_reloc_wdata(a, sym);
+}
+
+/* Add immediate to RAX/EAX — used for struct field offset */
+void asm_add_imm(Assembler *a, Reg dst, int imm) {
+    int enc = reg_enc(dst);
+    if (imm == 0) return;
+    if (imm >= -128 && imm <= 127) {
+        /* add reg, imm8 */
+        if (a->is_64bit) { asm_emit1(a,0x48); asm_emit2(a,0x83,0xC0|(uint8_t)enc); }
+        else              { asm_emit2(a,0x83,0xC0|(uint8_t)enc); }
+        asm_emit1(a,(uint8_t)(int8_t)imm);
+    } else {
+        /* add reg, imm32 */
+        if (a->is_64bit) { asm_emit1(a,0x48); asm_emit2(a,0x81,0xC0|(uint8_t)enc); }
+        else              { asm_emit2(a,0x81,0xC0|(uint8_t)enc); }
+        asm_emit_u32(a,(uint32_t)imm);
     }
 }

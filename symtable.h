@@ -1,6 +1,7 @@
 #ifndef SYMTABLE_H
 #define SYMTABLE_H
 #include "ast.h"
+#include <string.h>
 
 typedef enum {
     SYM_VAR,      /* local variable  */

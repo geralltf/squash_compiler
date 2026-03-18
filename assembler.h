@@ -33,9 +33,12 @@ typedef enum {
 typedef enum {
     RELOC_ABS32,       /* 32-bit absolute VA of IAT slot (32-bit PE)  */
     RELOC_DATA_ABS32,  /* 32-bit absolute VA of data label (32-bit PE) */
+    RELOC_TEXT_ABS32,  /* 32-bit absolute VA of code label (32-bit PE) */
+    RELOC_WDATA_ABS32, /* 32-bit absolute VA of writable-data label    */
     RELOC_REL32,       /* 32-bit PC-relative (branch/call)             */
     RELOC_IAT_REL32,   /* 32-bit RIP-relative to IAT slot (64-bit)    */
     RELOC_DATA_REL32,  /* 32-bit RIP-relative to data symbol (64-bit) */
+    RELOC_WDATA_REL32, /* 32-bit RIP-relative to writable-data symbol  */
 } RelocKind;
 
 /* =========================================================================
@@ -69,7 +72,14 @@ typedef struct {
  * ========================================================================= */
 #define ASM_BUF_INIT  65536
 #define ASM_MAX_RELOC 4096
-#define ASM_MAX_LABEL 1024
+#define ASM_MAX_LABEL 4096
+
+/* ---- Static data symbol entry ---- */
+typedef struct {
+    char    *name;    /* symbol name for relocation */
+    int      offset;  /* byte offset in data buffer */
+    int      size;    /* size in bytes              */
+} DataSymbol;
 
 typedef struct {
     uint8_t   *code;
@@ -87,6 +97,14 @@ typedef struct {
     Fixup      *fixups;
     int         fixup_count;
     int         fixup_cap;
+
+    /* Static / global variable data section */
+    uint8_t   *data_buf;
+    int        data_len;
+    int        data_cap;
+    DataSymbol *data_syms;
+    int         data_sym_count;
+    int         data_sym_cap;
 
     int         is_64bit;
 } Assembler;
@@ -112,10 +130,12 @@ int  asm_new_label (Assembler *a, const char *name);  /* allocate label */
 void asm_def_label (Assembler *a, int id);             /* define at current pos */
 void asm_emit_fixup(Assembler *a, int label_id);       /* emit placeholder + register fixup */
 void asm_resolve   (Assembler *a);                     /* patch all fixups */
+void asm_resolve_text_relocs(Assembler *a, uint32_t text_rva, uint64_t image_base);
 
 /* Relocations (for imports / data) */
 void asm_reloc_iat (Assembler *a, const char *sym);    /* import call slot */
-void asm_reloc_data(Assembler *a, const char *sym);    /* data label */
+void asm_reloc_data (Assembler *a, const char *sym);   /* rdata label (read-only) */
+void asm_reloc_wdata(Assembler *a, const char *sym);   /* wdata label (read-write) */
 
 /* =========================================================================
  * High-level instruction emitters
@@ -128,6 +148,9 @@ void asm_push_imm32 (Assembler *a, int32_t v);
 void asm_sub_rsp    (Assembler *a, int32_t n);      /* sub rsp/esp, imm  */
 void asm_add_rsp    (Assembler *a, int32_t n);      /* add rsp/esp, imm  */
 void asm_enter      (Assembler *a, int local_bytes); /* push rbp; mov rbp,rsp; sub rsp,N */
+/* Two-pass frame: emit prologue with placeholder, patch later */
+int  asm_enter_deferred(Assembler *a);               /* returns patch offset             */
+void asm_patch_frame   (Assembler *a, int patch_off, int aligned_size);
 void asm_leave      (Assembler *a);                  /* leave             */
 void asm_ret        (Assembler *a);                  /* ret               */
 
@@ -136,8 +159,13 @@ void asm_mov_reg_imm  (Assembler *a, Reg dst, long long imm);   /* mov reg, imm 
 void asm_mov_reg_reg  (Assembler *a, Reg dst, Reg src);          /* mov reg, reg */
 void asm_mov_mem_reg  (Assembler *a, Reg base, int disp, Reg src);/* [base+d]=src */
 void asm_mov_reg_mem  (Assembler *a, Reg dst, Reg base, int disp);/* dst=[base+d] */
-void asm_lea_rip_data (Assembler *a, Reg dst, const char *sym);  /* lea reg,[rip+sym] */
+void asm_lea_rip_data (Assembler *a, Reg dst, const char *sym);  /* lea reg,[rip+rdata_sym] */
+void asm_lea_rip_wdata(Assembler *a, Reg dst, const char *sym);  /* lea reg,[rip+wdata_sym] */
 void asm_lea_rbp_disp (Assembler *a, Reg dst, int disp);         /* lea reg,[rbp+d] */
+/* Load address of a code-section function label into dst.
+ * 64-bit: lea dst,[rip+label]  (RIP-relative)
+ * 32-bit: mov dst, label_abs   (absolute VA, RELOC_TEXT_ABS32) */
+void asm_load_func_addr(Assembler *a, Reg dst, int label_id);
 
 /* ---- Arithmetic ---- */
 void asm_add_reg_reg(Assembler *a, Reg dst, Reg src);
@@ -177,4 +205,21 @@ void asm_call_import_with_args(Assembler *a, const char *sym, int argc);
 /* ---- x86 32-bit helpers ---- */
 void asm_call_import32(Assembler *a, const char *sym); /* call [abs_iat]  */
 
+/* ---- call through register (function pointer) ---- */
+/* call rax / call eax — register holds the function address */
+void asm_call_reg(Assembler *a, Reg reg);
+
+/* ---- Static / global data section ---- */
+/* Append N zero bytes to the data section; returns offset. */
+int  asm_data_alloc (Assembler *a, const char *name, int size);
+/* Write a value into the data section at a given offset. */
+void asm_data_write32(Assembler *a, int offset, int32_t value);
+void asm_data_write64(Assembler *a, int offset, int64_t value);
+/* Get pointer to raw data bytes and their length. */
+uint8_t *asm_data_bytes(Assembler *a, int *out_len);
+
+/* ---- x86 32-bit helpers ---- */
+void asm_call_import32(Assembler *a, const char *sym); /* call [abs_iat]  */
+
 #endif /* ASSEMBLER_H */
+void asm_add_imm(Assembler *a, Reg dst, int imm);

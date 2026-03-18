@@ -141,6 +141,19 @@ int main(int argc, char **argv) {
     int reloc_count=0;
     Relocation *relocs=codegen_get_relocs(&cg,&reloc_count);
 
+    /* Resolve RELOC_TEXT_ABS32 (function pointer addresses in 32-bit mode) */
+    uint32_t text_rva_val  = 0x1000;
+    uint64_t image_base_val = is_64bit ? 0x140000000ULL : 0x00400000ULL;
+    asm_resolve_text_relocs(&as, text_rva_val, image_base_val);
+
+    /* Build wdata label/offset arrays for the PE builder */
+    char **wdata_labels  = malloc(cg.wdata_count * sizeof(char*));
+    int  *wdata_offsets  = malloc(cg.wdata_count * sizeof(int));
+    for (int i=0; i<cg.wdata_count; i++) {
+        wdata_labels[i]  = cg.wdata[i].label;
+        wdata_offsets[i] = cg.wdata[i].offset;
+    }
+
     PEBuildInput pbi; memset(&pbi,0,sizeof pbi);
     pbi.is_64bit          = is_64bit;
     pbi.text              = text;
@@ -152,6 +165,11 @@ int main(int argc, char **argv) {
     pbi.string_labels     = str_labels;
     pbi.string_offsets    = str_offsets;
     pbi.string_count      = cg.string_count;
+    pbi.wdata_bytes       = calloc(cg.wdata_pool_size + 1, 1); /* zero-init wdata */
+    pbi.wdata_len         = cg.wdata_pool_size;
+    pbi.wdata_labels      = wdata_labels;
+    pbi.wdata_offsets     = wdata_offsets;
+    pbi.wdata_count       = cg.wdata_count;
     pbi.import_specs      = sym.imports;
     pbi.import_count      = sym.import_count;
     pbi.entry_func        = "main";
@@ -160,6 +178,8 @@ int main(int argc, char **argv) {
     int rc=pe_link_and_write(&pbi);
 
     free(src); free(str_labels); free(str_offsets);
+    free(wdata_labels); free(wdata_offsets);
+    if (pbi.wdata_bytes) free(pbi.wdata_bytes);
     if (rdata_data) free(rdata_data);
     ast_free(prog); asm_free(&as);
     return rc;

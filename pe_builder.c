@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <stdint.h>
 
 #ifdef _WIN32
@@ -121,7 +122,7 @@ void pe_build_file_header(uint8_t *buf, uint16_t machine, uint16_t nsec,
     PE_FileHeader *fh = (PE_FileHeader *)buf;
     fh->Machine              = machine;
     fh->NumberOfSections     = nsec;
-    fh->TimeDateStamp        = 0;
+    fh->TimeDateStamp        = (uint32_t)time(NULL);  /* real timestamp */
     fh->SizeOfOptionalHeader = opt_size;
     fh->Characteristics      = chars;
 }
@@ -147,8 +148,9 @@ void pe_build_opt_header_32(uint8_t *buf, uint32_t ep_rva, uint32_t img_size,
     oh->SizeOfImage                 = img_size;
     oh->SizeOfHeaders               = headers_size;
     oh->Subsystem                   = IMAGE_SUBSYSTEM_WINDOWS_CUI;
-    /* NX-compat only; NO DYNAMIC_BASE (would break abs-VA calls without reloc) */
-    oh->DllCharacteristics          = 0x8100;
+    /* NX-compat only; NO DYNAMIC_BASE (would break abs-VA calls without reloc)
+     * NO TERMINAL_SERVER_AWARE (0x8000 removed — reduces AV heuristic triggers) */
+    oh->DllCharacteristics          = 0x0100;  /* NX_COMPAT only */
     oh->SizeOfStackReserve          = 0x100000;
     oh->SizeOfStackCommit           = 0x1000;
     oh->SizeOfHeapReserve           = 0x100000;
@@ -179,7 +181,7 @@ void pe_build_opt_header_64(uint8_t *buf, uint32_t ep_rva, uint32_t img_size,
     oh->SizeOfHeaders               = headers_size;
     oh->Subsystem                   = IMAGE_SUBSYSTEM_WINDOWS_CUI;
     /* NX-compat + DYNAMIC_BASE + terminal-server-aware (ASLR safe: uses RIP-rel) */
-    oh->DllCharacteristics          = 0x8160;
+    oh->DllCharacteristics          = 0x0140;  /* DYNAMIC_BASE + NX_COMPAT */
     oh->SizeOfStackReserve          = 0x100000;
     oh->SizeOfStackCommit           = 0x1000;
     oh->SizeOfHeapReserve           = 0x100000;
@@ -347,7 +349,9 @@ int pe_link_and_write(PEBuildInput *in) {
     uint32_t text_raw   = ALIGN_UP(in->text_len, FILE_ALIGN);
     uint32_t rdata_rva  = text_rva  + ALIGN_UP(text_raw,  SEC_ALIGN);
     uint32_t data_rva   = rdata_rva + ALIGN_UP(rdata_size, SEC_ALIGN);
-    uint32_t data_raw   = FILE_ALIGN;  /* minimal .data placeholder */
+    /* .data section holds the writable data pool (handle cache, static vars) */
+    uint32_t wdata_size = (in->wdata_len > 0) ? (uint32_t)in->wdata_len : 0;
+    uint32_t data_raw   = ALIGN_UP(wdata_size > 0 ? wdata_size : 1, FILE_ALIGN);
     uint32_t bss_rva    = data_rva  + SEC_ALIGN;  /* .bss after full .data page */
     uint32_t img_size   = bss_rva   + SEC_ALIGN;  /* SizeOfImage covers all sections */
 
@@ -528,6 +532,35 @@ int pe_link_and_write(PEBuildInput *in) {
                 /* RELOC_DATA_ABS32: 32-bit absolute VA */
                 pu32(text+patch, (uint32_t)(image_base + str_rva));
             }
+
+        } else if (r->kind == RELOC_WDATA_REL32 || r->kind == RELOC_WDATA_ABS32) {
+            /* Find label in writable data pool (.data section) */
+            uint32_t wdata_rva_base = data_rva;
+            uint32_t wdata_off_in_section = 0;
+            int found_w = 0;
+            for (int wi=0; wi < in->wdata_count; wi++) {
+                if (strcmp(in->wdata_labels[wi], r->symbol)==0) {
+                    wdata_off_in_section = (uint32_t)in->wdata_offsets[wi];
+                    found_w = 1;
+                    break;
+                }
+            }
+            if (!found_w) {
+                fprintf(stderr,"pe_link: no wdata label '%s'\n", r->symbol);
+            } else {
+                uint32_t target_rva = wdata_rva_base + wdata_off_in_section;
+                if (r->kind == RELOC_WDATA_REL32) {
+                    uint64_t target_va = image_base + target_rva;
+                    uint64_t next_rip  = image_base + text_rva + patch + 4;
+                    int32_t  disp      = (int32_t)(target_va - next_rip);
+                    text[patch+0] = (uint8_t)(disp);
+                    text[patch+1] = (uint8_t)(disp>>8);
+                    text[patch+2] = (uint8_t)(disp>>16);
+                    text[patch+3] = (uint8_t)(disp>>24);
+                } else {
+                    pu32(text+patch, (uint32_t)(image_base + target_rva));
+                }
+            }
         }
     }
     free(iat_entries);
@@ -589,6 +622,9 @@ int pe_link_and_write(PEBuildInput *in) {
     if (!fp) { perror("fopen output"); return 1; }
 
     uint8_t *data_section = calloc(data_raw, 1);
+    /* Copy wdata pool into .data section */
+    if (in->wdata_bytes && in->wdata_len > 0)
+        memcpy(data_section, in->wdata_bytes, in->wdata_len);
 
     fwrite(hdr,          1, hdr_size,  fp);
     fwrite(text,         1, text_raw,  fp);
@@ -596,6 +632,48 @@ int pe_link_and_write(PEBuildInput *in) {
     fwrite(data_section, 1, data_raw,  fp);
 
     fclose(fp);
+
+    /* Compute and patch the PE checksum.
+     * The checksum is at: e_lfanew + 4 + 20 + 64 = e_lfanew + 88 bytes.
+     * Algorithm: sum all 16-bit words, fold carry, add file size.
+     * We re-read the whole file, compute, then patch the 4-byte field. */
+    {
+        FILE *ckf = fopen(in->output_path, "r+b");
+        if (ckf) {
+            fseek(ckf, 0, SEEK_END);
+            long fsize = ftell(ckf);
+            rewind(ckf);
+            uint8_t *fbuf = calloc((fsize + 1) & ~1, 1);
+            fread(fbuf, 1, fsize, ckf);
+
+            /* Find checksum field offset: [e_lfanew]+88 */
+            uint32_t e_lfanew_v;
+            memcpy(&e_lfanew_v, fbuf + 0x3C, 4);
+            uint32_t ckoff = e_lfanew_v + 4 + 20 + 64;  /* CheckSum field */
+            /* Zero out checksum field before computing */
+            fbuf[ckoff]=fbuf[ckoff+1]=fbuf[ckoff+2]=fbuf[ckoff+3]=0;
+
+            /* 16-bit word sum with carry folding */
+            uint32_t ck = 0;
+            long words = (fsize + 1) / 2;
+            for (long wi = 0; wi < words; wi++) {
+                uint16_t w = (uint16_t)fbuf[wi*2] | ((uint16_t)fbuf[wi*2+1]<<8);
+                ck += w;
+                if (ck > 0xFFFF) ck = (ck & 0xFFFF) + (ck >> 16);
+            }
+            ck += (uint32_t)fsize;
+
+            /* Write checksum back */
+            fbuf[ckoff+0]=(uint8_t)(ck);
+            fbuf[ckoff+1]=(uint8_t)(ck>>8);
+            fbuf[ckoff+2]=(uint8_t)(ck>>16);
+            fbuf[ckoff+3]=(uint8_t)(ck>>24);
+            rewind(ckf);
+            fwrite(fbuf, 1, fsize, ckf);
+            fclose(ckf);
+            free(fbuf);
+        }
+    }
 
     printf("PE written: %s\n", in->output_path);
     printf("  %-10s file=0x%04X  RVA=0x%04X  size=%u\n",
