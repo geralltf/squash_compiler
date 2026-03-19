@@ -5,14 +5,6 @@
 #include <ctype.h>
 #include <errno.h>
 
-#ifdef _WIN32
-#define strdup _strdup
-#endif
-
-#ifdef _WIN32
-#define strtok_r strtok_s
-#endif
-
 /* =========================================================================
  * Error reporting helper
  * ========================================================================= */
@@ -35,6 +27,7 @@ static const KW KEYWORDS[] = {
     {"enum",     TOK_ENUM},   {"extern",   TOK_EXTERN},
     {"float",    TOK_FLOAT_KW},{"for",     TOK_FOR},
     {"goto",     TOK_GOTO},   {"if",       TOK_IF},
+    {"inline",   TOK_INLINE},
     {"int",      TOK_INT},    {"long",     TOK_LONG},
     {"register", TOK_REGISTER},{"return",  TOK_RETURN},
     {"short",    TOK_SHORT},  {"signed",   TOK_SIGNED},
@@ -154,7 +147,7 @@ static Token ParseNumber(Lexer *l) {
             const char *s=t.start;
             while (*s && (isdigit((unsigned char)*s)||*s=='.'||*s=='e'||*s=='E'||
                           *s=='+'||*s=='-') && bi<62) buf[bi++]=*s++;
-            while (l->src[l->pos] && l->src[l->pos]!=buf[0]) {} /* consumed above */
+            /* pos is already at the right place; restart below restores t.start */
             /* restart: back up and re-lex float */
             l->pos = (int)(t.start - l->src);
             l->col = t.col;
@@ -170,11 +163,11 @@ static Token ParseNumber(Lexer *l) {
         } else {
             t.ival=v;
         }
-        /* suffixes: u, l, ll, ul, etc. */
-        while (l->src[l->pos]=='u'||l->src[l->pos]=='U'||
-               l->src[l->pos]=='l'||l->src[l->pos]=='L'||
-               l->src[l->pos]=='f'||l->src[l->pos]=='F') adv(l);
     }
+    /* Consume integer/float suffixes: U, L, LL, UL, F, etc. */
+    while (l->src[l->pos]=='u'||l->src[l->pos]=='U'||
+           l->src[l->pos]=='l'||l->src[l->pos]=='L'||
+           l->src[l->pos]=='f'||l->src[l->pos]=='F') adv(l);
     t.kind  = is_float ? TOK_FLOAT : TOK_NUMBER;
     t.len   = (int)(l->src+l->pos-t.start);
     return t;
@@ -416,24 +409,6 @@ typedef struct {
 
 /* ── helpers ─────────────────────────────────────────────────────────── */
 
-size_t my_strnlen(const char* src, size_t n) {
-    size_t len = 0;
-    while (len < n && src[len])
-        len++;
-    return len;
-}
-
-char* my_strndup(const char* s, size_t n) {
-    size_t len = my_strnlen(s, n);
-    char* p = malloc(len + 1);
-    if (p) {
-        memcpy(p, s, len);
-        p[len] = '\0';
-    }
-    return p;
-}
-
-
 static int pp_macro_find(PPState *st, const char *name, int len) {
     for (int i = 0; i < st->nmc; i++)
         if ((int)strlen(st->macros[i].name)==len &&
@@ -451,7 +426,7 @@ static void pp_macro_define(PPState *st, const char *name, int nlen,
         return;
     }
     if (st->nmc >= PP_MAX_MACROS) return;
-    st->macros[st->nmc].name  = my_strndup(name, nlen);
+    st->macros[st->nmc].name  = strndup(name, nlen);
     st->macros[st->nmc].value = strdup(value);
     st->nmc++;
 }

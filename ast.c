@@ -3,10 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#define strdup _strdup
-#endif
-
 /* =========================================================================
  * TypeInfo
  * ========================================================================= */
@@ -47,14 +43,44 @@ char *typeinfo_str(const TypeInfo *t) {
 int typeinfo_size(const TypeInfo *t, int is_64bit) {
     if (!t) return 4;
     if (t->pointer_depth > 0) return is_64bit ? 8 : 4;
-    if (strcmp(t->base,"char")==0)   return 1;
-    if (strcmp(t->base,"short")==0)  return 2;
-    if (strcmp(t->base,"int")==0)    return 4;
-    if (strcmp(t->base,"long")==0)   return is_64bit ? 8 : 4;
-    if (strcmp(t->base,"double")==0) return 8;
-    if (strcmp(t->base,"float")==0)  return 4;
-    if (strcmp(t->base,"void")==0)   return 0;
+    const char *b = t->base;
+    if (!b) return 4;
+    /* Strip leading unsigned/signed qualifiers for size computation */
+    if (strncmp(b,"unsigned ",9)==0) b+=9;
+    else if (strncmp(b,"signed ",7)==0) b+=7;
+    if (strcmp(b,"char")==0   || strcmp(b,"bool")==0 ||
+        strcmp(b,"_Bool")==0  || strcmp(b,"uint8_t")==0 ||
+        strcmp(b,"int8_t")==0) return 1;
+    if (strcmp(b,"short")==0  || strcmp(b,"int16_t")==0 ||
+        strcmp(b,"uint16_t")==0) return 2;
+    if (strcmp(b,"int")==0    || strcmp(b,"uint")==0 ||
+        strcmp(b,"uint32_t")==0|| strcmp(b,"int32_t")==0 ||
+        strcmp(b,"float")==0)  return 4;
+    if (strcmp(b,"long")==0)   return is_64bit ? 8 : 4;
+    if (strcmp(b,"long long")==0||strcmp(b,"int64_t")==0||
+        strcmp(b,"uint64_t")==0||strcmp(b,"ulong")==0||
+        strcmp(b,"double")==0 ||strcmp(b,"long double")==0) return 8;
+    if (strcmp(b,"void")==0)   return 0;
     return 4; /* default for structs etc */
+}
+
+/* Returns 1 if the type is a floating-point type */
+int typeinfo_is_float(const TypeInfo *t) {
+    if (!t || !t->base || t->pointer_depth > 0) return 0;
+    const char *b = t->base;
+    return strcmp(b,"float")==0 || strcmp(b,"double")==0 ||
+           strcmp(b,"long double")==0;
+}
+
+/* Returns 1 if the type is unsigned */
+int typeinfo_is_unsigned(const TypeInfo *t) {
+    if (!t || !t->base) return 0;
+    const char *b = t->base;
+    return strncmp(b,"unsigned ",9)==0 || strcmp(b,"uint")==0 ||
+           strcmp(b,"ulong")==0 || strcmp(b,"bool")==0 ||
+           strcmp(b,"_Bool")==0 || strcmp(b,"uint8_t")==0 ||
+           strcmp(b,"uint16_t")==0 || strcmp(b,"uint32_t")==0 ||
+           strcmp(b,"uint64_t")==0;
 }
 
 /* =========================================================================

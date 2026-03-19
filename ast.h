@@ -56,6 +56,10 @@ struct TypeInfo {
     int   is_unsigned;
     int   array_size;   /* -1 = not an array, 0 = [] incomplete */
     TypeInfo *pointed_to; /* for pointer types                  */
+    int   is_volatile;
+    int   is_inline;
+    int   is_extern;
+    int   is_float;     /* float/double type                  */
 };
 
 typedef struct ASTNode ASTNode;

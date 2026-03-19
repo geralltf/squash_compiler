@@ -52,6 +52,12 @@ typedef struct {
     int          wdata_cap;
     int          wdata_pool_size; /* total bytes in the wdata pool          */
 
+    /* Float constant pool — 8-byte double literals in .rdata              */
+    StringEntry *float_consts;
+    int          float_const_count;
+    int          float_const_cap;
+    int          float_const_pool_size;
+
     /* Cached stdout HANDLE slot — allocated in .data (writable).           */
     char         stdout_handle_lbl[64];
 } CodeGen;
@@ -71,3 +77,17 @@ uint8_t    *codegen_get_rdata (CodeGen *cg, int *len);
 Relocation *codegen_get_relocs(CodeGen *cg, int *count);
 
 #endif
+
+/* Float codegen — evaluates float expressions into XMM0 (64-bit) or ST0 (32-bit) */
+/* Returns 1 if the expression is a float type, 0 if integer */
+int  codegen_is_float_expr(CodeGen *cg, ASTNode *n);
+void codegen_float_expr    (CodeGen *cg, ASTNode *n); /* result in XMM0/ST0 */
+void codegen_store_float   (CodeGen *cg, ASTNode *lhs); /* store XMM0/ST0 to lvalue */
+
+/* Float constant pool — 8-byte entries in .rdata for double literals */
+const char *intern_float_const(CodeGen *cg, double val);
+
+/* Extended wdata access for wdata pool query */
+uint8_t    *codegen_get_wdata  (CodeGen *cg, int *len);
+char      **codegen_get_wdata_labels (CodeGen *cg, int *count);
+int        *codegen_get_wdata_offsets(CodeGen *cg, int *count);

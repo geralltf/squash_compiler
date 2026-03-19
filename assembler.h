@@ -223,3 +223,54 @@ void asm_call_import32(Assembler *a, const char *sym); /* call [abs_iat]  */
 
 #endif /* ASSEMBLER_H */
 void asm_add_imm(Assembler *a, Reg dst, int imm);
+
+/* =========================================================================
+ * Floating-point SSE2 helpers (64-bit) and x87 helpers (32-bit)
+ * All float values: XMM0 = result register, XMM1 = secondary
+ * ========================================================================= */
+
+/* 64-bit SSE2 double operations */
+void asm_movsd_load (Assembler *a, int xmm_dst, Reg base, int disp); /* movsd xmm,[base+disp] */
+void asm_movsd_store(Assembler *a, Reg base, int disp, int xmm_src); /* movsd [base+disp],xmm */
+void asm_movsd_rip  (Assembler *a, int xmm_dst, const char *sym);    /* movsd xmm,[rip+sym] */
+void asm_movsd_xmm  (Assembler *a, int dst, int src);                 /* movsd xmm,xmm */
+void asm_addsd      (Assembler *a, int dst, int src);
+void asm_subsd      (Assembler *a, int dst, int src);
+void asm_mulsd      (Assembler *a, int dst, int src);
+void asm_divsd      (Assembler *a, int dst, int src);
+void asm_ucomisd    (Assembler *a, int xmm0, int xmm1);
+void asm_cvtsi2sd   (Assembler *a, int xmm_dst, Reg int_src); /* int->double */
+void asm_cvttsd2si  (Assembler *a, Reg int_dst, int xmm_src); /* double->int (truncate) */
+void asm_movss_load (Assembler *a, int xmm_dst, Reg base, int disp); /* float (32-bit) */
+void asm_movss_store(Assembler *a, Reg base, int disp, int xmm_src);
+void asm_cvtss2sd   (Assembler *a, int xmm_dst, int xmm_src); /* float->double */
+void asm_cvtsd2ss   (Assembler *a, int xmm_dst, int xmm_src); /* double->float */
+
+/* Push/pop XMM registers (via stack) */
+void asm_push_xmm   (Assembler *a, int xmm);  /* sub rsp,8; movsd [rsp],xmm */
+void asm_pop_xmm    (Assembler *a, int xmm);  /* movsd xmm,[rsp]; add rsp,8 */
+
+/* XOR of float/double (for obfuscation/misc use) */
+void asm_xorpd      (Assembler *a, int dst, int src); /* xorpd xmm,xmm */
+void asm_xorps      (Assembler *a, int dst, int src); /* xorps xmm,xmm */
+
+/* 32-bit x87 helpers */
+void asm_fld_mem64  (Assembler *a, Reg base, int disp); /* fldl [base+disp] */
+void asm_fstp_mem64 (Assembler *a, Reg base, int disp); /* fstpl [base+disp] */
+void asm_fild_mem32 (Assembler *a, Reg base, int disp); /* fildl [base+disp] */
+void asm_fistp_mem32(Assembler *a, Reg base, int disp); /* fistpl [base+disp] */
+void asm_faddp      (Assembler *a);
+void asm_fsubp      (Assembler *a);
+void asm_fsubrp     (Assembler *a);
+void asm_fmulp      (Assembler *a);
+void asm_fdivp      (Assembler *a);
+void asm_fdivrp     (Assembler *a);
+void asm_fcompp     (Assembler *a);
+void asm_fnstsw     (Assembler *a);  /* fnstsw ax */
+void asm_sahf       (Assembler *a);  /* sahf */
+void asm_fld1       (Assembler *a);  /* fld1 */
+void asm_fldz       (Assembler *a);  /* fldz */
+void asm_fldpi      (Assembler *a);  /* fldpi */
+void asm_fchs       (Assembler *a);  /* fchs (negate) */
+void asm_fabs_x87   (Assembler *a);  /* fabs */
+void asm_fsqrt      (Assembler *a);  /* fsqrt */

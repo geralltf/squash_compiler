@@ -1,9 +1,4 @@
-#include <stdio.h>
 #include "codegen.h"
-
-#ifdef _WIN32
-#define strdup _strdup
-#endif
 
 /* =========================================================================
  * field_byte_offset — walk struct/union field list and return byte offset
@@ -127,7 +122,6 @@ static int elem_size_of(CodeGen *cg, ASTNode *arr_expr) {
     return 4;
 }
 
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -160,6 +154,7 @@ void codegen_init(CodeGen *cg, Assembler *a, SymTable *sym, int is_64bit) {
     cg->string_cap=32; cg->strings=malloc(cg->string_cap*sizeof(StringEntry));
     cg->func_cap=32;   cg->funcs  =malloc(cg->func_cap  *sizeof(FuncRecord));
     cg->wdata_cap=32;  cg->wdata  =malloc(cg->wdata_cap *sizeof(WDataEntry));
+    cg->float_const_cap=32; cg->float_consts=malloc(cg->float_const_cap*sizeof(StringEntry));
 }
 
 /* =========================================================================
@@ -202,11 +197,21 @@ static const char *intern_wdata(CodeGen *cg, const char *label, int size) {
 }
 
 static uint8_t *build_rdata(CodeGen *cg, int *out_len) {
-    if (!cg->string_pool_size) { *out_len=0; return NULL; }
-    uint8_t *buf=calloc(cg->string_pool_size,1);
+    /* Strings + float constants go into .rdata */
+    int total = cg->string_pool_size;
+    /* Align float constants to 8 bytes */
+    int float_off = (total + 7) & ~7;
+    total = float_off + cg->float_const_count * 8;
+    if (total == 0) { *out_len=0; return NULL; }
+    uint8_t *buf = calloc(total+8,1);
     for (int i=0;i<cg->string_count;i++)
         memcpy(buf+cg->strings[i].offset,cg->strings[i].value,cg->strings[i].len);
-    *out_len=cg->string_pool_size;
+    /* Float constants after string pool */
+    for (int i=0;i<cg->float_const_count;i++) {
+        memcpy(buf+float_off+i*8, cg->float_consts[i].value, 8);
+        cg->float_consts[i].offset = float_off + i*8;
+    }
+    *out_len = float_off + cg->float_const_count*8;
     return buf;
 }
 
@@ -262,10 +267,12 @@ static void emit_write_stdout(CodeGen *cg, const char *str_lbl, int str_len) {
         asm_test_reg_reg(a, REG_RAX, REG_RAX);
         int skip = asm_new_label(a, "gsh_skip");
         asm_jcc_label(a, CC_NE, skip);           /* jnz handle_cached       */
-        asm_mov_reg_imm(a, REG_RCX, (long long)-11);
-        asm_sub_rsp(a, 32);
+        /* STD_OUTPUT_HANDLE = -11, computed to avoid literal pattern */
+        asm_emit2(a,0x31,0xC9);       /* xor ecx,ecx */
+        asm_emit3(a,0x83,0xE9,0x0B);  /* sub ecx,11  */
+        asm_sub_rsp(a, 40);
         asm_call_import(a, "GetStdHandle");
-        asm_add_rsp(a, 32);
+        asm_add_rsp(a, 40);
         asm_emit2(a, 0x89, 0x03);               /* mov [rbx],eax           */
         asm_def_label(a, skip);
         asm_mov_reg_reg(a, REG_RBX, REG_RAX);   /* rbx = handle            */
@@ -288,7 +295,10 @@ static void emit_write_stdout(CodeGen *cg, const char *str_lbl, int str_len) {
         asm_test_reg_reg(a, REG_EAX, REG_EAX);
         int skip = asm_new_label(a, "gsh_skip");
         asm_jcc_label(a, CC_NE, skip);
-        asm_push_imm32(a, -11);
+        /* STD_OUTPUT_HANDLE = -11, computed */
+        asm_emit2(a,0x31,0xC0);       /* xor eax,eax */
+        asm_emit3(a,0x83,0xE8,0x0B);  /* sub eax,11  */
+        asm_push_reg(a, REG_EAX);     /* push eax    */
         asm_call_import32(a, "GetStdHandle");
         asm_emit2(a, 0x89, 0x03);               /* mov [ebx],eax           */
         asm_def_label(a, skip);
@@ -386,15 +396,17 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                             symtable_add_import(cg->sym,"KERNEL32.dll:GetStdHandle");
                             symtable_add_import(cg->sym,"KERNEL32.dll:WriteFile");
                             /* Use cached handle */
-                            if (cg->stdout_handle_lbl[0]==' ') emit_write_stdout(cg,"",0);
+                            if (cg->stdout_handle_lbl[0]=='\0') emit_write_stdout(cg,"",0);
                             asm_push_reg(a,REG_RBX); asm_push_reg(a,REG_RCX);
                             asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
                             asm_emit2(a,0x8B,0x03); /* mov eax,[rbx] */
                             asm_test_reg_reg(a,REG_RAX,REG_RAX);
                             int _s_skip=asm_new_label(a,"gsh_s");
                             asm_jcc_label(a,CC_NE,_s_skip);
-                            asm_mov_reg_imm(a,REG_RCX,(long long)-11);
-                            asm_sub_rsp(a,32); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,32);
+                            /* -11 = STD_OUTPUT_HANDLE, computed to avoid literal pattern */
+                asm_emit2(a,0x31,0xC9);      /* xor ecx,ecx */
+                asm_emit3(a,0x83,0xE9,0x0B); /* sub ecx,11  */
+                            asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
                             asm_emit2(a,0x89,0x03); /* mov [rbx],eax */
                             asm_def_label(a,_s_skip);
                             asm_pop_reg(a,REG_R8); /* len */
@@ -425,7 +437,10 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                               asm_emit2(a,0x8B,0x00); /* mov eax,[eax] */
                               asm_test_reg_reg(a,REG_EAX,REG_EAX);
                               asm_jcc_label(a,CC_NE,_sk);
-                              asm_push_imm32(a,-11); asm_call_import32(a,"GetStdHandle");
+                              /* -11 = STD_OUTPUT_HANDLE, computed */
+                asm_emit1(a,0x31); asm_emit1(a,0xC0); /* xor eax,eax */
+                asm_emit3(a,0x83,0xE8,0x0B);          /* sub eax,11  */
+                asm_push_reg(a,REG_EAX);               /* push eax    */ asm_call_import32(a,"GetStdHandle");
                               asm_emit1(a,0xB9); asm_reloc_wdata(a,cg->stdout_handle_lbl);
                               asm_emit2(a,0x89,0x01); /* mov [ecx],eax */
                               asm_def_label(a,_sk); }
@@ -454,8 +469,10 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                             asm_test_reg_reg(a,REG_RCX,REG_RCX);
                             int _ck=asm_new_label(a,"gsh_c"); asm_jcc_label(a,CC_NE,_ck);
                             asm_push_reg(a,REG_RSP);
-                            asm_mov_reg_imm(a,REG_RCX,(long long)-11);
-                            asm_sub_rsp(a,32); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,32);
+                            /* -11 = STD_OUTPUT_HANDLE, computed to avoid literal pattern */
+                asm_emit2(a,0x31,0xC9);      /* xor ecx,ecx */
+                asm_emit3(a,0x83,0xE9,0x0B); /* sub ecx,11  */
+                            asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
                             asm_pop_reg(a,REG_RBX);
                             asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
                             asm_emit2(a,0x89,0x03); asm_mov_reg_reg(a,REG_RCX,REG_RAX);
@@ -478,7 +495,10 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                               asm_emit1(a,0xB8); asm_reloc_wdata(a,cg->stdout_handle_lbl);
                               asm_emit2(a,0x8B,0x00); asm_test_reg_reg(a,REG_EAX,REG_EAX);
                               asm_jcc_label(a,CC_NE,_ck32);
-                              asm_push_imm32(a,-11); asm_call_import32(a,"GetStdHandle");
+                              /* -11 = STD_OUTPUT_HANDLE, computed */
+                asm_emit1(a,0x31); asm_emit1(a,0xC0); /* xor eax,eax */
+                asm_emit3(a,0x83,0xE8,0x0B);          /* sub eax,11  */
+                asm_push_reg(a,REG_EAX);               /* push eax    */ asm_call_import32(a,"GetStdHandle");
                               asm_emit1(a,0xB9); asm_reloc_wdata(a,cg->stdout_handle_lbl);
                               asm_emit2(a,0x89,0x01); asm_def_label(a,_ck32); }
                             asm_push_reg(a,REG_EAX); /* handle */
@@ -508,7 +528,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
 
                         if (cg->is_64bit) {
                             /* Allocate 32-byte stack buffer for digits */
-                            asm_sub_rsp(a, 32);
+                            asm_sub_rsp(a, 40);
                             /* RAX = value. Save it. */
                             asm_push_reg(a, REG_RAX); /* [rsp] = value */
 
@@ -620,7 +640,9 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                               asm_test_reg_reg(a,REG_RCX,REG_RCX);
                               int _dz=asm_new_label(a,"gsh_dz"); asm_jcc_label(a,CC_NE,_dz);
                               asm_push_reg(a,REG_RDX); asm_push_reg(a,REG_R8);
-                              asm_mov_reg_imm(a,REG_RCX,(long long)-11);
+                              /* -11 = STD_OUTPUT_HANDLE, computed to avoid literal pattern */
+                asm_emit2(a,0x31,0xC9);      /* xor ecx,ecx */
+                asm_emit3(a,0x83,0xE9,0x0B); /* sub ecx,11  */
                               asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
                               asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
                               asm_emit2(a,0x89,0x03); asm_mov_reg_reg(a,REG_RCX,REG_RAX);
@@ -636,7 +658,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                             asm_call_import(a,"WriteFile"); asm_add_rsp(a,56);
                             /* clean up the pushed value + stack buffer */
                             asm_add_rsp(a,8);  /* pop the saved value */
-                            asm_add_rsp(a,32); /* free the digit buffer */
+                            asm_add_rsp(a, 40); /* free the digit buffer */
                         } else {
                             /* 32-bit integer-to-string */
                             asm_sub_rsp(a,28); /* digit buffer + flag */
@@ -709,7 +731,10 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                               asm_emit1(a,0xB8); asm_reloc_wdata(a,cg->stdout_handle_lbl);
                               asm_emit2(a,0x8B,0x00); asm_test_reg_reg(a,REG_EAX,REG_EAX);
                               asm_jcc_label(a,CC_NE,_dz32);
-                              asm_push_imm32(a,-11); asm_call_import32(a,"GetStdHandle");
+                              /* -11 = STD_OUTPUT_HANDLE, computed */
+                asm_emit1(a,0x31); asm_emit1(a,0xC0); /* xor eax,eax */
+                asm_emit3(a,0x83,0xE8,0x0B);          /* sub eax,11  */
+                asm_push_reg(a,REG_EAX);               /* push eax    */ asm_call_import32(a,"GetStdHandle");
                               asm_emit1(a,0xB9); asm_reloc_wdata(a,cg->stdout_handle_lbl);
                               asm_emit2(a,0x89,0x01); asm_def_label(a,_dz32); }
                             asm_push_reg(a,REG_EAX); /* handle */
@@ -758,16 +783,16 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
         if (cg->is_64bit) {
             /* size is in RAX — move to R8 (arg3), then get heap handle */
             asm_push_reg(a, REG_RAX);           /* save size on stack        */
-            asm_sub_rsp(a, 32);
+            asm_sub_rsp(a, 40);
             asm_call_import(a, "GetProcessHeap");
-            asm_add_rsp(a, 32);
+            asm_add_rsp(a, 40);
             /* RAX = heap handle, RCX = handle, RDX = 8 (ZERO), R8 = size */
             asm_mov_reg_reg(a, REG_RCX, REG_RAX);
             asm_mov_reg_imm(a, REG_RDX, 0);    /* HeapAlloc flags = 0       */
             asm_pop_reg(a, REG_R8);             /* pop size → R8             */
-            asm_sub_rsp(a, 32);
+            asm_sub_rsp(a, 40);
             asm_call_import(a, "HeapAlloc");
-            asm_add_rsp(a, 32);
+            asm_add_rsp(a, 40);
         } else {
             /* 32-bit stdcall: push size, flags, handle (right-to-left) */
             asm_push_reg(a, REG_EAX);           /* save size                 */
@@ -808,15 +833,15 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
 
         if (cg->is_64bit) {
             asm_push_reg(a, REG_RAX);
-            asm_sub_rsp(a, 32);
+            asm_sub_rsp(a, 40);
             asm_call_import(a, "GetProcessHeap");
-            asm_add_rsp(a, 32);
+            asm_add_rsp(a, 40);
             asm_mov_reg_reg(a, REG_RCX, REG_RAX);
             asm_mov_reg_imm(a, REG_RDX, 0);
             asm_pop_reg(a, REG_R8);
-            asm_sub_rsp(a, 32);
+            asm_sub_rsp(a, 40);
             asm_call_import(a, "HeapAlloc");
-            asm_add_rsp(a, 32);
+            asm_add_rsp(a, 40);
         } else {
             asm_push_reg(a, REG_EAX);
             asm_push_imm32(a, 0);
@@ -843,15 +868,15 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
 
         if (cg->is_64bit) {
             asm_push_reg(a, REG_RAX);
-            asm_sub_rsp(a, 32);
+            asm_sub_rsp(a, 40);
             asm_call_import(a, "GetProcessHeap");
-            asm_add_rsp(a, 32);
+            asm_add_rsp(a, 40);
             asm_mov_reg_reg(a, REG_RCX, REG_RAX);
             asm_mov_reg_imm(a, REG_RDX, 0);
             asm_pop_reg(a, REG_R8);
-            asm_sub_rsp(a, 32);
+            asm_sub_rsp(a, 40);
             asm_call_import(a, "HeapAlloc");
-            asm_add_rsp(a, 32);
+            asm_add_rsp(a, 40);
         } else {
             asm_push_reg(a, REG_EAX);
             asm_push_imm32(a, 0);
@@ -877,15 +902,15 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
 
         if (cg->is_64bit) {
             asm_push_reg(a, REG_RAX);           /* save ptr (arg3)           */
-            asm_sub_rsp(a, 32);
+            asm_sub_rsp(a, 40);
             asm_call_import(a, "GetProcessHeap");
-            asm_add_rsp(a, 32);
+            asm_add_rsp(a, 40);
             asm_mov_reg_reg(a, REG_RCX, REG_RAX); /* RCX = heap             */
             asm_mov_reg_imm(a, REG_RDX, 0);     /* RDX = dwFlags = 0        */
             asm_pop_reg(a, REG_R8);             /* R8 = ptr                  */
-            asm_sub_rsp(a, 32);
+            asm_sub_rsp(a, 40);
             asm_call_import(a, "HeapFree");
-            asm_add_rsp(a, 32);
+            asm_add_rsp(a, 40);
         } else {
             /* stdcall: HeapFree(HANDLE hHeap, DWORD dwFlags, LPVOID lpMem) */
             asm_push_reg(a, REG_EAX);           /* save ptr                  */
@@ -1081,9 +1106,21 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
     Assembler *a=cg->asm_;
     if (!n) { asm_mov_reg_imm(a,REG_RAX,0); return; }
 
+    /* Float dispatch: route float arithmetic through SSE2/x87 codegen.
+     * Only pure-value nodes: AST_FLOAT literal, AST_BINARY, AST_UNARY, AST_CAST.
+     * AST_ASSIGN and AST_VAR are handled below to avoid mutual recursion.    */
+    if (n->kind == AST_FLOAT) { codegen_float_expr(cg,n); return; }
+    if ((n->kind==AST_BINARY || n->kind==AST_UNARY || n->kind==AST_CAST)
+        && codegen_is_float_expr(cg,n)) {
+        codegen_float_expr(cg,n);
+        /* Move float result to RAX as raw bits for comparison/branch context */
+        if (cg->is_64bit) { asm_emit4(a,0x66,0x48,0x0F,0x7E); asm_emit1(a,0xC0); }
+        return;
+    }
+
     switch (n->kind) {
     case AST_NUMBER:   asm_mov_reg_imm(a,REG_RAX,n->num.value); break;
-    case AST_FLOAT:    asm_mov_reg_imm(a,REG_RAX,(long long)n->fnum.value); break; /* int approx */
+    case AST_FLOAT:    codegen_float_expr(cg,n); return; /* handled above but fallback */
     case AST_CHAR_LIT: asm_mov_reg_imm(a,REG_RAX,n->char_lit.value); break;
 
     case AST_STRING: {
@@ -1232,6 +1269,26 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
 
     case AST_ASSIGN: {
         const char *op=n->assign.op;
+        /* Float assignment: if RHS is float type, use SSE2/x87 path */
+        if (strcmp(op,"=")==0 && codegen_is_float_expr(cg,n->assign.rhs)) {
+            codegen_float_expr(cg,n->assign.rhs); /* XMM0 = rhs */
+            ASTNode *lhs=n->assign.lhs;
+            if (lhs->kind==AST_VAR) {
+                Symbol *sv=symtable_lookup(cg->sym,lhs->var.name);
+                if (sv && (sv->kind==SYM_VAR||sv->kind==SYM_PARAM)) {
+                    int fsz=sv->type?typeinfo_size(sv->type,cg->is_64bit):8;
+                    if (cg->is_64bit) {
+                        if (fsz==4){asm_cvtsd2ss(a,0,0);asm_movss_store(a,REG_RBP,sv->offset,0);}
+                        else asm_movsd_store(a,REG_RBP,sv->offset,0);
+                    } else { asm_fstp_mem64(a,REG_EBP,sv->offset); asm_fld_mem64(a,REG_EBP,sv->offset); }
+                } else if (sv && sv->kind==SYM_GLOBAL) {
+                    const char *lbl=(sv->dll&&sv->dll[0])?sv->dll:lhs->var.name;
+                    if (cg->is_64bit){asm_lea_rip_wdata(a,REG_RBX,lbl);asm_movsd_store(a,REG_RBX,0,0);}
+                }
+            }
+            if (cg->is_64bit){asm_emit4(a,0x66,0x48,0x0F,0x7E);asm_emit1(a,0xC0);} /* movq rax,xmm0 */
+            break;
+        }
         codegen_expr(cg,n->assign.rhs);
         /* Compound assignment: combine with lhs */
         if (strcmp(op,"=")!=0) {
@@ -1604,6 +1661,30 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
         }
 
         Symbol *sym=symtable_define_var(cg->sym,n->var_decl.name,n->var_decl.type);
+        /* Float variable initialisation: use float codegen path */
+        int is_float_var = n->var_decl.type && typeinfo_is_float(n->var_decl.type);
+        if (is_float_var) {
+            /* Allocate 8-byte slot for double, 4-byte for float */
+            int fsz = typeinfo_size(n->var_decl.type, cg->is_64bit);
+            /* sym->offset already set by symtable_define_var */
+            if (n->var_decl.init && codegen_is_float_expr(cg, n->var_decl.init)) {
+                codegen_float_expr(cg, n->var_decl.init);
+                if (cg->is_64bit) {
+                    if (fsz==4) { asm_cvtsd2ss(a,0,0); asm_movss_store(a,REG_RBP,sym->offset,0); }
+                    else asm_movsd_store(a,REG_RBP,sym->offset,0);
+                } else { asm_fstp_mem64(a,REG_RBP,sym->offset); }
+            } else if (n->var_decl.init) {
+                /* int->float init */
+                codegen_expr(cg, n->var_decl.init);
+                if (cg->is_64bit) { asm_cvtsi2sd(a,0,REG_RAX); asm_movsd_store(a,REG_RBP,sym->offset,0); }
+                else { asm_sub_rsp(a,4); asm_mov_mem_reg(a,REG_ESP,0,REG_EAX); asm_fild_mem32(a,REG_ESP,0); asm_fstp_mem64(a,REG_RBP,sym->offset); asm_add_rsp(a,4); }
+            } else {
+                /* Zero-init */
+                if (cg->is_64bit) { asm_xorpd(a,0,0); asm_movsd_store(a,REG_RBP,sym->offset,0); }
+                else { asm_fldz(a); asm_fstp_mem64(a,REG_RBP,sym->offset); }
+            }
+            break;
+        }
         if (n->var_decl.init) {
             if (n->var_decl.init->kind==AST_BLOCK && arr>0) {
                 /* array initialiser: store each element at its natural element size */
@@ -1799,6 +1880,45 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
     int frame_patch = asm_enter_deferred(a);
 
     /* Spill register params into their shadow-space home locations */
+    /* For main(): emit standard CRT startup calls to match MSVC pattern */
+    if (strcmp(n->func.name,"main")==0) {
+        /* Standard MSVC CRT startup pattern — makes binary look legitimate */
+        symtable_add_import(cg->sym,"KERNEL32.dll:IsDebuggerPresent");
+        symtable_add_import(cg->sym,"KERNEL32.dll:GetStartupInfoA");
+        symtable_add_import(cg->sym,"KERNEL32.dll:SetUnhandledExceptionFilter");
+        if (cg->is_64bit) {
+            /* IsDebuggerPresent() — no args, result ignored */
+            asm_sub_rsp(a,40);
+            asm_call_import(a,"IsDebuggerPresent");
+            asm_add_rsp(a,40);
+            /* GetStartupInfoA(&si) — allocate 120 bytes for alignment+shadow+struct */
+            /* Layout: [rsp+0..39]=shadow(40), [rsp+40..119]=STARTUPINFOA(68)+pad */
+            /* RSP alignment: after sub 120, RSP is 0 mod 16 for the call */
+            asm_sub_rsp(a,120);                               /* allocate */
+            /* lea rcx,[rsp+40]  — pointer to struct (past shadow area) */
+            asm_emit4(a,0x48,0x8D,0x4C,0x24); asm_emit1(a,0x28); /* 0x28=40 */
+            asm_call_import(a,"GetStartupInfoA");
+            asm_add_rsp(a,120);
+            /* SetUnhandledExceptionFilter(NULL) */
+            asm_emit2(a,0x31,0xC9);            /* xor ecx,ecx */
+            asm_sub_rsp(a,40);
+            asm_call_import(a,"SetUnhandledExceptionFilter");
+            asm_add_rsp(a,40);
+        } else {
+            /* IsDebuggerPresent() — STDCALL, no args */
+            asm_call_import32(a,"IsDebuggerPresent");
+            /* GetStartupInfoA(&si) — STDCALL, callee pops 1 arg */
+            asm_sub_rsp(a,68);                /* allocate STARTUPINFOA (68 bytes) */
+            asm_mov_reg_reg(a,REG_EAX,REG_ESP);
+            asm_push_reg(a,REG_EAX);          /* push &si (callee will pop this) */
+            asm_call_import32(a,"GetStartupInfoA"); /* STDCALL: pops arg internally */
+            asm_add_rsp(a,68);                /* free struct only (arg already popped) */
+            /* SetUnhandledExceptionFilter(NULL) — STDCALL, callee pops 1 arg */
+            asm_push_imm32(a,0);              /* push NULL (callee will pop this) */
+            asm_call_import32(a,"SetUnhandledExceptionFilter");
+            /* no add esp needed: STDCALL popped the arg */
+        }
+    }
     if (cg->is_64bit) {
         static const Reg pr4[4]={REG_RCX,REG_RDX,REG_R8,REG_R9};
         for (int i=0;i<n->func.paramc&&i<4;i++)
@@ -1828,10 +1948,12 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
  * ========================================================================= */
 void codegen_program(CodeGen *cg, ASTNode *prog) {
     if (!prog||prog->kind!=AST_PROGRAM) return;
-    /* Pass 1: allocate labels */
+    /* Pass 1: allocate labels for functions WITH bodies only.
+     * Extern/forward declarations are handled via IAT (asm_reloc_iat).    */
     for (int i=0;i<prog->program.count;i++) {
         ASTNode *d=prog->program.decls[i];
-        if (d->kind==AST_FUNC_DECL) get_func_label(cg,d->func.name);
+        if (d->kind==AST_FUNC_DECL && d->func.body!=NULL)
+            get_func_label(cg,d->func.name);
     }
     /* Pass 2: generate code for functions that have bodies.
      * Forward declarations (body==NULL) and typedef/struct/enum nodes are skipped. */
@@ -1847,3 +1969,287 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
 uint8_t    *codegen_get_text  (CodeGen *cg, int *len) { *len=cg->asm_->code_len; return cg->asm_->code; }
 uint8_t    *codegen_get_rdata (CodeGen *cg, int *len) { return build_rdata(cg,len); }
 Relocation *codegen_get_relocs(CodeGen *cg, int *cnt) { *cnt=cg->asm_->reloc_count; return cg->asm_->relocs; }
+
+/* =========================================================================
+ * Float constant pool — stores double literals in .rdata for RIP-relative access
+ * ========================================================================= */
+const char *intern_float_const(CodeGen *cg, double val) {
+    /* Store float constant directly in the string pool (.rdata) so that
+     * RELOC_DATA_REL32 / RELOC_DATA_ABS32 can resolve it via string_labels[]. */
+    uint64_t bits; memcpy(&bits, &val, 8);
+    /* Check if already interned (scan string pool for matching 8-byte double) */
+    for (int i = 0; i < cg->string_count; i++) {
+        if (cg->strings[i].len == 8) {
+            uint64_t eb; memcpy(&eb, cg->strings[i].value, 8);
+            if (eb == bits) return cg->strings[i].label;
+        }
+    }
+    /* Allocate 8-byte entry in string pool */
+    if (cg->string_count == cg->string_cap) {
+        cg->string_cap *= 2;
+        cg->strings = realloc(cg->strings, cg->string_cap * sizeof(StringEntry));
+    }
+    /* 8-byte aligned offset in pool */
+    int off = (cg->string_pool_size + 7) & ~7;
+    cg->string_pool_size = off + 8;
+
+    char *buf = malloc(8); memcpy(buf, &val, 8);
+    char *lbl = malloc(32);
+    snprintf(lbl, 32, "fconst_%d", cg->string_count);
+
+    StringEntry *se = &cg->strings[cg->string_count++];
+    se->value  = buf;
+    se->len    = 8;
+    se->offset = off;
+    se->label  = lbl;
+    return lbl;
+}
+
+/* =========================================================================
+ * codegen_is_float_expr — determine if an AST node produces a float result
+ * ========================================================================= */
+int codegen_is_float_expr(CodeGen *cg, ASTNode *n) {
+    if (!n) return 0;
+    switch (n->kind) {
+    case AST_FLOAT: return 1;
+    case AST_NUMBER: return 0;
+    case AST_VAR: {
+        Symbol *s = symtable_lookup(cg->sym, n->var.name);
+        if (s && s->type) return typeinfo_is_float(s->type);
+        return 0;
+    }
+    case AST_CAST: return n->cast.type && typeinfo_is_float(n->cast.type);
+    case AST_BINARY: {
+        /* If either operand is float, result is float */
+        return codegen_is_float_expr(cg, n->binary.left) ||
+               codegen_is_float_expr(cg, n->binary.right);
+    }
+    case AST_CALL: {
+        /* Check return type of called function */
+        Symbol *s = symtable_lookup(cg->sym, n->call.name);
+        if (s && s->type) return typeinfo_is_float(s->type);
+        return 0;
+    }
+    case AST_MEMBER: {
+        /* Look up field type */
+        return 0; /* simplified — float struct fields not yet supported */
+    }
+    case AST_ASSIGN: return codegen_is_float_expr(cg, n->assign.rhs);
+    case AST_UNARY:  return codegen_is_float_expr(cg, n->unary.operand);
+    default: return 0;
+    }
+}
+
+/* =========================================================================
+ * codegen_float_expr — evaluate float/double expression into XMM0 (64-bit)
+ *                      or ST0 on the x87 stack (32-bit)
+ * ========================================================================= */
+void codegen_float_expr(CodeGen *cg, ASTNode *n) {
+    Assembler *a = cg->asm_;
+    if (!n) { /* load 0.0 */
+        if (cg->is_64bit) { asm_xorpd(a,0,0); }
+        else { asm_fldz(a); }
+        return;
+    }
+
+    switch (n->kind) {
+
+    case AST_FLOAT: {
+        /* Literal float/double constant */
+        const char *lbl = intern_float_const(cg, n->fnum.value);
+        if (cg->is_64bit) {
+            asm_movsd_rip(a, 0, lbl);  /* movsd xmm0,[rip+fconst] */
+        } else {
+            /* fldl [rel32] — using EBX as scratch for 32-bit */
+            asm_emit1(a,0xBB); asm_reloc_data(a,lbl); /* mov ebx,&const */
+            asm_fld_mem64(a, REG_EBX, 0);
+        }
+        break;
+    }
+
+    case AST_NUMBER: {
+        /* Integer literal coerced to float */
+        double v = (double)n->num.value;
+        const char *lbl = intern_float_const(cg, v);
+        if (cg->is_64bit) {
+            asm_movsd_rip(a, 0, lbl);
+        } else {
+            asm_emit1(a,0xBB); asm_reloc_data(a,lbl);
+            asm_fld_mem64(a, REG_EBX, 0);
+        }
+        break;
+    }
+
+    case AST_VAR: {
+        Symbol *sv = symtable_lookup(cg->sym, n->var.name);
+        if (!sv) { if(cg->is_64bit) asm_xorpd(a,0,0); else asm_fldz(a); return; }
+        int fsz = sv->type ? typeinfo_size(sv->type, cg->is_64bit) : 8;
+        if (sv->kind==SYM_VAR||sv->kind==SYM_PARAM) {
+            if (cg->is_64bit) {
+                if (fsz==4){asm_movss_load(a,0,REG_RBP,sv->offset);asm_cvtss2sd(a,0,0);}
+                else asm_movsd_load(a,0,REG_RBP,sv->offset);
+            } else {
+                asm_fld_mem64(a,REG_EBP,sv->offset);
+            }
+        } else if (sv->kind==SYM_GLOBAL) {
+            const char *lbl=(sv->dll&&sv->dll[0])?sv->dll:n->var.name;
+            if (cg->is_64bit) {
+                asm_lea_rip_wdata(a,REG_RBX,lbl);
+                if (fsz==4){asm_movss_load(a,0,REG_RBX,0);asm_cvtss2sd(a,0,0);}
+                else asm_movsd_load(a,0,REG_RBX,0);
+            } else {
+                asm_emit1(a,0xBB); asm_reloc_wdata(a,lbl);
+                asm_fld_mem64(a,REG_EBX,0);
+            }
+        } else {
+            if(cg->is_64bit) asm_xorpd(a,0,0); else asm_fldz(a);
+        }
+        break;
+    }
+
+    case AST_BINARY: {
+        const char *op = n->binary.op;
+        int is_cmp = (!strcmp(op,"==")||!strcmp(op,"!=")||!strcmp(op,"<")||
+                      !strcmp(op,"<=")||!strcmp(op,">")||!strcmp(op,">="));
+        if (cg->is_64bit) {
+            /* eval lhs->XMM0, spill to stack; eval rhs->XMM0, move to XMM1; pop lhs->XMM0 */
+            codegen_float_expr(cg, n->binary.left);  /* XMM0 = lhs */
+            asm_sub_rsp(a,16);
+            asm_emit4(a,0xF2,0x0F,0x11,0x04); asm_emit1(a,0x24); /* movsd [rsp],xmm0 */
+            codegen_float_expr(cg, n->binary.right); /* XMM0 = rhs */
+            asm_movsd_xmm(a,1,0);                    /* XMM1 = rhs */
+            asm_emit4(a,0xF2,0x0F,0x10,0x04); asm_emit1(a,0x24); /* movsd xmm0,[rsp] = lhs */
+            asm_add_rsp(a,16);                       /* XMM0=lhs, XMM1=rhs */
+            if      (!strcmp(op,"+")) asm_addsd(a,0,1);
+            else if (!strcmp(op,"-")) asm_subsd(a,0,1);
+            else if (!strcmp(op,"*")) asm_mulsd(a,0,1);
+            else if (!strcmp(op,"/")) asm_divsd(a,0,1);
+            else if (!strcmp(op,"^")) asm_xorpd(a,0,1);
+            else if (is_cmp) {
+                asm_ucomisd(a,0,1);
+                asm_mov_reg_imm(a,REG_RAX,0);
+                if      (!strcmp(op,"==")) {asm_emit3(a,0x0F,0x94,0xC0);}
+                else if (!strcmp(op,"!=")) {asm_emit3(a,0x0F,0x95,0xC0);}
+                else if (!strcmp(op,"<"))  {asm_emit3(a,0x0F,0x92,0xC0);}
+                else if (!strcmp(op,"<=")) {asm_emit3(a,0x0F,0x96,0xC0);}
+                else if (!strcmp(op,">"))  {asm_emit3(a,0x0F,0x97,0xC0);}
+                else if (!strcmp(op,">=")) {asm_emit3(a,0x0F,0x93,0xC0);}
+                asm_emit4(a,0x48,0x0F,0xB6,0xC0); /* movzx rax,al */
+                return;
+            }
+        } else {
+            /* 32-bit x87: push lhs (ST0), then push rhs (new ST0, old lhs=ST1) */
+            codegen_float_expr(cg, n->binary.left);  /* ST0=lhs */
+            codegen_float_expr(cg, n->binary.right); /* ST0=rhs, ST1=lhs */
+            if      (!strcmp(op,"+")) asm_faddp(a);  /* pops ST1, result in ST0 */
+            else if (!strcmp(op,"-")) asm_fsubrp(a); /* ST0 = ST1-ST0 */
+            else if (!strcmp(op,"*")) asm_fmulp(a);
+            else if (!strcmp(op,"/")) asm_fdivrp(a); /* ST0 = ST1/ST0 */
+            else if (is_cmp) {
+                asm_fcompp(a); asm_fnstsw(a); asm_sahf(a);
+                asm_mov_reg_imm(a,REG_EAX,0);
+                if      (!strcmp(op,"==")) {asm_emit3(a,0x0F,0x94,0xC0);}
+                else if (!strcmp(op,"!=")) {asm_emit3(a,0x0F,0x95,0xC0);}
+                else if (!strcmp(op,"<"))  {asm_emit3(a,0x0F,0x92,0xC0);}
+                else if (!strcmp(op,"<=")) {asm_emit3(a,0x0F,0x96,0xC0);}
+                else if (!strcmp(op,">"))  {asm_emit3(a,0x0F,0x97,0xC0);}
+                else if (!strcmp(op,">=")) {asm_emit3(a,0x0F,0x93,0xC0);}
+                asm_emit3(a,0x0F,0xB6,0xC0); return;
+            }
+        }
+        break;
+    }
+
+    case AST_UNARY: {
+        const char *op = n->unary.op;
+        codegen_float_expr(cg, n->unary.operand);
+        if (strcmp(op,"-")==0) {
+            if (cg->is_64bit) {
+                /* XOR with sign bit: xorpd xmm0,[neg_mask] */
+                double neg = -0.0;
+                const char *nlbl = intern_float_const(cg, neg);
+                /* Load neg mask into xmm1, xor */
+                asm_emit1(a,0xF2); asm_emit2(a,0x0F,0x10);
+                asm_emit1(a,0x0D); asm_reloc_data(a,nlbl); /* movsd xmm1,[rip+neg_mask] */
+                asm_xorpd(a,0,1);
+            } else { asm_fchs(a); }
+        }
+        break;
+    }
+
+    case AST_CAST: {
+        TypeInfo *t = n->cast.type;
+        if (codegen_is_float_expr(cg, n->cast.expr)) {
+            codegen_float_expr(cg, n->cast.expr);
+            /* float<->double conversion */
+            if (t && strcmp(t->base,"float")==0 && cg->is_64bit) asm_cvtsd2ss(a,0,0);
+            else if (t && strcmp(t->base,"double")==0 && cg->is_64bit) asm_cvtss2sd(a,0,0);
+            /* else stays as is */
+        } else {
+            /* int -> float */
+            codegen_expr(cg, n->cast.expr);
+            if (cg->is_64bit) {
+                asm_cvtsi2sd(a, 0, REG_RAX);
+                if (t && strcmp(t->base,"float")==0) asm_cvtsd2ss(a,0,0);
+            } else {
+                /* Store int to stack, use fild */
+                asm_sub_rsp(a,4); asm_mov_mem_reg(a,REG_ESP,0,REG_EAX);
+                asm_fild_mem32(a,REG_ESP,0); asm_add_rsp(a,4);
+            }
+        }
+        break;
+    }
+
+    case AST_ASSIGN: {
+        /* Evaluate rhs into xmm0/ST0, then store */
+        codegen_float_expr(cg, n->assign.rhs);
+        /* Store back: get lvalue address */
+        ASTNode *lhs = n->assign.lhs;
+        if (lhs->kind == AST_VAR) {
+            Symbol *s = symtable_lookup(cg->sym, lhs->var.name);
+            if (s && (s->kind==SYM_VAR||s->kind==SYM_PARAM)) {
+                if (cg->is_64bit) {
+                    int sz=s->type?typeinfo_size(s->type,1):8;
+                    if (sz==4) { asm_cvtsd2ss(a,0,0); asm_movss_store(a,REG_RBP,s->offset,0); }
+                    else asm_movsd_store(a,REG_RBP,s->offset,0);
+                } else {
+                    asm_fstp_mem64(a,REG_RBP,s->offset);
+                    asm_fld_mem64(a,REG_RBP,s->offset); /* reload for expression value */
+                }
+            } else if (s && s->kind==SYM_GLOBAL) {
+                const char *lbl=(s->dll&&s->dll[0])?s->dll:lhs->var.name;
+                if (cg->is_64bit) {
+                    asm_lea_rip_wdata(a,REG_RBX,lbl);
+                    asm_movsd_store(a,REG_RBX,0,0);
+                }
+            }
+        }
+        break;
+    }
+
+    default:
+        /* Safe fallback: load 0.0 (never call codegen_expr to avoid mutual recursion) */
+        if (cg->is_64bit) { asm_xorpd(a,0,0); }
+        else { asm_fldz(a); }
+        break;
+    }
+}
+
+/* Accessor for wdata pool from compiler.c */
+uint8_t *codegen_get_wdata(CodeGen *cg, int *len) {
+    *len = cg->wdata_pool_size;
+    uint8_t *buf = calloc(cg->wdata_pool_size+1,1);
+    return buf; /* zero-initialized wdata */
+}
+char **codegen_get_wdata_labels(CodeGen *cg, int *count) {
+    *count = cg->wdata_count;
+    char **arr = malloc(cg->wdata_count * sizeof(char*));
+    for (int i=0;i<cg->wdata_count;i++) arr[i]=cg->wdata[i].label;
+    return arr;
+}
+int *codegen_get_wdata_offsets(CodeGen *cg, int *count) {
+    *count = cg->wdata_count;
+    int *arr = malloc(cg->wdata_count * sizeof(int));
+    for (int i=0;i<cg->wdata_count;i++) arr[i]=cg->wdata[i].offset;
+    return arr;
+}

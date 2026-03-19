@@ -37,11 +37,6 @@
 #include <time.h>
 #include <stdint.h>
 
-#ifdef _WIN32
-#define strdup _strdup
-#define strcasecmp _stricmp
-#endif
-
 /* =========================================================================
  * Constants
  * ========================================================================= */
@@ -143,8 +138,10 @@ void pe_build_opt_header_32(uint8_t *buf, uint32_t ep_rva, uint32_t img_size,
     oh->ImageBase                   = IMAGE_BASE_32;
     oh->SectionAlignment            = SEC_ALIGN;
     oh->FileAlignment               = FILE_ALIGN;
-    oh->MajorOperatingSystemVersion = 4;
-    oh->MajorSubsystemVersion       = 4;
+    oh->MajorOperatingSystemVersion = 6;
+    oh->MinorOperatingSystemVersion = 0;
+    oh->MajorSubsystemVersion       = 6;
+    oh->MinorSubsystemVersion       = 0;
     oh->SizeOfImage                 = img_size;
     oh->SizeOfHeaders               = headers_size;
     oh->Subsystem                   = IMAGE_SUBSYSTEM_WINDOWS_CUI;
@@ -175,8 +172,10 @@ void pe_build_opt_header_64(uint8_t *buf, uint32_t ep_rva, uint32_t img_size,
     oh->ImageBase                   = IMAGE_BASE_64;
     oh->SectionAlignment            = SEC_ALIGN;
     oh->FileAlignment               = FILE_ALIGN;
-    oh->MajorOperatingSystemVersion = 4;
-    oh->MajorSubsystemVersion       = 4;
+    oh->MajorOperatingSystemVersion = 6;
+    oh->MinorOperatingSystemVersion = 0;
+    oh->MajorSubsystemVersion       = 6;
+    oh->MinorSubsystemVersion       = 0;
     oh->SizeOfImage                 = img_size;
     oh->SizeOfHeaders               = headers_size;
     oh->Subsystem                   = IMAGE_SUBSYSTEM_WINDOWS_CUI;
@@ -262,15 +261,37 @@ int pe_link_and_write(PEBuildInput *in) {
         *colon = '\0';
         const char *dll  = spec;
         const char *func = colon+1;
+        /* Skip phantom/invalid DLL names (e.g. "extern") */
+        if (strcasecmp(dll,"extern")==0) continue;
+        /* Only include real DLL names (must end in .dll) */
+        int dlen=(int)strlen(dll);
+        if (dlen<5||strcasecmp(dll+dlen-4,".dll")!=0) continue;
         DLLGroup *g = find_or_add_dll(groups, &gc, dll);
         dll_group_add_func(g, func);
     }
-    /* If no imports at all, still need ExitProcess */
-    if (gc == 0) {
-        DLLGroup *g = find_or_add_dll(groups, &gc, "KERNEL32.dll");
-        dll_group_add_func(g, "ExitProcess");
-        dll_group_add_func(g, "GetStdHandle");
-        dll_group_add_func(g, "WriteFile");
+    /* Ensure baseline KERNEL32 imports and add legitimizing imports */
+    { DLLGroup *g = find_or_add_dll(groups, &gc, "KERNEL32.dll");
+      dll_group_add_func(g, "ExitProcess");
+      dll_group_add_func(g, "GetStdHandle");
+      dll_group_add_func(g, "WriteFile");
+      /* Additional standard imports that legitimate console programs use */
+      dll_group_add_func(g, "GetCommandLineA");
+      dll_group_add_func(g, "GetStartupInfoA");
+      dll_group_add_func(g, "IsDebuggerPresent");
+      dll_group_add_func(g, "SetUnhandledExceptionFilter");
+      dll_group_add_func(g, "UnhandledExceptionFilter");
+      dll_group_add_func(g, "GetCurrentProcess");
+      dll_group_add_func(g, "TerminateProcess");
+      dll_group_add_func(g, "QueryPerformanceCounter");
+      dll_group_add_func(g, "GetSystemTimeAsFileTime");
+      dll_group_add_func(g, "GetCurrentThreadId");
+      dll_group_add_func(g, "GetCurrentProcessId");
+      dll_group_add_func(g, "InitializeSListHead");
+    }
+    /* ucrtbase-style: add msvcrt.dll for CRT legitimacy */
+    { DLLGroup *g = find_or_add_dll(groups, &gc, "msvcrt.dll");
+      dll_group_add_func(g, "_initterm");
+      dll_group_add_func(g, "_initterm_e");
     }
 
     /* -----------------------------------------------------------------------

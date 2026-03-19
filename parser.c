@@ -4,15 +4,14 @@
 #include <string.h>
 #include <stdarg.h>
 
-#ifdef _WIN32
-#define strdup _strdup
-#endif
-
 /* =========================================================================
  * Helpers
  * ========================================================================= */
 static Token  cur(Parser *p)              { return lexer_peek(p->lex); }
-static Token  adv(Parser *p)              { return lexer_next(p->lex); }
+static Token  adv(Parser *p) {
+    Token t = lexer_next(p->lex);
+    return t;
+}
 static int    chk(Parser *p, TokenKind k) { return lexer_check(p->lex, k); }
 static Token  eat(Parser *p, TokenKind k) { return lexer_expect(p->lex, k); }
 
@@ -624,8 +623,11 @@ ASTNode *ParseStatement(Parser *p) {
         return ast_goto(lbl, line);
     }
 
-    /* Label: ident ':' statement */
+    /* Label: ident ':' statement  OR  typedef-name variable declaration */
     if (chk(p,TOK_IDENT)) {
+        /* If this ident is a typedef name, treat as variable declaration */
+        { Symbol *ts = symtable_lookup(p->sym, tok_ident(cur(p)));
+          if (ts && ts->kind==SYM_TYPEDEF) return ParseVariable(p); }
         /* peek one ahead to see if it's a label */
         Token saved = cur(p);
         char nm[256]; strncpy(nm,tok_ident(saved),sizeof nm-1);
@@ -707,6 +709,10 @@ ASTNode *ParseVariable(Parser *p) {
     else if (chk(p,TOK_AUTO))    { strncpy(storage,"auto",sizeof storage-1);     adv(p); }
     else if (chk(p,TOK_REGISTER)){ strncpy(storage,"register",sizeof storage-1); adv(p); }
     else if (chk(p,TOK_CONST))   { strncpy(storage,"const",sizeof storage-1);    adv(p); }
+    /* consume inline/volatile silently */
+    while (chk(p,TOK_INLINE)||chk(p,TOK_VOLATILE)) adv(p);
+    if (chk(p,TOK_STATIC)&&!storage[0]){strncpy(storage,"static",sizeof storage-1);adv(p);}
+    while (chk(p,TOK_INLINE)||chk(p,TOK_VOLATILE)) adv(p);
 
     TypeInfo *type = ParseTypeSpecifier(p);
     if (!type) { parse_error(p,"expected type specifier"); return ast_number(0,line); }
@@ -835,6 +841,14 @@ ASTNode *ParseFunction(Parser *p, const char *storage, TypeInfo *ret, const char
         body = ParseBlock(p);
     } else {
         eat(p,TOK_SEMICOLON); /* forward declaration */
+        /* extern/forward declaration: register as import so calls use IAT */
+        if (storage && strcmp(storage,"extern")==0) {
+            /* Only register if not already a known Win API import */
+            Symbol *existing = symtable_lookup(p->sym, name);
+            if (!existing || existing->kind != SYM_IMPORT) {
+                symtable_define_import(p->sym, name, "extern");
+            }
+        }
     }
     symtable_pop_scope(p->sym);
     return ast_func_decl(storage, ret, name, params, paramc, variadic, body, line);
@@ -904,6 +918,11 @@ ASTNode *parse_program(Parser *p) {
         char storage[32]="";
         if (chk(p,TOK_STATIC))  { strncpy(storage,"static",sizeof storage-1);  adv(p); }
         else if (chk(p,TOK_EXTERN)) { strncpy(storage,"extern",sizeof storage-1); adv(p); }
+        /* consume inline/const/volatile qualifiers silently */
+        while (chk(p,TOK_INLINE)||chk(p,TOK_CONST)||chk(p,TOK_VOLATILE)) adv(p);
+        /* also handle 'static inline' or 'inline static' */
+        if (chk(p,TOK_STATIC)&&!storage[0]) { strncpy(storage,"static",sizeof storage-1); adv(p); }
+        while (chk(p,TOK_INLINE)||chk(p,TOK_CONST)||chk(p,TOK_VOLATILE)) adv(p);
 
         if (!is_type_start(p)) {
             parse_error(p,"expected declaration at top level, got '%s'",
