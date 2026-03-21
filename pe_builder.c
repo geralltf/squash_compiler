@@ -278,13 +278,9 @@ int pe_link_and_write(PEBuildInput *in) {
       dll_group_add_func(g, "GetCommandLineA");
       dll_group_add_func(g, "GetStartupInfoA");
       dll_group_add_func(g, "IsDebuggerPresent");
-      dll_group_add_func(g, "SetUnhandledExceptionFilter");
-      dll_group_add_func(g, "UnhandledExceptionFilter");
-      dll_group_add_func(g, "GetCurrentProcess");
-      dll_group_add_func(g, "TerminateProcess");
-      dll_group_add_func(g, "QueryPerformanceCounter");
-      dll_group_add_func(g, "GetSystemTimeAsFileTime");
       dll_group_add_func(g, "GetCurrentThreadId");
+      dll_group_add_func(g, "GetSystemTimeAsFileTime");
+      dll_group_add_func(g, "QueryPerformanceCounter");
       dll_group_add_func(g, "GetCurrentProcessId");
       dll_group_add_func(g, "InitializeSListHead");
     }

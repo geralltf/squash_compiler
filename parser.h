@@ -9,6 +9,7 @@ typedef struct {
     SymTable *sym;
     const char *filename;
     int       error_count;
+    int       anon_counter;  /* unique counter for anonymous struct/union names */
 } Parser;
 
 void     parser_init   (Parser *p, Lexer *l, SymTable *sym, const char *filename);

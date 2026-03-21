@@ -207,6 +207,8 @@ TypeInfo *typeinfo_ptr  (TypeInfo *base);
 void      typeinfo_free (TypeInfo *t);
 char     *typeinfo_str  (const TypeInfo *t);
 int       typeinfo_size (const TypeInfo *t, int is_64bit);
+int       typeinfo_is_float(const TypeInfo *t);
+int       typeinfo_is_unsigned(const TypeInfo *t);
 
 void ast_print(const ASTNode *n, int indent);
 void ast_free (ASTNode *n);

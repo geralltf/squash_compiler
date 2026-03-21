@@ -41,7 +41,7 @@ static char *tok_ident(Token t) {
  * parser_init
  * ========================================================================= */
 void parser_init(Parser *p, Lexer *l, SymTable *sym, const char *filename) {
-    p->lex=l; p->sym=sym; p->filename=filename; p->error_count=0;
+    p->lex=l; p->sym=sym; p->filename=filename; p->error_count=0; p->anon_counter=0;
 }
 
 /* =========================================================================
@@ -115,8 +115,15 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
                 if (is_union) sz = fs>sz?fs:sz;
                 else sz+=fs;
             }
+            if (!has_name) {
+                /* Generate unique name for anonymous struct/union so it can be found
+                 * by field_byte_offset after typedef resolution. */
+                snprintf(sname, sizeof sname, "$anon%d", p->anon_counter++);
+                has_name = 1;
+                snprintf(key, sizeof key, "%s %s", is_union?"union":"struct", sname);
+            }
             if (has_name) symtable_define_struct(p->sym, sname, sd, sz);
-            ti->base = strdup(sname[0] ? key : (is_union?"union anon":"struct anon"));
+            ti->base = strdup(key);
         } else {
             char key[280]; snprintf(key,sizeof key,"%s %s",is_union?"union":"struct",sname);
             ti->base = strdup(key);
@@ -816,6 +823,11 @@ ASTNode *ParseFunction(Parser *p, const char *storage, TypeInfo *ret, const char
             if (chk(p,TOK_ELLIPSIS)) { variadic=1; adv(p); break; }
             if (!is_type_start(p)) { parse_error(p,"expected parameter type"); break; }
             TypeInfo *pt = ParseTypeSpecifier(p);
+            /* "void f(void)" — single void param with no name = zero params in C */
+            if (pt->base && strcmp(pt->base,"void")==0 && pt->pointer_depth==0
+                && !chk(p,TOK_IDENT) && !chk(p,TOK_STAR) && chk(p,TOK_RPAREN)) {
+                break; /* treat as empty param list */
+            }
             /* check for function pointer param: type (*name)(params) */
             while (chk(p,TOK_STAR)) { adv(p); pt->pointer_depth++; }
             char pname[256]="";
