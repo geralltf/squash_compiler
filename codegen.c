@@ -15,18 +15,61 @@ static int field_byte_offset(SymTable *sym, ASTNode *obj_node, const char *field
      * and get the type name from its TypeInfo or from the struct_decl.     */
     const char *type_name = NULL;
 
-    /* Walk up: obj_node is the struct variable.
-     * Its symbol gives us the TypeInfo whose name is "struct Foo" or "Foo". */
+    /* Walk up: obj_node is the struct variable or nested member.
+     * Its symbol/type gives us the TypeInfo whose name is "struct Foo" or "Foo". */
     if (obj_node && obj_node->kind == AST_VAR) {
         Symbol *vs = symtable_lookup(sym, obj_node->var.name);
         if (vs && vs->type) {
-            /* type->name might be "Point", "struct Point", etc. */
             const char *tn = vs->type->base;
             if (tn) {
-                /* Strip leading "struct " or "union " if present */
                 if (strncmp(tn,"struct ",7)==0) tn+=7;
                 else if (strncmp(tn,"union ",6)==0)  tn+=6;
                 type_name = tn;
+            }
+        }
+    } else if (obj_node && obj_node->kind == AST_MEMBER) {
+        /* Nested member like o.a in o.a.pad — find the type of field 'a' in its parent struct */
+        /* Recursively find parent struct type, then look up the field type */
+        ASTNode *parent = obj_node->member.obj;
+        const char *parent_type = NULL;
+        if (parent && parent->kind == AST_VAR) {
+            Symbol *pv = symtable_lookup(sym, parent->var.name);
+            if (pv && pv->type) parent_type = pv->type->base;
+        }
+        if (parent_type) {
+            const char *bare = parent_type;
+            if (strncmp(bare,"struct ",7)==0) bare+=7;
+            else if (strncmp(bare,"union ",6)==0) bare+=6;
+            char pkey[256]; snprintf(pkey,sizeof pkey,"struct %s",bare);
+            Symbol *pss = symtable_lookup(sym, pkey);
+            if (!pss || !pss->struct_node) {
+                /* try typedef resolution */
+                Symbol *tds = symtable_lookup(sym, parent_type);
+                if (tds && tds->kind == SYM_TYPEDEF && tds->type && tds->type->base) {
+                    const char *tb=tds->type->base;
+                    if (strncmp(tb,"struct ",7)==0) tb+=7;
+                    else if (strncmp(tb,"union ",6)==0) tb+=6;
+                    snprintf(pkey,sizeof pkey,"struct %s",tb);
+                    pss = symtable_lookup(sym, pkey);
+                }
+            }
+            if (pss && pss->struct_node) {
+                /* Find field obj_node->member.field in parent struct to get its type */
+                const char *fname = obj_node->member.field;
+                ASTNode *psd = pss->struct_node;
+                for (int fi=0; fi<psd->struct_decl.nfields; fi++) {
+                    ASTNode *ff = psd->struct_decl.fields[fi];
+                    if (ff && ff->kind==AST_FIELD && ff->field.name &&
+                        strcmp(ff->field.name, fname)==0 && ff->field.type) {
+                        const char *fbase = ff->field.type->base;
+                        if (fbase) {
+                            if (strncmp(fbase,"struct ",7)==0) fbase+=7;
+                            else if (strncmp(fbase,"union ",6)==0) fbase+=6;
+                            type_name = fbase;
+                        }
+                        break;
+                    }
+                }
             }
         }
     }
@@ -2048,12 +2091,23 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             if ((frame&8)==0) frame+=8;  /* ensure frame%16==8 so RSP is 0-mod-16 at CALL */
             asm_sub_rsp(a,frame);
             for (int i=0;i<argc;i++) {
-                codegen_expr(cg,n->call.args[i]);
-                if      (i==0) asm_mov_reg_reg(a,REG_RCX,REG_RAX);
-                else if (i==1) asm_mov_reg_reg(a,REG_RDX,REG_RAX);
-                else if (i==2) asm_mov_reg_reg(a,REG_R8, REG_RAX);
-                else if (i==3) asm_mov_reg_reg(a,REG_R9, REG_RAX);
-                else           asm_mov_mem_reg(a,REG_RSP,32+(i-4)*8,REG_RAX);
+                int arg_is_float = codegen_is_float_expr(cg, n->call.args[i]);
+                if (arg_is_float && i < 4) {
+                    /* Float arg: evaluate into XMMi (XMM0 for arg0, etc.) */
+                    codegen_float_expr(cg, n->call.args[i]); /* -> XMM0 */
+                    if (i==1) asm_movsd_xmm(a,1,0); /* movsd xmm1,xmm0 */
+                    else if (i==2) asm_movsd_xmm(a,2,0);
+                    else if (i==3) asm_movsd_xmm(a,3,0);
+                    /* Also move bits to shadow int register for variadic compat */
+                    /* (not strictly needed for non-variadic, skip for now) */
+                } else {
+                    codegen_expr(cg,n->call.args[i]);
+                    if      (i==0) asm_mov_reg_reg(a,REG_RCX,REG_RAX);
+                    else if (i==1) asm_mov_reg_reg(a,REG_RDX,REG_RAX);
+                    else if (i==2) asm_mov_reg_reg(a,REG_R8, REG_RAX);
+                    else if (i==3) asm_mov_reg_reg(a,REG_R9, REG_RAX);
+                    else           asm_mov_mem_reg(a,REG_RSP,32+(i-4)*8,REG_RAX);
+                }
             }
             if (sym && sym->kind==SYM_IMPORT) {
                 char key[512]; snprintf(key,sizeof key,"%s:%s",sym->dll,name);
@@ -2465,8 +2519,16 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
     /* Spill register params FIRST — before CRT startup calls which clobber registers */
     if (cg->is_64bit) {
         static const Reg pr4_spill[4]={REG_RCX,REG_RDX,REG_R8,REG_R9};
-        for (int i=0;i<n->func.paramc&&i<4;i++)
-            asm_mov_mem_reg(a,REG_RBP,16+i*8,pr4_spill[i]);
+        for (int i=0;i<n->func.paramc&&i<4;i++) {
+            ASTNode *pr=n->func.params[i];
+            int is_float_param = pr->param.type && typeinfo_is_float(pr->param.type);
+            if (is_float_param) {
+                /* Float param arrives in XMMi — spill with movsd [rbp+16+i*8],xmmi */
+                asm_movsd_store(a, REG_RBP, 16+i*8, i); /* movsd [rbp+slot],xmmi */
+            } else {
+                asm_mov_mem_reg(a,REG_RBP,16+i*8,pr4_spill[i]);
+            }
+        }
     }
     /* For main(): emit standard CRT startup calls to match MSVC pattern */
     if (strcmp(n->func.name,"main")==0) {
