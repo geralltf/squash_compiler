@@ -103,12 +103,22 @@ static int field_byte_offset(SymTable *sym, ASTNode *obj_node, const char *field
     int is_union = sd->struct_decl.is_union;
 
     /* Walk fields; compute correct size for each field type. */
+    for (int i=0;i<sd->struct_decl.nfields;i++) { ASTNode *__f2=sd->struct_decl.fields[i];
+ }
     int offset = 0;
     for (int i = 0; i < sd->struct_decl.nfields; i++) {
         ASTNode *f = sd->struct_decl.fields[i];
         if (!f || f->kind != AST_FIELD) continue;
-        if (f->field.name && strcmp(f->field.name, field_name)==0)
-            return is_union ? 0 : offset;
+        if (f->field.name && strcmp(f->field.name, field_name)==0) {
+            if (is_union) return 0;
+            /* Apply the target field's own alignment before returning */
+            int tfsz = f->field.type ? typeinfo_size(f->field.type, sym->is_64bit) : 4;
+            if (tfsz < 1) tfsz = 4;
+            if (f->field.array_size > 0) tfsz *= f->field.array_size;
+            int talign = tfsz < 8 ? tfsz : 8;
+            if (talign > 1) offset = (offset + talign-1) & ~(talign-1);
+            return offset;
+        }
         if (!is_union) {
             int fsz = 4; /* default: int-sized */
             if (f->field.type) {
@@ -200,7 +210,6 @@ static int elem_size_of(CodeGen *cg, ASTNode *arr_expr) {
     }
     return 4;
 }
-
 
 /* =========================================================================
  * Internal Win32 function shims — malloc/free/memcpy etc backed by
@@ -1917,9 +1926,81 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             /* Determine store width from LHS element size.
              * Array subscripts of pointer type need 64-bit store in 64-bit mode.
              * Struct member fields and plain int arrays use 32-bit store.         */
+            /* Determine store width from LHS type, not RHS guesswork.
+             * For array subscripts use elem_size_of; for struct members
+             * look up the actual field TypeInfo; for pointer vars use 8. */
             int store_sz = 4;
-            if (cg->is_64bit && n->assign.lhs->kind == AST_INDEX)
-                store_sz = elem_size_of(cg, n->assign.lhs->index.array);
+            if (cg->is_64bit) {
+                ASTNode *lhs = n->assign.lhs;
+                if (lhs->kind == AST_INDEX) {
+                    store_sz = elem_size_of(cg, lhs->index.array);
+                } else if (lhs->kind == AST_MEMBER) {
+                    /* Walk to the containing struct and get the field's TypeInfo */
+                    ASTNode *obj = lhs->member.obj;
+                    const char *fname = lhs->member.field;
+                    const char *stype = NULL;
+                    if (obj && obj->kind == AST_VAR) {
+                        Symbol *sv = symtable_lookup(cg->sym, obj->var.name);
+                        if (sv && sv->type) stype = sv->type->base;
+                    } else if (obj && obj->kind == AST_DEREF) {
+                        /* ptr->field: find type of pointer operand */
+                        ASTNode *op = obj->deref.operand;
+                        if (op && op->kind == AST_VAR) {
+                            Symbol *sv = symtable_lookup(cg->sym, op->var.name);
+                            if (sv && sv->type && sv->type->pointer_depth > 0) {
+                                /* strip one pointer level to get struct type */
+                                stype = sv->type->base;
+                            }
+                        }
+                    }
+                    if (stype) {
+                        const char *bare = stype;
+                        if (strncmp(bare,"struct ",7)==0) bare+=7;
+                        else if (strncmp(bare,"union ",6)==0) bare+=6;
+                        char sk[256]; snprintf(sk,sizeof sk,"struct %s",bare);
+                        Symbol *ss = symtable_lookup(cg->sym, sk);
+                        if (!ss) {
+                            /* try typedef resolution */
+                            Symbol *td = symtable_lookup(cg->sym, stype);
+                            if (td && td->kind==SYM_TYPEDEF && td->type) {
+                                bare = td->type->base;
+                                if (strncmp(bare,"struct ",7)==0) bare+=7;
+                                else if (strncmp(bare,"union ",6)==0) bare+=6;
+                                snprintf(sk,sizeof sk,"struct %s",bare);
+                                ss = symtable_lookup(cg->sym, sk);
+                            }
+                        }
+                        if (ss && ss->struct_node) {
+                            for (int _i=0; _i<ss->struct_node->struct_decl.nfields; _i++) {
+                                ASTNode *ff = ss->struct_node->struct_decl.fields[_i];
+                                if (ff && ff->kind==AST_FIELD && ff->field.name &&
+                                    strcmp(ff->field.name, fname)==0 && ff->field.type) {
+                                    store_sz = typeinfo_size(ff->field.type, 1);
+                                    if (ff->field.type->pointer_depth > 0) store_sz = 8;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } else if (lhs->kind == AST_VAR) {
+                    Symbol *sv = symtable_lookup(cg->sym, lhs->var.name);
+                    if (sv && sv->type && sv->type->pointer_depth > 0) store_sz = 8;
+                } else if (lhs->kind == AST_DEREF) {
+                    /* *ptr = val — width from ptr's base type */
+                    ASTNode *op = lhs->deref.operand;
+                    if (op && op->kind == AST_VAR) {
+                        Symbol *sv = symtable_lookup(cg->sym, op->var.name);
+                        if (sv && sv->type && sv->type->pointer_depth > 1) store_sz = 8;
+                        else if (sv && sv->type && sv->type->pointer_depth==1) {
+                            /* *charptr = val — 1 byte */
+                            const char *b2=sv->type->base;
+                            if (strncmp(b2,"unsigned ",9)==0) b2+=9;
+                            if (strcmp(b2,"char")==0||strcmp(b2,"int8_t")==0||strcmp(b2,"uint8_t")==0)
+                                store_sz=1;
+                        }
+                    }
+                }
+            }
             if (store_sz == 8 && cg->is_64bit) {
                 /* mov [rax],rbx — 64-bit store for pointer-sized elements */
                 asm_emit3(a,0x48,0x89,0x18);
