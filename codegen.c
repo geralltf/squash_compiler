@@ -927,7 +927,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             asm_call_import(a, "GetProcessHeap");
             asm_add_rsp(a, 40);
             asm_mov_reg_reg(a, REG_RCX, REG_RAX);
-            asm_mov_reg_imm(a, REG_RDX, 0);
+            asm_mov_reg_imm(a, REG_RDX, 8); /* HEAP_ZERO_MEMORY */
             asm_pop_reg(a, REG_R8);
             asm_sub_rsp(a, 40);
             asm_call_import(a, "HeapAlloc");
@@ -939,7 +939,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             asm_pop_reg(a, REG_EBX);
             asm_pop_reg(a, REG_ECX);
             asm_push_reg(a, REG_ECX);
-            asm_push_imm32(a, 0);
+            asm_push_imm32(a, 8); /* HEAP_ZERO_MEMORY */
             asm_push_reg(a, REG_EAX);
             asm_call_import32(a, "HeapAlloc");
         }
@@ -2709,7 +2709,12 @@ int codegen_is_float_expr(CodeGen *cg, ASTNode *n) {
     }
     case AST_CAST: return n->cast.type && is_float_type(cg, n->cast.type);
     case AST_BINARY: {
-        /* If either operand is float, result is float */
+        const char *op = n->binary.op;
+        /* Comparison ops always return int (0/1), even if operands are float */
+        int is_cmp = (!strcmp(op,"==")||!strcmp(op,"!=")||!strcmp(op,"<")||
+                     !strcmp(op,"<=")||!strcmp(op,">")||!strcmp(op,">="));
+        if (is_cmp) return 0;
+        /* For arithmetic ops: if either operand is float, result is float */
         return codegen_is_float_expr(cg, n->binary.left) ||
                codegen_is_float_expr(cg, n->binary.right);
     }
