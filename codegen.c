@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 /* =========================================================================
  * field_byte_offset — walk struct/union field list and return byte offset
  * For unions every field is at offset 0.

@@ -5,6 +5,29 @@
 #include <ctype.h>
 #include <errno.h>
 
+#ifdef _WIN32
+#define strdup _strdup
+#define strtok_r strtok_s
+#endif
+
+
+size_t my_strnlen(const char* src, size_t n) {
+    size_t len = 0;
+    while (len < n && src[len])
+        len++;
+    return len;
+}
+
+char* my_strndup(const char* s, size_t n) {
+    size_t len = my_strnlen(s, n);
+    char* p = malloc(len + 1);
+    if (p) {
+        memcpy(p, s, len);
+        p[len] = '\0';
+    }
+    return p;
+}
+
 /* =========================================================================
  * Error reporting helper
  * ========================================================================= */
@@ -426,7 +449,7 @@ static void pp_macro_define(PPState *st, const char *name, int nlen,
         return;
     }
     if (st->nmc >= PP_MAX_MACROS) return;
-    st->macros[st->nmc].name  = strndup(name, nlen);
+    st->macros[st->nmc].name  = my_strndup(name, nlen);
     st->macros[st->nmc].value = strdup(value);
     st->nmc++;
 }
