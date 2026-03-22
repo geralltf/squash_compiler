@@ -220,6 +220,7 @@ static const char *INTERNAL_SHIMS[] = {
     "memcpy","memset","memcmp","memmove",
     "strlen","strcpy","strncpy","strcmp",
     "strncmp","strcat","strncat","strchr","strstr",
+    "abs","labs",
     "atoi","atol","atof",
     "sprintf","printf","puts","putchar","abort",
     NULL
@@ -1445,7 +1446,28 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
         codegen_expr(cg,args[0]); return;
     }
 
-    /* ---- atoi/atol(s) -> int ---- */
+    /* ---- abs(x) / labs(x) -> absolute value ---- */
+    if ((strcmp(name,"abs")==0 || strcmp(name,"labs")==0) && argc>=1) {
+        codegen_expr(cg,args[0]);  /* result in RAX/EAX */
+        if (cg->is_64bit) {
+            /* 64-bit: test rax,rax; jns skip; neg rax; skip: */
+            int skip=asm_new_label(a,"abs_skip");
+            asm_test_reg_reg(a,REG_RAX,REG_RAX);
+            asm_jcc_label(a,CC_GE,skip);
+            asm_emit3(a,0x48,0xF7,0xD8); /* neg rax */
+            asm_def_label(a,skip);
+        } else {
+            /* 32-bit: test eax,eax; jns skip; neg eax; skip: */
+            int skip=asm_new_label(a,"abs_skip");
+            asm_test_reg_reg(a,REG_EAX,REG_EAX);
+            asm_jcc_label(a,CC_GE,skip);
+            asm_emit2(a,0xF7,0xD8); /* neg eax */
+            asm_def_label(a,skip);
+        }
+        return;
+    }
+
+        /* ---- atoi/atol(s) -> int ---- */
     if ((strcmp(name,"atoi")==0||strcmp(name,"atol")==0) && argc>=1) {
         if (cg->is_64bit) {
             codegen_expr(cg,args[0]); asm_mov_reg_reg(a,REG_RSI,REG_RAX);
@@ -2364,28 +2386,38 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             int frame=32+extra;
             if ((frame&8)==0) frame+=8;  /* ensure frame%16==8 so RSP is 0-mod-16 at CALL */
             asm_sub_rsp(a,frame);
-            /* Process args in reverse order so that float arg evaluation
-             * (which produces result in XMM0) doesn't overwrite earlier float args.
-             * Stack args (i>=4) are handled separately in forward order. */
-            for (int i=argc-1;i>=0;i--) {
-                int arg_is_float = codegen_is_float_expr(cg, n->call.args[i]);
-                if (arg_is_float && i < 4) {
-                    /* Float arg: evaluate into XMM0 then move to XMMi */
-                    codegen_float_expr(cg, n->call.args[i]); /* -> XMM0 */
-                    if      (i==1) asm_movsd_xmm(a,1,0);
-                    else if (i==2) asm_movsd_xmm(a,2,0);
-                    else if (i==3) asm_movsd_xmm(a,3,0);
-                    /* i==0: already in XMM0 */
-                } else if (i < 4) {
-                    codegen_expr(cg,n->call.args[i]);
-                    if      (i==0) asm_mov_reg_reg(a,REG_RCX,REG_RAX);
-                    else if (i==1) asm_mov_reg_reg(a,REG_RDX,REG_RAX);
-                    else if (i==2) asm_mov_reg_reg(a,REG_R8, REG_RAX);
-                    else if (i==3) asm_mov_reg_reg(a,REG_R9, REG_RAX);
-                } else {
-                    codegen_expr(cg,n->call.args[i]);
-                    asm_mov_mem_reg(a,REG_RSP,32+(i-4)*8,REG_RAX);
+            /* Evaluate all args to temporary stack slots (forward order),
+             * then load into registers. This avoids clobbering issues where
+             * a later arg's evaluation (e.g. a function call) overwrites
+             * registers already set for an earlier arg.
+             * Layout in shadow space + extra: [rsp+0]=arg0, [rsp+8]=arg1, ...
+             * We use [rsp+32..] for args >=4 (normal stack), and
+             * [rsp+8..31] for args 0..3 temps (within shadow space). */
+            {
+                /* Pass 1: evaluate each arg into its shadow slot or stack slot */
+                for (int i=0;i<argc;i++) {
+                    int arg_is_float = codegen_is_float_expr(cg, n->call.args[i]);
+                    if (arg_is_float) {
+                        codegen_float_expr(cg, n->call.args[i]); /* -> XMM0 */
+                        /* Store double to shadow space slot i*8 */
+                        asm_movsd_store(a, REG_RSP, i*8, 0); /* movsd [rsp+i*8],xmm0 */
+                    } else {
+                        codegen_expr(cg, n->call.args[i]); /* -> RAX */
+                        asm_mov_mem_reg(a, REG_RSP, i*8, REG_RAX); /* [rsp+i*8]=rax */
+                    }
                 }
+                /* Pass 2: load from slots into ABI registers */
+                for (int i=0;i<argc && i<4;i++) {
+                    int arg_is_float = codegen_is_float_expr(cg, n->call.args[i]);
+                    if (arg_is_float) {
+                        /* movsd xmm_i, [rsp+i*8] */
+                        asm_movsd_load(a, i, REG_RSP, i*8);
+                    } else {
+                        asm_mov_reg_mem(a, i==0?REG_RCX:i==1?REG_RDX:i==2?REG_R8:REG_R9,
+                                        REG_RSP, i*8);
+                    }
+                }
+                /* Stack args >= 4 are already at [rsp+32+(i-4)*8] from pass 1 */
             }
             if (sym && sym->kind==SYM_IMPORT) {
                 char key[512]; snprintf(key,sizeof key,"%s:%s",sym->dll,name);
