@@ -836,16 +836,28 @@ void asm_pop_xmm(Assembler *a, int xmm) {
 
 /* x87 helpers (32-bit mode) */
 void asm_fld_mem64 (Assembler *a,Reg b,int d){
-    if(d>=-128&&d<=127){asm_emit1(a,0xDD);asm_emit1(a,(uint8_t)(0x40|reg_enc(b)));asm_emit1(a,(uint8_t)(int8_t)d);}
-    else{asm_emit1(a,0xDD);asm_emit1(a,(uint8_t)(0x80|reg_enc(b)));asm_emit_u32(a,(uint32_t)d);}
+    int enc=reg_enc(b);
+    if(d>=-128&&d<=127){asm_emit1(a,0xDD);asm_emit1(a,(uint8_t)(0x40|enc));if(enc==4)asm_emit1(a,0x24);asm_emit1(a,(uint8_t)(int8_t)d);}
+    else{asm_emit1(a,0xDD);asm_emit1(a,(uint8_t)(0x80|enc));if(enc==4)asm_emit1(a,0x24);asm_emit_u32(a,(uint32_t)d);}
 }
 void asm_fstp_mem64(Assembler *a,Reg b,int d){
-    if(d>=-128&&d<=127){asm_emit1(a,0xDD);asm_emit1(a,(uint8_t)(0x58|reg_enc(b)));asm_emit1(a,(uint8_t)(int8_t)d);}
-    else{asm_emit1(a,0xDD);asm_emit1(a,(uint8_t)(0x98|reg_enc(b)));asm_emit_u32(a,(uint32_t)d);}
+    int enc=reg_enc(b);
+    if(d>=-128&&d<=127){asm_emit1(a,0xDD);asm_emit1(a,(uint8_t)(0x58|enc));if(enc==4)asm_emit1(a,0x24);asm_emit1(a,(uint8_t)(int8_t)d);}
+    else{asm_emit1(a,0xDD);asm_emit1(a,(uint8_t)(0x98|enc));if(enc==4)asm_emit1(a,0x24);asm_emit_u32(a,(uint32_t)d);}
 }
 void asm_fild_mem32 (Assembler *a,Reg b,int d){
-    if(d>=-128&&d<=127){asm_emit1(a,0xDB);asm_emit1(a,(uint8_t)(0x40|reg_enc(b)));asm_emit1(a,(uint8_t)(int8_t)d);}
-    else{asm_emit1(a,0xDB);asm_emit1(a,(uint8_t)(0x80|reg_enc(b)));asm_emit_u32(a,(uint32_t)d);}
+    int enc=reg_enc(b);
+    if(d>=-128&&d<=127){
+        asm_emit1(a,0xDB);
+        asm_emit1(a,(uint8_t)(0x40|enc));
+        if(enc==4) asm_emit1(a,0x24); /* SIB: base=esp, no index */
+        asm_emit1(a,(uint8_t)(int8_t)d);
+    } else {
+        asm_emit1(a,0xDB);
+        asm_emit1(a,(uint8_t)(0x80|enc));
+        if(enc==4) asm_emit1(a,0x24); /* SIB: base=esp, no index */
+        asm_emit_u32(a,(uint32_t)d);
+    }
 }
 void asm_fistp_mem32(Assembler *a,Reg b,int d){
     asm_emit1(a,0xD9); asm_emit1(a,0xFC); /* frndint first */
