@@ -735,9 +735,11 @@ void asm_movsd_load(Assembler *a, int xmm_dst, Reg base, int disp) {
     int enc=reg_enc(base);
     if (disp>=-128&&disp<=127) {
         asm_emit1(a,(uint8_t)(0x40|((xmm_dst&7)<<3)|enc));
+        if (enc==4) asm_emit1(a,0x24); /* SIB: base=rsp, no index */
         asm_emit1(a,(uint8_t)(int8_t)disp);
     } else {
         asm_emit1(a,(uint8_t)(0x80|((xmm_dst&7)<<3)|enc));
+        if (enc==4) asm_emit1(a,0x24);
         asm_emit_u32(a,(uint32_t)disp);
     }
 }
@@ -749,9 +751,11 @@ void asm_movsd_store(Assembler *a, Reg base, int disp, int xmm_src) {
     int enc=reg_enc(base);
     if (disp>=-128&&disp<=127) {
         asm_emit1(a,(uint8_t)(0x40|((xmm_src&7)<<3)|enc));
+        if (enc==4) asm_emit1(a,0x24); /* SIB: base=rsp, no index */
         asm_emit1(a,(uint8_t)(int8_t)disp);
     } else {
         asm_emit1(a,(uint8_t)(0x80|((xmm_src&7)<<3)|enc));
+        if (enc==4) asm_emit1(a,0x24);
         asm_emit_u32(a,(uint32_t)disp);
     }
 }
@@ -806,16 +810,16 @@ void asm_cvttsd2si(Assembler *a, Reg int_dst, int xmm_src) {
 void asm_movss_load(Assembler *a, int xmm_dst, Reg base, int disp) {
     asm_emit1(a,0xF3); asm_emit2(a,0x0F,0x10);
     int enc=reg_enc(base);
-    if (disp>=-128&&disp<=127){asm_emit1(a,(uint8_t)(0x40|((xmm_dst&7)<<3)|enc));asm_emit1(a,(uint8_t)(int8_t)disp);}
-    else{asm_emit1(a,(uint8_t)(0x80|((xmm_dst&7)<<3)|enc));asm_emit_u32(a,(uint32_t)disp);}
+    if (disp>=-128&&disp<=127){asm_emit1(a,(uint8_t)(0x40|((xmm_dst&7)<<3)|enc));if(enc==4)asm_emit1(a,0x24);asm_emit1(a,(uint8_t)(int8_t)disp);}
+    else{asm_emit1(a,(uint8_t)(0x80|((xmm_dst&7)<<3)|enc));if(enc==4)asm_emit1(a,0x24);asm_emit_u32(a,(uint32_t)disp);}
 }
 
 /* movss [base+disp],xmm */
 void asm_movss_store(Assembler *a, Reg base, int disp, int xmm_src) {
     asm_emit1(a,0xF3); asm_emit2(a,0x0F,0x11);
     int enc=reg_enc(base);
-    if (disp>=-128&&disp<=127){asm_emit1(a,(uint8_t)(0x40|((xmm_src&7)<<3)|enc));asm_emit1(a,(uint8_t)(int8_t)disp);}
-    else{asm_emit1(a,(uint8_t)(0x80|((xmm_src&7)<<3)|enc));asm_emit_u32(a,(uint32_t)disp);}
+    if (disp>=-128&&disp<=127){asm_emit1(a,(uint8_t)(0x40|((xmm_src&7)<<3)|enc));if(enc==4)asm_emit1(a,0x24);asm_emit1(a,(uint8_t)(int8_t)disp);}
+    else{asm_emit1(a,(uint8_t)(0x80|((xmm_src&7)<<3)|enc));if(enc==4)asm_emit1(a,0x24);asm_emit_u32(a,(uint32_t)disp);}
 }
 
 void asm_cvtss2sd(Assembler *a,int d,int s){sse2_xmm_xmm(a,0xF3,0x5A,d,s);}

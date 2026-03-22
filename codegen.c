@@ -357,7 +357,7 @@ static void emit_write_stdout(CodeGen *cg, const char *str_lbl, int str_len) {
         int skip = asm_new_label(a, "gsh_skip");
         asm_jcc_label(a, CC_NE, skip);           /* jnz handle_cached       */
         /* STD_OUTPUT_HANDLE = -11, computed to avoid literal pattern */
-        asm_emit2(a,0x31,0xC9); asm_emit3(a,0x83,0xE9,0x0B); /* xor ecx,ecx; sub ecx,11 = -11 */
+        asm_emit2(a,0x6A,0xF5); asm_emit1(a,0x59); /* push -11; pop rcx */
         asm_sub_rsp(a, 40);
         asm_call_import(a, "GetStdHandle");
         asm_add_rsp(a, 40);
@@ -384,8 +384,7 @@ static void emit_write_stdout(CodeGen *cg, const char *str_lbl, int str_len) {
         int skip = asm_new_label(a, "gsh_skip");
         asm_jcc_label(a, CC_NE, skip);
         /* STD_OUTPUT_HANDLE = -11, computed */
-        asm_emit2(a,0x31,0xC0); asm_emit3(a,0x83,0xE8,0x0B); /* xor eax,eax; sub eax,11 = -11 */
-        asm_push_reg(a, REG_EAX);     /* push eax    */
+        asm_emit2(a,0x6A,0xF5); /* push -11 (sign-extended, for GetStdHandle arg) */
         asm_call_import32(a, "GetStdHandle");
         asm_emit2(a, 0x89, 0x03);               /* mov [ebx],eax           */
         asm_def_label(a, skip);
@@ -491,7 +490,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                             int _s_skip=asm_new_label(a,"gsh_s");
                             asm_jcc_label(a,CC_NE,_s_skip);
                             /* -11 = STD_OUTPUT_HANDLE, computed to avoid literal pattern */
-                asm_emit2(a,0x31,0xC9); asm_emit3(a,0x83,0xE9,0x0B); /* xor ecx,ecx; sub ecx,11 = -11 */       /* neg ecx -> -11 */
+                asm_emit2(a,0x6A,0xF5); asm_emit1(a,0x59); /* push -11; pop rcx */       /* neg ecx -> -11 */
                             asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
                             asm_emit2(a,0x89,0x03); /* mov [rbx],eax */
                             asm_def_label(a,_s_skip);
@@ -527,8 +526,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                               asm_test_reg_reg(a,REG_EAX,REG_EAX);
                               asm_jcc_label(a,CC_NE,_sk);
                               /* -11 = STD_OUTPUT_HANDLE, computed to avoid literal */
-                asm_emit2(a,0x31,0xC0); asm_emit3(a,0x83,0xE8,0x0B); /* xor eax,eax; sub eax,11 = -11 */                /* neg eax -> -11 */
-                asm_push_reg(a,REG_EAX);               /* push eax    */
+                asm_emit2(a,0x6A,0xF5); /* push -11 for GetStdHandle */
                 asm_call_import32(a,"GetStdHandle");   /* stdcall pops arg */
                               /* store handle: ecx still = wdata_addr */
                               asm_emit2(a,0x89,0x01); /* mov [ecx],eax */
@@ -566,7 +564,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                             int _ck=asm_new_label(a,"gsh_c"); asm_jcc_label(a,CC_NE,_ck);
                             asm_push_reg(a,REG_RSP);
                             /* -11 = STD_OUTPUT_HANDLE, computed to avoid literal pattern */
-                asm_emit2(a,0x31,0xC9); asm_emit3(a,0x83,0xE9,0x0B); /* xor ecx,ecx; sub ecx,11 = -11 */       /* neg ecx -> -11 */
+                asm_emit2(a,0x6A,0xF5); asm_emit1(a,0x59); /* push -11; pop rcx */       /* neg ecx -> -11 */
                             asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
                             asm_pop_reg(a,REG_RBX);
                             asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
@@ -591,8 +589,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                               asm_emit2(a,0x8B,0x00); asm_test_reg_reg(a,REG_EAX,REG_EAX);
                               asm_jcc_label(a,CC_NE,_ck32);
                               /* -11 = STD_OUTPUT_HANDLE, computed */
-                asm_emit2(a,0x31,0xC0); asm_emit3(a,0x83,0xE8,0x0B); /* xor eax,eax; sub eax,11 = -11 */                /* neg eax -> -11 */
-                asm_push_reg(a,REG_EAX);               /* push eax    */ asm_call_import32(a,"GetStdHandle");
+                asm_emit2(a,0x6A,0xF5); /* push -11 for GetStdHandle */ asm_call_import32(a,"GetStdHandle");
                               asm_emit1(a,0xB9); asm_reloc_wdata(a,cg->stdout_handle_lbl);
                               asm_emit2(a,0x89,0x01); asm_def_label(a,_ck32); }
                             asm_push_reg(a,REG_EAX); /* handle */
@@ -735,7 +732,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                               int _dz=asm_new_label(a,"gsh_dz"); asm_jcc_label(a,CC_NE,_dz);
                               asm_push_reg(a,REG_RDX); asm_push_reg(a,REG_R8);
                               /* -11 = STD_OUTPUT_HANDLE, computed to avoid literal pattern */
-                asm_emit2(a,0x31,0xC9); asm_emit3(a,0x83,0xE9,0x0B); /* xor ecx,ecx; sub ecx,11 = -11 */       /* neg ecx -> -11 */
+                asm_emit2(a,0x6A,0xF5); asm_emit1(a,0x59); /* push -11; pop rcx */       /* neg ecx -> -11 */
                               asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
                               asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
                               asm_emit2(a,0x89,0x03); asm_mov_reg_reg(a,REG_RCX,REG_RAX);
@@ -825,8 +822,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                               asm_emit2(a,0x8B,0x00); asm_test_reg_reg(a,REG_EAX,REG_EAX);
                               asm_jcc_label(a,CC_NE,_dz32);
                               /* -11 = STD_OUTPUT_HANDLE, computed */
-                asm_emit2(a,0x31,0xC0); asm_emit3(a,0x83,0xE8,0x0B); /* xor eax,eax; sub eax,11 = -11 */                /* neg eax -> -11 */
-                asm_push_reg(a,REG_EAX);               /* push eax    */ asm_call_import32(a,"GetStdHandle");
+                asm_emit2(a,0x6A,0xF5); /* push -11 for GetStdHandle */ asm_call_import32(a,"GetStdHandle");
                               asm_emit1(a,0xB9); asm_reloc_wdata(a,cg->stdout_handle_lbl);
                               asm_emit2(a,0x89,0x01); asm_def_label(a,_dz32); }
                             asm_push_reg(a,REG_EAX); /* handle */
