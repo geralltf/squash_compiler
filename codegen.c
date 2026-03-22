@@ -1818,13 +1818,59 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
         if (n->member.arrow) codegen_expr(cg,n->member.obj);
         else codegen_lvalue(cg,n->member.obj);
         { int foff = field_byte_offset(cg->sym, n->member.obj, n->member.field);
-          /* load 4-byte field — use 32-bit load (zero-extends to RAX in 64-bit) */
-          if (foff == 0) {
-              asm_emit2(a,0x8B,0x00);       /* mov eax,[rax] / mov eax,[eax] */
-          } else if (foff < 128) {
-              asm_emit3(a,0x8B,0x40,(uint8_t)foff); /* mov eax,[rax+disp8] */
+          /* Determine load width from field type */
+          int load64 = 0;
+          if (cg->is_64bit) {
+              /* Look up the field's TypeInfo to check pointer_depth */
+              ASTNode *mobj = n->member.obj;
+              const char *mfname = n->member.field;
+              const char *mstype = NULL;
+              if (mobj->kind == AST_VAR) {
+                  Symbol *sv = symtable_lookup(cg->sym, mobj->var.name);
+                  if (sv && sv->type) mstype = sv->type->base;
+              } else if (mobj->kind == AST_DEREF || n->member.arrow) {
+                  /* ptr->field: need to find the pointed-to struct type */
+                  ASTNode *op = (mobj->kind==AST_DEREF) ? mobj->deref.operand : mobj;
+                  if (op->kind == AST_VAR) {
+                      Symbol *sv = symtable_lookup(cg->sym, op->var.name);
+                      if (sv && sv->type) mstype = sv->type->base;
+                  }
+              }
+              if (mstype) {
+                  const char *bare = mstype;
+                  if (strncmp(bare,"struct ",7)==0) bare+=7;
+                  else if (strncmp(bare,"union ",6)==0) bare+=6;
+                  char sk[256]; snprintf(sk,sizeof sk,"struct %s",bare);
+                  Symbol *ss = symtable_lookup(cg->sym, sk);
+                  if (ss && ss->struct_node) {
+                      for (int _i=0;_i<ss->struct_node->struct_decl.nfields;_i++) {
+                          ASTNode *ff=ss->struct_node->struct_decl.fields[_i];
+                          if (ff&&ff->field.name&&strcmp(ff->field.name,mfname)==0&&ff->field.type) {
+                              if (ff->field.type->pointer_depth > 0) load64=1;
+                              break;
+                          }
+                      }
+                  }
+              }
+          }
+          if (load64) {
+              /* 64-bit pointer load */
+              if (foff == 0) {
+                  asm_emit3(a,0x48,0x8B,0x00); /* mov rax,[rax] */
+              } else if (foff < 128) {
+                  asm_emit4(a,0x48,0x8B,0x40,(uint8_t)foff); /* mov rax,[rax+disp8] */
+              } else {
+                  asm_emit3(a,0x48,0x8B,0x80); asm_emit_u32(a,(uint32_t)foff);
+              }
           } else {
-              asm_emit2(a,0x8B,0x80); asm_emit_u32(a,(uint32_t)foff); /* mov eax,[rax+disp32] */
+              /* 32-bit int load (zero-extends to RAX) */
+              if (foff == 0) {
+                  asm_emit2(a,0x8B,0x00);       /* mov eax,[rax] */
+              } else if (foff < 128) {
+                  asm_emit3(a,0x8B,0x40,(uint8_t)foff); /* mov eax,[rax+disp8] */
+              } else {
+                  asm_emit2(a,0x8B,0x80); asm_emit_u32(a,(uint32_t)foff);
+              }
           }
         }
         break;
