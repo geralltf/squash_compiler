@@ -2075,7 +2075,16 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             }
             if (n->unary.operand->kind==AST_VAR) {
                 Symbol *s=symtable_lookup(cg->sym,n->unary.operand->var.name);
-                if (s) asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
+                if (s && (s->kind==SYM_VAR||s->kind==SYM_PARAM)) {
+                    asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
+                } else if (s && s->kind==SYM_GLOBAL) {
+                    const char *glbl=(s->dll&&s->dll[0])?s->dll:n->unary.operand->var.name;
+                    asm_push_reg(a,REG_RAX);
+                    if (cg->is_64bit) asm_lea_rip_wdata(a,REG_RBX,glbl);
+                    else { asm_emit1(a,0xBB); asm_reloc_wdata(a,glbl); }
+                    asm_pop_reg(a,REG_RAX);
+                    asm_emit2(a,0x89,0x03); /* mov [rbx/ebx],eax */
+                }
             }
             asm_pop_reg(a,REG_RAX); /* return original value */
         } else if (strcmp(op,"++")==0||strcmp(op,"--")==0) {
@@ -2085,7 +2094,16 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             else asm_sub_reg_reg(a,REG_RAX,REG_RBX);
             if (n->unary.operand->kind==AST_VAR) {
                 Symbol *s=symtable_lookup(cg->sym,n->unary.operand->var.name);
-                if (s) asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
+                if (s && (s->kind==SYM_VAR||s->kind==SYM_PARAM)) {
+                    asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
+                } else if (s && s->kind==SYM_GLOBAL) {
+                    const char *glbl=(s->dll&&s->dll[0])?s->dll:n->unary.operand->var.name;
+                    asm_push_reg(a,REG_RAX);
+                    if (cg->is_64bit) asm_lea_rip_wdata(a,REG_RBX,glbl);
+                    else { asm_emit1(a,0xBB); asm_reloc_wdata(a,glbl); }
+                    asm_pop_reg(a,REG_RAX);
+                    asm_emit2(a,0x89,0x03); /* mov [rbx/ebx],eax */
+                }
             }
         } else {
             codegen_expr(cg,n->unary.operand);
