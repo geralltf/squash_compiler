@@ -203,10 +203,10 @@ Symbol *symtable_define_global(SymTable *st, const char *name, TypeInfo *type, i
     return s;
 }
 
-Symbol *symtable_define_param(SymTable *st, const char *name, TypeInfo *type, int idx) {
+Symbol *symtable_define_param(SymTable *st, const char *name, TypeInfo *type, int idx, int byte_offset_32) {
     Symbol *s = alloc_sym(st, name, type, SYM_PARAM);
     s->param_index = idx;
-    s->offset = st->is_64bit ? 16+idx*8 : 8+idx*4;
+    s->offset = st->is_64bit ? 16+idx*8 : 8+byte_offset_32;
     return s;
 }
 

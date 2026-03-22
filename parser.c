@@ -819,6 +819,7 @@ ASTNode *ParseFunction(Parser *p, const char *storage, TypeInfo *ret, const char
     symtable_push_scope(p->sym);
     symtable_reset_locals(p->sym);
     if (!chk(p,TOK_RPAREN)) {
+        int param_byte_off=0; /* cumulative 32-bit param stack offset */
         do {
             if (chk(p,TOK_ELLIPSIS)) { variadic=1; adv(p); break; }
             if (!is_type_start(p)) { parse_error(p,"expected parameter type"); break; }
@@ -834,7 +835,9 @@ ASTNode *ParseFunction(Parser *p, const char *storage, TypeInfo *ret, const char
             if (chk(p,TOK_IDENT)) { strncpy(pname,tok_ident(cur(p)),sizeof pname-1); adv(p); }
             /* array param: name[] */
             if (chk(p,TOK_LBRACKET)) { adv(p); if (chk(p,TOK_RBRACKET)) adv(p); pt->pointer_depth++; }
-            symtable_define_param(p->sym, pname, pt, paramc);
+            symtable_define_param(p->sym, pname, pt, paramc, param_byte_off);
+            /* Advance cumulative offset by actual param size (doubles=8, rest=4) */
+            { int psz = typeinfo_size(pt, p->sym->is_64bit); param_byte_off += (psz > 4 ? psz : 4); }
             params[paramc++]=ast_param(pt, pname[0]?pname:NULL, 0, cur(p).line);
         } while (chk(p,TOK_COMMA)&&adv(p).kind!=TOK_EOF);
     }

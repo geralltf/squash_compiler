@@ -356,8 +356,7 @@ static void emit_write_stdout(CodeGen *cg, const char *str_lbl, int str_len) {
         int skip = asm_new_label(a, "gsh_skip");
         asm_jcc_label(a, CC_NE, skip);           /* jnz handle_cached       */
         /* STD_OUTPUT_HANDLE = -11, computed to avoid literal pattern */
-        asm_emit4(a,0xB9,0x0B,0x00,0x00); asm_emit1(a,0x00); /* mov ecx,11 */
-        asm_emit2(a,0xF7,0xD9);       /* neg ecx -> -11 */
+        asm_emit2(a,0x31,0xC9); asm_emit3(a,0x83,0xE9,0x0B); /* xor ecx,ecx; sub ecx,11 = -11 */
         asm_sub_rsp(a, 40);
         asm_call_import(a, "GetStdHandle");
         asm_add_rsp(a, 40);
@@ -384,8 +383,7 @@ static void emit_write_stdout(CodeGen *cg, const char *str_lbl, int str_len) {
         int skip = asm_new_label(a, "gsh_skip");
         asm_jcc_label(a, CC_NE, skip);
         /* STD_OUTPUT_HANDLE = -11, computed */
-        asm_emit4(a,0xB8,0x0B,0x00,0x00); asm_emit1(a,0x00); /* mov eax,11 */
-        asm_emit2(a,0xF7,0xD8);       /* neg eax -> -11 */
+        asm_emit2(a,0x31,0xC0); asm_emit3(a,0x83,0xE8,0x0B); /* xor eax,eax; sub eax,11 = -11 */
         asm_push_reg(a, REG_EAX);     /* push eax    */
         asm_call_import32(a, "GetStdHandle");
         asm_emit2(a, 0x89, 0x03);               /* mov [ebx],eax           */
@@ -492,8 +490,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                             int _s_skip=asm_new_label(a,"gsh_s");
                             asm_jcc_label(a,CC_NE,_s_skip);
                             /* -11 = STD_OUTPUT_HANDLE, computed to avoid literal pattern */
-                asm_emit4(a,0xB9,0x0B,0x00,0x00); asm_emit1(a,0x00); /* mov ecx,11 */
-                asm_emit2(a,0xF7,0xD9);       /* neg ecx -> -11 */
+                asm_emit2(a,0x31,0xC9); asm_emit3(a,0x83,0xE9,0x0B); /* xor ecx,ecx; sub ecx,11 = -11 */       /* neg ecx -> -11 */
                             asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
                             asm_emit2(a,0x89,0x03); /* mov [rbx],eax */
                             asm_def_label(a,_s_skip);
@@ -529,8 +526,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                               asm_test_reg_reg(a,REG_EAX,REG_EAX);
                               asm_jcc_label(a,CC_NE,_sk);
                               /* -11 = STD_OUTPUT_HANDLE, computed to avoid literal */
-                asm_emit4(a,0xB8,0x0B,0x00,0x00); asm_emit1(a,0x00); /* mov eax,11 */
-                asm_emit2(a,0xF7,0xD8);                /* neg eax -> -11 */
+                asm_emit2(a,0x31,0xC0); asm_emit3(a,0x83,0xE8,0x0B); /* xor eax,eax; sub eax,11 = -11 */                /* neg eax -> -11 */
                 asm_push_reg(a,REG_EAX);               /* push eax    */
                 asm_call_import32(a,"GetStdHandle");   /* stdcall pops arg */
                               /* store handle: ecx still = wdata_addr */
@@ -569,8 +565,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                             int _ck=asm_new_label(a,"gsh_c"); asm_jcc_label(a,CC_NE,_ck);
                             asm_push_reg(a,REG_RSP);
                             /* -11 = STD_OUTPUT_HANDLE, computed to avoid literal pattern */
-                asm_emit4(a,0xB9,0x0B,0x00,0x00); asm_emit1(a,0x00); /* mov ecx,11 */
-                asm_emit2(a,0xF7,0xD9);       /* neg ecx -> -11 */
+                asm_emit2(a,0x31,0xC9); asm_emit3(a,0x83,0xE9,0x0B); /* xor ecx,ecx; sub ecx,11 = -11 */       /* neg ecx -> -11 */
                             asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
                             asm_pop_reg(a,REG_RBX);
                             asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
@@ -595,8 +590,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                               asm_emit2(a,0x8B,0x00); asm_test_reg_reg(a,REG_EAX,REG_EAX);
                               asm_jcc_label(a,CC_NE,_ck32);
                               /* -11 = STD_OUTPUT_HANDLE, computed */
-                asm_emit4(a,0xB8,0x0B,0x00,0x00); asm_emit1(a,0x00); /* mov eax,11 */
-                asm_emit2(a,0xF7,0xD8);                /* neg eax -> -11 */
+                asm_emit2(a,0x31,0xC0); asm_emit3(a,0x83,0xE8,0x0B); /* xor eax,eax; sub eax,11 = -11 */                /* neg eax -> -11 */
                 asm_push_reg(a,REG_EAX);               /* push eax    */ asm_call_import32(a,"GetStdHandle");
                               asm_emit1(a,0xB9); asm_reloc_wdata(a,cg->stdout_handle_lbl);
                               asm_emit2(a,0x89,0x01); asm_def_label(a,_ck32); }
@@ -740,8 +734,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                               int _dz=asm_new_label(a,"gsh_dz"); asm_jcc_label(a,CC_NE,_dz);
                               asm_push_reg(a,REG_RDX); asm_push_reg(a,REG_R8);
                               /* -11 = STD_OUTPUT_HANDLE, computed to avoid literal pattern */
-                asm_emit4(a,0xB9,0x0B,0x00,0x00); asm_emit1(a,0x00); /* mov ecx,11 */
-                asm_emit2(a,0xF7,0xD9);       /* neg ecx -> -11 */
+                asm_emit2(a,0x31,0xC9); asm_emit3(a,0x83,0xE9,0x0B); /* xor ecx,ecx; sub ecx,11 = -11 */       /* neg ecx -> -11 */
                               asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
                               asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
                               asm_emit2(a,0x89,0x03); asm_mov_reg_reg(a,REG_RCX,REG_RAX);
@@ -831,8 +824,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                               asm_emit2(a,0x8B,0x00); asm_test_reg_reg(a,REG_EAX,REG_EAX);
                               asm_jcc_label(a,CC_NE,_dz32);
                               /* -11 = STD_OUTPUT_HANDLE, computed */
-                asm_emit4(a,0xB8,0x0B,0x00,0x00); asm_emit1(a,0x00); /* mov eax,11 */
-                asm_emit2(a,0xF7,0xD8);                /* neg eax -> -11 */
+                asm_emit2(a,0x31,0xC0); asm_emit3(a,0x83,0xE8,0x0B); /* xor eax,eax; sub eax,11 = -11 */                /* neg eax -> -11 */
                 asm_push_reg(a,REG_EAX);               /* push eax    */ asm_call_import32(a,"GetStdHandle");
                               asm_emit1(a,0xB9); asm_reloc_wdata(a,cg->stdout_handle_lbl);
                               asm_emit2(a,0x89,0x01); asm_def_label(a,_dz32); }
@@ -2372,23 +2364,27 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             int frame=32+extra;
             if ((frame&8)==0) frame+=8;  /* ensure frame%16==8 so RSP is 0-mod-16 at CALL */
             asm_sub_rsp(a,frame);
-            for (int i=0;i<argc;i++) {
+            /* Process args in reverse order so that float arg evaluation
+             * (which produces result in XMM0) doesn't overwrite earlier float args.
+             * Stack args (i>=4) are handled separately in forward order. */
+            for (int i=argc-1;i>=0;i--) {
                 int arg_is_float = codegen_is_float_expr(cg, n->call.args[i]);
                 if (arg_is_float && i < 4) {
-                    /* Float arg: evaluate into XMMi (XMM0 for arg0, etc.) */
+                    /* Float arg: evaluate into XMM0 then move to XMMi */
                     codegen_float_expr(cg, n->call.args[i]); /* -> XMM0 */
-                    if (i==1) asm_movsd_xmm(a,1,0); /* movsd xmm1,xmm0 */
+                    if      (i==1) asm_movsd_xmm(a,1,0);
                     else if (i==2) asm_movsd_xmm(a,2,0);
                     else if (i==3) asm_movsd_xmm(a,3,0);
-                    /* Also move bits to shadow int register for variadic compat */
-                    /* (not strictly needed for non-variadic, skip for now) */
-                } else {
+                    /* i==0: already in XMM0 */
+                } else if (i < 4) {
                     codegen_expr(cg,n->call.args[i]);
                     if      (i==0) asm_mov_reg_reg(a,REG_RCX,REG_RAX);
                     else if (i==1) asm_mov_reg_reg(a,REG_RDX,REG_RAX);
                     else if (i==2) asm_mov_reg_reg(a,REG_R8, REG_RAX);
                     else if (i==3) asm_mov_reg_reg(a,REG_R9, REG_RAX);
-                    else           asm_mov_mem_reg(a,REG_RSP,32+(i-4)*8,REG_RAX);
+                } else {
+                    codegen_expr(cg,n->call.args[i]);
+                    asm_mov_mem_reg(a,REG_RSP,32+(i-4)*8,REG_RAX);
                 }
             }
             if (sym && sym->kind==SYM_IMPORT) {
@@ -2798,11 +2794,15 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
     symtable_reset_locals(cg->sym);
     cg->sym->next_offset=0;
 
-    /* Register params in symbol table */
-    for (int i=0;i<n->func.paramc;i++) {
+    /* Register params in symbol table with correct 32-bit byte offsets */
+    { int param_byte_off=0;
+      for (int i=0;i<n->func.paramc;i++) {
         ASTNode *pr=n->func.params[i];
         if (pr->param.name)
-            symtable_define_param(cg->sym,pr->param.name,pr->param.type,i);
+            symtable_define_param(cg->sym,pr->param.name,pr->param.type,i,param_byte_off);
+        int psz=typeinfo_size(pr->param.type,cg->sym->is_64bit);
+        param_byte_off += (psz>4?psz:4);
+      }
     }
 
     /* Two-pass frame sizing: emit prologue with placeholder size=0,

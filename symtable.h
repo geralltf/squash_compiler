@@ -52,7 +52,7 @@ void    symtable_push_scope   (SymTable *st);
 void    symtable_pop_scope    (SymTable *st);
 Symbol *symtable_define_var   (SymTable *st, const char *name, TypeInfo *type);
 Symbol *symtable_define_global(SymTable *st, const char *name, TypeInfo *type, int array_size);
-Symbol *symtable_define_param (SymTable *st, const char *name, TypeInfo *type, int idx);
+Symbol *symtable_define_param (SymTable *st, const char *name, TypeInfo *type, int idx, int byte_offset_32);
 Symbol *symtable_define_func  (SymTable *st, const char *name, TypeInfo *ret, int paramc, ASTNode *node);
 Symbol *symtable_define_import(SymTable *st, const char *name, const char *dll);
 Symbol *symtable_define_enum_val(SymTable *st, const char *name, long long val);
