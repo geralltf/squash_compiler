@@ -220,7 +220,7 @@ static const char *INTERNAL_SHIMS[] = {
     "memcpy","memset","memcmp","memmove",
     "strlen","strcpy","strncpy","strcmp",
     "strncmp","strcat","strncat","strchr","strstr",
-    "atoi","atol",
+    "atoi","atol","atof",
     "sprintf","printf","puts","putchar","abort",
     NULL
 };
@@ -1516,6 +1516,130 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             asm_def_label(a,ddn);
             asm_emit2(a,0x89,0xF8);
             asm_emit2(a,0xF7,0xEB);
+        }
+        return;
+    }
+
+    /* ---- atof(s) -> double  (result in XMM0 64-bit / ST0 32-bit) ---- */
+    if (strcmp(name,"atof")==0 && argc>=1) {
+        codegen_expr(cg,args[0]); /* RAX/EAX = string ptr */
+        if (cg->is_64bit) {
+            /* 64-bit: forward to msvcrt atof; arg in RCX, result in XMM0 */
+            symtable_add_import(cg->sym,"msvcrt.dll:atof");
+            asm_mov_reg_reg(a,REG_RCX,REG_RAX);
+            asm_sub_rsp(a,40);
+            asm_call_import(a,"atof");
+            asm_add_rsp(a,40);
+        } else {
+            /* 32-bit inline x87 atof:
+             * On entry EAX = string ptr.
+             * Registers used: ESI=ptr, ECX=cur_char, EDX=sign, EBX=frac_divisor
+             * x87 stack during int  loop: ST0=int_accum
+             * x87 stack during frac loop: ST0=frac_accum, ST1=int_accum
+             * After frac: push EBX; fidiv [esp]; faddp -> ST0=int+frac
+             */
+            /* Save registers */
+            asm_push_reg(a,REG_EBX);
+            asm_push_reg(a,REG_ESI);
+            asm_push_reg(a,REG_EDI);
+            asm_mov_reg_reg(a,REG_ESI,REG_EAX); /* ESI = ptr */
+
+            /* Skip leading whitespace */
+            int af_ws=asm_new_label(a,"atof_ws"),af_wsd=asm_new_label(a,"atof_wsd");
+            asm_def_label(a,af_ws);
+            asm_emit3(a,0x0F,0xB6,0x0E);          /* movzx ecx,byte[esi] */
+            asm_emit3(a,0x83,0xF9,0x20);           /* cmp ecx,0x20 */
+            asm_jcc_label(a,CC_NE,af_wsd);
+            asm_emit2(a,0xFF,0xC6);                /* inc esi */
+            asm_jmp_label(a,af_ws);
+            asm_def_label(a,af_wsd);
+
+            /* Sign: EDX=0 positive, EDX=1 negative */
+            int af_sgn=asm_new_label(a,"atof_sgn"),af_sgo=asm_new_label(a,"atof_sgo");
+            asm_emit1(a,0x31); asm_emit1(a,0xD2); /* xor edx,edx */
+            asm_emit3(a,0x80,0x3E,0x2D);           /* cmp byte[esi],'-' */
+            asm_jcc_label(a,CC_NE,af_sgn);
+            asm_emit1(a,0x42);                      /* inc edx */
+            asm_emit2(a,0xFF,0xC6);                /* inc esi */
+            asm_jmp_label(a,af_sgo);
+            asm_def_label(a,af_sgn);
+            asm_emit3(a,0x80,0x3E,0x2B);           /* cmp byte[esi],'+' */
+            asm_jcc_label(a,CC_NE,af_sgo);
+            asm_emit2(a,0xFF,0xC6);                /* inc esi */
+            asm_def_label(a,af_sgo);
+
+            /* Integer part: ST0 = 0.0, loop ST0=ST0*10+digit */
+            int af_ilp=asm_new_label(a,"atof_ilp"),af_idn=asm_new_label(a,"atof_idn");
+            asm_fldz(a);                            /* ST0=0.0 */
+            asm_def_label(a,af_ilp);
+            asm_emit3(a,0x0F,0xB6,0x0E);           /* movzx ecx,byte[esi] */
+            asm_emit3(a,0x83,0xE9,0x30);           /* sub ecx,'0' */
+            asm_emit3(a,0x83,0xF9,0x00);           /* cmp ecx,0 */
+            asm_jcc_label(a,CC_L,af_idn);
+            asm_emit3(a,0x83,0xF9,0x09);           /* cmp ecx,9 */
+            asm_jcc_label(a,CC_G,af_idn);
+            /* ST0 = ST0*10 */
+            asm_sub_rsp(a,4);
+            asm_emit3(a,0xC7,0x04,0x24); asm_emit_u32(a,10); /* mov dword[esp],10 */
+            asm_emit3(a,0xDA,0x0C,0x24);           /* fimul dword[esp] */
+            /* ST0 += digit */
+            asm_emit3(a,0x89,0x0C,0x24);           /* mov [esp],ecx */
+            asm_emit3(a,0xDA,0x04,0x24);           /* fiadd dword[esp] */
+            asm_add_rsp(a,4);
+            asm_emit2(a,0xFF,0xC6);                /* inc esi */
+            asm_jmp_label(a,af_ilp);
+            asm_def_label(a,af_idn);
+
+            /* Fractional part */
+            int af_fno=asm_new_label(a,"atof_fno"),af_flp=asm_new_label(a,"atof_flp");
+            int af_fdn=asm_new_label(a,"atof_fdn");
+            asm_emit3(a,0x80,0x3E,0x2E);           /* cmp byte[esi],'.' */
+            asm_jcc_label(a,CC_NE,af_fno);
+            asm_emit2(a,0xFF,0xC6);                /* inc esi */
+            /* EBX = divisor (starts at 1) */
+            asm_emit1(a,0xBB); asm_emit_u32(a,1); /* mov ebx,1 */
+            asm_fldz(a);                           /* ST0=0.0 (frac), ST1=int */
+            asm_def_label(a,af_flp);
+            asm_emit3(a,0x0F,0xB6,0x0E);          /* movzx ecx,byte[esi] */
+            asm_emit3(a,0x83,0xE9,0x30);          /* sub ecx,'0' */
+            asm_emit3(a,0x83,0xF9,0x00);          /* cmp ecx,0 */
+            asm_jcc_label(a,CC_L,af_fdn);
+            asm_emit3(a,0x83,0xF9,0x09);          /* cmp ecx,9 */
+            asm_jcc_label(a,CC_G,af_fdn);
+            /* ST0 = ST0*10 + digit */
+            asm_sub_rsp(a,4);
+            asm_emit3(a,0xC7,0x04,0x24); asm_emit_u32(a,10);
+            asm_emit3(a,0xDA,0x0C,0x24);          /* fimul dword[esp] */
+            asm_emit3(a,0x89,0x0C,0x24);          /* mov [esp],ecx */
+            asm_emit3(a,0xDA,0x04,0x24);          /* fiadd dword[esp] */
+            asm_add_rsp(a,4);
+            /* EBX *= 10 */
+            asm_emit3(a,0x6B,0xDB,0x0A);          /* imul ebx,ebx,10 */
+            asm_emit2(a,0xFF,0xC6);               /* inc esi */
+            asm_jmp_label(a,af_flp);
+            asm_def_label(a,af_fdn);
+            /* ST0=frac_int, ST1=int_val; EBX=divisor */
+            /* frac = frac_int / EBX */
+            asm_sub_rsp(a,4);
+            asm_emit3(a,0x89,0x1C,0x24);          /* mov [esp],ebx */
+            asm_emit3(a,0xDA,0x34,0x24);          /* fidiv dword[esp] -> ST0 /= EBX */
+            asm_add_rsp(a,4);
+            /* result = int + frac */
+            asm_emit2(a,0xDE,0xC1);               /* faddp st1,st0 -> ST0=int+frac */
+            asm_def_label(a,af_fno);
+
+            /* Apply sign */
+            int af_pos=asm_new_label(a,"atof_pos");
+            asm_emit2(a,0x85,0xD2);               /* test edx,edx */
+            asm_jcc_label(a,CC_E,af_pos);
+            asm_emit2(a,0xD9,0xE0);               /* fchs */
+            asm_def_label(a,af_pos);
+
+            /* Restore registers */
+            asm_pop_reg(a,REG_EDI);
+            asm_pop_reg(a,REG_ESI);
+            asm_pop_reg(a,REG_EBX);
+            /* Result in ST0 */
         }
         return;
     }
@@ -2876,6 +3000,8 @@ int codegen_is_float_expr(CodeGen *cg, ASTNode *n) {
     }
     case AST_CALL: {
         /* Check return type of called function */
+        /* Hard-coded float-returning shims */
+        if (strcmp(n->call.name,"atof")==0) return 1;
         Symbol *s = symtable_lookup(cg->sym, n->call.name);
         if (s && s->type) return is_float_type(cg, s->type);
         return 0;
