@@ -1821,6 +1821,8 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             if (cg->is_64bit) {
                 /* cvttsd2si eax,xmm0  (truncate toward zero) */
                 asm_emit4(a, 0xF2, 0x0F, 0x2C, 0xC0);
+                /* movsxd rax,eax — sign-extend int32 result to int64 */
+                asm_emit3(a, 0x48, 0x63, 0xC0);
             } else {
                 /* 32-bit float->int using x87 fnstcw/fldcw/fistp (no SSE2 required).
                  * We need extra stack space: 2 bytes for saved CW, 2 for truncating CW,
