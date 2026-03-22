@@ -1698,14 +1698,25 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 /* cvttsd2si eax,xmm0  (truncate toward zero) */
                 asm_emit4(a, 0xF2, 0x0F, 0x2C, 0xC0);
             } else {
-                /* Use SSE2 cvttsd2si for 32-bit float->int: avoids fnstcw/fldcw AV heuristic.
-                 * Transfer x87 ST0 to stack, load into XMM0, convert with truncation. */
-                asm_emit3(a, 0x83, 0xEC, 0x08);             /* sub esp,8 */
-                asm_emit3(a, 0xDD, 0x1C, 0x24);             /* fstp qword[esp] (ST0->mem, pops) */
-                asm_emit4(a, 0xF2, 0x0F, 0x10, 0x04);       /* movsd xmm0,[esp] */
-                asm_emit1(a, 0x24);
-                asm_emit4(a, 0xF2, 0x0F, 0x2C, 0xC0);       /* cvttsd2si eax,xmm0 (truncate) */
-                asm_emit3(a, 0x83, 0xC4, 0x08);             /* add esp,8 */
+                /* 32-bit float->int using x87 fnstcw/fldcw/fistp (no SSE2 required).
+                 * We need extra stack space: 2 bytes for saved CW, 2 for truncating CW,
+                 * 4 bytes for the fistp result.
+                 * Allocate 8 bytes total so ESP stays aligned.
+                 *   [esp+0..1] = result (fistp dword)
+                 *   [esp+2..3] = modified CW (truncation mode)
+                 *   [esp+4..5] = original CW (fnstcw)
+                 *   [esp+6..7] = padding
+                 */
+                asm_emit3(a, 0x83, 0xEC, 0x08);             /* sub esp,8           */
+                asm_emit3(a, 0x9B, 0xD9, 0x7C); asm_emit1(a, 0x24); asm_emit1(a, 0x04); /* fnstcw [esp+4] */
+                asm_emit4(a, 0x0F, 0xB7, 0x44, 0x24); asm_emit1(a, 0x04); /* movzx eax,word[esp+4] */
+                asm_emit1(a, 0x0D); asm_emit_u32(a, 0x0C00); /* or eax,0x0C00 (set RC=truncate) */
+                asm_emit3(a, 0x66, 0x89, 0x44); asm_emit1(a, 0x24); asm_emit1(a, 0x02); /* mov [esp+2],ax */
+                asm_emit3(a, 0xD9, 0x6C, 0x24); asm_emit1(a, 0x02); /* fldcw [esp+2] */
+                asm_emit3(a, 0xDB, 0x1C, 0x24); /* fistp dword[esp] (truncate ST0->int32, pop) */
+                asm_emit3(a, 0xD9, 0x6C, 0x24); asm_emit1(a, 0x04); /* fldcw [esp+4] (restore) */
+                asm_emit3(a, 0x8B, 0x04, 0x24); /* mov eax,[esp] */
+                asm_emit3(a, 0x83, 0xC4, 0x08);             /* add esp,8           */
             }
             break;
         }
@@ -2903,8 +2914,7 @@ void codegen_float_expr(CodeGen *cg, ASTNode *n) {
             asm_movsd_rip(a, 0, lbl);  /* movsd xmm0,[rip+fconst] */
         } else {
             /* fldl [rel32] — using EBX as scratch for 32-bit */
-            asm_emit1(a,0xBB); asm_reloc_data(a,lbl); /* mov ebx,&const */
-            asm_fld_mem64(a, REG_EBX, 0);
+            asm_emit2(a,0xDD,0x05); asm_reloc_data(a,lbl); /* fldl [abs32] */
         }
         break;
     }
@@ -2916,8 +2926,7 @@ void codegen_float_expr(CodeGen *cg, ASTNode *n) {
         if (cg->is_64bit) {
             asm_movsd_rip(a, 0, lbl);
         } else {
-            asm_emit1(a,0xBB); asm_reloc_data(a,lbl);
-            asm_fld_mem64(a, REG_EBX, 0);
+            asm_emit2(a,0xDD,0x05); asm_reloc_data(a,lbl); /* fldl [abs32] */
         }
         break;
     }
@@ -2940,8 +2949,7 @@ void codegen_float_expr(CodeGen *cg, ASTNode *n) {
                 if (fsz==4){asm_movss_load(a,0,REG_RBX,0);asm_cvtss2sd(a,0,0);}
                 else asm_movsd_load(a,0,REG_RBX,0);
             } else {
-                asm_emit1(a,0xBB); asm_reloc_wdata(a,lbl);
-                asm_fld_mem64(a,REG_EBX,0);
+                asm_emit2(a,0xDD,0x05); asm_reloc_wdata(a,lbl); /* fldl [abs32] global */
             }
         } else {
             if(cg->is_64bit) asm_xorpd(a,0,0); else asm_fldz(a);
