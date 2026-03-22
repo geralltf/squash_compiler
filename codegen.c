@@ -2403,9 +2403,22 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             if (!is_float_type(cg, sym ? sym->type : NULL))
                 asm_emit3(a, 0x48, 0x63, 0xC0); /* movsxd rax,eax */
         } else {
+            /* 32-bit cdecl: push args right-to-left.
+             * Float args are 8 bytes on stack; int args are 4 bytes. */
+            int total_arg_bytes = 0;
             for (int i=argc-1;i>=0;i--) {
-                codegen_expr(cg,n->call.args[i]);
-                asm_push_reg(a,REG_EAX);
+                int arg_is_float = codegen_is_float_expr(cg, n->call.args[i]);
+                if (arg_is_float) {
+                    /* Push 8-byte double onto stack */
+                    codegen_float_expr(cg, n->call.args[i]); /* -> ST0 */
+                    asm_sub_rsp(a, 8);
+                    asm_fstp_mem64(a, REG_ESP, 0); /* fstp qword[esp] */
+                    total_arg_bytes += 8;
+                } else {
+                    codegen_expr(cg, n->call.args[i]);
+                    asm_push_reg(a, REG_EAX);
+                    total_arg_bytes += 4;
+                }
             }
             if (sym && sym->kind==SYM_IMPORT) {
                 char key[512]; snprintf(key,sizeof key,"%s:%s",sym->dll,name);
@@ -2413,7 +2426,7 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 asm_call_import32(a,name);
             } else {
                 asm_call_direct(a,get_func_label(cg,name));
-                if (argc>0) asm_add_rsp(a,argc*4);
+                if (total_arg_bytes>0) asm_add_rsp(a,total_arg_bytes);
             }
         }
         break;
