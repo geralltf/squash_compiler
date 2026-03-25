@@ -288,8 +288,14 @@ void test_union(void) {
 }
 
 void test_main_args(int argc, char *argv[]) {
-    check(argc>=1,          "argv:argc>=1");
-    check(argv[0]!=NULL,    "argv:argv[0]");
+    check(argc>=1,              "argv:argc>=1");
+    check(argv[0]!=NULL,        "argv:argv[0]");
+    /* Print all argv strings */
+    printf("argc=%d\r\n", argc);
+    int i;
+    for (i = 0; i < argc; i++) {
+        printf("argv[%d]=%s\r\n", i, argv[i]);
+    }
 }
 
 /* forward declaration implementation */
