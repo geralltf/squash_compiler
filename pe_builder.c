@@ -37,11 +37,6 @@
 #include <time.h>
 #include <stdint.h>
 
-#ifdef _WIN32
-#define strdup _strdup
-#define strcasecmp _stricmp
-#endif
-
 /* =========================================================================
  * Constants
  * ========================================================================= */

@@ -2894,6 +2894,136 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
             asm_add_rsp(a,8);
         }
     }
+    /* If main() has argc/argv params, populate them from GetCommandLineA */
+    if (strcmp(n->func.name,"main")==0 && n->func.paramc >= 1) {
+        symtable_add_import(cg->sym,"KERNEL32.dll:GetCommandLineA");
+        symtable_add_import(cg->sym,"KERNEL32.dll:GetProcessHeap");
+        symtable_add_import(cg->sym,"KERNEL32.dll:HeapAlloc");
+        if (cg->is_64bit) {
+            /* Parse Windows cmdline → real argc/argv.
+             * R15 saves RSP so AND RSP,-16 doesn't corrupt the frame.
+             * [rbp+16]=argc, [rbp+24]=cmdline/argv temp between calls. */
+            int sk1=asm_new_label(a,"cl_sk1"); int tk1=asm_new_label(a,"cl_tk1");
+            int in1=asm_new_label(a,"cl_in1"); int dn1=asm_new_label(a,"cl_dn1");
+            int sk2=asm_new_label(a,"cl_sk2"); int tk2=asm_new_label(a,"cl_tk2");
+            int in2=asm_new_label(a,"cl_in2"); int dn2=asm_new_label(a,"cl_dn2");
+
+            /* push r15; mov r15,rsp  — save RSP before any alignment adjustment */
+            asm_emit2(a,0x41,0x57);                         /* push r15 */
+            asm_emit3(a,0x4C,0x8B,0xFC);                    /* mov r15,rsp (8B=load into reg) */
+
+            /* Step 1: GetCommandLineA → cmdline in [rbp+24] */
+            asm_emit4(a,0x48,0x83,0xE4,0xF0); /* and rsp,-16 */
+            asm_sub_rsp(a,40); asm_call_import(a,"GetCommandLineA"); asm_add_rsp(a,40);
+            asm_emit3(a,0x48,0x89,0x45); asm_emit1(a,0x18); /* mov [rbp+24],rax */
+
+            /* Step 2: count tokens → argc in [rbp+16] */
+            asm_emit3(a,0x48,0x8B,0x45); asm_emit1(a,0x18); /* mov rax,[rbp+24] */
+            asm_emit3(a,0x48,0x31,0xC9);                    /* xor rcx,rcx */
+            asm_def_label(a,sk1);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x20); asm_jcc_label(a,CC_NE,tk1);
+            asm_emit2(a,0xFF,0xC0); asm_jmp_label(a,sk1);
+            asm_def_label(a,tk1);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x00); asm_jcc_label(a,CC_E,dn1);
+            asm_emit2(a,0xFF,0xC1);
+            asm_def_label(a,in1);
+            asm_emit2(a,0xFF,0xC0);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x00); asm_jcc_label(a,CC_E,dn1);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x20); asm_jcc_label(a,CC_NE,in1);
+            asm_jmp_label(a,sk1);
+            asm_def_label(a,dn1);
+            asm_emit3(a,0x48,0x89,0x4D); asm_emit1(a,0x10); /* mov [rbp+16],rcx (argc) */
+
+            /* Step 3: HeapAlloc(GetProcessHeap(),0,(argc+1)*8) → argv in [rbp+24] */
+            asm_emit4(a,0x48,0x83,0xE4,0xF0); /* and rsp,-16 */
+            asm_sub_rsp(a,40); asm_call_import(a,"GetProcessHeap"); asm_add_rsp(a,40);
+            asm_mov_reg_reg(a,REG_RCX,REG_RAX);
+            asm_emit3(a,0x48,0x8B,0x45); asm_emit1(a,0x10); /* mov rax,[rbp+16] */
+            asm_emit3(a,0x48,0x8D,0x40); asm_emit1(a,0x01); /* lea rax,[rax+1] */
+            asm_emit4(a,0x48,0xC1,0xE0,0x03);               /* shl rax,3 */
+            asm_mov_reg_reg(a,REG_R8,REG_RAX);
+            asm_emit2(a,0x31,0xD2);                          /* xor edx,edx (flags=0) */
+            asm_emit4(a,0x48,0x83,0xE4,0xF0); /* and rsp,-16 */
+            asm_sub_rsp(a,40); asm_call_import(a,"HeapAlloc"); asm_add_rsp(a,40);
+            asm_emit3(a,0x48,0x89,0x45); asm_emit1(a,0x18); /* mov [rbp+24],rax (argv) */
+
+            /* Step 4: GetCommandLineA again for Pass 2 tokenisation */
+            asm_emit4(a,0x48,0x83,0xE4,0xF0); /* and rsp,-16 */
+            asm_sub_rsp(a,40); asm_call_import(a,"GetCommandLineA"); asm_add_rsp(a,40);
+            asm_emit3(a,0x48,0x8B,0x4D); asm_emit1(a,0x18); /* mov rcx,[rbp+24] (argv) */
+            asm_emit2(a,0x31,0xD2);                          /* xor edx,edx (tok_idx) */
+
+            /* Pass 2: record token pointers, NUL-terminate in-place */
+            asm_def_label(a,sk2);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x20); asm_jcc_label(a,CC_NE,tk2);
+            asm_emit2(a,0xFF,0xC0); asm_jmp_label(a,sk2);
+            asm_def_label(a,tk2);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x00); asm_jcc_label(a,CC_E,dn2);
+            asm_emit4(a,0x48,0x89,0x04,0xD1);               /* mov [rcx+rdx*8],rax */
+            asm_emit2(a,0xFF,0xC2);                          /* inc edx */
+            asm_def_label(a,in2);
+            asm_emit2(a,0xFF,0xC0);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x00); asm_jcc_label(a,CC_E,dn2);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x20); asm_jcc_label(a,CC_NE,in2);
+            asm_emit2(a,0xC6,0x00); asm_emit1(a,0x00);      /* NUL-terminate token */
+            asm_emit2(a,0xFF,0xC0); asm_jmp_label(a,sk2);
+            asm_def_label(a,dn2);
+            asm_emit3(a,0x4D,0x31,0xC0);                    /* xor r8,r8 */
+            asm_emit4(a,0x4C,0x89,0x04,0xD1);               /* argv[tok_idx]=NULL */
+
+            /* Restore RSP from R15, pop R15 */
+            asm_emit3(a,0x4C,0x89,0xFC);                    /* mov rsp,r15 */
+            asm_emit2(a,0x41,0x5F);                         /* pop r15 */
+            /* [rbp+16]=argc, [rbp+24]=argv */
+        } else {
+            /* 32-bit: EBX=cmdline, EDI=argc, ESI=argv, EAX=scan, EDX=tok_idx */
+            int sk1b=asm_new_label(a,"cl32_sk1"),tk1b=asm_new_label(a,"cl32_tk1");
+            int in1b=asm_new_label(a,"cl32_in1"),dn1b=asm_new_label(a,"cl32_dn1");
+            int sk2b=asm_new_label(a,"cl32_sk2"),tk2b=asm_new_label(a,"cl32_tk2");
+            int in2b=asm_new_label(a,"cl32_in2"),dn2b=asm_new_label(a,"cl32_dn2");
+            asm_push_reg(a,REG_EBX); asm_push_reg(a,REG_ESI); asm_push_reg(a,REG_EDI);
+            asm_call_import32(a,"GetCommandLineA"); asm_mov_reg_reg(a,REG_EBX,REG_EAX);
+            asm_mov_reg_reg(a,REG_EAX,REG_EBX); asm_emit2(a,0x31,0xFF);
+            asm_def_label(a,sk1b);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x20); asm_jcc_label(a,CC_NE,tk1b);
+            asm_emit2(a,0xFF,0xC0); asm_jmp_label(a,sk1b);
+            asm_def_label(a,tk1b);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x00); asm_jcc_label(a,CC_E,dn1b);
+            asm_emit2(a,0xFF,0xC7);
+            asm_def_label(a,in1b);
+            asm_emit2(a,0xFF,0xC0);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x00); asm_jcc_label(a,CC_E,dn1b);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x20); asm_jcc_label(a,CC_NE,in1b);
+            asm_jmp_label(a,sk1b);
+            asm_def_label(a,dn1b); /* EDI=argc */
+            /* HeapAlloc(GetProcessHeap(),8,(edi+1)*4) */
+            asm_call_import32(a,"GetProcessHeap"); /* EAX=heap */
+            asm_emit2(a,0x8D,0x47); asm_emit1(a,0x01); /* lea eax,[edi+1] */
+            asm_emit3(a,0xC1,0xE0,0x02); /* shl eax,2 -> size */
+            asm_push_reg(a,REG_EAX); /* push size */
+            asm_emit1(a,0x6A); asm_emit1(a,0x08); /* push 8 (HEAP_ZERO) */
+            asm_call_import32(a,"GetProcessHeap"); /* push handle */
+            asm_push_reg(a,REG_EAX);
+            asm_call_import32(a,"HeapAlloc"); /* stdcall pops 3 args */
+            asm_mov_reg_reg(a,REG_ESI,REG_EAX); /* ESI=argv */
+            asm_mov_reg_reg(a,REG_EAX,REG_EBX); asm_emit2(a,0x31,0xD2);
+            asm_def_label(a,sk2b);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x20); asm_jcc_label(a,CC_NE,tk2b);
+            asm_emit2(a,0xFF,0xC0); asm_jmp_label(a,sk2b);
+            asm_def_label(a,tk2b);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x00); asm_jcc_label(a,CC_E,dn2b);
+            asm_emit3(a,0x89,0x04,0x96); asm_emit2(a,0xFF,0xC2);
+            asm_def_label(a,in2b);
+            asm_emit2(a,0xFF,0xC0);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x00); asm_jcc_label(a,CC_E,dn2b);
+            asm_emit2(a,0x80,0x38); asm_emit1(a,0x20); asm_jcc_label(a,CC_NE,in2b);
+            asm_emit2(a,0xC6,0x00); asm_emit1(a,0x00); asm_emit2(a,0xFF,0xC0); asm_jmp_label(a,sk2b);
+            asm_def_label(a,dn2b);
+            asm_emit3(a,0xC7,0x04,0x96); asm_emit_u32(a,0);
+            asm_emit3(a,0x89,0x7D,0x08); asm_emit3(a,0x89,0x75,0x0C); /* argc,argv */
+            asm_pop_reg(a,REG_EDI); asm_pop_reg(a,REG_ESI); asm_pop_reg(a,REG_EBX);
+        }
+    }
     /* Generate function body; locals accumulate into sym->next_offset */
     codegen_stmt(cg,n->func.body);
 
