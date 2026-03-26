@@ -226,6 +226,10 @@ static const char *INTERNAL_SHIMS[] = {
     "strncmp","strcat","strncat","strchr","strstr",
     "abs","labs",
     "atoi","atol","atof",
+    "fopen","fclose","fgets","fputs","feof","fflush",
+    "fread","fwrite","fseek","ftell","rewind",
+    "fgetc","fputc","fgets","ungetc",
+    "remove","rename","ferror","clearerr",
     "sprintf","printf","puts","putchar","abort",
     NULL
 };
@@ -1658,6 +1662,50 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
         return;
     }
 
+    /* ---- msvcrt.dll file I/O passthrough shims ---- */
+    {
+        static const char *msvcrt_file_fns[] = {
+            "fopen","fclose","fgets","fputs","feof","fflush",
+            "fread","fwrite","fseek","ftell","rewind",
+            "fgetc","fputc","ungetc","remove","rename","ferror","clearerr",
+            NULL
+        };
+        int is_file_fn = 0;
+        for (int i=0; msvcrt_file_fns[i]; i++)
+            if (strcmp(name, msvcrt_file_fns[i])==0) { is_file_fn=1; break; }
+        if (is_file_fn) {
+            char import_key[64];
+            snprintf(import_key, sizeof import_key, "msvcrt.dll:%s", name);
+            symtable_add_import(cg->sym, import_key);
+            if (cg->is_64bit) {
+                /* 64-bit: args in RCX,RDX,R8,R9; shadow space */
+                int extra = (argc > 4) ? (argc-4)*8 : 0;
+                int frame = 32 + extra;
+                if ((frame & 8) == 0) frame += 8;
+                asm_sub_rsp(a, frame);
+                for (int i=0; i<argc; i++) {
+                    codegen_expr(cg, args[i]);
+                    if      (i==0) asm_mov_reg_reg(a,REG_RCX,REG_RAX);
+                    else if (i==1) asm_mov_reg_reg(a,REG_RDX,REG_RAX);
+                    else if (i==2) asm_mov_reg_reg(a,REG_R8, REG_RAX);
+                    else if (i==3) asm_mov_reg_reg(a,REG_R9, REG_RAX);
+                    else           asm_mov_mem_reg(a,REG_RSP,32+(i-4)*8,REG_RAX);
+                }
+                asm_call_import(a, name);
+                asm_add_rsp(a, frame);
+            } else {
+                /* 32-bit cdecl: args right-to-left */
+                for (int i=argc-1; i>=0; i--) {
+                    codegen_expr(cg, args[i]);
+                    asm_push_reg(a, REG_EAX);
+                }
+                asm_call_import32(a, name);
+                if (argc > 0) asm_add_rsp(a, argc*4);
+            }
+            return;
+        }
+    }
+
     /* Default for all other internal shims — evaluate args and return 0 */
     for (int i = 0; i < argc; i++) codegen_expr(cg, args[i]);
     asm_mov_reg_imm(a, REG_RAX, 0);
@@ -1818,10 +1866,27 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
     case AST_SIZEOF_TYPE:
         asm_mov_reg_imm(a,REG_RAX,(long long)sizeof_type(n->sizeof_type.type,cg->is_64bit));
         break;
-    case AST_SIZEOF_EXPR:
-        /* emit 4 for non-pointer, 8 for pointer (simplified) */
-        asm_mov_reg_imm(a,REG_RAX,cg->is_64bit?8:4);
+    case AST_SIZEOF_EXPR: {
+        /* Look up the size of the expression's type.
+         * For arrays: return the full array byte size.
+         * For pointers/scalars: return the pointer or type size. */
+        ASTNode *se = n->sizeof_expr.expr;
+        long long sz = cg->is_64bit ? 8 : 4; /* default: pointer size */
+        if (se && se->kind == AST_VAR) {
+            Symbol *sym = symtable_lookup(cg->sym, se->var.name);
+            if (sym && sym->type) {
+                if (sym->type->array_size > 0) {
+                    /* Array variable: size = element_size * array_size */
+                    int elem_sz = typeinfo_size(sym->type, cg->is_64bit);
+                    sz = (long long)elem_sz * sym->type->array_size;
+                } else {
+                    sz = (long long)typeinfo_size(sym->type, cg->is_64bit);
+                }
+            }
+        }
+        asm_mov_reg_imm(a, REG_RAX, sz);
         break;
+    }
 
     case AST_CAST: {
         /* Check if we are casting a float expression to an integer type.
