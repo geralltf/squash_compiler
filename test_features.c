@@ -10,6 +10,7 @@
 #include "include/stdlib.h"
 #include "include/string.h"
 #include "include/ctype.h"
+#include "include/stdio.h"
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -301,6 +302,76 @@ void test_main_args(int argc, char *argv[]) {
 /* forward declaration implementation */
 int fwd_double(int x) { return x * 2; }
 
+/* =========================================================================
+ * File I/O tests — write then read back a text file, and a binary file
+ * ========================================================================= */
+void test_file_io(void) {
+    /* ---- text write ---- */
+    FILE *f = fopen("_test_tmp.txt", "w");
+    check(f != NULL,              "fileio:fopen_w");
+    if (f != NULL) {
+        fputs("hello file\n", f);
+        fputs("line two\n", f);
+        fclose(f);
+        check(1,                  "fileio:fclose_w");
+    }
+
+    /* ---- text read back ---- */
+    f = fopen("_test_tmp.txt", "r");
+    check(f != NULL,              "fileio:fopen_r");
+    if (f != NULL) {
+        char buf[64];
+        char *r1 = fgets(buf, sizeof(buf), f);
+        check(r1 != NULL,         "fileio:fgets1");
+        check(buf[0]=='h',        "fileio:content1");
+        char *r2 = fgets(buf, sizeof(buf), f);
+        check(r2 != NULL,         "fileio:fgets2");
+        check(buf[0]=='l',        "fileio:content2");
+        char *r3 = fgets(buf, sizeof(buf), f);
+        check(r3==NULL,             "fileio:eof");
+        fclose(f);
+    }
+
+    /* ---- binary write ---- */
+    f = fopen("_test_tmp.bin", "wb");
+    check(f != NULL,              "fileio:fopen_wb");
+    if (f != NULL) {
+        char data[4];
+        data[0]=0x41; data[1]=0x42; data[2]=0x43; data[3]=0x44;
+        int nw = (int)fwrite(data, 1, 4, f);
+        check(nw == 4,            "fileio:fwrite");
+        fclose(f);
+    }
+
+    /* ---- binary read back ---- */
+    f = fopen("_test_tmp.bin", "rb");
+    check(f != NULL,              "fileio:fopen_rb");
+    if (f != NULL) {
+        char buf[8];
+        int nr = (int)fread(buf, 1, 4, f);
+        check(nr == 4,            "fileio:fread");
+        check(buf[0]==0x41 && buf[3]==0x44, "fileio:binary_data");
+        fclose(f);
+    }
+
+    /* ---- fseek / ftell ---- */
+    f = fopen("_test_tmp.txt", "r");
+    check(f != NULL,              "fileio:fopen_seek");
+    if (f != NULL) {
+        fseek(f, 0, SEEK_END);
+        int sz = (int)ftell(f);
+        check(sz > 0,             "fileio:ftell");
+        rewind(f);
+        int pos = (int)ftell(f);
+        check(pos == 0,           "fileio:rewind");
+        fclose(f);
+    }
+
+    /* ---- cleanup ---- */
+    remove("_test_tmp.txt");
+    remove("_test_tmp.bin");
+}
+
 /* ============================================================ */
 int main(int argc, char *argv[]) {
     printf("=== Feature Test Suite ===\r\n");
@@ -321,6 +392,7 @@ int main(int argc, char *argv[]) {
     test_forward_decl();
     test_union();
     test_main_args(argc, argv);
+    test_file_io();
     printf("===========================\r\n");
     printf("PASS:%d FAIL:%d\r\n", g_pass, g_fail);
     if (g_fail == 0) printf("ALL PASS\r\n");
