@@ -5,6 +5,28 @@
 #include <ctype.h>
 #include <errno.h>
 
+#ifdef _WIN32
+#define strdup _strdup
+#define strtok_r strtok_s
+#endif
+
+size_t my_strnlen(const char* src, size_t n) {
+    size_t len = 0;
+    while (len < n && src[len])
+        len++;
+    return len;
+}
+
+char* my_strndup(const char* s, size_t n) {
+    size_t len = my_strnlen(s, n);
+    char* p = malloc(len + 1);
+    if (p) {
+        memcpy(p, s, len);
+        p[len] = '\0';
+    }
+    return p;
+}
+
 /* =========================================================================
  * Error reporting helper
  * ========================================================================= */
@@ -426,7 +448,7 @@ static void pp_macro_define(PPState *st, const char *name, int nlen,
         return;
     }
     if (st->nmc >= PP_MAX_MACROS) return;
-    st->macros[st->nmc].name  = strndup(name, nlen);
+    st->macros[st->nmc].name  = my_strndup(name, nlen);
     st->macros[st->nmc].value = strdup(value);
     st->nmc++;
 }
@@ -713,8 +735,16 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
             int nlen2=(int)(p-ns);
             char incname[512]; snprintf(incname,sizeof incname,"%.*s",nlen2,ns);
 
-            if (system_inc) continue;  /* skip <stdio.h> etc. */
-
+            /* For system includes (<stdio.h> etc.), try our built-in include/ dir first */
+            char sys_path[600];
+            if (system_inc) {
+                /* Strip any leading path: use just the filename */
+                const char *base = incname;
+                for (const char *cp=incname; *cp; cp++) if(*cp=='/'||*cp=='\\') base=cp+1;
+                snprintf(sys_path, sizeof sys_path, "include/%s", base);
+                incname[0] = '\0'; /* signal to use sys_path */
+                strncat(incname, sys_path, sizeof(sys_path)-1);
+            }
             char *inc_src = pp_read_file(st, incname);
             if (!inc_src) {
                 fprintf(stderr,"preprocessor: cannot find '%s'\n", incname);
