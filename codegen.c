@@ -150,6 +150,53 @@ static int field_byte_offset(SymTable *sym, ASTNode *obj_node, const char *field
             offset += fsz;
         }
     }
+    /* Not found at top level — try anonymous __anon_N members (C11 anonymous unions) */
+    offset = 0;
+    for (int i = 0; i < sd->struct_decl.nfields; i++) {
+        ASTNode *f = sd->struct_decl.fields[i];
+        if (!f || f->kind != AST_FIELD) continue;
+        /* Check if this is an anonymous member (__anon_N) */
+        if (f->field.name && strncmp(f->field.name, "__anon_", 7)==0 && f->field.type) {
+            /* Find the struct for this anonymous member's type */
+            const char *atype = f->field.type->base;
+            if (atype) {
+                const char *bare = atype;
+                if (strncmp(bare,"struct ",7)==0) bare+=7;
+                else if (strncmp(bare,"union ",6)==0) bare+=6;
+                Symbol *asym = symtable_lookup(sym, atype);
+                if (!asym) { char k[256]; snprintf(k,sizeof k,"struct %s",bare); asym=symtable_lookup(sym,k); }
+                if (asym && asym->struct_node) {
+                    ASTNode *asd = asym->struct_node;
+                    int is_anon_union = (asd->struct_decl.is_union);
+                    int anon_off = 0;
+                    for (int j=0; j<asd->struct_decl.nfields; j++) {
+                        ASTNode *af = asd->struct_decl.fields[j];
+                        if (!af || af->kind!=AST_FIELD) continue;
+                        if (af->field.name && strcmp(af->field.name, field_name)==0) {
+                            return is_union ? 0 : (offset + (is_anon_union ? 0 : anon_off));
+                        }
+                        if (!is_anon_union) {
+                            int fsz = af->field.type ? typeinfo_size(af->field.type,sym->is_64bit) : 4;
+                            if (fsz<1) fsz=4;
+                            if (af->field.array_size>0) fsz*=af->field.array_size;
+                            int align=fsz<8?fsz:8;
+                            if (align>1) anon_off=(anon_off+align-1)&~(align-1);
+                            anon_off+=fsz;
+                        }
+                    }
+                }
+            }
+        }
+        /* Advance offset past this field */
+        if (!is_union) {
+            int fsz = f->field.type ? typeinfo_size(f->field.type,sym->is_64bit) : 4;
+            if (fsz<1) fsz=4;
+            if (f->field.array_size>0) fsz*=f->field.array_size;
+            int align=fsz<8?fsz:8;
+            if (align>1) offset=(offset+align-1)&~(align-1);
+            offset+=fsz;
+        }
+    }
     return 0; /* field not found — safe fallback */
 }
 
@@ -223,14 +270,15 @@ static const char *INTERNAL_SHIMS[] = {
     "malloc","calloc","realloc","free",
     "memcpy","memset","memcmp","memmove",
     "strlen","strcpy","strncpy","strcmp",
-    "strncmp","strcat","strncat","strchr","strstr",
+    "strncmp","strcat","strncat","strchr","strrchr","strstr","strpbrk","strtok",
     "abs","labs",
     "atoi","atol","atof",
+    "strdup","perror","strerror","getenv","fprintf",
     "fopen","fclose","fgets","fputs","feof","fflush",
     "fread","fwrite","fseek","ftell","rewind",
-    "fgetc","fputc","fgets","ungetc",
+    "fgetc","fputc","ungetc",
     "remove","rename","ferror","clearerr",
-    "sprintf","printf","puts","putchar","abort",
+    "sprintf","printf","puts","putchar","abort","exit","vfprintf","vprintf","snprintf",
     NULL
 };
 static int is_internal_shim(const char *name) {
@@ -1662,12 +1710,62 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
         return;
     }
 
+    /* ---- fprintf: direct msvcrt.dll call ---- */
+    if (strcmp(name,"fprintf")==0) {
+        /* Pass directly to msvcrt fprintf which handles FILE* + fmt + varargs */
+        symtable_add_import(cg->sym, "msvcrt.dll:fprintf");
+        Assembler *a2 = cg->asm_;
+        if (cg->is_64bit) {
+            int extra = (argc > 4) ? (argc-4)*8 : 0;
+            int frame = 32 + extra; if ((frame&8)==0) frame+=8;
+            asm_sub_rsp(a2, frame);
+            for (int i=0; i<argc; i++) {
+                codegen_expr(cg, args[i]);
+                if      (i==0) asm_mov_reg_reg(a2,REG_RCX,REG_RAX);
+                else if (i==1) asm_mov_reg_reg(a2,REG_RDX,REG_RAX);
+                else if (i==2) asm_mov_reg_reg(a2,REG_R8, REG_RAX);
+                else if (i==3) asm_mov_reg_reg(a2,REG_R9, REG_RAX);
+                else           asm_mov_mem_reg(a2,REG_RSP,32+(i-4)*8,REG_RAX);
+            }
+            asm_call_import(a2,"fprintf");
+            asm_add_rsp(a2, frame);
+        } else {
+            for (int i=argc-1; i>=0; i--) { codegen_expr(cg,args[i]); asm_push_reg(a2,REG_EAX); }
+            asm_call_import32(a2,"fprintf"); if (argc>0) asm_add_rsp(a2,argc*4);
+        }
+        return;
+    }
+
+    /* ---- exit(code): call ExitProcess(code) ---- */
+    if (strcmp(name,"exit")==0 || strcmp(name,"abort")==0) {
+        long long code_val = 0;
+        if (strcmp(name,"exit")==0 && argc>=1) {
+            codegen_expr(cg, args[0]);
+            /* result in RAX/EAX - move to arg register for ExitProcess */
+        } else {
+            asm_mov_reg_imm(a, REG_RAX, 0);
+        }
+        symtable_add_import(cg->sym, "KERNEL32.dll:ExitProcess");
+        if (cg->is_64bit) {
+            asm_sub_rsp(a, 40);
+            asm_mov_reg_reg(a, REG_RCX, REG_RAX);
+            asm_call_import(a, "ExitProcess");
+            asm_add_rsp(a, 40);
+        } else {
+            asm_push_reg(a, REG_EAX);
+            asm_call_import32(a, "ExitProcess");
+            asm_add_rsp(a, 4);
+        }
+        return;
+    }
+
     /* ---- msvcrt.dll file I/O passthrough shims ---- */
     {
         static const char *msvcrt_file_fns[] = {
             "fopen","fclose","fgets","fputs","feof","fflush",
             "fread","fwrite","fseek","ftell","rewind",
             "fgetc","fputc","ungetc","remove","rename","ferror","clearerr",
+            "strdup","perror","strerror","getenv","system","strrchr","strtok","strpbrk","vfprintf","vprintf","snprintf",
             NULL
         };
         int is_file_fn = 0;
@@ -2408,8 +2506,7 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
 
         if (is_internal_shim(name)) {
             /* shim_uses_regs: string/memory shims that clobber ESI/EDI/EBX in 32-bit */
-            #define shim_uses_regs(n) (!strcmp(n,"strcpy")||!strcmp(n,"strcmp")||!strcmp(n,"strncmp")||                !strcmp(n,"strcat")||!strcmp(n,"strncat")||!strcmp(n,"strchr")||!strcmp(n,"strstr")||                !strcmp(n,"strncpy")||!strcmp(n,"atoi")||!strcmp(n,"atol")||!strcmp(n,"memcmp")||                !strcmp(n,"memcpy")||!strcmp(n,"memmove")||!strcmp(n,"memset"))
-            if (!cg->is_64bit && shim_uses_regs(name)) {
+                        if (!cg->is_64bit && (!strcmp(name,"strcpy")||!strcmp(name,"strcmp")||!strcmp(name,"strnamecmp")||                !strcmp(name,"strcat")||!strcmp(name,"strnamecat")||!strcmp(name,"strchr")||!strcmp(name,"strstr")||                !strcmp(name,"strnamecpy")||!strcmp(name,"atoi")||!strcmp(name,"atol")||!strcmp(name,"memcmp")||                !strcmp(name,"memcpy")||!strcmp(name,"memmove")||!strcmp(name,"memset"))) {
                 /* Save callee-preserved registers that shims may clobber in 32-bit */
                 asm_push_reg(a, REG_EBX);
                 asm_push_reg(a, REG_ESI);
@@ -2488,7 +2585,23 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 char key[512]; snprintf(key,sizeof key,"%s:%s",sym->dll,name);
                 symtable_add_import(cg->sym,key);
                 asm_call_import(a,name);
-            } else asm_call_direct(a,get_func_label(cg,name));
+            } else if (sym && sym->kind==SYM_FUNC) {
+                /* Check if it's a Windows API (declared extern but really an import) */
+                const char *dll64 = symtable_find_dll(cg->sym, name);
+                if (dll64) {
+                    char key64[512]; snprintf(key64,sizeof key64,"%s:%s",dll64,name);
+                    symtable_add_import(cg->sym,key64);
+                    asm_call_import(a,name);
+                } else {
+                    /* Locally defined function: call directly */
+                    asm_call_direct(a,get_func_label(cg,name));
+                }
+            } else {
+                /* Unknown function: try msvcrt.dll passthrough for C stdlib */
+                char key[512]; snprintf(key,sizeof key,"msvcrt.dll:%s",name);
+                symtable_add_import(cg->sym,key);
+                asm_call_import(a,name);
+            }
             asm_add_rsp(a,frame);
             /* Sign-extend EAX->RAX so that signed int return values compare correctly
              * in 64-bit (e.g. strcmp returning -1 = 0xFFFFFFFF zero-extends to large
@@ -2517,10 +2630,22 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 char key[512]; snprintf(key,sizeof key,"%s:%s",sym->dll,name);
                 symtable_add_import(cg->sym,key);
                 asm_call_import32(a,name);
+            } else if (sym && sym->kind==SYM_FUNC) {
+                const char *dll32 = symtable_find_dll(cg->sym, name);
+                if (dll32) {
+                    char key32b[512]; snprintf(key32b,sizeof key32b,"%s:%s",dll32,name);
+                    symtable_add_import(cg->sym,key32b);
+                    asm_call_import32(a,name);
+                } else {
+                    asm_call_direct(a,get_func_label(cg,name));
+                }
             } else {
-                asm_call_direct(a,get_func_label(cg,name));
-                if (total_arg_bytes>0) asm_add_rsp(a,total_arg_bytes);
+                /* Unknown function: msvcrt passthrough */
+                char key32[512]; snprintf(key32,sizeof key32,"msvcrt.dll:%s",name);
+                symtable_add_import(cg->sym,key32);
+                asm_call_import32(a,name);
             }
+            if (total_arg_bytes>0) asm_add_rsp(a,total_arg_bytes);
         }
         break;
     }
@@ -2573,6 +2698,16 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
         break;
     }
 
+    case AST_BLOCK:
+        /* Block used as expression (e.g. compound literal) — evaluate stmts, last val in RAX */
+        for (int i=0;i<n->block.count;i++) {
+            if (i==n->block.count-1)
+                codegen_expr(cg,n->block.stmts[i]);
+            else
+                codegen_stmt(cg,n->block.stmts[i]);
+        }
+        break;
+
     default:
         fprintf(stderr,"codegen_expr: unhandled node kind %d\n",n->kind);
         asm_mov_reg_imm(a,REG_RAX,0);
@@ -2587,11 +2722,23 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
     if (!n) return;
 
     switch (n->kind) {
-    case AST_BLOCK:
-        symtable_push_scope(cg->sym);
-        for (int i=0;i<n->block.count;i++) codegen_stmt(cg,n->block.stmts[i]);
-        symtable_pop_scope(cg->sym);
+    case AST_BLOCK: {
+        /* Check if this is a flat declarator list (all children are VAR_DECL).
+         * Such blocks come from multi-declarator statements like "int a=1, b=2;"
+         * They must NOT push a new scope — vars belong to the current scope. */
+        int all_var_decl = (n->block.count > 0);
+        for (int i=0; i<n->block.count && all_var_decl; i++)
+            if (!n->block.stmts[i] || n->block.stmts[i]->kind != AST_VAR_DECL)
+                all_var_decl = 0;
+        if (all_var_decl) {
+            for (int i=0;i<n->block.count;i++) codegen_stmt(cg,n->block.stmts[i]);
+        } else {
+            symtable_push_scope(cg->sym);
+            for (int i=0;i<n->block.count;i++) codegen_stmt(cg,n->block.stmts[i]);
+            symtable_pop_scope(cg->sym);
+        }
         break;
+    }
 
     case AST_EXPR_STMT:
         codegen_expr(cg,n->expr_stmt.expr);
@@ -2869,6 +3016,21 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
             asm_mov_reg_imm(a, REG_RAX, 0);
         }
         asm_leave(a); asm_ret(a);
+        break;
+
+    case AST_NUMBER:
+    case AST_FLOAT:
+    case AST_STRING:
+        /* Null/no-op statement (e.g. from empty semicolon) — ignore */
+        break;
+
+    case AST_TYPEDEF_DECL:
+        /* Local typedef — symtable already updated by parser, nothing to emit */
+        break;
+
+    case AST_ENUM_DECL:
+    case AST_ENUM_VAL:
+        /* Enum declarations — values already in symtable */
         break;
 
     default:

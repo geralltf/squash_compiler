@@ -33,3 +33,9 @@ typedef unsigned int       uintptr_t;
 #define UINT32_MAX 4294967295U
 #define UINT64_MAX 18446744073709551615ULL
 #endif
+
+/* C99 integer constant macros */
+#define UINT64_C(x) ((unsigned long long)(x))
+#define INT64_C(x)  ((long long)(x))
+#define UINT32_C(x) ((unsigned int)(x))
+#define INT32_C(x)  ((int)(x))

@@ -27,6 +27,7 @@ char* my_strndup(const char* s, size_t n) {
     return p;
 }
 
+
 /* =========================================================================
  * Error reporting helper
  * ========================================================================= */
@@ -281,17 +282,16 @@ Token lexer_next(Lexer *l) {
     if (c=='>'&&c2=='>'&&c3=='=') { adv(l);adv(l); t.kind=TOK_RSHIFT_EQ; t.len=3; goto done; }
 
     /* Two-char */
-#define TW(a,b,k) if(c==(a)&&c2==(b)){adv(l);t.kind=(k);t.len=2;goto done;}
-    TW('<','<',TOK_LSHIFT)  TW('>','>',TOK_RSHIFT)
-    TW('&','&',TOK_AND)     TW('|','|',TOK_OR)
-    TW('=','=',TOK_EQ)      TW('!','=',TOK_NEQ)
-    TW('<','=',TOK_LE)      TW('>','=',TOK_GE)
-    TW('+','+',TOK_INC)     TW('-','-',TOK_DEC)
-    TW('+','=',TOK_PLUS_EQ) TW('-','=',TOK_MINUS_EQ)
-    TW('*','=',TOK_STAR_EQ) TW('/','=',TOK_SLASH_EQ)
-    TW('%','=',TOK_PERCENT_EQ) TW('&','=',TOK_AMP_EQ)
-    TW('|','=',TOK_PIPE_EQ) TW('^','=',TOK_CARET_EQ)
-    TW('-','>',TOK_ARROW)
+    if(c=='<'&&c2=='<'){adv(l);t.kind=TOK_LSHIFT;t.len=2;goto done;}  if(c=='>'&&c2=='>'){adv(l);t.kind=TOK_RSHIFT;t.len=2;goto done;}
+    if(c=='&'&&c2=='&'){adv(l);t.kind=TOK_AND;t.len=2;goto done;}     if(c=='|'&&c2=='|'){adv(l);t.kind=TOK_OR;t.len=2;goto done;}
+    if(c=='='&&c2=='='){adv(l);t.kind=TOK_EQ;t.len=2;goto done;}      if(c=='!'&&c2=='='){adv(l);t.kind=TOK_NEQ;t.len=2;goto done;}
+    if(c=='<'&&c2=='='){adv(l);t.kind=TOK_LE;t.len=2;goto done;}      if(c=='>'&&c2=='='){adv(l);t.kind=TOK_GE;t.len=2;goto done;}
+    if(c=='+'&&c2=='+'){adv(l);t.kind=TOK_INC;t.len=2;goto done;}     if(c=='-'&&c2=='-'){adv(l);t.kind=TOK_DEC;t.len=2;goto done;}
+    if(c=='+'&&c2=='='){adv(l);t.kind=TOK_PLUS_EQ;t.len=2;goto done;} if(c=='-'&&c2=='='){adv(l);t.kind=TOK_MINUS_EQ;t.len=2;goto done;}
+    if(c=='*'&&c2=='='){adv(l);t.kind=TOK_STAR_EQ;t.len=2;goto done;} if(c=='/'&&c2=='='){adv(l);t.kind=TOK_SLASH_EQ;t.len=2;goto done;}
+    if(c=='%'&&c2=='='){adv(l);t.kind=TOK_PERCENT_EQ;t.len=2;goto done;} if(c=='&'&&c2=='='){adv(l);t.kind=TOK_AMP_EQ;t.len=2;goto done;}
+    if(c=='|'&&c2=='='){adv(l);t.kind=TOK_PIPE_EQ;t.len=2;goto done;} if(c=='^'&&c2=='='){adv(l);t.kind=TOK_CARET_EQ;t.len=2;goto done;}
+    if(c=='-'&&c2=='>'){adv(l);t.kind=TOK_ARROW;t.len=2;goto done;}
 #undef TW
 
     /* One-char */
@@ -485,14 +485,15 @@ static char *pp_expand(PPState *st, const char *src) {
                 int pre  = (p==out || !(isalnum((unsigned char)p[-1])||p[-1]=='_'));
                 int post = !(isalnum((unsigned char)p[mlen])||p[mlen]=='_');
                 if (!pre || !post) { p++; continue; }
+                int poff = (int)(p - out);  /* save offset BEFORE free */
                 int ol   = (int)strlen(out);
                 int vl   = (int)strlen(mval);
                 char *tmp = malloc(ol - mlen + vl + 1);
-                memcpy(tmp, out, p - out);
-                memcpy(tmp + (p-out), mval, vl);
-                strcpy(tmp + (p-out) + vl, p + mlen);
+                memcpy(tmp, out, poff);
+                memcpy(tmp + poff, mval, vl);
+                strcpy(tmp + poff + vl, p + mlen);
                 free(out); out = tmp;
-                p = out + (p-out) + vl;
+                p = out + poff + vl;  /* use saved offset, not stale p */
                 changed = 1;
             }
         }
@@ -579,14 +580,8 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
     cond_active[0]=1; cond_seen_true[0]=1; cond_seen_else[0]=0;
 
     /* Helper: are we currently in an active (outputting) branch? */
-#define PP_ACTIVE() (cond_active[cond_depth])
 
     /* Helper: append text to output buffer */
-#define PP_EMIT(s,n) do {                          \
-    size_t _n=(n);                                  \
-    while(len+_n+2>cap){cap*=2;out=realloc(out,cap);}  \
-    memcpy(out+len,(s),_n); len+=_n;               \
-} while(0)
 
     /* Split source into lines, process each */
     char *copy = strdup(src);
@@ -598,10 +593,10 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
 
         if (*p != '#') {
             /* Regular source line: macro-expand and emit if active */
-            if (PP_ACTIVE()) {
+            if ((cond_active[cond_depth])) {
                 char *expanded = pp_expand(st, line);
-                PP_EMIT(expanded, strlen(expanded));
-                PP_EMIT("\n", 1);
+                do { size_t _emn=(strlen(expanded)); while(len+_emn+2>cap){cap*=2;out=(char*)realloc(out,cap);} memcpy(out+len,(expanded),_emn); len+=_emn; } while(0);
+                do { size_t _emn=(1); while(len+_emn+2>cap){cap*=2;out=(char*)realloc(out,cap);} memcpy(out+len,("\n"),_emn); len+=_emn; } while(0);
                 free(expanded);
             }
             continue;
@@ -691,7 +686,7 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
         }
 
         /* Skip directives in inactive branches */
-        if (!PP_ACTIVE()) continue;
+        if (!(cond_active[cond_depth])) continue;
 
         /* ── #define ──────────────────────────── */
         if (strncmp(p,"define",6)==0 && !isalnum((unsigned char)p[6]) && p[6]!='_') {
@@ -751,7 +746,7 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
                 continue;
             }
             char *inc_out = process_file(st, inc_src, incname);
-            PP_EMIT(inc_out, strlen(inc_out));
+            do { size_t _emn=(strlen(inc_out)); while(len+_emn+2>cap){cap*=2;out=(char*)realloc(out,cap);} memcpy(out+len,(inc_out),_emn); len+=_emn; } while(0);
             free(inc_src); free(inc_out);
             continue;
         }
@@ -763,8 +758,6 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
     free(copy);
     out[len] = '\0';
 
-#undef PP_ACTIVE
-#undef PP_EMIT
     return out;
 }
 
@@ -781,6 +774,10 @@ char *preprocess(const char *src, const char *filename,
     pp_macro_define(st,"FALSE",5,"0");
     pp_macro_define(st,"EXIT_SUCCESS",12,"0");
     pp_macro_define(st,"EXIT_FAILURE",12,"1");
+    /* Standard streams: use msvcrt file descriptor values */
+    pp_macro_define(st,"stdin", 5,"((void*)0)");
+    pp_macro_define(st,"stdout",6,"((void*)1)");
+    pp_macro_define(st,"stderr",6,"((void*)2)");
 
     char *result = process_file(st, src, filename);
 

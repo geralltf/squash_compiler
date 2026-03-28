@@ -37,15 +37,19 @@
 #include <time.h>
 #include <stdint.h>
 
+#ifdef _WIN32
+#define strdup _strdup
+#define strcasecmp _stricmp
+#endif
+
 /* =========================================================================
  * Constants
  * ========================================================================= */
 #define FILE_ALIGN    0x200
 #define SEC_ALIGN     0x1000
 #define IMAGE_BASE_32 0x00400000u
-#define IMAGE_BASE_64 UINT64_C(0x140000000)
+#define IMAGE_BASE_64 ((unsigned long long)0x140000000ULL)
 
-#define ALIGN_UP(v,a) (((v)+(a)-1) & ~((a)-1))
 
 #define IMAGE_FILE_MACHINE_I386       0x014C
 #define IMAGE_FILE_MACHINE_AMD64      0x8664
@@ -58,9 +62,6 @@
 #define IMAGE_DIRECTORY_ENTRY_IMPORT  1
 #define IMAGE_DIRECTORY_ENTRY_IAT     12
 
-#define SCN_CODE   (0x00000020|0x20000000|0x40000000) /* CNT_CODE|MEM_EXEC|MEM_READ */
-#define SCN_RDATA  (0x00000040|0x40000000)             /* CNT_INIT|MEM_READ */
-#define SCN_DATA   (0x00000040|0x40000000|0x80000000)  /* CNT_INIT|MEM_R|MEM_W */
 
 /* =========================================================================
  * Little-endian write helpers
@@ -130,8 +131,8 @@ void pe_build_opt_header_32(uint8_t *buf, uint32_t ep_rva, uint32_t img_size,
     PE_OptionalHeader32 *oh = (PE_OptionalHeader32 *)buf;
     oh->Magic                       = IMAGE_NT_OPTIONAL_HDR32_MAGIC;
     oh->MajorLinkerVersion          = 14;
-    oh->SizeOfCode                  = ALIGN_UP(code_size, FILE_ALIGN);
-    oh->SizeOfInitializedData       = ALIGN_UP(idata_size, FILE_ALIGN);
+    oh->SizeOfCode                  = (((code_size)+(FILE_ALIGN)-1) & ~((FILE_ALIGN)-1));
+    oh->SizeOfInitializedData       = (((idata_size)+(FILE_ALIGN)-1) & ~((FILE_ALIGN)-1));
     oh->AddressOfEntryPoint         = ep_rva;
     oh->BaseOfCode                  = SEC_ALIGN;          /* .text RVA */
     oh->BaseOfData                  = 2 * SEC_ALIGN;      /* .rdata RVA */
@@ -165,8 +166,8 @@ void pe_build_opt_header_64(uint8_t *buf, uint32_t ep_rva, uint32_t img_size,
     PE_OptionalHeader64 *oh = (PE_OptionalHeader64 *)buf;
     oh->Magic                       = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
     oh->MajorLinkerVersion          = 14;
-    oh->SizeOfCode                  = ALIGN_UP(code_size, FILE_ALIGN);
-    oh->SizeOfInitializedData       = ALIGN_UP(idata_size, FILE_ALIGN);
+    oh->SizeOfCode                  = (((code_size)+(FILE_ALIGN)-1) & ~((FILE_ALIGN)-1));
+    oh->SizeOfInitializedData       = (((idata_size)+(FILE_ALIGN)-1) & ~((FILE_ALIGN)-1));
     oh->AddressOfEntryPoint         = ep_rva;
     oh->BaseOfCode                  = SEC_ALIGN;
     oh->ImageBase                   = IMAGE_BASE_64;
@@ -346,7 +347,7 @@ int pe_link_and_write(PEBuildInput *in) {
     /* String pool follows */
     uint32_t strpool_off = cur_hn;
     uint32_t rdata_size  = strpool_off + (uint32_t)in->rdata_strings_len;
-    rdata_size = ALIGN_UP(rdata_size, FILE_ALIGN);
+    rdata_size = (((rdata_size)+(FILE_ALIGN)-1) & ~((FILE_ALIGN)-1));
 
     /* -----------------------------------------------------------------------
      * Step 3: Assign RVAs
@@ -360,15 +361,15 @@ int pe_link_and_write(PEBuildInput *in) {
     uint32_t oh_size  = is64 ? (uint32_t)sizeof(PE_OptionalHeader64)
                               : (uint32_t)sizeof(PE_OptionalHeader32);
     uint32_t hdr_raw  = 0x80 + 4 + 20 + oh_size + 4*40; /* 4 sections */
-    uint32_t hdr_size = ALIGN_UP(hdr_raw, FILE_ALIGN);
+    uint32_t hdr_size = (((hdr_raw)+(FILE_ALIGN)-1) & ~((FILE_ALIGN)-1));
 
     uint32_t text_rva   = SEC_ALIGN;                           /* 0x1000 */
-    uint32_t text_raw   = ALIGN_UP(in->text_len, FILE_ALIGN);
-    uint32_t rdata_rva  = text_rva  + ALIGN_UP(text_raw,  SEC_ALIGN);
-    uint32_t data_rva   = rdata_rva + ALIGN_UP(rdata_size, SEC_ALIGN);
+    uint32_t text_raw   = (((in->text_len)+(FILE_ALIGN)-1) & ~((FILE_ALIGN)-1));
+    uint32_t rdata_rva  = text_rva  + (((text_raw)+(SEC_ALIGN)-1) & ~((SEC_ALIGN)-1));
+    uint32_t data_rva   = rdata_rva + (((rdata_size)+(SEC_ALIGN)-1) & ~((SEC_ALIGN)-1));
     /* .data section holds the writable data pool (handle cache, static vars) */
     uint32_t wdata_size = (in->wdata_len > 0) ? (uint32_t)in->wdata_len : 0;
-    uint32_t data_raw   = ALIGN_UP(wdata_size > 0 ? wdata_size : 1, FILE_ALIGN);
+    uint32_t data_raw   = (((wdata_size > 0 ? wdata_size : 1)+(FILE_ALIGN)-1) & ~((FILE_ALIGN)-1));
     uint32_t bss_rva    = data_rva  + SEC_ALIGN;  /* .bss after full .data page */
     uint32_t img_size   = bss_rva   + SEC_ALIGN;  /* SizeOfImage covers all sections */
 
@@ -623,11 +624,11 @@ int pe_link_and_write(PEBuildInput *in) {
     /* Section table: placed right after optional header */
     uint32_t sh_base = 0x98 + oh_size;
     pe_build_section_header(hdr+sh_base+0*40, ".text",
-        (uint32_t)in->text_len, text_rva,  text_raw,  text_foff,  SCN_CODE);
+        (uint32_t)in->text_len, text_rva,  text_raw,  text_foff,  (0x00000020|0x20000000|0x40000000));
     pe_build_section_header(hdr+sh_base+1*40, ".rdata",
-        rdata_size, rdata_rva, rdata_size, rdata_foff, SCN_RDATA);
+        rdata_size, rdata_rva, rdata_size, rdata_foff, (0x00000040|0x40000000));
     pe_build_section_header(hdr+sh_base+2*40, ".data",
-        data_raw, data_rva, data_raw, data_foff, SCN_DATA);
+        data_raw, data_rva, data_raw, data_foff, (0x00000040|0x40000000|0x80000000));
     pe_build_section_header(hdr+sh_base+3*40, ".bss",
         SEC_ALIGN, bss_rva, 0, 0,
         0x00000080|0x40000000|0x80000000); /* CNT_UNINIT|R|W */

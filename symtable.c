@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 typedef struct { const char *name; const char *dll; } WinAPI;
 static const WinAPI WIN_APIS[] = {
     {"GetStdHandle","KERNEL32.dll"},{"WriteFile","KERNEL32.dll"},
@@ -31,6 +35,14 @@ static const WinAPI WIN_APIS[] = {
     {"sprintf","__internal__"},{"printf","__internal__"},
     {"puts","__internal__"},{"putchar","__internal__"},
     {"abort","__internal__"},
+    {"exit","__internal__"},
+    {"GetSystemTimeAsFileTime","KERNEL32.dll"},
+    {"GetCurrentProcessId","KERNEL32.dll"},
+    {"GetCurrentThreadId","KERNEL32.dll"},
+    {"InitializeSListHead","KERNEL32.dll"},
+    {"GetSystemTime","KERNEL32.dll"},
+    {"GetLocalTime","KERNEL32.dll"},
+    {"GetTickCount","KERNEL32.dll"},
     {NULL,NULL}
 };
 
@@ -261,6 +273,11 @@ void symtable_add_import(SymTable *st, const char *dll_func) {
         st->imports = realloc(st->imports, st->import_cap*sizeof(char*));
     }
     st->imports[st->import_count++] = strdup(dll_func);
+}
+
+const char *symtable_find_dll(SymTable *st, const char *name) {
+    (void)st;
+    return find_dll(name);
 }
 
 void symtable_print(const SymTable *st) {

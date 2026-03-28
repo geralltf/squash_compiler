@@ -9,6 +9,10 @@
 #include "codegen.h"
 #include "pe_builder.h"
 
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 static char *read_file(const char *path) {
     FILE *fp=fopen(path,"rb");
     if (!fp) { perror(path); exit(1); }

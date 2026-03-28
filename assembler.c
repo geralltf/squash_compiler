@@ -4,6 +4,10 @@
 #include <string.h>
 #include <assert.h>
 
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 /* =========================================================================
  * Init / free
  * ========================================================================= */
@@ -114,7 +118,9 @@ void asm_resolve(Assembler *a) {
         int lid   = a->fixups[i].label_id;
         int target = a->labels[lid].offset;
         if (target < 0) {
-            fprintf(stderr,"asm_resolve: undefined label %d\n",lid); exit(1);
+            fprintf(stderr,"asm_resolve: undefined label %d (name=%s)\n",
+                lid, (lid<a->label_count && a->labels[lid].name) ? a->labels[lid].name : "?");
+            exit(1);
         }
         /* pc-relative: target - (patch + 4) */
         int32_t disp = (int32_t)(target - (patch + 4));

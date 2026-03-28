@@ -63,5 +63,6 @@ void    symtable_reset_locals (SymTable *st);
 int     symtable_local_size   (SymTable *st);
 void    symtable_add_import   (SymTable *st, const char *dll_func);
 void    symtable_print        (const SymTable *st);
+const char *symtable_find_dll (SymTable *st, const char *name);
 
 #endif

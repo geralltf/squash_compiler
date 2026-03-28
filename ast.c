@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 /* =========================================================================
  * TypeInfo
  * ========================================================================= */
@@ -65,6 +69,15 @@ int typeinfo_size(const TypeInfo *t, int is_64bit) {
 }
 
 /* Returns 1 if the type is a floating-point type */
+TypeInfo *typeinfo_copy(const TypeInfo *t) {
+    if (!t) return NULL;
+    TypeInfo *c = calloc(1, sizeof(TypeInfo));
+    *c = *t;  /* shallow copy fields */
+    if (t->base) c->base = strdup(t->base);
+    /* pointed_t is shared (not deep-copied) which is fine for our use */
+    return c;
+}
+
 int typeinfo_is_float(const TypeInfo *t) {
     if (!t || !t->base || t->pointer_depth > 0) return 0;
     const char *b = t->base;

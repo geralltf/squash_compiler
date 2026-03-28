@@ -4,6 +4,10 @@
 #include <string.h>
 #include <stdarg.h>
 
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 /* =========================================================================
  * Helpers
  * ========================================================================= */
@@ -91,8 +95,22 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
                     /* field might have pointer stars */
                     TypeInfo *ft2 = ft;
                     while (chk(p,TOK_STAR)) { adv(p); ft2=typeinfo_ptr(ft2); }
-                    if (!chk(p,TOK_IDENT)) { parse_error(p,"expected field name"); break; }
-                    char fn[64]; strncpy(fn,tok_ident(cur(p)),sizeof fn-1); adv(p);
+                    char fn[64];
+                    if (!chk(p,TOK_IDENT)) {
+                        /* Anonymous struct/union member (C11): no field name.
+                         * Give it a hidden name "__anon_N" so struct is valid. */
+                        if (ft && ft->base &&
+                            (strncmp(ft->base,"struct ",7)==0 ||
+                             strncmp(ft->base,"union " ,6)==0)) {
+                            snprintf(fn, sizeof fn, "__anon_%d", p->anon_counter++);
+                        } else {
+                            parse_error(p,"expected field name"); break;
+                        }
+                    } else {
+                        strncpy(fn, tok_ident(cur(p)), sizeof fn-1);
+                        fn[sizeof fn-1]='\0';
+                        adv(p);
+                    }
                     int arr=-1;
                     if (chk(p,TOK_LBRACKET)) {
                         adv(p);
@@ -304,15 +322,22 @@ ASTNode *ParsePrimary(Parser *p) {
 
     if (chk(p,TOK_SIZEOF)) {
         adv(p);
-        eat(p,TOK_LPAREN);
-        if (is_type_start(p)) {
-            TypeInfo *ti = ParseFullType(p);
+        /* sizeof supports both sizeof(x) and sizeof x */
+        if (chk(p, TOK_LPAREN)) {
+            adv(p); /* consume '(' */
+            if (is_type_start(p)) {
+                TypeInfo *ti = ParseFullType(p);
+                eat(p,TOK_RPAREN);
+                return ast_sizeof_type(ti, line);
+            }
+            ASTNode *e = ParseUnary(p);
             eat(p,TOK_RPAREN);
-            return ast_sizeof_type(ti, line);
+            return ast_sizeof_expr(e, line);
+        } else {
+            /* sizeof without parens: sizeof varname */
+            ASTNode *eu = ParseUnary(p);
+            return ast_sizeof_expr(eu, line);
         }
-        ASTNode *e = ParseExpression(p);
-        eat(p,TOK_RPAREN);
-        return ast_sizeof_expr(e, line);
     }
 
     if (chk(p,TOK_IDENT)) return ParseIdentifier(p);
@@ -529,6 +554,23 @@ ASTNode *ParseBlock(Parser *p) {
 
 ASTNode *ParseStatement(Parser *p) {
     int line = cur(p).line;
+    /* Null statement: just a semicolon */
+    if (chk(p,TOK_SEMICOLON)) { adv(p); return ast_number(0,line); }
+
+    /* Local typedef inside a function body */
+    if (chk(p,TOK_TYPEDEF)) {
+        adv(p);
+        TypeInfo *ti = ParseTypeSpecifier(p);
+        while (chk(p,TOK_STAR)) { adv(p); ti->pointer_depth++; }
+        if (chk(p,TOK_IDENT)) {
+            char alias[256]; strncpy(alias,tok_ident(cur(p)),sizeof alias-1); adv(p);
+            eat(p,TOK_SEMICOLON);
+            symtable_define_typedef(p->sym, alias, ti);
+            return ast_typedef_decl(ti, alias, line);
+        }
+        eat(p,TOK_SEMICOLON);
+        return ast_number(0,line);
+    }
 
     if (chk(p,TOK_LBRACE)) return ParseBlock(p);
 
@@ -723,6 +765,7 @@ ASTNode *ParseVariable(Parser *p) {
 
     TypeInfo *type = ParseTypeSpecifier(p);
     if (!type) { parse_error(p,"expected type specifier"); return ast_number(0,line); }
+    int base_ptr_depth = type->pointer_depth; /* save before first declarator's stars */
 
     /* Pointer stars directly after type */
     while (chk(p,TOK_STAR)) { adv(p); type->pointer_depth++; }
@@ -803,6 +846,40 @@ ASTNode *ParseVariable(Parser *p) {
             init = ParseAssignment(p);
         }
     }
+    /* Multi-declarator: "int a=1, *b=NULL, c[4];" — collect all into a block */
+    if (chk(p, TOK_COMMA)) {
+        /* Build a list of VarDecl nodes, one per declarator */
+        ASTNode *decls[64]; int nd=0;
+        symtable_define_var(p->sym, name, type);
+        decls[nd++] = ast_var_decl(storage[0]?storage:NULL, type, name, init, array_size, line);
+        while (chk(p, TOK_COMMA) && nd<63) {
+            adv(p); /* consume ',' */
+            /* Each additional declarator gets a fresh copy of the BASE type */
+            if (!type) { parse_error(p,"internal: type is null before copy"); break; }
+            TypeInfo *t2 = (TypeInfo*)calloc(1, sizeof(TypeInfo));
+            if (!t2) { parse_error(p,"internal: calloc returned null"); break; }
+            *t2 = *type;
+            if (type->base) t2->base = strdup(type->base);
+            t2->pointer_depth = base_ptr_depth;  /* reset to base, not first declarator's depth */
+            while (chk(p, TOK_STAR)) { adv(p); t2->pointer_depth++; }
+            if (!chk(p,TOK_IDENT)) { parse_error(p,"expected declarator name"); break; }
+            char n2[256]; strncpy(n2,tok_ident(cur(p)),sizeof n2-1); n2[sizeof n2-1]='\0'; adv(p);
+            int arr2=-1;
+            if (chk(p,TOK_LBRACKET)) {
+                adv(p);
+                if (chk(p,TOK_NUMBER)) { arr2=(int)cur(p).ival; adv(p); } else arr2=0;
+                eat(p,TOK_RBRACKET);
+            }
+            ASTNode *init2=NULL;
+            if (chk(p,TOK_ASSIGN)) { adv(p); init2=ParseAssignment(p); }
+            symtable_define_var(p->sym, n2, t2);
+            decls[nd++] = ast_var_decl(storage[0]?storage:NULL, t2, n2, init2, arr2, line);
+        }
+        eat(p,TOK_SEMICOLON);
+        if (nd==1) return decls[0];
+        return ast_block(decls, nd, line);
+    }
+
     eat(p,TOK_SEMICOLON);
 
     symtable_define_var(p->sym, name, type);
@@ -891,7 +968,32 @@ ASTNode *parse_program(Parser *p) {
                 int arr=-1;
                 if (chk(p,TOK_LBRACKET)) { adv(p); if (chk(p,TOK_NUMBER)){ arr=(int)cur(p).ival; adv(p); } eat(p,TOK_RBRACKET); }
                 ASTNode *init=NULL;
-                if (chk(p,TOK_ASSIGN)){adv(p); init=ParseAssignment(p);}
+                if (chk(p,TOK_ASSIGN)){
+                    adv(p);
+                    if (chk(p,TOK_LBRACE)) {
+                        /* Brace-enclosed initializer: { val, val, ... } or { {v,v}, ... } */
+                        adv(p); /* consume { */
+                        ASTNode *elems[1024]; int ne=0;
+                        while (!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF)&&ne<1023) {
+                            if (chk(p,TOK_LBRACE)) {
+                                /* nested brace: struct literal - collect until } */
+                                adv(p);
+                                while (!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF)&&ne<1023) {
+                                    elems[ne++]=ParseAssignment(p);
+                                    if (!chk(p,TOK_COMMA)) break; adv(p);
+                                }
+                                eat(p,TOK_RBRACE);
+                            } else {
+                                elems[ne++]=ParseAssignment(p);
+                            }
+                            if (!chk(p,TOK_COMMA)) break; adv(p);
+                        }
+                        eat(p,TOK_RBRACE);
+                        init = ast_block(elems, ne, line);
+                    } else {
+                        init=ParseAssignment(p);
+                    }
+                }
                 eat(p,TOK_SEMICOLON);
                 symtable_define_global(p->sym,name,ti,arr);
                 decls[count++]=ast_var_decl(NULL,ti,name,init,arr,line);
@@ -965,7 +1067,31 @@ ASTNode *parse_program(Parser *p) {
                 eat(p,TOK_RBRACKET);
             }
             ASTNode *init=NULL;
-            if (chk(p,TOK_ASSIGN)) { adv(p); init=ParseAssignment(p); }
+            if (chk(p,TOK_ASSIGN)) {
+                adv(p);
+                if (chk(p,TOK_LBRACE)) {
+                    /* Braced global initializer: arr = {a,b} or = {{a,b},{c,d}} */
+                    adv(p);
+                    ASTNode *elems[1024]; int ne=0;
+                    while (!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF)&&ne<1023) {
+                        if (chk(p,TOK_LBRACE)) {
+                            adv(p);
+                            while (!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF)&&ne<1023) {
+                                elems[ne++]=ParseAssignment(p);
+                                if (!chk(p,TOK_COMMA)) break; adv(p);
+                            }
+                            eat(p,TOK_RBRACE);
+                        } else {
+                            elems[ne++]=ParseAssignment(p);
+                        }
+                        if (!chk(p,TOK_COMMA)) break; adv(p);
+                    }
+                    eat(p,TOK_RBRACE);
+                    init = ast_block(elems, ne, line);
+                } else {
+                    init=ParseAssignment(p);
+                }
+            }
             eat(p,TOK_SEMICOLON);
             symtable_define_global(p->sym, name, ret, arr);
             decls[count++]=ast_var_decl(storage[0]?storage:NULL, ret, name, init, arr, line);
