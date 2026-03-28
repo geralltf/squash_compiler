@@ -118,7 +118,7 @@ void asm_resolve(Assembler *a) {
         int lid   = a->fixups[i].label_id;
         int target = a->labels[lid].offset;
         if (target < 0) {
-            fprintf(stderr,"asm_resolve: undefined label %d (name=%s)\n",
+            printf("asm_resolve: undefined label %d (name=%s)\n",
                 lid, (lid<a->label_count && a->labels[lid].name) ? a->labels[lid].name : "?");
             exit(1);
         }
@@ -392,7 +392,7 @@ void asm_mov_reg_mem(Assembler *a, Reg dst, Reg base, int disp) {
 
 /* lea dst, [rip + data_symbol]  (64-bit only: 48 8D 05 <rel32>) */
 void asm_lea_rip_data(Assembler *a, Reg dst, const char *sym) {
-    if (!a->is_64bit) { fprintf(stderr,"asm_lea_rip_data: 32-bit not supported\n"); exit(1); }
+    if (!a->is_64bit) { printf("asm_lea_rip_data: 32-bit not supported\n"); exit(1); }
     rex_w(a, dst, REG_RAX);
     asm_emit1(a, 0x8D);
     /* ModRM: mod=00, reg=dst, rm=101 (RIP-relative) */
@@ -656,7 +656,7 @@ void asm_resolve_text_relocs(Assembler *a, uint32_t text_rva, uint64_t image_bas
             label_off = a->labels[label_id].offset;
         }
         if (label_off < 0) {
-            fprintf(stderr, "asm_resolve_text_relocs: label %d not found\n", label_id);
+            printf("asm_resolve_text_relocs: label %d not found\n", label_id);
             continue;
         }
 

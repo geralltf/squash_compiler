@@ -21,3 +21,7 @@ void *memset(void *d, int c, unsigned int n);
 int   memcmp(const void *a, const void *b, unsigned int n);
 
 #endif
+
+/* Windows-specific case-insensitive comparison */
+int _stricmp(const char *a, const char *b);
+int _strnicmp(const char *a, const char *b, int n);

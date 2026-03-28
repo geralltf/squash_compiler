@@ -278,7 +278,7 @@ static const char *INTERNAL_SHIMS[] = {
     "fread","fwrite","fseek","ftell","rewind",
     "fgetc","fputc","ungetc",
     "remove","rename","ferror","clearerr",
-    "sprintf","printf","puts","putchar","abort","exit","vfprintf","vprintf","snprintf",
+    "sprintf","printf","puts","putchar","abort","exit","vfprintf","vprintf","snprintf","vsnprintf",
     NULL
 };
 static int is_internal_shim(const char *name) {
@@ -1765,7 +1765,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             "fopen","fclose","fgets","fputs","feof","fflush",
             "fread","fwrite","fseek","ftell","rewind",
             "fgetc","fputc","ungetc","remove","rename","ferror","clearerr",
-            "strdup","perror","strerror","getenv","system","strrchr","strtok","strpbrk","vfprintf","vprintf","snprintf",
+            "strdup","perror","strerror","getenv","system","strrchr","strtok","strpbrk","vfprintf","vprintf","snprintf","vsnprintf","_stricmp","_strnicmp",
             NULL
         };
         int is_file_fn = 0;
@@ -1818,7 +1818,7 @@ void codegen_lvalue(CodeGen *cg, ASTNode *n) {
     switch (n->kind) {
     case AST_VAR: {
         Symbol *s=symtable_lookup(cg->sym,n->var.name);
-        if (!s) { fprintf(stderr,"codegen_lvalue: undefined '%s'\n",n->var.name); asm_mov_reg_imm(a,REG_RAX,0); return; }
+        if (!s) { printf("codegen_lvalue: undefined '%s'\n",n->var.name); asm_mov_reg_imm(a,REG_RAX,0); return; }
         if (s->kind==SYM_VAR||s->kind==SYM_PARAM)
             asm_lea_rbp_disp(a,REG_RAX,s->offset);
         else if (s->kind==SYM_GLOBAL) {
@@ -1926,7 +1926,7 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
 
     case AST_VAR: {
         Symbol *s=symtable_lookup(cg->sym,n->var.name);
-        if (!s) { fprintf(stderr,"codegen: undefined '%s' at line %d\n",n->var.name,n->line); asm_mov_reg_imm(a,REG_RAX,0); return; }
+        if (!s) { printf("codegen: undefined '%s' at line %d\n",n->var.name,n->line); asm_mov_reg_imm(a,REG_RAX,0); return; }
         if (s->kind==SYM_ENUM_VAL) { asm_mov_reg_imm(a,REG_RAX,s->enum_value); return; }
         if (s->kind==SYM_VAR||s->kind==SYM_PARAM) {
             if (s->array_size > 0) {
@@ -2709,7 +2709,7 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
         break;
 
     default:
-        fprintf(stderr,"codegen_expr: unhandled node kind %d\n",n->kind);
+        printf("codegen_expr: unhandled node kind %d\n",n->kind);
         asm_mov_reg_imm(a,REG_RAX,0);
     }
 }
@@ -2979,12 +2979,12 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
 
     case AST_BREAK:
         if (cg->loop_end_label>=0) asm_jmp_label(a,cg->loop_end_label);
-        else fprintf(stderr,"codegen: break outside loop/switch\n");
+        else printf("codegen: break outside loop/switch\n");
         break;
 
     case AST_CONTINUE:
         if (cg->loop_top_label>=0) asm_jmp_label(a,cg->loop_top_label);
-        else fprintf(stderr,"codegen: continue outside loop\n");
+        else printf("codegen: continue outside loop\n");
         break;
 
     case AST_GOTO: {
@@ -3034,7 +3034,7 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
         break;
 
     default:
-        fprintf(stderr,"codegen_stmt: unhandled node %d\n",n->kind);
+        printf("codegen_stmt: unhandled node %d\n",n->kind);
     }
 }
 

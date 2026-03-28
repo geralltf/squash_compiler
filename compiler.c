@@ -15,7 +15,7 @@
 
 static char *read_file(const char *path) {
     FILE *fp=fopen(path,"rb");
-    if (!fp) { perror(path); exit(1); }
+    if (!fp) { printf("error: cannot open %s\n",path); exit(1); }
     fseek(fp,0,SEEK_END); long sz=ftell(fp); rewind(fp);
     char *buf=malloc(sz+1); fread(buf,1,sz,fp); buf[sz]='\0';
     fclose(fp); return buf;
@@ -56,10 +56,10 @@ int main(int argc, char **argv) {
             if (n_inc<32) include_dirs[n_inc++]=d;
         }
         else if (!src_path) src_path=argv[i];
-        else fprintf(stderr,"unknown argument: %s\n",argv[i]);
+        else printf("unknown argument: %s\n",argv[i]);
     }
     if (!src_path) {
-        fprintf(stderr,"Usage: compiler [-32|-64] [-dump] [-I dir] <source.c> [-o output.exe]\n");
+        printf("Usage: compiler [-32|-64] [-dump] [-I dir] <source.c> [-o output.exe]\n");
         return 1;
     }
     char out_buf[512];
@@ -98,7 +98,7 @@ int main(int argc, char **argv) {
     ASTNode *prog=parse_program(&parser);
 
     if (parser.error_count>0) {
-        fprintf(stderr,"%d compile error(s). Aborting.\n",parser.error_count);
+        printf("%d compile error(s). Aborting.\n",parser.error_count);
         return 1;
     }
 

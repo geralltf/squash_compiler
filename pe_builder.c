@@ -31,16 +31,27 @@
  */
 
 #include "pe_builder.h"
+
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
+/* Portable case-insensitive string compare */
+static int pe_strcasecmp(const char *a, const char *b) {
+    while (*a && *b) {
+        int ca=*a, cb=*b;
+        if (ca>='A'&&ca<='Z') ca+=32;
+        if (cb>='A'&&cb<='Z') cb+=32;
+        if (ca!=cb) return ca-cb;
+        a++; b++;
+    }
+    return (unsigned char)*a - (unsigned char)*b;
+}
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <stdint.h>
-
-#ifdef _WIN32
-#define strdup _strdup
-#define strcasecmp _stricmp
-#endif
 
 /* =========================================================================
  * Constants
@@ -220,7 +231,7 @@ typedef struct {
 
 static DLLGroup *find_or_add_dll(DLLGroup *groups, int *gc, const char *dll) {
     for (int i=0;i<*gc;i++)
-        if (strcasecmp(groups[i].dll, dll)==0) return &groups[i];
+        if (pe_strcasecmp(groups[i].dll, dll)==0) return &groups[i];
     DLLGroup *g = &groups[(*gc)++];
     g->dll       = strdup(dll);
     g->func_cap  = 8;
@@ -263,10 +274,10 @@ int pe_link_and_write(PEBuildInput *in) {
         const char *dll  = spec;
         const char *func = colon+1;
         /* Skip phantom/invalid DLL names (e.g. "extern") */
-        if (strcasecmp(dll,"extern")==0) continue;
+        if (pe_strcasecmp(dll,"extern")==0) continue;
         /* Only include real DLL names (must end in .dll) */
         int dlen=(int)strlen(dll);
-        if (dlen<5||strcasecmp(dll+dlen-4,".dll")!=0) continue;
+        if (dlen<5||pe_strcasecmp(dll+dlen-4,".dll")!=0) continue;
         DLLGroup *g = find_or_add_dll(groups, &gc, dll);
         dll_group_add_func(g, func);
     }
@@ -510,7 +521,7 @@ int pe_link_and_write(PEBuildInput *in) {
                 }
             }
             if (target_va == 0) {
-                fprintf(stderr, "pe_link: no IAT entry for '%s'\n", r->symbol);
+                printf("pe_link: no IAT entry for '%s'\n", r->symbol);
                 /* Don't abort — just leave zero; will crash at runtime */
             }
             if (r->kind == RELOC_IAT_REL32) {
@@ -536,7 +547,7 @@ int pe_link_and_write(PEBuildInput *in) {
                 }
             }
             if (str_rva == 0) {
-                fprintf(stderr,"pe_link: no string '%s' in pool\n", r->symbol);
+                printf("pe_link: no string '%s' in pool\n", r->symbol);
             }
             if (r->kind == RELOC_DATA_REL32) {
                 uint64_t target_va = image_base + str_rva;
@@ -564,7 +575,7 @@ int pe_link_and_write(PEBuildInput *in) {
                 }
             }
             if (!found_w) {
-                fprintf(stderr,"pe_link: no wdata label '%s'\n", r->symbol);
+                printf("pe_link: no wdata label '%s'\n", r->symbol);
             } else {
                 uint32_t target_rva = wdata_rva_base + wdata_off_in_section;
                 if (r->kind == RELOC_WDATA_REL32) {

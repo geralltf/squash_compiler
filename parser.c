@@ -21,18 +21,18 @@ static Token  eat(Parser *p, TokenKind k) { return lexer_expect(p->lex, k); }
 
 void parse_error(Parser *p, const char *fmt, ...) {
     Token t = cur(p);
-    fprintf(stderr, "%s:%d:%d: error: ", p->filename?p->filename:"?", t.line, t.col);
-    va_list ap; va_start(ap,fmt); vfprintf(stderr,fmt,ap); va_end(ap);
-    fprintf(stderr, "\n");
+    printf("%s:%d:%d: error: ", p->filename?p->filename:"?", t.line, t.col);
+    va_list ap; va_start(ap,fmt); vprintf(fmt,ap); va_end(ap);
+    printf("\n");
     p->error_count++;
-    if (p->error_count > 20) { fprintf(stderr,"Too many errors, aborting.\n"); exit(1); }
+    if (p->error_count > 20) { printf("Too many errors, aborting.\n"); exit(1); }
 }
 
 void parse_warn(Parser *p, const char *fmt, ...) {
     Token t = cur(p);
-    fprintf(stderr, "%s:%d:%d: warning: ", p->filename?p->filename:"?", t.line, t.col);
-    va_list ap; va_start(ap,fmt); vfprintf(stderr,fmt,ap); va_end(ap);
-    fprintf(stderr, "\n");
+    printf("%s:%d:%d: warning: ", p->filename?p->filename:"?", t.line, t.col);
+    va_list ap; va_start(ap,fmt); vprintf(fmt,ap); va_end(ap);
+    printf("\n");
 }
 
 static char *tok_ident(Token t) {

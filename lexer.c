@@ -7,31 +7,13 @@
 
 #ifdef _WIN32
 #define strdup _strdup
-#define strtok_r strtok_s
 #endif
-
-size_t my_strnlen(const char* src, size_t n) {
-    size_t len = 0;
-    while (len < n && src[len])
-        len++;
-    return len;
-}
-
-char* my_strndup(const char* s, size_t n) {
-    size_t len = my_strnlen(s, n);
-    char* p = malloc(len + 1);
-    if (p) {
-        memcpy(p, s, len);
-        p[len] = '\0';
-    }
-    return p;
-}
 
 /* =========================================================================
  * Error reporting helper
  * ========================================================================= */
 static void lex_error(const Lexer *l, const char *msg) {
-    fprintf(stderr, "%s:%d:%d: error: %s\n",
+    printf("%s:%d:%d: error: %s\n",
             l->filename ? l->filename : "<input>", l->line, l->col, msg);
     exit(1);
 }
@@ -308,7 +290,7 @@ Token lexer_next(Lexer *l) {
         case '!':t.kind=TOK_BANG;break;     case '<':t.kind=TOK_LT;break;
         case '>':t.kind=TOK_GT;break;       case '=':t.kind=TOK_ASSIGN;break;
         default:
-            fprintf(stderr,"%s:%d:%d: error: unknown character '%c' (0x%02X)\n",
+            printf("%s:%d:%d: error: unknown character '%c' (0x%02X)\n",
                     l->filename?l->filename:"?", t.line, t.col, c, (unsigned char)c);
             t.kind=TOK_ERROR; break;
     }
@@ -322,7 +304,7 @@ int   lexer_check(Lexer *l, TokenKind k) { return l->cur.kind==k; }
 Token lexer_expect(Lexer *l, TokenKind k) {
     Token t=l->cur;
     if (t.kind!=k) {
-        fprintf(stderr,"%s:%d:%d: error: expected '%s' but got '%s'\n",
+        printf("%s:%d:%d: error: expected '%s' but got '%s'\n",
                 l->filename?l->filename:"?", t.line, t.col,
                 token_kind_name(k), token_kind_name(t.kind));
         exit(1);
@@ -453,7 +435,7 @@ static void pp_macro_define(PPState *st, const char *name, int nlen,
         return;
     }
     if (st->nmc >= PP_MAX_MACROS) return;
-    st->macros[st->nmc].name  = my_strndup(name, nlen);
+    { char *_snd=malloc(nlen+1); strncpy(_snd,name,nlen); _snd[nlen]='\0'; st->macros[st->nmc].name=_snd; }
     st->macros[st->nmc].value = strdup(value);
     st->macros[st->nmc].nparams = -1;
     st->nmc++;
@@ -665,7 +647,9 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
     char *copy = strdup(src);
     char *line;
     char *rest = copy;
-    while ((line = strtok_r(rest, "\n", &rest)) != NULL) {
+    while ((line = (rest && *rest) ? rest : NULL) != NULL) {
+        char *_nl = strchr(rest, '\n');
+        if (_nl) { *_nl = '\0'; rest = _nl+1; } else rest = NULL;
         const char *p = line;
         while (*p==' '||*p=='\t') p++;
 
@@ -808,7 +792,7 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
                 /* Register function-like macro */
                 int idx2=pp_macro_find(st,nm,nlen);
                 if (idx2<0) { idx2=st->nmc++; }
-                st->macros[idx2].name= my_strndup(nm,nlen);
+                { char *_snd2=malloc(nlen+1); strncpy(_snd2,nm,nlen); _snd2[nlen]='\0'; st->macros[idx2].name=_snd2; }
                 st->macros[idx2].value=strdup(body);
                 st->macros[idx2].nparams=np;
                 for (int pi=0;pi<np;pi++) st->macros[idx2].params[pi]=strdup(pnames_buf+pi*64);
@@ -859,7 +843,7 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
             }
             char *inc_src = pp_read_file(st, incname);
             if (!inc_src) {
-                fprintf(stderr,"preprocessor: cannot find '%s'\n", incname);
+                printf("preprocessor: cannot find '%s'\n", incname);
                 continue;
             }
             char *inc_out = process_file(st, inc_src, incname);
