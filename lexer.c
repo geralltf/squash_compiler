@@ -27,7 +27,6 @@ char* my_strndup(const char* s, size_t n) {
     return p;
 }
 
-
 /* =========================================================================
  * Error reporting helper
  * ========================================================================= */
@@ -414,7 +413,12 @@ void token_print(const Token *t) {
 #define PP_MAX_DEPTH    64      /* max nested #if depth            */
 #define PP_MAX_INCLUDED 256     /* max distinct files included     */
 
-typedef struct { char *name; char *value; } PPMacro;
+typedef struct {
+    char *name;
+    char *value;
+    char *params[16]; /* NULL-terminated list of param names, NULL if object-like */
+    int   nparams;    /* -1 = object-like, >=0 = function-like */
+} PPMacro;
 
 typedef struct {
     PPMacro macros[PP_MAX_MACROS];
@@ -445,11 +449,13 @@ static void pp_macro_define(PPState *st, const char *name, int nlen,
     if (idx >= 0) {
         free(st->macros[idx].value);
         st->macros[idx].value = strdup(value);
+        st->macros[idx].nparams = -1;
         return;
     }
     if (st->nmc >= PP_MAX_MACROS) return;
     st->macros[st->nmc].name  = my_strndup(name, nlen);
     st->macros[st->nmc].value = strdup(value);
+    st->macros[st->nmc].nparams = -1;
     st->nmc++;
 }
 
@@ -472,29 +478,101 @@ static int pp_macro_defined(PPState *st, const char *name) {
 /* Expand macros in a single text token (word-boundary check). */
 static char *pp_expand(PPState *st, const char *src) {
     char *out = strdup(src);
-    /* iterate: keep expanding until stable (handles chained macros) */
     int changed = 1;
-    while (changed) {
+    int max_iters = 100; /* prevent infinite expansion loops */
+    while (changed && max_iters-- > 0) {
         changed = 0;
         for (int m = 0; m < st->nmc; m++) {
             const char *mname = st->macros[m].name;
             const char *mval  = st->macros[m].value;
             int   mlen = (int)strlen(mname);
+            int   is_fn = (st->macros[m].nparams >= 0);
             char *p    = out;
             while ((p = strstr(p, mname)) != NULL) {
+                int poff = (int)(p - out);
                 int pre  = (p==out || !(isalnum((unsigned char)p[-1])||p[-1]=='_'));
-                int post = !(isalnum((unsigned char)p[mlen])||p[mlen]=='_');
+                int post_char = (int)(unsigned char)p[mlen];
+                int post = is_fn ? (p[mlen]=='(') : !(isalnum((unsigned char)p[mlen])||p[mlen]=='_');
                 if (!pre || !post) { p++; continue; }
-                int poff = (int)(p - out);  /* save offset BEFORE free */
-                int ol   = (int)strlen(out);
-                int vl   = (int)strlen(mval);
-                char *tmp = malloc(ol - mlen + vl + 1);
-                memcpy(tmp, out, poff);
-                memcpy(tmp + poff, mval, vl);
-                strcpy(tmp + poff + vl, p + mlen);
-                free(out); out = tmp;
-                p = out + poff + vl;  /* use saved offset, not stale p */
-                changed = 1;
+
+                if (is_fn) {
+                    /* Function-like: parse args from (a, b, c) */
+                    char *ap = p + mlen + 1; /* skip '(' */
+                    while (*ap==' '||*ap=='\t') ap++;
+                    /* Use flat storage: args_buf[na*512 + char_offset] */
+                    char args_buf[8192]; int na=0;  /* 16 args * 512 bytes each */
+                    int depth=1;
+                    /* Parse comma-separated args, handling nested parens */
+                    if (*ap != ')') {  /* non-empty arg list */
+                        while (na < 16) {
+                            int ai=0;
+                            char *cur_arg = args_buf + na*512;
+                            while (*ap) {
+                                if (*ap=='(') { depth++; if(ai<511) cur_arg[ai++]=*ap++; }
+                                else if (*ap==')') {
+                                    if (depth==1) break;
+                                    depth--;
+                                    if(ai<511) cur_arg[ai++]=*ap++;
+                                }
+                                else if (*ap==',' && depth==1) break;
+                                else { if(ai<511) cur_arg[ai++]=*ap++; }
+                            }
+                            cur_arg[ai]='\0';
+                            while (ai>0 && (cur_arg[ai-1]==' '||cur_arg[ai-1]=='\t')) cur_arg[--ai]='\0';
+                            char *ta=cur_arg; while(*ta==' '||*ta=='\t') ta++;
+                            if(ta!=cur_arg) memmove(cur_arg,ta,strlen(ta)+1);
+                            na++;
+                            if (*ap==',') { ap++; }
+                            else break;
+                        }
+                    }
+                    if (*ap==')') ap++;
+                    /* Build expanded body by substituting params */
+                    char body[4096]=""; int bi=0;
+                    const char *bp=mval;
+                    while (*bp && bi<4095) {
+                        /* Check if current position matches a param name */
+                        int matched=0;
+                        for (int pi=0; pi<st->macros[m].nparams && pi<na; pi++) {
+                            const char *pn=st->macros[m].params[pi];
+                            if (!pn) continue;
+                            int pl=(int)strlen(pn);
+                            if (strncmp(bp,pn,pl)==0 &&
+                                !(isalnum((unsigned char)bp[pl])||bp[pl]=='_') &&
+                                !(bp>mval && (isalnum((unsigned char)bp[-1])||bp[-1]=='_'))) {
+                                /* substitute */
+                                int al=(int)strlen(args_buf+pi*512);
+                                if (bi+al<4095) { memcpy(body+bi,args_buf+pi*512,al); bi+=al; }
+                                bp+=pl; matched=1; break;
+                            }
+                        }
+                        if (!matched) body[bi++]=*bp++;
+                    }
+                    body[bi]='\0';
+                    /* Replace MACRO(args) in out */
+                    int macro_len=(int)(ap-p);
+                    int ol=(int)strlen(out);
+                    int vl=(int)strlen(body);
+                    char *tmp=malloc(ol-macro_len+vl+1);
+                    memcpy(tmp,out,poff);
+                    memcpy(tmp+poff,body,vl);
+                    strcpy(tmp+poff+vl,out+poff+macro_len);
+                    free(out); out=tmp;
+                    p=out+poff+vl;
+                    changed=1;
+                } else {
+                    /* Object-like macro */
+                    int poff2=(int)(p-out);
+                    int ol=(int)strlen(out);
+                    int vl=(int)strlen(mval);
+                    char *tmp=malloc(ol-mlen+vl+1);
+                    memcpy(tmp,out,poff2);
+                    memcpy(tmp+poff2,mval,vl);
+                    strcpy(tmp+poff2+vl,p+mlen);
+                    free(out); out=tmp;
+                    p=out+poff2+vl;
+                    changed=1;
+                }
             }
         }
     }
@@ -696,8 +774,47 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
             while (isalnum((unsigned char)*p)||*p=='_') p++;
             int nlen = (int)(p-nm);
             if (nlen==0) continue;
-            /* skip function-like macros */
-            if (*p=='(') continue;
+            /* Handle function-like macros: #define FOO(a,b) body */
+            if (*p=='(') {
+                p++; /* skip '(' */
+                char pnames_buf[1024]; int np=0;  /* 16*64 */
+                while (*p && *p!=')' && np<16) {
+                    while (*p==' '||*p=='\t') p++;
+                    if (*p==')') break;
+                    if (strncmp(p,"...",3)==0) { p+=3; break; } /* variadic - skip */
+                    int pl=0;
+                    while ((isalnum((unsigned char)*p)||*p=='_') && pl<63)
+                        pnames_buf[np*64+pl++]=*p++;
+                    pnames_buf[np*64+pl]='\0';
+                    if (pl>0) np++;
+                    while (*p==' '||*p=='\t') p++;
+                    if (*p==',') p++;
+                }
+                while (*p && *p!=')') p++;
+                if (*p==')') p++;
+                while (*p==' '||*p=='\t') p++;
+                /* Get body (handle backslash continuation) */
+                char body[4096]=""; int bi=0;
+                while (*p && *p!='\n' && *p!='\r' && bi<4095) {
+                    if (*p=='\\' && (p[1]=='\n'||p[1]=='\r')) {
+                        p+=2; if (*p=='\n') p++;
+                        while (*p==' '||*p=='\t') p++;
+                        if (bi>0 && body[bi-1]!=' ') body[bi++]=' ';
+                    } else { body[bi++]=*p++; }
+                }
+                body[bi]='\0';
+                /* Trim trailing whitespace */
+                while (bi>0 && (body[bi-1]==' '||body[bi-1]=='\t')) body[--bi]='\0';
+                /* Register function-like macro */
+                int idx2=pp_macro_find(st,nm,nlen);
+                if (idx2<0) { idx2=st->nmc++; }
+                st->macros[idx2].name= my_strndup(nm,nlen);
+                st->macros[idx2].value=strdup(body);
+                st->macros[idx2].nparams=np;
+                for (int pi=0;pi<np;pi++) st->macros[idx2].params[pi]=strdup(pnames_buf+pi*64);
+                for (int pi=np;pi<16;pi++) st->macros[idx2].params[pi]=NULL;
+                continue;
+            }
             while (*p==' '||*p=='\t') p++;
             /* trim trailing CR/whitespace */
             char val[4096]; strncpy(val,p,sizeof val-1); val[sizeof val-1]='\0';
@@ -782,7 +899,7 @@ char *preprocess(const char *src, const char *filename,
     char *result = process_file(st, src, filename);
 
     /* free macros */
-    for (int i=0;i<st->nmc;i++) { free(st->macros[i].name); free(st->macros[i].value); }
+    for (int i=0;i<st->nmc;i++) { free(st->macros[i].name); free(st->macros[i].value); for(int j=0;j<16&&st->macros[i].params[j];j++) free(st->macros[i].params[j]); }
     for (int i=0;i<st->n_included;i++) free(st->included[i]);
     free(st);
     return result;
