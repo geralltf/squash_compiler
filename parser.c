@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdarg.h>
 
 #ifdef _WIN32
 #define strdup _strdup
@@ -19,20 +18,16 @@ static Token  adv(Parser *p) {
 static int    chk(Parser *p, TokenKind k) { return lexer_check(p->lex, k); }
 static Token  eat(Parser *p, TokenKind k) { return lexer_expect(p->lex, k); }
 
-void parse_error(Parser *p, const char *fmt, ...) {
+void parse_error(Parser *p, const char *msg) {
     Token t = cur(p);
-    printf("%s:%d:%d: error: ", p->filename?p->filename:"?", t.line, t.col);
-    va_list ap; va_start(ap,fmt); vprintf(fmt,ap); va_end(ap);
-    printf("\n");
+    printf("%s:%d:%d: error: %s\n", p->filename?p->filename:"?", t.line, t.col, msg);
     p->error_count++;
     if (p->error_count > 20) { printf("Too many errors, aborting.\n"); exit(1); }
 }
 
-void parse_warn(Parser *p, const char *fmt, ...) {
+void parse_warn(Parser *p, const char *msg) {
     Token t = cur(p);
-    printf("%s:%d:%d: warning: ", p->filename?p->filename:"?", t.line, t.col);
-    va_list ap; va_start(ap,fmt); vprintf(fmt,ap); va_end(ap);
-    printf("\n");
+    printf("%s:%d:%d: warning: %s\n", p->filename?p->filename:"?", t.line, t.col, msg);
 }
 
 static char *tok_ident(Token t) {
@@ -342,7 +337,7 @@ ASTNode *ParsePrimary(Parser *p) {
 
     if (chk(p,TOK_IDENT)) return ParseIdentifier(p);
 
-    parse_error(p,"unexpected token '%s'", token_kind_name(cur(p).kind));
+    { char _em[128]; snprintf(_em,sizeof _em,"unexpected token '%s'",token_kind_name(cur(p).kind)); parse_error(p,_em); }
     adv(p);
     return ast_number(0, line); /* error recovery */
 }
@@ -842,6 +837,8 @@ ASTNode *ParseVariable(Parser *p) {
             }
             eat(p,TOK_RBRACE);
             init = ast_block(elems, ne, line); /* reuse AST_BLOCK as initialiser list */
+            /* If array size was unspecified (char x[] = {...}), infer from element count */
+            if (array_size <= 0) array_size = ne;
         } else {
             init = ParseAssignment(p);
         }
@@ -1042,8 +1039,7 @@ ASTNode *parse_program(Parser *p) {
         while (chk(p,TOK_INLINE)||chk(p,TOK_CONST)||chk(p,TOK_VOLATILE)) adv(p);
 
         if (!is_type_start(p)) {
-            parse_error(p,"expected declaration at top level, got '%s'",
-                        token_kind_name(cur(p).kind));
+            { char _em[128]; snprintf(_em,sizeof _em,"expected declaration at top level, got '%s'",token_kind_name(cur(p).kind)); parse_error(p,_em); }
             adv(p); continue;
         }
 
@@ -1088,11 +1084,14 @@ ASTNode *parse_program(Parser *p) {
                     }
                     eat(p,TOK_RBRACE);
                     init = ast_block(elems, ne, line);
+                    /* Infer array size from initializer if unspecified */
+                    if (arr <= 0) arr = ne;
                 } else {
                     init=ParseAssignment(p);
                 }
             }
             eat(p,TOK_SEMICOLON);
+            if (arr > 0) ret->array_size = arr;
             symtable_define_global(p->sym, name, ret, arr);
             decls[count++]=ast_var_decl(storage[0]?storage:NULL, ret, name, init, arr, line);
         }

@@ -190,6 +190,7 @@ void asm_movzx_rax_al(Assembler *a);                 /* movzx rax, al     */
 
 /* ---- Control flow ---- */
 void asm_jmp_label  (Assembler *a, int label_id);
+void asm_call_label (Assembler *a, int label_id);
 void asm_jcc_label  (Assembler *a, CondCode cc, int label_id);
 void asm_call_import(Assembler *a, const char *sym);  /* call [IAT_sym]   */
 void asm_call_direct(Assembler *a, int label_id);     /* call label        */

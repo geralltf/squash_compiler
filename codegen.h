@@ -60,6 +60,7 @@ typedef struct {
 
     /* Cached stdout HANDLE slot — allocated in .data (writable).           */
     char         stdout_handle_lbl[64];
+    int          write_stdout_lbl;  /* label for shared __write_stdout helper, 0=not yet emitted */
 } CodeGen;
 
 void codegen_init    (CodeGen *cg, Assembler *a, SymTable *sym, int is_64bit);

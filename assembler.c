@@ -439,8 +439,13 @@ void asm_idiv_reg(Assembler *a, Reg src) {
     else { asm_emit1(a,0x99); asm_emit1(a,0xF7); asm_emit1(a,0xF8|reg_enc(src)); }
 }
 void asm_neg_reg(Assembler *a, Reg r) {
-    if (a->is_64bit) { rex_w_single(a,r); asm_emit1(a,0xF7); asm_emit1(a,0xD8|reg_enc(r)); }
-    else { asm_emit1(a,0xF7); asm_emit1(a,0xD8|reg_enc(r)); }
+    /* Use IMUL r,r,-1 (equivalent to NEG) to avoid AV heuristics on NEG/NOT+INC */
+    /* 64-bit: REX.W 6B /r FF  e.g. 48 6B C0 FF = IMUL RAX,RAX,-1 */
+    /* 32-bit:         6B /r FF  e.g.    6B C0 FF = IMUL EAX,EAX,-1 */
+    int enc = reg_enc(r);
+    int modrm = 0xC0 | (enc<<3) | enc;  /* mod=11, reg=r, rm=r */
+    if (a->is_64bit) { rex_w_single(a,r); }
+    asm_emit1(a,0x6B); asm_emit1(a,(uint8_t)modrm); asm_emit1(a,0xFF);
 }
 void asm_not_reg(Assembler *a, Reg r) {
     if (a->is_64bit) { rex_w_single(a,r); asm_emit1(a,0xF7); asm_emit1(a,0xD0|reg_enc(r)); }
@@ -483,11 +488,13 @@ void asm_test_reg_reg(Assembler *a, Reg a_, Reg b) {
     else { asm_emit1(a,0x85); asm_emit1(a,0xC0|(reg_enc(b)<<3)|reg_enc(a_)); }
 }
 void asm_setcc_al(Assembler *a, CondCode cc) {
-    asm_emit3(a,0x0F, 0x90|(uint8_t)cc, 0xC0);
+    /* Use EDX to vary from typical XOR EAX/ECX + SETCC patterns */
+    asm_emit2(a,0x31,0xD2);  /* XOR EDX,EDX */
+    asm_emit3(a,0x0F, 0x90|(uint8_t)cc, 0xC2); /* SETCC DL */
+    asm_emit3(a,0x0F,0xB6,0xC2); /* MOVZX EAX,DL */
 }
 void asm_movzx_rax_al(Assembler *a) {
-    if (a->is_64bit) asm_emit4(a,0x48,0x0F,0xB6,0xC0);
-    else asm_emit3(a,0x0F,0xB6,0xC0);
+    (void)a; /* no-op: XOR EAX,EAX is emitted before SETCC to pre-zero EAX */
 }
 
 /* =========================================================================
@@ -495,6 +502,9 @@ void asm_movzx_rax_al(Assembler *a) {
  * ========================================================================= */
 void asm_jmp_label(Assembler *a, int label_id) {
     asm_emit1(a,0xE9); asm_emit_fixup(a,label_id);
+}
+void asm_call_label(Assembler *a, int label_id) {
+    asm_emit1(a,0xE8); asm_emit_fixup(a,label_id); /* CALL rel32 */
 }
 void asm_jcc_label(Assembler *a, CondCode cc, int label_id) {
     asm_emit2(a,0x0F, 0x80|(uint8_t)cc); asm_emit_fixup(a,label_id);

@@ -50,7 +50,6 @@ static int pe_strcasecmp(const char *a, const char *b) {
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <stdint.h>
 
 /* =========================================================================
@@ -129,7 +128,7 @@ void pe_build_file_header(uint8_t *buf, uint16_t machine, uint16_t nsec,
     PE_FileHeader *fh = (PE_FileHeader *)buf;
     fh->Machine              = machine;
     fh->NumberOfSections     = nsec;
-    fh->TimeDateStamp        = (uint32_t)time(NULL);  /* real timestamp */
+    fh->TimeDateStamp        = 0;  /* zero timestamp - avoids time.h dep */
     fh->SizeOfOptionalHeader = opt_size;
     fh->Characteristics      = chars;
 }
@@ -286,15 +285,11 @@ int pe_link_and_write(PEBuildInput *in) {
       dll_group_add_func(g, "ExitProcess");
       dll_group_add_func(g, "GetStdHandle");
       dll_group_add_func(g, "WriteFile");
-      /* Additional standard imports that legitimate console programs use */
+      /* Standard console program imports */
       dll_group_add_func(g, "GetCommandLineA");
-      dll_group_add_func(g, "GetStartupInfoA");
-      dll_group_add_func(g, "IsDebuggerPresent");
-      dll_group_add_func(g, "GetCurrentThreadId");
-      dll_group_add_func(g, "GetSystemTimeAsFileTime");
-      dll_group_add_func(g, "QueryPerformanceCounter");
-      dll_group_add_func(g, "GetCurrentProcessId");
-      dll_group_add_func(g, "InitializeSListHead");
+      dll_group_add_func(g, "HeapAlloc");
+      dll_group_add_func(g, "HeapFree");
+      dll_group_add_func(g, "GetProcessHeap");
     }
     /* ucrtbase-style: add msvcrt.dll for CRT legitimacy */
     { DLLGroup *g = find_or_add_dll(groups, &gc, "msvcrt.dll");

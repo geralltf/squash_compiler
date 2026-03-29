@@ -53,7 +53,7 @@ ASTNode *ParseFunction    (Parser *p, const char *storage, TypeInfo *ret, const 
 ASTNode *ParseVariable    (Parser *p);
 
 /* Error helpers */
-void parse_error  (Parser *p, const char *fmt, ...);
-void parse_warn   (Parser *p, const char *fmt, ...);
+void parse_error  (Parser *p, const char *msg);
+void parse_warn   (Parser *p, const char *msg);
 
 #endif
