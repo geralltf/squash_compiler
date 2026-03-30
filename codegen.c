@@ -496,12 +496,18 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
         symtable_add_import(cg->sym,"KERNEL32.dll:WriteFile");
         int buf_size = 512; /* smaller buffer avoids large-stack shellcode heuristic */
         if (cg->is_64bit) {
-            /* Allocate buffer on stack + shadow space */
-            int frame = 48 + buf_size;
-            if ((frame&8)==0) frame+=8;
-            asm_sub_rsp(a, frame);
-            /* LEA RCX,[rsp + shadow] = buf ptr */
-            asm_emit4(a,0x48,0x8D,0x4C,0x24); asm_emit1(a,48); /* lea rcx,[rsp+48] */
+            /* Realign stack to 16-byte boundary before buffer alloc.
+             * Use R15 to save RSP (like argv injection does), since the
+             * current frame offset may not be 0-mod-16 when printf is called
+             * from inside a function body. */
+            int buf_off = 48; /* buffer starts after 48-byte shadow+margin */
+            int frame = buf_off + buf_size + 8; /* +8 for R15 save slot */
+            asm_emit2(a,0x41,0x57);              /* push r15 */
+            asm_emit3(a,0x4C,0x8B,0xFC);         /* mov r15,rsp  (save original rsp) */
+            asm_emit4(a,0x48,0x83,0xE4,0xF0);    /* and rsp,-16   (realign) */
+            asm_sub_rsp(a, buf_off + buf_size);   /* allocate shadow + buffer */
+            /* LEA RCX,[rsp+buf_off] = buf ptr */
+            asm_emit4(a,0x48,0x8D,0x4C,0x24); asm_emit1(a,buf_off);
             asm_mov_reg_imm(a,REG_RDX,buf_size);
             if (argc>=1){codegen_expr(cg,args[0]); asm_mov_reg_reg(a,REG_R8,REG_RAX);}
             else asm_mov_reg_imm(a,REG_R8,0);
@@ -512,27 +518,26 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                 asm_mov_mem_reg(a,REG_RSP,32+(i-2)*8,REG_RAX);
             }
             asm_call_import(a,"_snprintf");
-            /* RAX = bytes written. Call WriteFile(handle, buf, len, NULL, NULL) */
-            asm_mov_reg_reg(a,REG_R8,REG_RAX);  /* nBytes = len */
-            asm_emit4(a,0x48,0x8D,0x54,0x24); asm_emit1(a,48); /* lea rdx,[rsp+48]=buf */
-            /* Read cached stdout handle from .data slot (set once at main() startup) */
-            asm_push_reg(a,REG_RBX);
+            /* RAX = bytes written -> R8 = nBytesToWrite */
+            asm_mov_reg_reg(a,REG_R8,REG_RAX);
+            /* RDX = buf (already 16-byte aligned RSP + buf_off) */
+            asm_emit4(a,0x48,0x8D,0x54,0x24); asm_emit1(a,buf_off);
+            /* Read handle from slot (no PUSH/POP to avoid misalignment) */
             if (cg->stdout_handle_lbl[0]!='\0') {
-                asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
-                asm_emit3(a,0x48,0x8B,0x1B); /* mov rbx,[rbx] */
+                asm_lea_rip_wdata(a,REG_RCX,cg->stdout_handle_lbl);
+                asm_emit3(a,0x48,0x8B,0x09); /* mov rcx,[rcx] */
             } else {
-                /* fallback: compute GetStdHandle(-11) if slot not ready */
                 asm_emit2(a,0x31,0xC9); asm_emit3(a,0x83,0xE9,0x0B);
                 asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
-                asm_mov_reg_reg(a,REG_RBX,REG_RAX);
+                asm_mov_reg_reg(a,REG_RCX,REG_RAX);
             }
-            asm_mov_reg_reg(a,REG_RCX,REG_RBX);
-            asm_pop_reg(a,REG_RBX);
             asm_mov_reg_imm(a,REG_R9,0);
             asm_mov_reg_imm(a,REG_RAX,0);
             asm_mov_mem_reg(a,REG_RSP,32,REG_RAX);
             asm_call_import(a,"WriteFile");
-            asm_add_rsp(a, frame);
+            /* Restore original RSP and R15 */
+            asm_emit3(a,0x4C,0x89,0xFC);         /* mov rsp,r15  (restore) */
+            asm_emit2(a,0x41,0x5F);              /* pop r15 */
         } else {
             /* 32-bit cdecl */
             asm_push_reg(a,REG_ESI); asm_push_reg(a,REG_EDI); asm_push_reg(a,REG_EBX);
@@ -1592,8 +1597,48 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             if (s->array_size > 0) {
                 /* Array decays to pointer-to-first-element: load address not value */
                 asm_lea_rbp_disp(a, REG_RAX, s->offset);
+            } else if (cg->is_64bit) {
+                /* Use size-appropriate load to avoid reading garbage from adjacent stack slots.
+                 * 1-byte vars: MOVZX EAX,byte[RBP+off] (zero-extends)
+                 * 4-byte vars: MOV EAX,[RBP+off]       (zero-extends upper 32 bits of RAX)
+                 * 8-byte vars: MOV RAX,[RBP+off]       (full 64-bit load)
+                 * For signed char/short, use MOVSX for sign extension. */
+                int vsz = s->type ? typeinfo_size(s->type, 1) : 4;
+                /* Use TypeInfo.is_unsigned field: unsigned int/char/bool -> zero-extend,
+                 * signed int/char/etc -> sign-extend for correct comparisons */
+                int is_signed = !(s->type && s->type->is_unsigned);
+                /* Note: plain "char" without unsigned qualifier is treated as signed
+                 * (matches GCC default on x86). unsigned char uses MOVZX. */
+                if (s->type && s->type->pointer_depth > 0) {
+                    /* Pointer: full 64-bit load */
+                    asm_mov_reg_mem(a, REG_RAX, REG_RBP, s->offset);
+                } else if (vsz == 1) {
+                    if (is_signed) {
+                        /* MOVSX EAX, byte[RBP+off] */
+                        asm_emit3(a,0x0F,0xBE,0x45); asm_emit1(a,(uint8_t)(int8_t)s->offset);
+                    } else {
+                        asm_mov_eax_mem8(a, REG_RBP, s->offset);
+                    }
+                } else if (vsz <= 4) {
+                    /* 32-bit load: zero-extends upper 32 bits of RAX */
+                    asm_mov_reg32_mem(a, REG_RAX, REG_RBP, s->offset);
+                } else {
+                    /* 64-bit load (long long, double, pointer) */
+                    asm_mov_reg_mem(a, REG_RAX, REG_RBP, s->offset);
+                }
             } else {
-                asm_mov_reg_mem(a,REG_RAX,REG_RBP,s->offset);
+                /* 32-bit: use size-appropriate load for chars */
+                int vsz32 = s->type ? typeinfo_size(s->type, 0) : 4;
+                int is_unsigned32 = (s->type && s->type->is_unsigned);
+                if (vsz32 == 1) {
+                    if (is_unsigned32) {
+                        asm_emit3(a,0x0F,0xB6,0x45); asm_emit1(a,(uint8_t)(int8_t)s->offset); /* MOVZX EAX,byte[EBP+off] */
+                    } else {
+                        asm_emit3(a,0x0F,0xBE,0x45); asm_emit1(a,(uint8_t)(int8_t)s->offset); /* MOVSX EAX,byte[EBP+off] */
+                    }
+                } else {
+                    asm_mov_reg_mem(a,REG_RAX,REG_RBP,s->offset);
+                }
             }
         }
         else if (s->kind==SYM_GLOBAL) {
@@ -3444,14 +3489,20 @@ static void codegen_branch(CodeGen *cg, ASTNode *cond, int lbl, int jump_if_true
         int is_cmp = (!strcmp(op,"==")||!strcmp(op,"!=")||!strcmp(op,"<")||
                       !strcmp(op,"<=")||!strcmp(op,">")||!strcmp(op,">="));
         if (is_cmp) {
-            /* Evaluate both sides, CMP, then Jcc */
+            /* Evaluate both sides, CMP, then Jcc.
+             * 64-bit: save left in red zone [RSP-8] to avoid misaligning the stack.
+             *         PUSH would make RSP 8-mod-16, breaking alignment for any
+             *         function call in the right operand.
+             * 32-bit: cdecl only requires 4-byte alignment, PUSH/POP is fine. */
             codegen_expr(cg, cond->binary.left);
-            asm_push_reg(a, cg->is_64bit ? REG_RAX : REG_EAX);
-            codegen_expr(cg, cond->binary.right);
             if (cg->is_64bit) {
-                asm_emit1(a,0x5B);             /* pop rbx */
-                asm_emit3(a,0x48,0x39,0xC3);   /* cmp rbx,rax */
+                asm_emit4(a,0x48,0x89,0x44,0x24); asm_emit1(a,0xF8); /* mov [rsp-8],rax */
+                codegen_expr(cg, cond->binary.right);
+                asm_emit4(a,0x48,0x8B,0x5C,0x24); asm_emit1(a,0xF8); /* mov rbx,[rsp-8] */
+                asm_emit3(a,0x48,0x39,0xC3);                          /* cmp rbx,rax */
             } else {
+                asm_push_reg(a, REG_EAX);
+                codegen_expr(cg, cond->binary.right);
                 asm_emit1(a,0x5B);             /* pop ebx */
                 asm_emit2(a,0x39,0xC3);        /* cmp ebx,eax */
             }
