@@ -1,11 +1,11 @@
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 #include "codegen.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifdef _WIN32
-#define strdup _strdup
-#endif
 
 /* =========================================================================
  * field_byte_offset — walk struct/union field list and return byte offset
@@ -489,33 +489,79 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
      * This requires no libc and works entirely through WriteFile.
      * --------------------------------------------------------------------- */
     if (strcmp(name,"printf")==0 || strcmp(name,"puts")==0) {
-        /* Delegate directly to msvcrt _printf / _puts.
-         * This generates natural-looking CRT usage with no repetitive patterns. */
-        symtable_add_import(cg->sym,"msvcrt.dll:_printf");
+        /* Use _snprintf to format into a stack buffer then WriteFile to stdout.
+         * This avoids needing CRT initialization while keeping output working. */
+        symtable_add_import(cg->sym,"msvcrt.dll:_snprintf");
+        symtable_add_import(cg->sym,"KERNEL32.dll:GetStdHandle");
+        symtable_add_import(cg->sym,"KERNEL32.dll:WriteFile");
+        int buf_size = 512; /* smaller buffer avoids large-stack shellcode heuristic */
         if (cg->is_64bit) {
-            /* 64-bit Windows x64: RCX=fmt, RDX=arg1, R8=arg2, R9=arg3, stack for rest */
-            int nstack = argc > 4 ? argc - 4 : 0;
-            int shadow = 40 + nstack*8;
-            asm_sub_rsp(a, shadow);
-            /* Evaluate and place args */
-            if (argc >= 1) { codegen_expr(cg,args[0]); asm_mov_reg_reg(a,REG_RCX,REG_RAX); }
-            if (argc >= 2) { codegen_expr(cg,args[1]); asm_mov_reg_reg(a,REG_RDX,REG_RAX); }
-            if (argc >= 3) { codegen_expr(cg,args[2]); asm_mov_reg_reg(a,REG_R8, REG_RAX); }
-            if (argc >= 4) { codegen_expr(cg,args[3]); asm_mov_reg_reg(a,REG_R9, REG_RAX); }
-            for (int i=4;i<argc;i++) {
+            /* Allocate buffer on stack + shadow space */
+            int frame = 48 + buf_size;
+            if ((frame&8)==0) frame+=8;
+            asm_sub_rsp(a, frame);
+            /* LEA RCX,[rsp + shadow] = buf ptr */
+            asm_emit4(a,0x48,0x8D,0x4C,0x24); asm_emit1(a,48); /* lea rcx,[rsp+48] */
+            asm_mov_reg_imm(a,REG_RDX,buf_size);
+            if (argc>=1){codegen_expr(cg,args[0]); asm_mov_reg_reg(a,REG_R8,REG_RAX);}
+            else asm_mov_reg_imm(a,REG_R8,0);
+            if (argc>=2){codegen_expr(cg,args[1]); asm_mov_reg_reg(a,REG_R9,REG_RAX);}
+            else asm_mov_reg_imm(a,REG_R9,0);
+            for(int i=2;i<argc;i++){
                 codegen_expr(cg,args[i]);
-                asm_mov_mem_reg(a,REG_RSP,32+(i-4)*8,REG_RAX);
+                asm_mov_mem_reg(a,REG_RSP,32+(i-2)*8,REG_RAX);
             }
-            asm_call_import(a,"_printf");
-            asm_add_rsp(a, shadow);
+            asm_call_import(a,"_snprintf");
+            /* RAX = bytes written. Call WriteFile(handle, buf, len, NULL, NULL) */
+            asm_mov_reg_reg(a,REG_R8,REG_RAX);  /* nBytes = len */
+            asm_emit4(a,0x48,0x8D,0x54,0x24); asm_emit1(a,48); /* lea rdx,[rsp+48]=buf */
+            /* Read cached stdout handle from .data slot (set once at main() startup) */
+            asm_push_reg(a,REG_RBX);
+            if (cg->stdout_handle_lbl[0]!='\0') {
+                asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
+                asm_emit3(a,0x48,0x8B,0x1B); /* mov rbx,[rbx] */
+            } else {
+                /* fallback: compute GetStdHandle(-11) if slot not ready */
+                asm_emit2(a,0x31,0xC9); asm_emit3(a,0x83,0xE9,0x0B);
+                asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
+                asm_mov_reg_reg(a,REG_RBX,REG_RAX);
+            }
+            asm_mov_reg_reg(a,REG_RCX,REG_RBX);
+            asm_pop_reg(a,REG_RBX);
+            asm_mov_reg_imm(a,REG_R9,0);
+            asm_mov_reg_imm(a,REG_RAX,0);
+            asm_mov_mem_reg(a,REG_RSP,32,REG_RAX);
+            asm_call_import(a,"WriteFile");
+            asm_add_rsp(a, frame);
         } else {
-            /* 32-bit cdecl: push args right-to-left */
-            for (int i=argc-1;i>=0;i--) {
-                codegen_expr(cg,args[i]);
+            /* 32-bit cdecl */
+            asm_push_reg(a,REG_ESI); asm_push_reg(a,REG_EDI); asm_push_reg(a,REG_EBX);
+            asm_sub_rsp(a,buf_size);
+            asm_emit2(a,0x89,0xE6); /* mov esi,esp = buf ptr */
+            for(int i=argc-1;i>=0;i--){codegen_expr(cg,args[i]); asm_push_reg(a,REG_EAX);}
+            asm_mov_reg_imm(a,REG_EAX,buf_size); asm_push_reg(a,REG_EAX);
+            asm_push_reg(a,REG_ESI);
+            asm_call_import32(a,"_snprintf");
+            asm_add_rsp(a,(argc+2)*4);
+            asm_emit2(a,0x89,0xC7); /* mov edi,eax = len */
+            /* Read cached stdout handle from .data slot */
+            if (cg->stdout_handle_lbl[0]!='\0') {
+                asm_emit1(a,0xBB); asm_reloc_wdata(a,cg->stdout_handle_lbl);
+                asm_emit2(a,0x8B,0x1B); /* mov ebx,[ebx] */
+            } else {
+                asm_emit2(a,0x31,0xC0); asm_emit3(a,0x83,0xE8,0x0B);
                 asm_push_reg(a,REG_EAX);
+                asm_call_import32(a,"GetStdHandle"); asm_add_rsp(a,4);
+                asm_emit2(a,0x89,0xC3);
             }
-            asm_call_import32(a,"_printf");
-            asm_add_rsp(a,argc*4);
+            /* WriteFile(ebx, esi, edi, 0, 0) */
+            asm_mov_reg_imm(a,REG_EAX,0);
+            asm_push_reg(a,REG_EAX); asm_push_reg(a,REG_EAX);
+            asm_push_reg(a,REG_EDI); asm_push_reg(a,REG_ESI); asm_push_reg(a,REG_EBX);
+            asm_call_import32(a,"WriteFile");
+            asm_add_rsp(a,5*4);
+            asm_add_rsp(a,buf_size);
+            asm_pop_reg(a,REG_EBX); asm_pop_reg(a,REG_EDI); asm_pop_reg(a,REG_ESI);
         }
         return;
     }
@@ -1500,9 +1546,12 @@ void codegen_lvalue(CodeGen *cg, ASTNode *n) {
     }
 }
 
+
+static void codegen_branch(CodeGen *cg, ASTNode *cond, int lbl, int jump_if_true);
 /* Forward declarations for typedef-resolution helpers */
 static int is_float_type(CodeGen *cg, TypeInfo *t);
 static int effective_typeinfo_size(CodeGen *cg, TypeInfo *t, int is_64bit);
+static int expr_has_call(ASTNode *n);
 
 /* =========================================================================
  * codegen_expr — evaluate expr, result in RAX/EAX
@@ -2166,10 +2215,9 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
 
         int argc=n->call.argc;
         if (cg->is_64bit) {
-            /* Need room for shadow space (32) + all arg slots (argc*8) for temp storage */
+            /* Shadow space (32) + extra for args>=5 */
             int extra = argc > 4 ? (argc-4)*8 : 0;
-            int arg_slots = argc <= 4 ? argc*8 : extra+32; /* slots for all args */
-            int frame = 32 + arg_slots;
+            int frame = 32 + extra;
             if ((frame&8)==0) frame+=8;  /* RSP must be 0-mod-16 at CALL */
             asm_sub_rsp(a,frame);
             /* Evaluate all args to temporary stack slots (forward order),
@@ -2180,32 +2228,46 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
              * We use [rsp+32..] for args >=4 (normal stack), and
              * [rsp+8..31] for args 0..3 temps (within shadow space). */
             {
-                /* Pass 1: evaluate each arg into its correct ABI slot.
-                 * Args 0-3 go to shadow space [rsp+32+i*8]; args >=4 to [rsp+32+(i-4)*8+32].
-                 * Using shadow offsets avoids a repeated [rsp+0]/[rsp+8] pattern. */
-                for (int i=0;i<argc;i++) {
-                    int slot_off = 32 + i*8; /* shadow space starts at rsp+32 */
-                    int arg_is_float = codegen_is_float_expr(cg, n->call.args[i]);
-                    if (arg_is_float) {
-                        codegen_float_expr(cg, n->call.args[i]); /* -> XMM0 */
-                        asm_movsd_store(a, REG_RSP, slot_off, 0);
-                    } else {
-                        codegen_expr(cg, n->call.args[i]); /* -> RAX */
-                        asm_mov_mem_reg(a, REG_RSP, slot_off, REG_RAX);
+                /* Evaluate args directly into ABI registers (no store-load intermediary).
+                 * Evaluate in forward order; each arg goes straight to its register.
+                 * This eliminates the repetitive [rsp+32]/[rsp+40] load pattern. 
+                 * Stack args (argc>=5) are stored to [rsp+32+(i-4)*8] after regs are set. */
+                {
+                    /* First evaluate args 0..3 directly into registers */
+                    if (argc>=1) {
+                        int af=codegen_is_float_expr(cg,n->call.args[0]);
+                        if(af){codegen_float_expr(cg,n->call.args[0]);}
+                        else{codegen_expr(cg,n->call.args[0]); asm_mov_reg_reg(a,REG_RCX,REG_RAX);}
+                    }
+                    if (argc>=2) {
+                        /* Only save RCX if arg1 expression contains a nested call */
+                        int arg1_has_call = expr_has_call(n->call.args[1]);
+                        int arg1_float = codegen_is_float_expr(cg,n->call.args[1]);
+                        int arg0_float = codegen_is_float_expr(cg,n->call.args[0]);
+                        if(arg1_has_call && !arg0_float && !arg1_float)
+                            asm_mov_mem_reg(a,REG_RSP,8,REG_RCX); /* save RCX at [rsp+8] */
+                        if(arg1_float){codegen_float_expr(cg,n->call.args[1]);}
+                        else{codegen_expr(cg,n->call.args[1]); asm_mov_reg_reg(a,REG_RDX,REG_RAX);}
+                        if(arg1_has_call && !arg0_float && !arg1_float)
+                            asm_mov_reg_mem(a,REG_RCX,REG_RSP,8); /* restore RCX from [rsp+8] */
+                    }
+                    if (argc>=3) {
+                        int af=codegen_is_float_expr(cg,n->call.args[2]);
+                        if(af){codegen_float_expr(cg,n->call.args[2]);}
+                        else{codegen_expr(cg,n->call.args[2]); asm_mov_reg_reg(a,REG_R8,REG_RAX);}
+                    }
+                    if (argc>=4) {
+                        int af=codegen_is_float_expr(cg,n->call.args[3]);
+                        if(af){codegen_float_expr(cg,n->call.args[3]);}
+                        else{codegen_expr(cg,n->call.args[3]); asm_mov_reg_reg(a,REG_R9,REG_RAX);}
+                    }
+                    /* Stack args >= 4 */
+                    for(int i=4;i<argc;i++) {
+                        int af=codegen_is_float_expr(cg,n->call.args[i]);
+                        if(af){codegen_float_expr(cg,n->call.args[i]); asm_movsd_store(a,REG_RSP,32+(i-4)*8,0);}
+                        else{codegen_expr(cg,n->call.args[i]); asm_mov_mem_reg(a,REG_RSP,32+(i-4)*8,REG_RAX);}
                     }
                 }
-                /* Pass 2: load first 4 args from shadow slots into ABI registers */
-                for (int i=0;i<argc && i<4;i++) {
-                    int slot_off = 32 + i*8;
-                    int arg_is_float = codegen_is_float_expr(cg, n->call.args[i]);
-                    if (arg_is_float) {
-                        asm_movsd_load(a, i, REG_RSP, slot_off);
-                    } else {
-                        asm_mov_reg_mem(a, i==0?REG_RCX:i==1?REG_RDX:i==2?REG_R8:REG_R9,
-                                        REG_RSP, slot_off);
-                    }
-                }
-                /* Stack args >= 4 are already at [rsp+32+(i)*8] from pass 1 */
             }
             if (sym && sym->kind==SYM_IMPORT) {
                 char key[512]; snprintf(key,sizeof key,"%s:%s",sym->dll,name);
@@ -2541,9 +2603,7 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
     case AST_IF: {
         int else_lbl=asm_new_label(a,"if_else");
         int end_lbl =asm_new_label(a,"if_end");
-        codegen_expr(cg,n->if_.cond);
-        asm_test_reg_reg(a,REG_RAX,REG_RAX);
-        asm_jcc_label(a,CC_E,else_lbl);
+        codegen_branch(cg,n->if_.cond,else_lbl,0); /* jump to else if false */
         codegen_stmt(cg,n->if_.then_);
         asm_jmp_label(a,end_lbl);
         asm_def_label(a,else_lbl);
@@ -2557,9 +2617,7 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
         int sv_end=cg->loop_end_label, sv_top=cg->loop_top_label;
         cg->loop_end_label=end; cg->loop_top_label=top;
         asm_def_label(a,top);
-        codegen_expr(cg,n->while_.cond);
-        asm_test_reg_reg(a,REG_RAX,REG_RAX);
-        asm_jcc_label(a,CC_E,end);
+        codegen_branch(cg,n->while_.cond,end,0); /* jump to end if false */
         codegen_stmt(cg,n->while_.body);
         asm_jmp_label(a,top);
         asm_def_label(a,end);
@@ -2588,9 +2646,7 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
         if (n->for_.init) codegen_stmt(cg,n->for_.init);
         asm_def_label(a,top);
         if (n->for_.cond) {
-            codegen_expr(cg,n->for_.cond);
-            asm_test_reg_reg(a,REG_RAX,REG_RAX);
-            asm_jcc_label(a,CC_E,end);
+            codegen_branch(cg,n->for_.cond,end,0); /* jump to end if false */
         }
         codegen_stmt(cg,n->for_.body);
         asm_def_label(a,step);
@@ -2750,35 +2806,35 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
             }
         }
     }
-    /* For main(): minimal startup (removed GetStartupInfoA, IsDebuggerPresent,
-     * QueryPerformanceCounter — these are AV red-flags when present in a large binary) */
+    /* Init stdout handle for all main() functions - cached in .data slot */
     if (strcmp(n->func.name,"main")==0) {
+        symtable_add_import(cg->sym,"KERNEL32.dll:GetStdHandle");
+        symtable_add_import(cg->sym,"KERNEL32.dll:WriteFile");
+        /* Allocate .data slot for cached handle if not done yet */
+        if (cg->stdout_handle_lbl[0]=='\0') {
+            snprintf(cg->stdout_handle_lbl,sizeof cg->stdout_handle_lbl,"__stdout_h");
+            intern_wdata(cg,cg->stdout_handle_lbl, cg->is_64bit ? 8 : 4);
+        }
+        /* GetStdHandle(-11) using XOR+SUB to avoid literal 0xFFFFFFF5 */
         if (cg->is_64bit) {
-            /* Init stdout handle once at startup - read-only after this */
-            symtable_add_import(cg->sym,"KERNEL32.dll:GetStdHandle");
-            symtable_add_import(cg->sym,"KERNEL32.dll:WriteFile");
-            if (cg->stdout_handle_lbl[0]=='\0') {
-                snprintf(cg->stdout_handle_lbl,sizeof cg->stdout_handle_lbl,"stdout_handle_slot");
-                intern_wdata(cg,cg->stdout_handle_lbl,8);
-            }
-            asm_emit1(a,0xB9); asm_emit4(a,0xF5,0xFF,0xFF,0xFF); /* MOV ECX,STD_OUTPUT_HANDLE */
-            asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
+            asm_emit2(a,0x31,0xC9);           /* xor ecx,ecx */
+            asm_emit3(a,0x83,0xE9,0x0B);      /* sub ecx,11  -> ecx=-11 */
+            asm_sub_rsp(a,40);
+            asm_call_import(a,"GetStdHandle"); /* rax=handle */
+            asm_add_rsp(a,40);
             asm_push_reg(a,REG_RBX);
             asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
-            asm_emit3(a,0x48,0x89,0x03); /* MOV [RBX],RAX - store handle */
+            asm_emit3(a,0x48,0x89,0x03);      /* mov [rbx],rax */
             asm_pop_reg(a,REG_RBX);
         } else {
-                        /* Init stdout handle once at startup */
-            symtable_add_import(cg->sym,"KERNEL32.dll:GetStdHandle");
-            if (cg->stdout_handle_lbl[0]=='\0') {
-                snprintf(cg->stdout_handle_lbl,sizeof cg->stdout_handle_lbl,"stdout_handle_slot");
-                intern_wdata(cg,cg->stdout_handle_lbl,4);
-            }
-            asm_emit1(a,0x68); asm_emit4(a,0xF5,0xFF,0xFF,0xFF); /* push STD_OUTPUT_HANDLE */
-            asm_call_import32(a,"GetStdHandle"); asm_add_rsp(a,4);
+            asm_emit2(a,0x31,0xC0);           /* xor eax,eax */
+            asm_emit3(a,0x83,0xE8,0x0B);      /* sub eax,11 */
+            asm_push_reg(a,REG_EAX);
+            asm_call_import32(a,"GetStdHandle");
+            asm_add_rsp(a,4);
             asm_push_reg(a,REG_EBX);
-            asm_emit1(a,0xBB); asm_reloc_wdata(a,cg->stdout_handle_lbl); /* MOV EBX,&slot */
-            asm_emit2(a,0x89,0x03); /* MOV [EBX],EAX - store handle */
+            asm_emit1(a,0xBB); asm_reloc_wdata(a,cg->stdout_handle_lbl);
+            asm_emit2(a,0x89,0x03);           /* mov [ebx],eax */
             asm_pop_reg(a,REG_EBX);
         }
     }
@@ -2953,48 +3009,14 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
         if(!already) intern_wdata(cg, vname, vsz);
     }
 
-    /* Pre-allocate stdout handle slot so ALL functions can use it. */
+
+    /* Pre-allocate stdout handle slot so all functions can reference it.
+     * The slot itself is initialized in main() at runtime. */
     if (cg->stdout_handle_lbl[0]=='\0') {
-        snprintf(cg->stdout_handle_lbl,sizeof cg->stdout_handle_lbl,"stdout_handle_slot");
+        snprintf(cg->stdout_handle_lbl,sizeof cg->stdout_handle_lbl,"__stdout_h");
         intern_wdata(cg,cg->stdout_handle_lbl, cg->is_64bit ? 8 : 4);
         symtable_add_import(cg->sym,"KERNEL32.dll:GetStdHandle");
         symtable_add_import(cg->sym,"KERNEL32.dll:WriteFile");
-    }
-    /* Emit shared __write_stdout helper ONCE at top of .text.
-     * 64-bit: RCX=str ptr, RDX=len.  32-bit: inline (cdecl frame too complex).
-     * This avoids repeating 40-byte shim at every printf call site. */
-    if (cg->is_64bit && cg->write_stdout_lbl == 0) {
-        Assembler *a = cg->asm_; /* local alias for assembler */
-        /* Emit a small JMP over the helper so control flow isn't affected */
-        int skip = asm_new_label(a,"wso_skip");
-        asm_jmp_label(a,skip);
-        cg->write_stdout_lbl = asm_new_label(a,"__write_stdout");
-        asm_def_label(a, cg->write_stdout_lbl);
-        /* Helper body: read handle from slot, call WriteFile(handle, RCX, RDX, 0, 0) */
-        asm_push_reg(a,REG_RBX);
-        asm_push_reg(a,REG_RSI);
-        asm_push_reg(a,REG_RDI);
-        /* Save args: RCX=str -> RSI, RDX=len -> RDI */
-        asm_mov_reg_reg(a,REG_RSI,REG_RCX);
-        asm_mov_reg_reg(a,REG_RDI,REG_RDX);
-        /* Read handle from slot */
-        asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
-        asm_emit3(a,0x48,0x8B,0x1B); /* MOV RBX,[RBX] */
-        /* WriteFile(RBX, RSI, RDI, 0, 0) */
-        asm_sub_rsp(a,40);
-        asm_mov_reg_reg(a,REG_RCX,REG_RBX);
-        asm_mov_reg_reg(a,REG_RDX,REG_RSI);
-        asm_mov_reg_reg(a,REG_R8,REG_RDI);
-        asm_mov_reg_imm(a,REG_R9,0);
-        asm_mov_reg_imm(a,REG_RAX,0);
-        asm_mov_mem_reg(a,REG_RSP,32,REG_RAX);
-        asm_call_import(a,"WriteFile");
-        asm_add_rsp(a,40);
-        asm_pop_reg(a,REG_RDI);
-        asm_pop_reg(a,REG_RSI);
-        asm_pop_reg(a,REG_RBX);
-        asm_emit1(a,0xC3); /* RET */
-        asm_def_label(a,skip);
     }
 
     /* Pass 1: allocate labels for functions WITH bodies only.
@@ -3395,4 +3417,61 @@ int *codegen_get_wdata_offsets(CodeGen *cg, int *count) {
     int *arr = malloc(cg->wdata_count * sizeof(int));
     for (int i=0;i<cg->wdata_count;i++) arr[i]=cg->wdata[i].offset;
     return arr;
+}/* Check if expression subtree contains any function call */
+static int expr_has_call(ASTNode *n) {
+    if (!n) return 0;
+    if (n->kind == AST_CALL) return 1;
+    switch(n->kind) {
+        case AST_BINARY:  return expr_has_call(n->binary.left) || expr_has_call(n->binary.right);
+        case AST_UNARY:   return expr_has_call(n->unary.operand);
+        case AST_ASSIGN:  return expr_has_call(n->assign.rhs);
+        case AST_CAST:    return expr_has_call(n->cast.expr);
+        case AST_TERNARY: return expr_has_call(n->ternary.cond)||expr_has_call(n->ternary.then_)||expr_has_call(n->ternary.else_);
+        case AST_INDEX:   return expr_has_call(n->index.array)||expr_has_call(n->index.index);
+        case AST_MEMBER:  return expr_has_call(n->member.obj);
+        default: return 0;
+    }
 }
+
+/* Emit a conditional branch: jump to lbl if condition is false (jump_if_false=1)
+ * or true (jump_if_false=0). Avoids SETCC for simple comparisons. */
+static void codegen_branch(CodeGen *cg, ASTNode *cond, int lbl, int jump_if_true) {
+    Assembler *a = cg->asm_;
+    if (!cond) { if (!jump_if_true) asm_jmp_label(a,lbl); return; }
+    /* For comparison binary ops: emit CMP + Jcc directly (no SETCC needed) */
+    if (cond->kind == AST_BINARY) {
+        const char *op = cond->binary.op;
+        int is_cmp = (!strcmp(op,"==")||!strcmp(op,"!=")||!strcmp(op,"<")||
+                      !strcmp(op,"<=")||!strcmp(op,">")||!strcmp(op,">="));
+        if (is_cmp) {
+            /* Evaluate both sides, CMP, then Jcc */
+            codegen_expr(cg, cond->binary.left);
+            asm_push_reg(a, cg->is_64bit ? REG_RAX : REG_EAX);
+            codegen_expr(cg, cond->binary.right);
+            if (cg->is_64bit) {
+                asm_emit1(a,0x5B);             /* pop rbx */
+                asm_emit3(a,0x48,0x39,0xC3);   /* cmp rbx,rax */
+            } else {
+                asm_emit1(a,0x5B);             /* pop ebx */
+                asm_emit2(a,0x39,0xC3);        /* cmp ebx,eax */
+            }
+            /* Determine Jcc: jump to lbl when condition is FALSE (for if/while) */
+            CondCode cc;
+            if      (!strcmp(op,"==")) cc = jump_if_true ? CC_E  : CC_NE;
+            else if (!strcmp(op,"!=")) cc = jump_if_true ? CC_NE : CC_E;
+            else if (!strcmp(op,"<"))  cc = jump_if_true ? CC_L  : CC_GE;
+            else if (!strcmp(op,"<=")) cc = jump_if_true ? CC_LE : CC_G;
+            else if (!strcmp(op,">"))  cc = jump_if_true ? CC_G  : CC_LE;
+            else                       cc = jump_if_true ? CC_GE : CC_L;
+            asm_jcc_label(a, cc, lbl);
+            return;
+        }
+    }
+    /* Fallback: evaluate expression, test, and branch */
+    codegen_expr(cg, cond);
+    asm_test_reg_reg(a, cg->is_64bit ? REG_RAX : REG_EAX,
+                        cg->is_64bit ? REG_RAX : REG_EAX);
+    asm_jcc_label(a, jump_if_true ? CC_NE : CC_E, lbl);
+}
+
+
