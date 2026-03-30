@@ -158,7 +158,9 @@ void asm_ret        (Assembler *a);                  /* ret               */
 void asm_mov_reg_imm  (Assembler *a, Reg dst, long long imm);   /* mov reg, imm */
 void asm_mov_reg_reg  (Assembler *a, Reg dst, Reg src);          /* mov reg, reg */
 void asm_mov_mem_reg  (Assembler *a, Reg base, int disp, Reg src);/* [base+d]=src */
-void asm_mov_reg_mem  (Assembler *a, Reg dst, Reg base, int disp);/* dst=[base+d] */
+void asm_mov_reg_mem  (Assembler *a, Reg dst, Reg base, int disp);/* dst=[base+d] (64-bit) */
+void asm_mov_reg32_mem(Assembler *a, Reg dst, Reg base, int disp);/* dst=[base+d] (32-bit, zero-extends) */
+void asm_mov_eax_mem8 (Assembler *a, Reg base, int disp);         /* MOVZX EAX,byte[base+d] */
 void asm_lea_rip_data (Assembler *a, Reg dst, const char *sym);  /* lea reg,[rip+rdata_sym] */
 void asm_lea_rip_wdata(Assembler *a, Reg dst, const char *sym);  /* lea reg,[rip+wdata_sym] */
 void asm_lea_rbp_disp (Assembler *a, Reg dst, int disp);         /* lea reg,[rbp+d] */

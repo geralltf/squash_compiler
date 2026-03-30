@@ -367,6 +367,25 @@ void asm_mov_mem_reg(Assembler *a, Reg base, int disp, Reg src) {
         }
     }
 }
+void asm_mov_reg32_mem(Assembler *a, Reg dst, Reg base, int disp) {
+    /* dst = [base+disp] — 32-bit load, zero-extends upper 32 bits of 64-bit reg */
+    /* No REX.W prefix => 32-bit operand size, upper 32 bits of dst zeroed */
+    if (needs_rex_r(dst) || needs_rex_r(base)) {
+        uint8_t rex=0x40;
+        if (needs_rex_r(dst)) rex|=0x04;
+        if (needs_rex_r(base)) rex|=0x01;
+        asm_emit1(a,rex);
+    }
+    asm_emit1(a,0x8B);
+    modrm_disp(a, dst, base, disp);
+}
+
+void asm_mov_eax_mem8(Assembler *a, Reg base, int disp) {
+    /* MOVZX EAX, byte[base+disp] — 8-bit load, zero-extends */
+    asm_emit2(a, 0x0F, 0xB6);
+    modrm_disp(a, REG_RAX, base, disp);
+}
+
 void asm_mov_reg_mem(Assembler *a, Reg dst, Reg base, int disp) {
     /* dst = [base+disp] */
     if (a->is_64bit) {
