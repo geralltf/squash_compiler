@@ -1,11 +1,11 @@
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 #include "ast.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifdef _WIN32
-#define strdup _strdup
-#endif
 
 /* =========================================================================
  * TypeInfo

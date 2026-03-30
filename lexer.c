@@ -1,13 +1,13 @@
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 #include "lexer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
-
-#ifdef _WIN32
-#define strdup _strdup
-#endif
 
 /* =========================================================================
  * Error reporting helper

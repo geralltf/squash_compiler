@@ -1,11 +1,11 @@
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 #include "symtable.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifdef _WIN32
-#define strdup _strdup
-#endif
 
 typedef struct { const char *name; const char *dll; } WinAPI;
 static const WinAPI WIN_APIS[] = {

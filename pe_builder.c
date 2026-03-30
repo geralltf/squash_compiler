@@ -1,3 +1,7 @@
+#ifdef _WIN32
+#define strdup _strdup
+#endif
+
 /*
  * pe_builder.c  —  Windows PE32 / PE32+ builder with linker
  *
@@ -31,10 +35,6 @@
  */
 
 #include "pe_builder.h"
-
-#ifdef _WIN32
-#define strdup _strdup
-#endif
 
 /* Portable case-insensitive string compare */
 static int pe_strcasecmp(const char *a, const char *b) {
