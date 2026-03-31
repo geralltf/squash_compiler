@@ -232,7 +232,7 @@ static DLLGroup *find_or_add_dll(DLLGroup *groups, int *gc, const char *dll) {
     for (int i=0;i<*gc;i++)
         if (pe_strcasecmp(groups[i].dll, dll)==0) return &groups[i];
     DLLGroup *g = &groups[(*gc)++];
-    g->dll       = strdup(dll);
+    g->dll       = my_strdup(dll);
     g->func_cap  = 8;
     g->funcs     = malloc(g->func_cap * sizeof(char*));
     g->func_count= 0;
@@ -245,7 +245,7 @@ static void dll_group_add_func(DLLGroup *g, const char *func) {
         g->func_cap*=2;
         g->funcs=realloc(g->funcs,g->func_cap*sizeof(char*));
     }
-    g->funcs[g->func_count++] = strdup(func);
+    g->funcs[g->func_count++] = my_strdup(func);
 }
 
 /* =========================================================================

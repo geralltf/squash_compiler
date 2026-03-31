@@ -7,24 +7,34 @@
 #include <stdlib.h>
 #include <string.h>
 
+char* my_strdup(const char* src) {
+    size_t len = strlen(src) + 1;
+    char* dest = malloc(len);
+    if (dest == NULL) {
+        return NULL;
+    }
+    memcpy(dest, src, len); // Or strcpy(dest, src);
+    return dest;
+}
+
 /* =========================================================================
  * TypeInfo
  * ========================================================================= */
 TypeInfo *typeinfo_new(const char *base) {
     TypeInfo *t = calloc(1, sizeof(TypeInfo));
-    t->base = strdup(base ? base : "int");
+    t->base = my_strdup(base ? base : "int");
     t->array_size = -1;
     return t;
 }
 TypeInfo *typeinfo_ptr(TypeInfo *base) {
     TypeInfo *t = calloc(1, sizeof(TypeInfo));
     if (base) {
-        t->base          = strdup(base->base);
+        t->base          = my_strdup(base->base);
         t->pointer_depth = base->pointer_depth + 1;
         t->is_const      = base->is_const;
         t->is_unsigned   = base->is_unsigned;
     } else {
-        t->base = strdup("void");
+        t->base = my_strdup("void");
         t->pointer_depth = 1;
     }
     t->array_size = -1;
@@ -37,12 +47,12 @@ void typeinfo_free(TypeInfo *t) {
     free(t);
 }
 char *typeinfo_str(const TypeInfo *t) {
-    if (!t) return strdup("?");
+    if (!t) return my_strdup("?");
     char buf[256];
     snprintf(buf, sizeof buf, "%s%s",
              t->is_unsigned?"unsigned ":"", t->base);
     for (int i=0;i<t->pointer_depth;i++) strncat(buf,"*",sizeof buf-strlen(buf)-1);
-    return strdup(buf);
+    return my_strdup(buf);
 }
 int typeinfo_size(const TypeInfo *t, int is_64bit) {
     if (!t) return 4;
@@ -73,7 +83,7 @@ TypeInfo *typeinfo_copy(const TypeInfo *t) {
     if (!t) return NULL;
     TypeInfo *c = calloc(1, sizeof(TypeInfo));
     *c = *t;  /* shallow copy fields */
-    if (t->base) c->base = strdup(t->base);
+    if (t->base) c->base = my_strdup(t->base);
     /* pointed_t is shared (not deep-copied) which is fine for our use */
     return c;
 }
@@ -111,9 +121,9 @@ static ASTNode *an(ASTKind k, int line) {
  * ========================================================================= */
 ASTNode *ast_number    (long long v, int line) { ASTNode *n=an(AST_NUMBER,line); n->num.value=v; return n; }
 ASTNode *ast_float     (double v, int line)    { ASTNode *n=an(AST_FLOAT,line);  n->fnum.value=v; return n; }
-ASTNode *ast_string    (const char *v, int line){ ASTNode *n=an(AST_STRING,line); n->str.value=strdup(v?v:""); return n; }
+ASTNode *ast_string    (const char *v, int line){ ASTNode *n=an(AST_STRING,line); n->str.value=my_strdup(v?v:""); return n; }
 ASTNode *ast_char_lit  (long long v, int line)  { ASTNode *n=an(AST_CHAR_LIT,line); n->char_lit.value=v; return n; }
-ASTNode *ast_var       (const char *name, int line){ ASTNode *n=an(AST_VAR,line); n->var.name=strdup(name); return n; }
+ASTNode *ast_var       (const char *name, int line){ ASTNode *n=an(AST_VAR,line); n->var.name=my_strdup(name); return n; }
 
 ASTNode *ast_unary(const char *op, ASTNode *operand, int post, int line) {
     ASTNode *n=an(AST_UNARY,line);
@@ -143,7 +153,7 @@ ASTNode *ast_index(ASTNode *array, ASTNode *index, int line) {
     ASTNode *n=an(AST_INDEX,line); n->index.array=array; n->index.index=index; return n;
 }
 ASTNode *ast_member(ASTNode *obj, const char *field, int arrow, int line) {
-    ASTNode *n=an(AST_MEMBER,line); n->member.obj=obj; n->member.field=strdup(field); n->member.arrow=arrow; return n;
+    ASTNode *n=an(AST_MEMBER,line); n->member.obj=obj; n->member.field=my_strdup(field); n->member.arrow=arrow; return n;
 }
 ASTNode *ast_addr(ASTNode *operand, int line) {
     ASTNode *n=an(AST_ADDR,line); n->addr.operand=operand; return n;
@@ -159,7 +169,7 @@ ASTNode *ast_fp_call(ASTNode *func_expr, ASTNode **args, int argc, int line) {
 }
 ASTNode *ast_call(const char *name, ASTNode **args, int argc, int line) {
     ASTNode *n=an(AST_CALL,line);
-    n->call.name=strdup(name); n->call.argc=argc;
+    n->call.name=my_strdup(name); n->call.argc=argc;
     if (argc>0) { n->call.args=malloc(argc*sizeof(ASTNode*)); memcpy(n->call.args,args,argc*sizeof(ASTNode*)); }
     return n;
 }
@@ -193,16 +203,16 @@ ASTNode *ast_default(ASTNode **body, int nb, int line) {
 ASTNode *ast_return   (ASTNode *expr, int line) { ASTNode *n=an(AST_RETURN,line); n->ret.expr=expr; return n; }
 ASTNode *ast_break    (int line) { return an(AST_BREAK,line); }
 ASTNode *ast_continue (int line) { return an(AST_CONTINUE,line); }
-ASTNode *ast_goto     (const char *label, int line) { ASTNode *n=an(AST_GOTO,line); n->goto_.label=strdup(label); return n; }
+ASTNode *ast_goto     (const char *label, int line) { ASTNode *n=an(AST_GOTO,line); n->goto_.label=my_strdup(label); return n; }
 ASTNode *ast_label    (const char *name, ASTNode *stmt, int line) {
-    ASTNode *n=an(AST_LABEL,line); n->label.name=strdup(name); n->label.stmt=stmt; return n;
+    ASTNode *n=an(AST_LABEL,line); n->label.name=my_strdup(name); n->label.stmt=stmt; return n;
 }
 ASTNode *ast_expr_stmt(ASTNode *expr, int line) { ASTNode *n=an(AST_EXPR_STMT,line); n->expr_stmt.expr=expr; return n; }
 ASTNode *ast_var_decl(const char *storage, TypeInfo *type, const char *name,
                       ASTNode *init, int array_size, int line) {
     ASTNode *n=an(AST_VAR_DECL,line);
-    n->var_decl.storage=storage?strdup(storage):NULL;
-    n->var_decl.type=type; n->var_decl.name=strdup(name);
+    n->var_decl.storage=storage?my_strdup(storage):NULL;
+    n->var_decl.type=type; n->var_decl.name=my_strdup(name);
     n->var_decl.init=init; n->var_decl.array_size=array_size;
     return n;
 }
@@ -215,42 +225,42 @@ ASTNode *ast_func_decl(const char *storage, TypeInfo *ret_type, const char *name
                         ASTNode **params, int paramc, int variadic,
                         ASTNode *body, int line) {
     ASTNode *n=an(AST_FUNC_DECL,line);
-    n->func.storage=storage?strdup(storage):NULL;
-    n->func.ret_type=ret_type; n->func.name=strdup(name);
+    n->func.storage=storage?my_strdup(storage):NULL;
+    n->func.ret_type=ret_type; n->func.name=my_strdup(name);
     n->func.paramc=paramc; n->func.is_variadic=variadic; n->func.body=body;
     if (paramc>0) { n->func.params=malloc(paramc*sizeof(ASTNode*)); memcpy(n->func.params,params,paramc*sizeof(ASTNode*)); }
     return n;
 }
 ASTNode *ast_param(TypeInfo *type, const char *name, int variadic, int line) {
     ASTNode *n=an(AST_PARAM,line);
-    n->param.type=type; n->param.name=name?strdup(name):NULL; n->param.is_variadic=variadic;
+    n->param.type=type; n->param.name=name?my_strdup(name):NULL; n->param.is_variadic=variadic;
     return n;
 }
 ASTNode *ast_struct_decl(const char *name, int is_union, ASTNode **fields, int nf, int line) {
     ASTNode *n=an(AST_STRUCT_DECL,line);
-    n->struct_decl.name=name?strdup(name):NULL; n->struct_decl.is_union=is_union;
+    n->struct_decl.name=name?my_strdup(name):NULL; n->struct_decl.is_union=is_union;
     n->struct_decl.nfields=nf;
     if (nf>0) { n->struct_decl.fields=malloc(nf*sizeof(ASTNode*)); memcpy(n->struct_decl.fields,fields,nf*sizeof(ASTNode*)); }
     return n;
 }
 ASTNode *ast_field(TypeInfo *type, const char *name, int array_size, int line) {
     ASTNode *n=an(AST_FIELD,line);
-    n->field.type=type; n->field.name=strdup(name); n->field.array_size=array_size;
+    n->field.type=type; n->field.name=my_strdup(name); n->field.array_size=array_size;
     return n;
 }
 ASTNode *ast_enum_decl(const char *name, ASTNode **vals, int nv, int line) {
     ASTNode *n=an(AST_ENUM_DECL,line);
-    n->enum_decl.name=name?strdup(name):NULL; n->enum_decl.nvals=nv;
+    n->enum_decl.name=name?my_strdup(name):NULL; n->enum_decl.nvals=nv;
     if (nv>0) { n->enum_decl.vals=malloc(nv*sizeof(ASTNode*)); memcpy(n->enum_decl.vals,vals,nv*sizeof(ASTNode*)); }
     return n;
 }
 ASTNode *ast_enum_val(const char *name, long long value, int has_value, int line) {
     ASTNode *n=an(AST_ENUM_VAL,line);
-    n->enum_val.name=strdup(name); n->enum_val.value=value; n->enum_val.has_value=has_value;
+    n->enum_val.name=my_strdup(name); n->enum_val.value=value; n->enum_val.has_value=has_value;
     return n;
 }
 ASTNode *ast_typedef_decl(TypeInfo *type, const char *name, int line) {
-    ASTNode *n=an(AST_TYPEDEF_DECL,line); n->typedef_decl.type=type; n->typedef_decl.name=strdup(name); return n;
+    ASTNode *n=an(AST_TYPEDEF_DECL,line); n->typedef_decl.type=type; n->typedef_decl.name=my_strdup(name); return n;
 }
 ASTNode *ast_program(ASTNode **decls, int count, int line) {
     ASTNode *n=an(AST_PROGRAM,line); n->program.count=count;

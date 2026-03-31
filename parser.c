@@ -136,10 +136,10 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
                 snprintf(key, sizeof key, "%s %s", is_union?"union":"struct", sname);
             }
             if (has_name) symtable_define_struct(p->sym, sname, sd, sz);
-            ti->base = strdup(key);
+            ti->base = my_strdup(key);
         } else {
             char key[280]; snprintf(key,sizeof key,"%s %s",is_union?"union":"struct",sname);
-            ti->base = strdup(key);
+            ti->base = my_strdup(key);
         }
         return ti;
     }
@@ -182,7 +182,7 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
             }
             eat(p,TOK_RBRACE);
         }
-        ti->base = strdup(ename[0] ? ename : "int");
+        ti->base = my_strdup(ename[0] ? ename : "int");
         return ti;
     }
 
@@ -190,7 +190,7 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
     if (k==TOK_IDENT) {
         Symbol *s = symtable_lookup(p->sym, tok_ident(cur(p)));
         if (s && s->kind==SYM_TYPEDEF) {
-            ti->base = strdup(tok_ident(cur(p))); adv(p);
+            ti->base = my_strdup(tok_ident(cur(p))); adv(p);
             return ti;
         }
     }
@@ -218,7 +218,7 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
     else if (has_long==1 && strcmp(base,"int")==0) strncpy(base,"long",sizeof base-1);
     else if (has_short && strcmp(base,"int")==0) strncpy(base,"short",sizeof base-1);
 
-    ti->base = strdup(base);
+    ti->base = my_strdup(base);
     return ti;
 }
 
@@ -856,7 +856,7 @@ ASTNode *ParseVariable(Parser *p) {
             TypeInfo *t2 = (TypeInfo*)calloc(1, sizeof(TypeInfo));
             if (!t2) { parse_error(p,"internal: calloc returned null"); break; }
             *t2 = *type;
-            if (type->base) t2->base = strdup(type->base);
+            if (type->base) t2->base = my_strdup(type->base);
             t2->pointer_depth = base_ptr_depth;  /* reset to base, not first declarator's depth */
             while (chk(p, TOK_STAR)) { adv(p); t2->pointer_depth++; }
             if (!chk(p,TOK_IDENT)) { parse_error(p,"expected declarator name"); break; }

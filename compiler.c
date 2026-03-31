@@ -36,7 +36,7 @@ static void inject_entry_reloc(Assembler *a, const char *entry) {
         a->reloc_cap*=2; a->relocs=realloc(a->relocs,a->reloc_cap*sizeof(Relocation));
     }
     Relocation *r=&a->relocs[a->reloc_count++];
-    r->offset=0; r->kind=RELOC_ABS32; r->symbol=strdup("__entry__"); r->addend=off;
+    r->offset=0; r->kind=RELOC_ABS32; r->symbol=my_strdup("__entry__"); r->addend=off;
 }
 
 int main(int argc, char **argv) {
@@ -58,6 +58,10 @@ int main(int argc, char **argv) {
         else if (!src_path) src_path=argv[i];
         else printf("unknown argument: %s\n",argv[i]);
     }
+    //src_path = "test_features.c";
+    //printf("[TEST] src_path: %s\n", src_path);
+    //printf("[TEST] out_path: %s\n", out_path);
+
     if (!src_path) {
         printf("Usage: compiler [-32|-64] [-dump] [-I dir] <source.c> [-o output.exe]\n");
         return 1;

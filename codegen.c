@@ -312,12 +312,12 @@ static const char *intern_string(CodeGen *cg, const char *value) {
         cg->strings=realloc(cg->strings,cg->string_cap*sizeof(StringEntry));
     }
     StringEntry *se=&cg->strings[cg->string_count++];
-    se->value  = strdup(value);
+    se->value  = my_strdup(value);
     se->len    = (int)strlen(value)+1;
     se->offset = cg->string_pool_size;
     cg->string_pool_size += se->len;
     char lbl[32]; snprintf(lbl,sizeof lbl,"str%d",cg->string_count-1);
-    se->label  = strdup(lbl);
+    se->label  = my_strdup(lbl);
     return se->label;
 }
 
@@ -329,7 +329,7 @@ static const char *intern_wdata(CodeGen *cg, const char *label, int size) {
         cg->wdata = realloc(cg->wdata, cg->wdata_cap * sizeof(WDataEntry));
     }
     WDataEntry *we = &cg->wdata[cg->wdata_count++];
-    we->label  = strdup(label);
+    we->label  = my_strdup(label);
     we->offset = cg->wdata_pool_size;
     we->size   = size;
     cg->wdata_pool_size += size;
@@ -369,7 +369,7 @@ static int get_func_label(CodeGen *cg, const char *name) {
         cg->funcs=realloc(cg->funcs,cg->func_cap*sizeof(FuncRecord));
     }
     int id=asm_new_label(cg->asm_,name);
-    cg->funcs[cg->func_count].name     =strdup(name);
+    cg->funcs[cg->func_count].name     =my_strdup(name);
     cg->funcs[cg->func_count].label_id =id;
     cg->func_count++;
     return id;
@@ -2534,7 +2534,7 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
                 /* Store the rdata label in sym->dll (repurposed for static vars)
                  * so codegen_expr can find it while lookup by original name works. */
                 free(user_sym->dll);
-                user_sym->dll = strdup(sym_name);
+                user_sym->dll = my_strdup(sym_name);
             }
 
             /* Static variable storage is zero-initialised via calloc() in the

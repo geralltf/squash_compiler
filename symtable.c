@@ -87,7 +87,7 @@ void symtable_pop_scope(SymTable *st) {
 
 static Symbol *alloc_sym(SymTable *st, const char *name, TypeInfo *type, SymKind kind) {
     Symbol *s = calloc(1,sizeof(Symbol));
-    s->name = strdup(name);
+    s->name = my_strdup(name);
     s->type = type;
     s->kind = kind;
     s->is_64bit = st->is_64bit;
@@ -101,7 +101,7 @@ static Symbol *alloc_global_sym(SymTable *st, const char *name, TypeInfo *type, 
     Scope *g = st->current;
     while (g->parent) g=g->parent;
     Symbol *s = calloc(1,sizeof(Symbol));
-    s->name=strdup(name); s->type=type; s->kind=kind; s->is_64bit=st->is_64bit;
+    s->name=my_strdup(name); s->type=type; s->kind=kind; s->is_64bit=st->is_64bit;
     s->next=g->head; g->head=s;
     return s;
 }
@@ -230,7 +230,7 @@ Symbol *symtable_define_func(SymTable *st, const char *name, TypeInfo *ret, int 
 
 Symbol *symtable_define_import(SymTable *st, const char *name, const char *dll) {
     Symbol *s = alloc_global_sym(st, name, typeinfo_new("int"), SYM_IMPORT);
-    s->dll = strdup(dll); s->paramc = -1;
+    s->dll = my_strdup(dll); s->paramc = -1;
     return s;
 }
 
@@ -272,7 +272,7 @@ void symtable_add_import(SymTable *st, const char *dll_func) {
         st->import_cap = st->import_cap ? st->import_cap*2 : 16;
         st->imports = realloc(st->imports, st->import_cap*sizeof(char*));
     }
-    st->imports[st->import_count++] = strdup(dll_func);
+    st->imports[st->import_count++] = my_strdup(dll_func);
 }
 
 const char *symtable_find_dll(SymTable *st, const char *name) {

@@ -95,7 +95,7 @@ int asm_new_label(Assembler *a, const char *name) {
         a->labels = realloc(a->labels, a->label_cap*sizeof(Label));
     }
     int id = a->label_count++;
-    a->labels[id].name   = strdup(name ? name : "");
+    a->labels[id].name   = my_strdup(name ? name : "");
     a->labels[id].offset = -1;
     return id;
 }
@@ -142,7 +142,7 @@ static void add_reloc(Assembler *a, RelocKind kind, const char *sym, int addend)
     Relocation *r = &a->relocs[a->reloc_count++];
     r->offset  = a->code_len;
     r->kind    = kind;
-    r->symbol  = strdup(sym);
+    r->symbol  = my_strdup(sym);
     r->addend  = addend;
     asm_emit_u32(a, 0); /* placeholder */
 }
@@ -636,7 +636,7 @@ int asm_data_alloc(Assembler *a, const char *name, int size) {
     /* Register symbol */
     if (name && a->data_sym_count < a->data_sym_cap) {
         DataSymbol *ds = &a->data_syms[a->data_sym_count++];
-        ds->name   = strdup(name);
+        ds->name   = my_strdup(name);
         ds->offset = off;
         ds->size   = size;
     }

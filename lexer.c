@@ -204,7 +204,7 @@ static Token lex_string(Lexer *l) {
     if (l->src[l->pos]=='"') adv(l);
     buf[bi]='\0';
     t.len  = (int)(l->src+l->pos-t.start);
-    t.sval = strdup(buf);
+    t.sval = my_strdup(buf);
     return t;
 }
 
@@ -430,13 +430,13 @@ static void pp_macro_define(PPState *st, const char *name, int nlen,
     int idx = pp_macro_find(st, name, nlen);
     if (idx >= 0) {
         free(st->macros[idx].value);
-        st->macros[idx].value = strdup(value);
+        st->macros[idx].value = my_strdup(value);
         st->macros[idx].nparams = -1;
         return;
     }
     if (st->nmc >= PP_MAX_MACROS) return;
     { char *_snd=malloc(nlen+1); strncpy(_snd,name,nlen); _snd[nlen]='\0'; st->macros[st->nmc].name=_snd; }
-    st->macros[st->nmc].value = strdup(value);
+    st->macros[st->nmc].value = my_strdup(value);
     st->macros[st->nmc].nparams = -1;
     st->nmc++;
 }
@@ -459,7 +459,7 @@ static int pp_macro_defined(PPState *st, const char *name) {
 
 /* Expand macros in a single text token (word-boundary check). */
 static char *pp_expand(PPState *st, const char *src) {
-    char *out = strdup(src);
+    char *out = my_strdup(src);
     int changed = 1;
     int max_iters = 100; /* prevent infinite expansion loops */
     while (changed && max_iters-- > 0) {
@@ -644,7 +644,7 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
     /* Helper: append text to output buffer */
 
     /* Split source into lines, process each */
-    char *copy = strdup(src);
+    char *copy = my_strdup(src);
     char *line;
     char *rest = copy;
     while ((line = (rest && *rest) ? rest : NULL) != NULL) {
@@ -793,9 +793,9 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
                 int idx2=pp_macro_find(st,nm,nlen);
                 if (idx2<0) { idx2=st->nmc++; }
                 { char *_snd2=malloc(nlen+1); strncpy(_snd2,nm,nlen); _snd2[nlen]='\0'; st->macros[idx2].name=_snd2; }
-                st->macros[idx2].value=strdup(body);
+                st->macros[idx2].value=my_strdup(body);
                 st->macros[idx2].nparams=np;
-                for (int pi=0;pi<np;pi++) st->macros[idx2].params[pi]=strdup(pnames_buf+pi*64);
+                for (int pi=0;pi<np;pi++) st->macros[idx2].params[pi]=my_strdup(pnames_buf+pi*64);
                 for (int pi=np;pi<16;pi++) st->macros[idx2].params[pi]=NULL;
                 continue;
             }
