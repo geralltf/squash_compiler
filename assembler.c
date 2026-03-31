@@ -344,6 +344,31 @@ void asm_mov_reg_reg(Assembler *a, Reg dst, Reg src) {
         asm_emit1(a, 0xC0|(reg_enc(src)<<3)|reg_enc(dst));
     }
 }
+void asm_mov_mem32_reg(Assembler *a, Reg base, int disp, Reg src) {
+    /* [base+disp] = src (32-bit store, no REX.W — preserves adjacent bytes) */
+    if (needs_rex_r(src) || needs_rex_r(base)) {
+        uint8_t rex=0x40;
+        if (needs_rex_r(src)) rex|=0x04;
+        if (needs_rex_r(base)) rex|=0x01;
+        asm_emit1(a,rex);
+    }
+    asm_emit1(a,0x89);
+    modrm_disp(a, src, base, disp);
+}
+
+void asm_mov_mem8_reg(Assembler *a, Reg base, int disp, Reg src) {
+    /* MOV byte[base+disp], src_low8 */
+    /* Need REX if src is >= 4 (for SPL, BPL etc.) or base >= 8 */
+    if (needs_rex_r(src) || needs_rex_r(base) || (int)src >= 4) {
+        uint8_t rex=0x40;
+        if (needs_rex_r(src)) rex|=0x04;
+        if (needs_rex_r(base)) rex|=0x01;
+        asm_emit1(a,rex);
+    }
+    asm_emit1(a,0x88);
+    modrm_disp(a, src, base, disp);
+}
+
 void asm_mov_mem_reg(Assembler *a, Reg base, int disp, Reg src) {
     /* [base+disp] = src */
     if (a->is_64bit) {

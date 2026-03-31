@@ -1976,7 +1976,14 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
         if (n->assign.lhs->kind==AST_VAR) {
             Symbol *s=symtable_lookup(cg->sym,n->assign.lhs->var.name);
             if (s && (s->kind==SYM_VAR||s->kind==SYM_PARAM)) {
-                asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
+                if (cg->is_64bit && s->type && s->type->pointer_depth == 0) {
+                    int vsz = typeinfo_size(s->type, 1);
+                    if (vsz == 1) asm_mov_mem8_reg(a,REG_RBP,s->offset,REG_RAX);
+                    else if (vsz <= 4) asm_mov_mem32_reg(a,REG_RBP,s->offset,REG_RAX);
+                    else asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
+                } else {
+                    asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
+                }
             } else if (s && s->kind==SYM_GLOBAL) {
                 const char *glbl = (s->dll && s->dll[0]) ? s->dll : n->assign.lhs->var.name;
                 asm_push_reg(a,REG_RAX);
