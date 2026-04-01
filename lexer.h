@@ -72,4 +72,6 @@ char *preprocess(const char *src, const char *filename,
 /* is this token a type-specifier keyword? */
 int tok_is_type(TokenKind k);
 
+char* my_strdup(const char* src);
+
 #endif

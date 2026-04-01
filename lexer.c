@@ -1,13 +1,12 @@
-#ifdef _WIN32
-#define strdup _strdup
-#endif
-
 #include "lexer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+
+/* portable strdup replacement */
+char* my_strdup(const char* src);
 
 /* =========================================================================
  * Error reporting helper
@@ -644,6 +643,10 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
     /* Helper: append text to output buffer */
 
     /* Split source into lines, process each */
+    if (!src || (unsigned long long)(const void*)src < 0x1000) {
+        fprintf(stderr, "CRASH GUARD: src=%p filename=%s\n", src, filename);
+        return out;
+    }
     char *copy = my_strdup(src);
     char *line;
     char *rest = copy;

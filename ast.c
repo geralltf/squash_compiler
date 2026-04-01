@@ -1,21 +1,17 @@
-#ifdef _WIN32
-#define strdup _strdup
-#endif
-
 #include "ast.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 char* my_strdup(const char* src) {
+    if (!src) return NULL;
     size_t len = strlen(src) + 1;
     char* dest = malloc(len);
-    if (dest == NULL) {
-        return NULL;
-    }
-    memcpy(dest, src, len); // Or strcpy(dest, src);
+    if (dest == NULL) return NULL;
+    memcpy(dest, src, len);
     return dest;
 }
+
 
 /* =========================================================================
  * TypeInfo

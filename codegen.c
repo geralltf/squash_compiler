@@ -1,11 +1,10 @@
-#ifdef _WIN32
-#define strdup _strdup
-#endif
-
 #include "codegen.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* portable strdup replacement */
+char* my_strdup(const char* src);
 
 /* =========================================================================
  * field_byte_offset — walk struct/union field list and return byte offset
@@ -1978,9 +1977,9 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             if (s && (s->kind==SYM_VAR||s->kind==SYM_PARAM)) {
                 if (cg->is_64bit && s->type && s->type->pointer_depth == 0) {
                     int vsz = typeinfo_size(s->type, 1);
-                    if (vsz == 1) asm_mov_mem8_reg(a,REG_RBP,s->offset,REG_RAX);
-                    else if (vsz <= 4) asm_mov_mem32_reg(a,REG_RBP,s->offset,REG_RAX);
-                    else asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
+                    if      (vsz == 1) asm_mov_mem8_reg  (a,REG_RBP,s->offset,REG_RAX);
+                    else if (vsz <= 4) asm_mov_mem32_reg (a,REG_RBP,s->offset,REG_RAX);
+                    else               asm_mov_mem_reg   (a,REG_RBP,s->offset,REG_RAX);
                 } else {
                     asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
                 }
@@ -2106,7 +2105,14 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             if (n->unary.operand->kind==AST_VAR) {
                 Symbol *s=symtable_lookup(cg->sym,n->unary.operand->var.name);
                 if (s && (s->kind==SYM_VAR||s->kind==SYM_PARAM)) {
-                    asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
+                    if (cg->is_64bit && s->type && s->type->pointer_depth == 0) {
+                        int vsz = typeinfo_size(s->type, 1);
+                        if      (vsz == 1) asm_mov_mem8_reg  (a,REG_RBP,s->offset,REG_RAX);
+                        else if (vsz <= 4) asm_mov_mem32_reg (a,REG_RBP,s->offset,REG_RAX);
+                        else               asm_mov_mem_reg   (a,REG_RBP,s->offset,REG_RAX);
+                    } else {
+                        asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
+                    }
                 } else if (s && s->kind==SYM_GLOBAL) {
                     const char *glbl=(s->dll&&s->dll[0])?s->dll:n->unary.operand->var.name;
                     asm_push_reg(a,REG_RAX);
@@ -2125,7 +2131,14 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             if (n->unary.operand->kind==AST_VAR) {
                 Symbol *s=symtable_lookup(cg->sym,n->unary.operand->var.name);
                 if (s && (s->kind==SYM_VAR||s->kind==SYM_PARAM)) {
-                    asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
+                    if (cg->is_64bit && s->type && s->type->pointer_depth == 0) {
+                        int vsz = typeinfo_size(s->type, 1);
+                        if      (vsz == 1) asm_mov_mem8_reg  (a,REG_RBP,s->offset,REG_RAX);
+                        else if (vsz <= 4) asm_mov_mem32_reg (a,REG_RBP,s->offset,REG_RAX);
+                        else               asm_mov_mem_reg   (a,REG_RBP,s->offset,REG_RAX);
+                    } else {
+                        asm_mov_mem_reg(a,REG_RBP,s->offset,REG_RAX);
+                    }
                 } else if (s && s->kind==SYM_GLOBAL) {
                     const char *glbl=(s->dll&&s->dll[0])?s->dll:n->unary.operand->var.name;
                     asm_push_reg(a,REG_RAX);

@@ -1,7 +1,3 @@
-#ifdef _WIN32
-#define strdup _strdup
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,10 +54,6 @@ int main(int argc, char **argv) {
         else if (!src_path) src_path=argv[i];
         else printf("unknown argument: %s\n",argv[i]);
     }
-    //src_path = "test_features.c";
-    //printf("[TEST] src_path: %s\n", src_path);
-    //printf("[TEST] out_path: %s\n", out_path);
-
     if (!src_path) {
         printf("Usage: compiler [-32|-64] [-dump] [-I dir] <source.c> [-o output.exe]\n");
         return 1;

@@ -1,11 +1,10 @@
-#ifdef _WIN32
-#define strdup _strdup
-#endif
-
 #include "parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* portable strdup replacement */
+char* my_strdup(const char* src);
 
 /* =========================================================================
  * Helpers

@@ -213,4 +213,6 @@ int       typeinfo_is_unsigned(const TypeInfo *t);
 void ast_print(const ASTNode *n, int indent);
 void ast_free (ASTNode *n);
 
+char* my_strdup(const char* src);
+
 #endif

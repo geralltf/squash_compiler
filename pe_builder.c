@@ -1,7 +1,3 @@
-#ifdef _WIN32
-#define strdup _strdup
-#endif
-
 /*
  * pe_builder.c  —  Windows PE32 / PE32+ builder with linker
  *
@@ -51,6 +47,9 @@ static int pe_strcasecmp(const char *a, const char *b) {
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+
+/* portable strdup replacement */
+char* my_strdup(const char* src);
 
 /* =========================================================================
  * Constants
