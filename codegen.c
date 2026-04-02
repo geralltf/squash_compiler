@@ -2284,14 +2284,10 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             int extra = argc > 4 ? (argc-4)*8 : 0;
             int frame = 32 + extra;
             if ((frame&8)==0) frame+=8;  /* RSP must be 0-mod-16 at CALL */
-            asm_sub_rsp(a,frame);
-            /* Evaluate all args to temporary stack slots (forward order),
-             * then load into registers. This avoids clobbering issues where
-             * a later arg's evaluation (e.g. a function call) overwrites
-             * registers already set for an earlier arg.
-             * Layout in shadow space + extra: [rsp+0]=arg0, [rsp+8]=arg1, ...
-             * We use [rsp+32..] for args >=4 (normal stack), and
-             * [rsp+8..31] for args 0..3 temps (within shadow space). */
+            /* Evaluate args BEFORE allocating shadow space.
+             * On Windows x64 there is NO red zone - writing below RSP via PUSH
+             * is unsafe (OS uses that memory). So evaluate args into registers
+             * first, THEN allocate shadow space, then call. */
             {
                 /* Evaluate args directly into ABI registers (no store-load intermediary).
                  * Evaluate in forward order; each arg goes straight to its register.
@@ -2310,11 +2306,11 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                         int arg1_float = codegen_is_float_expr(cg,n->call.args[1]);
                         int arg0_float = codegen_is_float_expr(cg,n->call.args[0]);
                         if(arg1_has_call && !arg0_float && !arg1_float)
-                            asm_mov_mem_reg(a,REG_RSP,8,REG_RCX); /* save RCX at [rsp+8] */
+                            asm_mov_reg_reg(a,REG_R10,REG_RCX); /* save RCX in R10 */
                         if(arg1_float){codegen_float_expr(cg,n->call.args[1]);}
                         else{codegen_expr(cg,n->call.args[1]); asm_mov_reg_reg(a,REG_RDX,REG_RAX);}
                         if(arg1_has_call && !arg0_float && !arg1_float)
-                            asm_mov_reg_mem(a,REG_RCX,REG_RSP,8); /* restore RCX from [rsp+8] */
+                            asm_mov_reg_reg(a,REG_RCX,REG_R10); /* restore RCX from R10 */
                     }
                     if (argc>=3) {
                         int af=codegen_is_float_expr(cg,n->call.args[2]);
@@ -2326,13 +2322,15 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                         if(af){codegen_float_expr(cg,n->call.args[3]);}
                         else{codegen_expr(cg,n->call.args[3]); asm_mov_reg_reg(a,REG_R9,REG_RAX);}
                     }
-                    /* Stack args >= 4 */
-                    for(int i=4;i<argc;i++) {
-                        int af=codegen_is_float_expr(cg,n->call.args[i]);
-                        if(af){codegen_float_expr(cg,n->call.args[i]); asm_movsd_store(a,REG_RSP,32+(i-4)*8,0);}
-                        else{codegen_expr(cg,n->call.args[i]); asm_mov_mem_reg(a,REG_RSP,32+(i-4)*8,REG_RAX);}
-                    }
                 }
+            }
+            /* Now allocate shadow space - AFTER args are in registers */
+            asm_sub_rsp(a,frame);
+            /* Stack args >= 4: store after shadow is allocated */
+            for(int i=4;i<argc;i++) {
+                int af=codegen_is_float_expr(cg,n->call.args[i]);
+                if(af){codegen_float_expr(cg,n->call.args[i]); asm_movsd_store(a,REG_RSP,32+(i-4)*8,0);}
+                else{codegen_expr(cg,n->call.args[i]); asm_mov_mem_reg(a,REG_RSP,32+(i-4)*8,REG_RAX);}
             }
             if (sym && sym->kind==SYM_IMPORT) {
                 char key[512]; snprintf(key,sizeof key,"%s:%s",sym->dll,name);
@@ -2652,11 +2650,27 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
                 }
             } else {
                 codegen_expr(cg,n->var_decl.init);
-                asm_mov_mem_reg(a,REG_RBP,sym->offset,REG_RAX);
+                /* Use size-aware store to avoid corrupting adjacent stack vars */
+                if (cg->is_64bit && sym->type && sym->type->pointer_depth == 0) {
+                    int vsz = typeinfo_size(sym->type, 1);
+                    if      (vsz == 1) asm_mov_mem8_reg  (a,REG_RBP,sym->offset,REG_RAX);
+                    else if (vsz <= 4) asm_mov_mem32_reg (a,REG_RBP,sym->offset,REG_RAX);
+                    else               asm_mov_mem_reg   (a,REG_RBP,sym->offset,REG_RAX);
+                } else {
+                    asm_mov_mem_reg(a,REG_RBP,sym->offset,REG_RAX);
+                }
             }
         } else {
+            /* Zero-initialize: use size-aware store */
             asm_mov_reg_imm(a,REG_RAX,0);
-            asm_mov_mem_reg(a,REG_RBP,sym->offset,REG_RAX);
+            if (cg->is_64bit && sym->type && sym->type->pointer_depth == 0) {
+                int vsz = typeinfo_size(sym->type, 1);
+                if      (vsz == 1) asm_mov_mem8_reg  (a,REG_RBP,sym->offset,REG_RAX);
+                else if (vsz <= 4) asm_mov_mem32_reg (a,REG_RBP,sym->offset,REG_RAX);
+                else               asm_mov_mem_reg   (a,REG_RBP,sym->offset,REG_RAX);
+            } else {
+                asm_mov_mem_reg(a,REG_RBP,sym->offset,REG_RAX);
+            }
         }
         break;
     }

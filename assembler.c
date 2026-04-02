@@ -530,10 +530,9 @@ void asm_test_reg_reg(Assembler *a, Reg a_, Reg b) {
     else { asm_emit1(a,0x85); asm_emit1(a,0xC0|(reg_enc(b)<<3)|reg_enc(a_)); }
 }
 void asm_setcc_al(Assembler *a, CondCode cc) {
-    /* XOR ECX,ECX + SETCC CL + MOVZX EAX,CL to vary bytes */
-    asm_emit2(a,0x31,0xC9);  /* XOR ECX,ECX */
-    asm_emit3(a,0x0F, 0x90|(uint8_t)cc, 0xC1); /* SETCC CL */
-    asm_emit3(a,0x0F,0xB6,0xC1); /* MOVZX EAX,CL */
+    /* XOR EAX,EAX + SETCC AL — avoids clobbering ECX/RCX (arg0 register) */
+    asm_emit2(a,0x31,0xC0);               /* XOR EAX,EAX */
+    asm_emit3(a,0x0F, 0x90|(uint8_t)cc, 0xC0); /* SETCC AL */
 }
 void asm_movzx_rax_al(Assembler *a) {
     (void)a; /* no-op: XOR EAX,EAX is emitted before SETCC to pre-zero EAX */
