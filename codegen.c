@@ -1489,14 +1489,19 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                     asm_mov_reg_mem(a, REG_RAX, REG_RBP, s->offset);
                 } else if (vsz == 1) {
                     if (is_signed) {
-                        /* MOVSX EAX, byte[RBP+off] */
-                        asm_emit3(a,0x0F,0xBE,0x45); asm_emit1(a,(uint8_t)(int8_t)s->offset);
+                        /* MOVSX RAX, byte[RBP+off] — sign-extend 8-bit to 64-bit */
+                        asm_movsx_rax_mem8(a, REG_RBP, s->offset);
                     } else {
                         asm_mov_eax_mem8(a, REG_RBP, s->offset);
                     }
                 } else if (vsz <= 4) {
-                    /* 32-bit load: zero-extends upper 32 bits of RAX */
-                    asm_mov_reg32_mem(a, REG_RAX, REG_RBP, s->offset);
+                    if (is_signed) {
+                        /* MOVSXD RAX, dword[RBP+off] — sign-extend 32-bit to 64-bit */
+                        asm_movsxd_rax_mem(a, REG_RBP, s->offset);
+                    } else {
+                        /* 32-bit load: zero-extends upper 32 bits of RAX */
+                        asm_mov_reg32_mem(a, REG_RAX, REG_RBP, s->offset);
+                    }
                 } else {
                     /* 64-bit load (long long, double, pointer) */
                     asm_mov_reg_mem(a, REG_RAX, REG_RBP, s->offset);
@@ -3359,16 +3364,16 @@ static void codegen_branch(CodeGen *cg, ASTNode *cond, int lbl, int jump_if_true
                       !strcmp(op,"<=")||!strcmp(op,">")||!strcmp(op,">="));
         if (is_cmp) {
             /* Evaluate both sides, CMP, then Jcc.
-             * 64-bit: save left in red zone [RSP-8] to avoid misaligning the stack.
-             *         PUSH would make RSP 8-mod-16, breaking alignment for any
-             *         function call in the right operand.
+             * 64-bit: PUSH/POP to save left operand (red zone [RSP-8] is
+             *         unsafe on Windows - OS can overwrite memory below RSP).
              * 32-bit: cdecl only requires 4-byte alignment, PUSH/POP is fine. */
             codegen_expr(cg, cond->binary.left);
+            /* Save left operand with PUSH (not [RSP-8] red zone - unsafe on Windows) */
             if (cg->is_64bit) {
-                asm_emit4(a,0x48,0x89,0x44,0x24); asm_emit1(a,0xF8); /* mov [rsp-8],rax */
+                asm_push_reg(a, REG_RAX);
                 codegen_expr(cg, cond->binary.right);
-                asm_emit4(a,0x48,0x8B,0x5C,0x24); asm_emit1(a,0xF8); /* mov rbx,[rsp-8] */
-                asm_emit3(a,0x48,0x39,0xC3);                          /* cmp rbx,rax */
+                asm_pop_reg(a, REG_RBX);
+                asm_emit3(a,0x48,0x39,0xC3);  /* cmp rbx,rax */
             } else {
                 asm_push_reg(a, REG_EAX);
                 codegen_expr(cg, cond->binary.right);
