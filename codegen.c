@@ -277,7 +277,7 @@ static const char *INTERNAL_SHIMS[] = {
     "fread","fwrite","fseek","ftell","rewind",
     "fgetc","fputc","ungetc",
     "remove","rename","ferror","clearerr",
-    "sprintf","printf","puts","putchar","abort","exit","vfprintf","vprintf","snprintf","vsnprintf","_snprintf","_vsnprintf",
+    "sprintf","printf","puts","putchar","abort","exit","vfprintf","vprintf","snprintf","vsnprintf",
     NULL
 };
 static int is_internal_shim(const char *name) {
@@ -381,91 +381,6 @@ static int sizeof_type(TypeInfo *ti, int is_64) {
     return typeinfo_size(ti, is_64);
 }
 
-/* =========================================================================
- * emit_write_stdout  — write a string literal to stdout via WriteFile.
- * Caches the stdout HANDLE in a zero-initialised rdata slot so GetStdHandle
- * is called at most ONCE per program run regardless of how many printf calls
- * are made.  This eliminates the repetitive push-0xF5/call-GetStdHandle
- * pattern that triggers Windows Defender heuristics.
- * ========================================================================= */
-
-/* Emit code to call GetStdHandle(STD_OUTPUT_HANDLE) -> handle in RBX (64-bit) or EBX (32-bit).
- * No caching - always calls GetStdHandle fresh to avoid AV heuristic patterns. */
-static void emit_get_stdout_handle(CodeGen *cg) {
-    Assembler *a=cg->asm_;
-    /* Read pre-initialized handle from slot (no GetStdHandle call needed) */
-    if (cg->stdout_handle_lbl[0]!='\0') {
-        if (cg->is_64bit) {
-            /* LEA RBX,[slot]; MOV RBX,[RBX] */
-            asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
-            asm_emit3(a,0x48,0x8B,0x1B); /* MOV RBX,[RBX] */
-        } else {
-            asm_emit1(a,0xBB); asm_reloc_wdata(a,cg->stdout_handle_lbl);
-            asm_emit2(a,0x8B,0x1B); /* MOV EBX,[EBX] */
-        }
-        return;
-    }
-    /* Fallback if slot not initialized */
-    symtable_add_import(cg->sym,"KERNEL32.dll:GetStdHandle");
-    if (cg->is_64bit) {
-        asm_emit1(a,0xB9); asm_emit4(a,0xF5,0xFF,0xFF,0xFF);
-        asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
-        asm_mov_reg_reg(a,REG_RBX,REG_RAX);
-    } else {
-        asm_emit1(a,0x68); asm_emit4(a,0xF5,0xFF,0xFF,0xFF);
-        asm_call_import32(a,"GetStdHandle"); asm_add_rsp(a,4);
-        asm_mov_reg_reg(a,REG_EBX,REG_EAX);
-    }
-}
-static void emit_write_stdout(CodeGen *cg, const char *str_lbl, int str_len) {
-    Assembler *a=cg->asm_;
-    symtable_add_import(cg->sym,"KERNEL32.dll:GetStdHandle");
-    symtable_add_import(cg->sym,"KERNEL32.dll:WriteFile");
-    if (str_len <= 0) return;
-
-    if (cg->is_64bit && cg->write_stdout_lbl != 0) {
-        /* Call shared __write_stdout(str=RCX, len=RDX) helper */
-        asm_lea_rip_data(a,REG_RCX,str_lbl);
-        asm_mov_reg_imm(a,REG_RDX,(long long)str_len);
-        asm_call_label(a,cg->write_stdout_lbl);
-    } else if (cg->is_64bit) {
-        /* Fallback inline (should not normally happen) */
-        asm_push_reg(a, REG_RBX);
-        asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
-        asm_emit3(a,0x48,0x8B,0x1B);
-        asm_sub_rsp(a, 48);
-        asm_mov_reg_reg(a, REG_RCX, REG_RBX);
-        asm_lea_rip_data(a, REG_RDX, str_lbl);
-        asm_mov_reg_imm(a, REG_R8, (long long)str_len);
-        asm_mov_reg_imm(a, REG_R9, 0);
-        asm_mov_reg_imm(a, REG_RAX, 0);
-        asm_mov_mem_reg(a, REG_RSP, 32, REG_RAX);
-        asm_call_import(a, "WriteFile");
-        asm_add_rsp(a, 48);
-        asm_pop_reg(a, REG_RBX);
-    } else {
-        /* 32-bit: inline (cdecl calling convention makes helper complex) */
-        asm_push_reg(a, REG_EBX);
-        if (cg->stdout_handle_lbl[0]!='\0') {
-            asm_emit1(a,0xBB); asm_reloc_wdata(a,cg->stdout_handle_lbl);
-            asm_emit2(a,0x8B,0x1B); /* MOV EBX,[EBX] */
-        } else {
-            asm_emit1(a,0x68); asm_emit4(a,0xF5,0xFF,0xFF,0xFF);
-            asm_call_import32(a,"GetStdHandle"); asm_add_rsp(a,4);
-            asm_mov_reg_reg(a,REG_EBX,REG_EAX);
-        }
-        asm_mov_reg_imm(a, REG_EAX, 0);
-        asm_push_reg(a, REG_EAX);
-        asm_push_reg(a, REG_EAX);
-        asm_mov_reg_imm(a, REG_EAX, str_len);
-        asm_push_reg(a, REG_EAX);
-        asm_emit1(a,0x68); asm_reloc_data(a, str_lbl);
-        asm_push_reg(a, REG_EBX);
-        asm_call_import32(a, "WriteFile");
-        asm_add_rsp(a, 5*4);
-        asm_pop_reg(a, REG_EBX);
-    }
-}
 
 
 /* =========================================================================
@@ -488,86 +403,49 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
      * This requires no libc and works entirely through WriteFile.
      * --------------------------------------------------------------------- */
     if (strcmp(name,"printf")==0 || strcmp(name,"puts")==0) {
-        /* Use _snprintf to format into a stack buffer then WriteFile to stdout.
-         * This avoids needing CRT initialization while keeping output working. */
-        symtable_add_import(cg->sym,"msvcrt.dll:_snprintf");
-        symtable_add_import(cg->sym,"KERNEL32.dll:GetStdHandle");
-        symtable_add_import(cg->sym,"KERNEL32.dll:WriteFile");
-        int buf_size = 512; /* smaller buffer avoids large-stack shellcode heuristic */
-        if (cg->is_64bit) {
-            /* Realign stack to 16-byte boundary before buffer alloc.
-             * Use R15 to save RSP (like argv injection does), since the
-             * current frame offset may not be 0-mod-16 when printf is called
-             * from inside a function body. */
-            int buf_off = 48; /* buffer starts after 48-byte shadow+margin */
-            int frame = buf_off + buf_size + 8; /* +8 for R15 save slot */
-            asm_emit2(a,0x41,0x57);              /* push r15 */
-            asm_emit3(a,0x4C,0x8B,0xFC);         /* mov r15,rsp  (save original rsp) */
-            asm_emit4(a,0x48,0x83,0xE4,0xF0);    /* and rsp,-16   (realign) */
-            asm_sub_rsp(a, buf_off + buf_size);   /* allocate shadow + buffer */
-            /* LEA RCX,[rsp+buf_off] = buf ptr */
-            asm_emit4(a,0x48,0x8D,0x4C,0x24); asm_emit1(a,buf_off);
-            asm_mov_reg_imm(a,REG_RDX,buf_size);
-            if (argc>=1){codegen_expr(cg,args[0]); asm_mov_reg_reg(a,REG_R8,REG_RAX);}
-            else asm_mov_reg_imm(a,REG_R8,0);
-            if (argc>=2){codegen_expr(cg,args[1]); asm_mov_reg_reg(a,REG_R9,REG_RAX);}
-            else asm_mov_reg_imm(a,REG_R9,0);
-            for(int i=2;i<argc;i++){
-                codegen_expr(cg,args[i]);
-                asm_mov_mem_reg(a,REG_RSP,32+(i-2)*8,REG_RAX);
-            }
-            asm_call_import(a,"_snprintf");
-            /* RAX = bytes written -> R8 = nBytesToWrite */
-            asm_mov_reg_reg(a,REG_R8,REG_RAX);
-            /* RDX = buf (already 16-byte aligned RSP + buf_off) */
-            asm_emit4(a,0x48,0x8D,0x54,0x24); asm_emit1(a,buf_off);
-            /* Read handle from slot (no PUSH/POP to avoid misalignment) */
-            if (cg->stdout_handle_lbl[0]!='\0') {
-                asm_lea_rip_wdata(a,REG_RCX,cg->stdout_handle_lbl);
-                asm_emit3(a,0x48,0x8B,0x09); /* mov rcx,[rcx] */
+        /* Call printf/puts directly from msvcrt.dll - clean, no shellcode patterns */
+        const char *fn = (strcmp(name,"puts")==0) ? "puts" : "printf";
+        symtable_add_import(cg->sym,"msvcrt.dll:printf");
+        symtable_add_import(cg->sym,"msvcrt.dll:puts");
+        /* Fall through to normal function call handling below */
+        (void)fn;
+        /* Re-route: treat as normal external call to msvcrt */
+        {
+            char key[64]; snprintf(key,sizeof key,"msvcrt.dll:%s",name);
+            symtable_add_import(cg->sym,key);
+            if (cg->is_64bit) {
+                /* Eval args into RCX,RDX,R8,R9 FIRST (no shadow yet - no red zone) */
+                static const Reg regs4[4]={REG_RCX,REG_RDX,REG_R8,REG_R9};
+                for (int i=0;i<argc&&i<4;i++) {
+                    int af=codegen_is_float_expr(cg,args[i]);
+                    if(af) codegen_float_expr(cg,args[i]);
+                    else { codegen_expr(cg,args[i]); asm_mov_reg_reg(a,regs4[i],REG_RAX); }
+                }
+                /* Extra args on stack (args 4+): need shadow first */
+                int extra=(argc>4)?(argc-4)*8:0;
+                int frame=32+extra; if((frame&8)==0) frame+=8;
+                asm_sub_rsp(a,frame);
+                for(int i=4;i<argc;i++){
+                    int af=codegen_is_float_expr(cg,args[i]);
+                    if(af){codegen_float_expr(cg,args[i]);asm_movsd_store(a,REG_RSP,32+(i-4)*8,0);}
+                    else{codegen_expr(cg,args[i]);asm_mov_mem_reg(a,REG_RSP,32+(i-4)*8,REG_RAX);}
+                }
+                asm_call_import(a,name);
+                asm_add_rsp(a,frame);
             } else {
-                asm_emit2(a,0x31,0xC9); asm_emit3(a,0x83,0xE9,0x0B);
-                asm_sub_rsp(a,40); asm_call_import(a,"GetStdHandle"); asm_add_rsp(a,40);
-                asm_mov_reg_reg(a,REG_RCX,REG_RAX);
+                /* 32-bit cdecl: push args right-to-left */
+                int total=0;
+                for(int i=argc-1;i>=0;i--){
+                    int af=codegen_is_float_expr(cg,args[i]);
+                    if(af){codegen_float_expr(cg,args[i]);asm_sub_rsp(a,8);asm_fstp_mem64(a,REG_ESP,0);total+=8;}
+                    else{codegen_expr(cg,args[i]);asm_push_reg(a,REG_EAX);total+=4;}
+                }
+                asm_call_import32(a,name);
+                if(total>0) asm_add_rsp(a,total);
             }
-            asm_mov_reg_imm(a,REG_R9,0);
-            asm_mov_reg_imm(a,REG_RAX,0);
-            asm_mov_mem_reg(a,REG_RSP,32,REG_RAX);
-            asm_call_import(a,"WriteFile");
-            /* Restore original RSP and R15 */
-            asm_emit3(a,0x4C,0x89,0xFC);         /* mov rsp,r15  (restore) */
-            asm_emit2(a,0x41,0x5F);              /* pop r15 */
-        } else {
-            /* 32-bit cdecl */
-            asm_push_reg(a,REG_ESI); asm_push_reg(a,REG_EDI); asm_push_reg(a,REG_EBX);
-            asm_sub_rsp(a,buf_size);
-            asm_emit2(a,0x89,0xE6); /* mov esi,esp = buf ptr */
-            for(int i=argc-1;i>=0;i--){codegen_expr(cg,args[i]); asm_push_reg(a,REG_EAX);}
-            asm_mov_reg_imm(a,REG_EAX,buf_size); asm_push_reg(a,REG_EAX);
-            asm_push_reg(a,REG_ESI);
-            asm_call_import32(a,"_snprintf");
-            asm_add_rsp(a,(argc+2)*4);
-            asm_emit2(a,0x89,0xC7); /* mov edi,eax = len */
-            /* Read cached stdout handle from .data slot */
-            if (cg->stdout_handle_lbl[0]!='\0') {
-                asm_emit1(a,0xBB); asm_reloc_wdata(a,cg->stdout_handle_lbl);
-                asm_emit2(a,0x8B,0x1B); /* mov ebx,[ebx] */
-            } else {
-                asm_emit2(a,0x31,0xC0); asm_emit3(a,0x83,0xE8,0x0B);
-                asm_push_reg(a,REG_EAX);
-                asm_call_import32(a,"GetStdHandle"); asm_add_rsp(a,4);
-                asm_emit2(a,0x89,0xC3);
-            }
-            /* WriteFile(ebx, esi, edi, 0, 0) */
-            asm_mov_reg_imm(a,REG_EAX,0);
-            asm_push_reg(a,REG_EAX); asm_push_reg(a,REG_EAX);
-            asm_push_reg(a,REG_EDI); asm_push_reg(a,REG_ESI); asm_push_reg(a,REG_EBX);
-            asm_call_import32(a,"WriteFile");
-            asm_add_rsp(a,5*4);
-            asm_add_rsp(a,buf_size);
-            asm_pop_reg(a,REG_EBX); asm_pop_reg(a,REG_EDI); asm_pop_reg(a,REG_ESI);
         }
         return;
+
     }
 
     /* -----------------------------------------------------------------------
@@ -1422,7 +1300,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             "fopen","fclose","fgets","fputs","feof","fflush",
             "fread","fwrite","fseek","ftell","rewind",
             "fgetc","fputc","ungetc","remove","rename","ferror","clearerr",
-            "strdup","perror","strerror","getenv","system","strrchr","strtok","strpbrk","vfprintf","vprintf","_snprintf","_vsnprintf","_stricmp","_strnicmp",
+            "strdup","perror","strerror","getenv","system","strrchr","strtok","strpbrk","vfprintf","vprintf","_stricmp","_strnicmp",
             NULL
         };
         int is_file_fn = 0;
@@ -1430,10 +1308,8 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             if (strcmp(name, msvcrt_file_fns[i])==0) { is_file_fn=1; break; }
         if (is_file_fn) {
             char import_key[64];
-            /* Redirect snprintf/vsnprintf to underscore versions for WinXP/7/8 compat */
+            /* Use snprintf/vsnprintf directly (modern Windows msvcrt.dll supports them) */
             const char *import_name = name;
-            if (strcmp(name,"snprintf")==0)  import_name="_snprintf";
-            if (strcmp(name,"vsnprintf")==0) import_name="_vsnprintf";
             snprintf(import_key, sizeof import_key, "msvcrt.dll:%s", import_name);
             symtable_add_import(cg->sym, import_key);
             if (cg->is_64bit) {
@@ -2885,38 +2761,7 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
             }
         }
     }
-    /* Init stdout handle for all main() functions - cached in .data slot */
-    if (strcmp(n->func.name,"main")==0) {
-        symtable_add_import(cg->sym,"KERNEL32.dll:GetStdHandle");
-        symtable_add_import(cg->sym,"KERNEL32.dll:WriteFile");
-        /* Allocate .data slot for cached handle if not done yet */
-        if (cg->stdout_handle_lbl[0]=='\0') {
-            snprintf(cg->stdout_handle_lbl,sizeof cg->stdout_handle_lbl,"__stdout_h");
-            intern_wdata(cg,cg->stdout_handle_lbl, cg->is_64bit ? 8 : 4);
-        }
-        /* GetStdHandle(-11) using XOR+SUB to avoid literal 0xFFFFFFF5 */
-        if (cg->is_64bit) {
-            asm_emit2(a,0x31,0xC9);           /* xor ecx,ecx */
-            asm_emit3(a,0x83,0xE9,0x0B);      /* sub ecx,11  -> ecx=-11 */
-            asm_sub_rsp(a,40);
-            asm_call_import(a,"GetStdHandle"); /* rax=handle */
-            asm_add_rsp(a,40);
-            asm_push_reg(a,REG_RBX);
-            asm_lea_rip_wdata(a,REG_RBX,cg->stdout_handle_lbl);
-            asm_emit3(a,0x48,0x89,0x03);      /* mov [rbx],rax */
-            asm_pop_reg(a,REG_RBX);
-        } else {
-            asm_emit2(a,0x31,0xC0);           /* xor eax,eax */
-            asm_emit3(a,0x83,0xE8,0x0B);      /* sub eax,11 */
-            asm_push_reg(a,REG_EAX);
-            asm_call_import32(a,"GetStdHandle");
-            asm_add_rsp(a,4);
-            asm_push_reg(a,REG_EBX);
-            asm_emit1(a,0xBB); asm_reloc_wdata(a,cg->stdout_handle_lbl);
-            asm_emit2(a,0x89,0x03);           /* mov [ebx],eax */
-            asm_pop_reg(a,REG_EBX);
-        }
-    }
+    /* stdout via msvcrt printf - no GetStdHandle/WriteFile needed */
     /* If main() has argc/argv params, populate them from GetCommandLineA */
     if (strcmp(n->func.name,"main")==0 && n->func.paramc >= 1) {
         symtable_add_import(cg->sym,"KERNEL32.dll:GetCommandLineA");
@@ -2931,12 +2776,8 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
             int sk2=asm_new_label(a,"cl_sk2"); int tk2=asm_new_label(a,"cl_tk2");
             int in2=asm_new_label(a,"cl_in2"); int dn2=asm_new_label(a,"cl_dn2");
 
-            /* push r15; mov r15,rsp  — save RSP before any alignment adjustment */
-            asm_emit2(a,0x41,0x57);                         /* push r15 */
-            asm_emit3(a,0x4C,0x8B,0xFC);                    /* mov r15,rsp (8B=load into reg) */
 
             /* Step 1: GetCommandLineA → cmdline in [rbp+24] */
-            asm_emit4(a,0x48,0x83,0xE4,0xF0); /* and rsp,-16 */
             asm_sub_rsp(a,40); asm_call_import(a,"GetCommandLineA"); asm_add_rsp(a,40);
             asm_emit3(a,0x48,0x89,0x45); asm_emit1(a,0x18); /* mov [rbp+24],rax */
 
@@ -2958,7 +2799,6 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
             asm_emit3(a,0x48,0x89,0x4D); asm_emit1(a,0x10); /* mov [rbp+16],rcx (argc) */
 
             /* Step 3: HeapAlloc(GetProcessHeap(),0,(argc+1)*8) → argv in [rbp+24] */
-            asm_emit4(a,0x48,0x83,0xE4,0xF0); /* and rsp,-16 */
             asm_sub_rsp(a,40); asm_call_import(a,"GetProcessHeap"); asm_add_rsp(a,40);
             asm_mov_reg_reg(a,REG_RCX,REG_RAX);
             asm_emit3(a,0x48,0x8B,0x45); asm_emit1(a,0x10); /* mov rax,[rbp+16] */
@@ -2966,12 +2806,10 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
             asm_emit4(a,0x48,0xC1,0xE0,0x03);               /* shl rax,3 */
             asm_mov_reg_reg(a,REG_R8,REG_RAX);
             asm_emit2(a,0x31,0xD2);                          /* xor edx,edx (flags=0) */
-            asm_emit4(a,0x48,0x83,0xE4,0xF0); /* and rsp,-16 */
             asm_sub_rsp(a,40); asm_call_import(a,"HeapAlloc"); asm_add_rsp(a,40);
             asm_emit3(a,0x48,0x89,0x45); asm_emit1(a,0x18); /* mov [rbp+24],rax (argv) */
 
             /* Step 4: GetCommandLineA again for Pass 2 tokenisation */
-            asm_emit4(a,0x48,0x83,0xE4,0xF0); /* and rsp,-16 */
             asm_sub_rsp(a,40); asm_call_import(a,"GetCommandLineA"); asm_add_rsp(a,40);
             asm_emit3(a,0x48,0x8B,0x4D); asm_emit1(a,0x18); /* mov rcx,[rbp+24] (argv) */
             asm_emit2(a,0x31,0xD2);                          /* xor edx,edx (tok_idx) */
@@ -2995,8 +2833,7 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
             asm_emit4(a,0x4C,0x89,0x04,0xD1);               /* argv[tok_idx]=NULL */
 
             /* Restore RSP from R15, pop R15 */
-            asm_emit3(a,0x4C,0x89,0xFC);                    /* mov rsp,r15 */
-            asm_emit2(a,0x41,0x5F);                         /* pop r15 */
+
             /* [rbp+16]=argc, [rbp+24]=argv */
         } else {
             /* 32-bit: EBX=cmdline, EDI=argc, ESI=argv, EAX=scan, EDX=tok_idx */
@@ -3094,8 +2931,6 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
     if (cg->stdout_handle_lbl[0]=='\0') {
         snprintf(cg->stdout_handle_lbl,sizeof cg->stdout_handle_lbl,"__stdout_h");
         intern_wdata(cg,cg->stdout_handle_lbl, cg->is_64bit ? 8 : 4);
-        symtable_add_import(cg->sym,"KERNEL32.dll:GetStdHandle");
-        symtable_add_import(cg->sym,"KERNEL32.dll:WriteFile");
     }
 
     /* Pass 1: allocate labels for functions WITH bodies only.

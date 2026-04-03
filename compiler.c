@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
         out_path=out_buf;
     }
 
-    printf("Compiling: %s -> %s (%s)\n",src_path,out_path,is_64bit?"64-bit":"32-bit");
+    printf("Compiling: %s -> %s (%s) [v91]\n",src_path,out_path,is_64bit?"64-bit":"32-bit");
 
     /* Stage 1: Read + preprocess */
     char *raw=read_file(src_path);

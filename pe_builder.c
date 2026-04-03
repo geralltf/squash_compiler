@@ -279,12 +279,9 @@ int pe_link_and_write(PEBuildInput *in) {
         DLLGroup *g = find_or_add_dll(groups, &gc, dll);
         dll_group_add_func(g, func);
     }
-    /* Ensure baseline KERNEL32 imports and add legitimizing imports */
+    /* Ensure baseline KERNEL32 imports */
     { DLLGroup *g = find_or_add_dll(groups, &gc, "KERNEL32.dll");
       dll_group_add_func(g, "ExitProcess");
-      dll_group_add_func(g, "GetStdHandle");
-      dll_group_add_func(g, "WriteFile");
-      /* Standard console program imports */
       dll_group_add_func(g, "GetCommandLineA");
       dll_group_add_func(g, "HeapAlloc");
       dll_group_add_func(g, "HeapFree");
