@@ -417,6 +417,18 @@ void asm_movsx_rax_mem8(Assembler *a, Reg base, int disp) {
     modrm_disp(a, REG_RAX, base, disp);
 }
 
+void asm_movsx_eax_mem8(Assembler *a, Reg base, int disp) {
+    /* MOVSX EAX, byte[base+disp] — sign-extend 8-bit to 32-bit EAX (no REX prefix) */
+    asm_emit2(a, 0x0F, 0xBE); /* MOVSX r32, r/m8 */
+    modrm_disp(a, REG_EAX, base, disp);
+}
+
+void asm_movzx_eax_mem8(Assembler *a, Reg base, int disp) {
+    /* MOVZX EAX, byte[base+disp] — zero-extend 8-bit to 32-bit EAX (no REX prefix) */
+    asm_emit2(a, 0x0F, 0xB6); /* MOVZX r32, r/m8 */
+    modrm_disp(a, REG_EAX, base, disp);
+}
+
 void asm_movsxd_rax_mem(Assembler *a, Reg base, int disp) {
     /* MOVSXD RAX, dword[base+disp] — sign-extend 32-bit to 64-bit RAX */
     rex_w(a, REG_RAX, base);

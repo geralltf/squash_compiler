@@ -1512,9 +1512,9 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 int is_unsigned32 = (s->type && s->type->is_unsigned);
                 if (vsz32 == 1) {
                     if (is_unsigned32) {
-                        asm_emit3(a,0x0F,0xB6,0x45); asm_emit1(a,(uint8_t)(int8_t)s->offset); /* MOVZX EAX,byte[EBP+off] */
+                        asm_movzx_eax_mem8(a, REG_EBP, s->offset); /* MOVZX EAX,byte[EBP+off] */
                     } else {
-                        asm_emit3(a,0x0F,0xBE,0x45); asm_emit1(a,(uint8_t)(int8_t)s->offset); /* MOVSX EAX,byte[EBP+off] */
+                        asm_movsx_eax_mem8(a, REG_EBP, s->offset); /* MOVSX EAX,byte[EBP+off] */
                     }
                 } else {
                     asm_mov_reg_mem(a,REG_RAX,REG_RBP,s->offset);
