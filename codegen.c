@@ -6,6 +6,10 @@
 /* portable strdup replacement */
 char* my_strdup(const char* src);
 
+/* forward declarations */
+static int sizeof_type_sym(TypeInfo *ti, int is_64, SymTable *sym);
+static int expr_has_call(ASTNode *n);
+
 /* =========================================================================
  * field_byte_offset — walk struct/union field list and return byte offset
  * For unions every field is at offset 0.
@@ -28,6 +32,86 @@ static int field_byte_offset(SymTable *sym, ASTNode *obj_node, const char *field
                 if (strncmp(tn,"struct ",7)==0) tn+=7;
                 else if (strncmp(tn,"union ",6)==0)  tn+=6;
                 type_name = tn;
+            }
+        }
+    } else if (obj_node && obj_node->kind == AST_INDEX) {
+        /* Array subscript like arr[i] — resolve type of array elements.
+         * arr[i].field: arr is either a local/param/global var or a struct member. */
+        ASTNode *arr = obj_node->index.array;
+        /* Find the element type of 'arr' */
+        if (arr && arr->kind == AST_VAR) {
+            Symbol *vs = symtable_lookup(sym, arr->var.name);
+            if (vs && vs->type) {
+                /* Element type is the type with one less pointer/array level */
+                const char *tn = vs->type->base;
+                if (tn) {
+                    /* If type has pointer_depth > 0, the element is what it points to */
+                    /* For array-of-struct: base is the struct/typedef name */
+                    if (strncmp(tn,"struct ",7)==0) tn+=7;
+                    else if (strncmp(tn,"union ",6)==0)  tn+=6;
+                    else {
+                        /* Could be typedef → resolve */
+                        Symbol *td = symtable_lookup(sym, tn);
+                        if (td && td->kind == SYM_TYPEDEF && td->type && td->type->base) {
+                            const char *tb = td->type->base;
+                            if (strncmp(tb,"struct ",7)==0) tb+=7;
+                            else if (strncmp(tb,"union ",6)==0) tb+=6;
+                            tn = tb;
+                        }
+                    }
+                    type_name = tn;
+                }
+            }
+        } else if (arr && arr->kind == AST_MEMBER) {
+            /* struct_var.field[i].member — resolve field's element type */
+            ASTNode *parent = arr->member.obj;
+            const char *parent_type = NULL;
+            if (parent && parent->kind == AST_VAR) {
+                Symbol *pv = symtable_lookup(sym, parent->var.name);
+                if (pv && pv->type) parent_type = pv->type->base;
+            }
+            if (parent_type) {
+                const char *bare = parent_type;
+                if (strncmp(bare,"struct ",7)==0) bare+=7;
+                else if (strncmp(bare,"union ",6)==0) bare+=6;
+                else {
+                    Symbol *td = symtable_lookup(sym, parent_type);
+                    if (td && td->kind == SYM_TYPEDEF && td->type) {
+                        const char *tb = td->type->base;
+                        if (strncmp(tb,"struct ",7)==0) tb+=7;
+                        else if (strncmp(tb,"union ",6)==0) tb+=6;
+                        bare = tb;
+                        parent_type = bare;
+                    }
+                }
+                char pkey[256]; snprintf(pkey,sizeof pkey,"struct %s",bare);
+                Symbol *pss = symtable_lookup(sym, pkey);
+                if (pss && pss->struct_node) {
+                    const char *fname2 = arr->member.field;
+                    ASTNode *psd = pss->struct_node;
+                    for (int fi=0; fi<psd->struct_decl.nfields; fi++) {
+                        ASTNode *ff = psd->struct_decl.fields[fi];
+                        if (ff && ff->kind==AST_FIELD && ff->field.name &&
+                            strcmp(ff->field.name, fname2)==0 && ff->field.type) {
+                            const char *fbase = ff->field.type->base;
+                            if (fbase) {
+                                if (strncmp(fbase,"struct ",7)==0) fbase+=7;
+                                else if (strncmp(fbase,"union ",6)==0) fbase+=6;
+                                else {
+                                    Symbol *td2 = symtable_lookup(sym, fbase);
+                                    if (td2 && td2->kind == SYM_TYPEDEF && td2->type && td2->type->base) {
+                                        const char *tb2 = td2->type->base;
+                                        if (strncmp(tb2,"struct ",7)==0) tb2+=7;
+                                        else if (strncmp(tb2,"union ",6)==0) tb2+=6;
+                                        fbase = tb2;
+                                    }
+                                }
+                                type_name = fbase;
+                            }
+                            break;
+                        }
+                    }
+                }
             }
         }
     } else if (obj_node && obj_node->kind == AST_MEMBER) {
@@ -115,10 +199,33 @@ static int field_byte_offset(SymTable *sym, ASTNode *obj_node, const char *field
         if (f->field.name && strcmp(f->field.name, field_name)==0) {
             if (is_union) return 0;
             /* Apply the target field's own alignment before returning */
-            int tfsz = f->field.type ? typeinfo_size(f->field.type, sym->is_64bit) : 4;
+            int tfsz = 4;
+            if (f->field.type) {
+                tfsz = typeinfo_size(f->field.type, sym->is_64bit);
+                /* Resolve typedef/struct for alignment */
+                if (f->field.type->pointer_depth == 0 && f->field.type->base) {
+                    const char *tb2 = f->field.type->base;
+                    const char *tbare2 = tb2;
+                    if (strncmp(tbare2,"struct ",7)==0) tbare2+=7;
+                    else if (strncmp(tbare2,"union ",6)==0) tbare2+=6;
+                    if (tbare2 != tb2) {
+                        char sk2[256]; snprintf(sk2,sizeof sk2,"struct %s",tbare2);
+                        Symbol *ts2 = symtable_lookup(sym, sk2);
+                        if (ts2 && ts2->struct_size > 0) tfsz = ts2->struct_size;
+                    } else {
+                        Symbol *ttd = symtable_lookup(sym, tb2);
+                        if (ttd && ttd->kind == SYM_TYPEDEF && ttd->type) {
+                            int rs = typeinfo_size(ttd->type, sym->is_64bit);
+                            if (rs > tfsz) tfsz = rs;
+                        }
+                    }
+                }
+            }
             if (tfsz < 1) tfsz = 4;
+            /* For alignment, use element size (not array total) */
+            int elem_tsz = tfsz;
             if (f->field.array_size > 0) tfsz *= f->field.array_size;
-            int talign = tfsz < 8 ? tfsz : 8;
+            int talign = elem_tsz < 8 ? elem_tsz : 8;
             if (talign > 1) offset = (offset + talign-1) & ~(talign-1);
             return offset;
         }
@@ -128,23 +235,46 @@ static int field_byte_offset(SymTable *sym, ASTNode *obj_node, const char *field
                 fsz = typeinfo_size(f->field.type, sym->is_64bit);
                 /* For struct/union fields, sizeof_type returns 4 (default).
                  * Look up the actual stored struct size from the symtable. */
-                if (fsz == 4 && f->field.type->base && f->field.type->pointer_depth == 0) {
+                if (f->field.type->base && f->field.type->pointer_depth == 0) {
                     const char *fb = f->field.type->base;
                     const char *bare = fb;
                     if (strncmp(bare,"struct ",7)==0) bare+=7;
                     else if (strncmp(bare,"union ",6)==0) bare+=6;
-                    char skey[256]; snprintf(skey,sizeof skey,"struct %s",bare);
-                    Symbol *fs = symtable_lookup(sym, skey);
-                    if (fs && fs->struct_size > 0) {
-                        fsz = fs->struct_size;
+                    if (bare != fb) {
+                        /* Struct/union type */
+                        char skey[256]; snprintf(skey,sizeof skey,"struct %s",bare);
+                        Symbol *fs = symtable_lookup(sym, skey);
+                        if (fs && fs->struct_size > 0) fsz = fs->struct_size;
+                        else if (fs && fs->struct_node) fsz = symtable_sizeof_struct(sym, fs->struct_node);
                     } else {
+                        /* May be a typedef for a struct */
+                        Symbol *td = symtable_lookup(sym, fb);
+                        if (td && td->kind == SYM_TYPEDEF && td->type && td->type->pointer_depth == 0) {
+                            const char *tb = td->type->base;
+                            const char *tbare = tb;
+                            if (strncmp(tbare,"struct ",7)==0) tbare+=7;
+                            else if (strncmp(tbare,"union ",6)==0) tbare+=6;
+                            if (tbare != tb) {
+                                char tkey[256]; snprintf(tkey,sizeof tkey,"struct %s",tbare);
+                                Symbol *tss = symtable_lookup(sym, tkey);
+                                if (tss && tss->struct_size > 0) fsz = tss->struct_size;
+                                else if (tss && tss->struct_node) fsz = symtable_sizeof_struct(sym, tss->struct_node);
+                            } else {
+                                int ts2 = typeinfo_size(td->type, sym->is_64bit);
+                                if (ts2 > 0) fsz = ts2;
+                            }
+                        } else if (td && td->kind == SYM_STRUCT) {
+                            if (td->struct_size > 0) fsz = td->struct_size;
+                        }
                     }
                 }
                 if (fsz < 1) fsz = 4;
             }
+            /* Use element size for alignment, total size for storage */
+            int elem_fsz2 = fsz;
             if (f->field.array_size > 0) fsz *= f->field.array_size;
-            /* Align to natural size (max 8) */
-            int align = fsz < 8 ? fsz : 8;
+            /* Align to element's natural alignment (max 8) */
+            int align = elem_fsz2 < 8 ? elem_fsz2 : 8;
             if (align > 1) offset = (offset + align-1) & ~(align-1);
             offset += fsz;
         }
@@ -220,40 +350,52 @@ static int elem_size_of(CodeGen *cg, ASTNode *arr_expr) {
              * Heuristic: if orig_pd==1 AND asym is a stack array (array_size>0),
              * each element IS a pointer (8 bytes in 64-bit, 4 in 32-bit). */
             if (orig_pd == 1 && asym->array_size > 0) return cg->is_64bit ? 8 : 4;
-            int sz = typeinfo_size(&tmp, cg->is_64bit);
-            return (sz >= 1) ? sz : 4;
+            /* Use sizeof_type_sym to resolve typedef-based struct sizes */
+            return sizeof_type_sym(&tmp, cg->is_64bit, cg->sym);
         }
     }
 
     /* Case 2: struct/union field — obj.field[i]
      * Look up the field's declared type in the struct definition.             */
-    if (arr_expr->kind == AST_MEMBER && arr_expr->member.obj &&
-        arr_expr->member.obj->kind == AST_VAR) {
-        Symbol *vs = symtable_lookup(cg->sym, arr_expr->member.obj->var.name);
-        if (vs && vs->type) {
-            const char *tn = vs->type->base;
-            if (!tn) return 4;
-            /* Build the struct symbol key */
-            char key[128];
-            /* symtable_define_struct always stores with "struct " prefix */
-            const char *bare_tn = tn;
-            if (strncmp(bare_tn,"struct ",7)==0) bare_tn+=7;
-            else if (strncmp(bare_tn,"union ",6)==0) bare_tn+=6;
-            snprintf(key, sizeof key, "struct %s", bare_tn);
-            Symbol *ss = symtable_lookup(cg->sym, key);
-            if (!ss || !ss->struct_node) return 4;
-            ASTNode *sd = ss->struct_node;
-            for (int i = 0; i < sd->struct_decl.nfields; i++) {
-                ASTNode *f = sd->struct_decl.fields[i];
-                if (!f || f->kind != AST_FIELD) continue;
-                if (f->field.name && strcmp(f->field.name, arr_expr->member.field)==0) {
-                    if (f->field.type) {
-                        TypeInfo tmp = *f->field.type;
-                        tmp.pointer_depth = (tmp.pointer_depth>0) ? tmp.pointer_depth-1 : 0;
-                        tmp.array_size = -1;
-                        int sz = typeinfo_size(&tmp, cg->is_64bit);
-                        return (sz >= 1) ? sz : 4;
-                    }
+    if (arr_expr->kind == AST_MEMBER) {
+        ASTNode *obj = arr_expr->member.obj;
+        /* Resolve the struct/union type of obj (handle both VAR and pointer-via-arrow) */
+        const char *tn = NULL;
+        if (obj && obj->kind == AST_VAR) {
+            Symbol *vs = symtable_lookup(cg->sym, obj->var.name);
+            if (vs && vs->type) tn = vs->type->base;
+        }
+        if (!tn) return 4;
+        /* Resolve typedef → struct key */
+        char key[256];
+        const char *bare_tn = tn;
+        if (strncmp(bare_tn,"struct ",7)==0) bare_tn+=7;
+        else if (strncmp(bare_tn,"union ",6)==0) bare_tn+=6;
+        if (bare_tn == tn) {
+            /* Could be a typedef */
+            Symbol *td = symtable_lookup(cg->sym, tn);
+            if (td && td->kind == SYM_TYPEDEF && td->type) {
+                const char *tb = td->type->base;
+                if (strncmp(tb,"struct ",7)==0) bare_tn = tb + 7;
+                else if (strncmp(tb,"union ",6)==0) bare_tn = tb + 6;
+                else bare_tn = tb;
+            }
+        }
+        snprintf(key, sizeof key, "struct %s", bare_tn);
+        Symbol *ss = symtable_lookup(cg->sym, key);
+        if (!ss || !ss->struct_node) return 4;
+        ASTNode *sd = ss->struct_node;
+        for (int i = 0; i < sd->struct_decl.nfields; i++) {
+            ASTNode *f = sd->struct_decl.fields[i];
+            if (!f || f->kind != AST_FIELD) continue;
+            if (f->field.name && strcmp(f->field.name, arr_expr->member.field)==0) {
+                if (f->field.type) {
+                    TypeInfo tmp = *f->field.type;
+                    /* Strip one pointer level to get element type */
+                    tmp.pointer_depth = (tmp.pointer_depth>0) ? tmp.pointer_depth-1 : 0;
+                    tmp.array_size = -1;
+                    /* Use sizeof_type_sym to handle typedef→struct */
+                    return sizeof_type_sym(&tmp, cg->is_64bit, cg->sym);
                 }
             }
         }
@@ -377,6 +519,45 @@ static int get_func_label(CodeGen *cg, const char *name) {
 /* =========================================================================
  * sizeof helper
  * ========================================================================= */
+/* Compute sizeof for a TypeInfo, looking up struct/typedef sizes from symtable */
+static int sizeof_type_sym(TypeInfo *ti, int is_64, SymTable *sym) {
+    if (!ti) return is_64 ? 8 : 4;
+    if (ti->pointer_depth > 0) return is_64 ? 8 : 4;
+    if (!ti->base) return 4;
+    /* Array type: element_size * count */
+    if (ti->array_size > 0) {
+        TypeInfo tmp = *ti; tmp.array_size = 0;
+        int esz = sizeof_type_sym(&tmp, is_64, sym);
+        return esz * ti->array_size;
+    }
+    /* Try basic types first */
+    int basic = typeinfo_size(ti, is_64);
+    if (basic != 4) return basic; /* got a definitive size (char=1, short=2, etc.) */
+    /* For structs, unions, typedefs — look up in symbol table */
+    if (sym) {
+        const char *b = ti->base;
+        /* Direct struct/union key: "struct Foo" or "union Foo" */
+        const char *bare = b;
+        if (strncmp(bare,"struct ",7)==0) bare+=7;
+        else if (strncmp(bare,"union ",6)==0) bare+=6;
+        if (bare != b) {
+            /* Is a struct/union type */
+            char key[256]; snprintf(key,sizeof key,"struct %s",bare);
+            Symbol *ss = symtable_lookup(sym, key);
+            if (ss && ss->struct_size > 0) return ss->struct_size;
+        }
+        /* Try as typedef */
+        Symbol *td = symtable_lookup(sym, b);
+        if (td && td->kind==SYM_TYPEDEF && td->type) {
+            return sizeof_type_sym(td->type, is_64, sym);
+        }
+        /* Try as struct key directly (e.g. "Foo" → "struct Foo") */
+        char skey[256]; snprintf(skey,sizeof skey,"struct %s",b);
+        Symbol *ss2 = symtable_lookup(sym, skey);
+        if (ss2 && ss2->struct_size > 0) return ss2->struct_size;
+    }
+    return basic; /* default 4 for unknown types */
+}
 static int sizeof_type(TypeInfo *ti, int is_64) {
     return typeinfo_size(ti, is_64);
 }
@@ -414,12 +595,27 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             char key[64]; snprintf(key,sizeof key,"msvcrt.dll:%s",name);
             symtable_add_import(cg->sym,key);
             if (cg->is_64bit) {
-                /* Eval args into RCX,RDX,R8,R9 FIRST (no shadow yet - no red zone) */
+                /* Eval args into RCX,RDX,R8,R9 FIRST (no shadow yet - no red zone).
+                 * Save already-set regs if subsequent arg evaluation clobbers them
+                 * (e.g. strlen shim clears RCX; we save to R10/R11/R12/R13). */
                 static const Reg regs4[4]={REG_RCX,REG_RDX,REG_R8,REG_R9};
+                /* Caller-saved scratch regs for saving in-flight arg values */
+                static const Reg save4[4]={REG_R10,REG_R11,REG_R12,REG_R13};
                 for (int i=0;i<argc&&i<4;i++) {
+                    /* Before evaluating arg[i], save already-placed args 0..i-1
+                     * if this arg's evaluation might clobber them (has inner call). */
+                    int this_has_call = expr_has_call(args[i]);
+                    if (this_has_call) {
+                        for (int k=0; k<i; k++)
+                            asm_mov_reg_reg(a, save4[k], regs4[k]);
+                    }
                     int af=codegen_is_float_expr(cg,args[i]);
                     if(af) codegen_float_expr(cg,args[i]);
                     else { codegen_expr(cg,args[i]); asm_mov_reg_reg(a,regs4[i],REG_RAX); }
+                    if (this_has_call) {
+                        for (int k=0; k<i; k++)
+                            asm_mov_reg_reg(a, regs4[k], save4[k]);
+                    }
                 }
                 /* Extra args on stack (args 4+): need shadow first */
                 int extra=(argc>4)?(argc-4)*8:0;
@@ -536,36 +732,66 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
     }
 
     /* -----------------------------------------------------------------------
-     * realloc(ptr, size) — simplified: just alloc new, return it
-     * (A full implementation would memcpy the old data too)
+     * realloc(ptr, size) — HeapReAlloc(GetProcessHeap(), 0, ptr, size)
+     * If ptr is NULL, falls back to HeapAlloc (matches C standard).
      * --------------------------------------------------------------------- */
     if (strcmp(name,"realloc")==0) {
+        symtable_add_import(cg->sym,"KERNEL32.dll:HeapReAlloc");
         symtable_add_import(cg->sym,"KERNEL32.dll:HeapAlloc");
         symtable_add_import(cg->sym,"KERNEL32.dll:GetProcessHeap");
-        if (argc >= 2) codegen_expr(cg, args[1]);
+        /* Evaluate ptr (arg0) and size (arg1) */
+        if (argc >= 1) codegen_expr(cg, args[0]);
         else           asm_mov_reg_imm(a, REG_RAX, 0);
 
         if (cg->is_64bit) {
-            asm_push_reg(a, REG_RAX);
+            asm_push_reg(a, REG_RAX);               /* save ptr */
+            if (argc >= 2) codegen_expr(cg, args[1]);
+            else           asm_mov_reg_imm(a, REG_RAX, 0);
+            asm_push_reg(a, REG_RAX);               /* save size */
             asm_sub_rsp(a, 40);
             asm_call_import(a, "GetProcessHeap");
             asm_add_rsp(a, 40);
-            asm_mov_reg_reg(a, REG_RCX, REG_RAX);
-            asm_mov_reg_imm(a, REG_RDX, 0);
-            asm_pop_reg(a, REG_R8);
+            /* RAX = heap, stack: [size, ptr] */
+            asm_mov_reg_reg(a, REG_RCX, REG_RAX);  /* RCX = heap */
+            asm_mov_reg_imm(a, REG_RDX, 0);         /* RDX = flags = 0 */
+            asm_pop_reg(a, REG_R9);                 /* R9 = size */
+            asm_pop_reg(a, REG_R8);                 /* R8 = ptr */
+            /* If ptr==NULL use HeapAlloc instead */
+            int use_alloc = asm_new_label(a, "realloc_alloc");
+            int done_lbl  = asm_new_label(a, "realloc_done");
+            /* test r8,r8 */
+            asm_emit3(a, 0x4D, 0x85, 0xC0);
+            asm_jcc_label(a, CC_E, use_alloc);
+            /* HeapReAlloc(heap, 0, ptr, size): RCX=heap RDX=0 R8=ptr R9=size */
+            asm_sub_rsp(a, 40);
+            asm_call_import(a, "HeapReAlloc");
+            asm_add_rsp(a, 40);
+            asm_jmp_label(a, done_lbl);
+            asm_def_label(a, use_alloc);
+            /* HeapAlloc(heap, 0, size): RCX=heap RDX=0 R8=size */
+            asm_mov_reg_reg(a, REG_R8, REG_R9);
             asm_sub_rsp(a, 40);
             asm_call_import(a, "HeapAlloc");
             asm_add_rsp(a, 40);
+            asm_def_label(a, done_lbl);
         } else {
-            asm_push_reg(a, REG_EAX);
-            asm_push_imm32(a, 0);
+            /* 32-bit stdcall HeapReAlloc(heap, flags, ptr, size) */
+            asm_push_reg(a, REG_EAX);               /* save ptr */
+            if (argc >= 2) codegen_expr(cg, args[1]);
+            else           asm_mov_reg_imm(a, REG_RAX, 0);
+            asm_push_reg(a, REG_EAX);               /* save size */
+            asm_push_imm32(a, 0);                   /* placeholder */
             asm_call_import32(a, "GetProcessHeap");
-            asm_pop_reg(a, REG_EBX);
-            asm_pop_reg(a, REG_ECX);
-            asm_push_reg(a, REG_ECX);
-            asm_push_imm32(a, 0);
-            asm_push_reg(a, REG_EAX);
-            asm_call_import32(a, "HeapAlloc");
+            asm_pop_reg(a, REG_EBX);                /* discard placeholder */
+            /* stack: [size, ptr], EAX = heap */
+            asm_pop_reg(a, REG_ECX);                /* ECX = size */
+            asm_pop_reg(a, REG_EDX);                /* EDX = ptr */
+            /* push stdcall args right-to-left: heap, flags, ptr, size */
+            asm_push_reg(a, REG_ECX);               /* push size */
+            asm_push_reg(a, REG_EDX);               /* push ptr */
+            asm_push_imm32(a, 0);                   /* push flags=0 */
+            asm_push_reg(a, REG_EAX);               /* push heap */
+            asm_call_import32(a, "HeapReAlloc");
         }
         return;
     }
@@ -1245,6 +1471,31 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
         return;
     }
 
+    /* ---- snprintf → _snprintf (msvcrt.dll doesn't export snprintf w/o underscore) ---- */
+    if (strcmp(name,"snprintf")==0) {
+        symtable_add_import(cg->sym, "msvcrt.dll:_snprintf");
+        Assembler *a2 = cg->asm_;
+        if (cg->is_64bit) {
+            int extra = (argc > 4) ? (argc-4)*8 : 0;
+            int frame = 32 + extra; if ((frame&8)==0) frame+=8;
+            asm_sub_rsp(a2, frame);
+            for (int i=0; i<argc; i++) {
+                codegen_expr(cg, args[i]);
+                if      (i==0) asm_mov_reg_reg(a2,REG_RCX,REG_RAX);
+                else if (i==1) asm_mov_reg_reg(a2,REG_RDX,REG_RAX);
+                else if (i==2) asm_mov_reg_reg(a2,REG_R8, REG_RAX);
+                else if (i==3) asm_mov_reg_reg(a2,REG_R9, REG_RAX);
+                else           asm_mov_mem_reg(a2,REG_RSP,32+(i-4)*8,REG_RAX);
+            }
+            asm_call_import(a2,"_snprintf");
+            asm_add_rsp(a2, frame);
+        } else {
+            for (int i=argc-1; i>=0; i--) { codegen_expr(cg,args[i]); asm_push_reg(a2,REG_EAX); }
+            asm_call_import32(a2,"_snprintf"); if (argc>0) asm_add_rsp(a2,argc*4);
+        }
+        return;
+    }
+
     /* ---- fprintf: direct msvcrt.dll call ---- */
     if (strcmp(name,"fprintf")==0) {
         /* Pass directly to msvcrt fprintf which handles FILE* + fmt + varargs */
@@ -1301,6 +1552,9 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             "fread","fwrite","fseek","ftell","rewind",
             "fgetc","fputc","ungetc","remove","rename","ferror","clearerr",
             "strdup","perror","strerror","getenv","system","strrchr","strtok","strpbrk","vfprintf","vprintf","_stricmp","_strnicmp",
+            "sprintf","vsnprintf","putchar",
+            "strtol","strtoul","strtod","strtoll","strtoull",
+            "sscanf","scanf","isxdigit","isupper","islower",
             NULL
         };
         int is_file_fn = 0;
@@ -1551,7 +1805,7 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
     }
 
     case AST_SIZEOF_TYPE:
-        asm_mov_reg_imm(a,REG_RAX,(long long)sizeof_type(n->sizeof_type.type,cg->is_64bit));
+        asm_mov_reg_imm(a,REG_RAX,(long long)sizeof_type_sym(n->sizeof_type.type,cg->is_64bit,cg->sym));
         break;
     case AST_SIZEOF_EXPR: {
         /* Look up the size of the expression's type.
@@ -1560,14 +1814,14 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
         ASTNode *se = n->sizeof_expr.expr;
         long long sz = cg->is_64bit ? 8 : 4; /* default: pointer size */
         if (se && se->kind == AST_VAR) {
-            Symbol *sym = symtable_lookup(cg->sym, se->var.name);
-            if (sym && sym->type) {
-                if (sym->type->array_size > 0) {
+            Symbol *esym = symtable_lookup(cg->sym, se->var.name);
+            if (esym && esym->type) {
+                if (esym->type->array_size > 0) {
                     /* Array variable: size = element_size * array_size */
-                    int elem_sz = typeinfo_size(sym->type, cg->is_64bit);
-                    sz = (long long)elem_sz * sym->type->array_size;
+                    int elem_sz = typeinfo_size(esym->type, cg->is_64bit);
+                    sz = (long long)elem_sz * esym->type->array_size;
                 } else {
-                    sz = (long long)typeinfo_size(sym->type, cg->is_64bit);
+                    sz = (long long)sizeof_type_sym(esym->type, cg->is_64bit, cg->sym);
                 }
             }
         }
@@ -1960,6 +2214,10 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             if (store_sz == 8 && cg->is_64bit) {
                 /* mov [rax],rbx — 64-bit store for pointer-sized elements */
                 asm_emit3(a,0x48,0x89,0x18);
+            } else if (store_sz == 1) {
+                asm_emit2(a,0x88,0x18); /* mov byte ptr [rax],bl */
+            } else if (store_sz == 2) {
+                asm_emit3(a,0x66,0x89,0x18); /* mov word ptr [rax],bx */
             } else if (!cg->is_64bit) {
                 asm_emit2(a,0x89,0x18); /* mov [eax],ebx */
             } else {
@@ -2002,6 +2260,14 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                     asm_pop_reg(a,REG_RAX);
                     asm_emit2(a,0x89,0x03); /* mov [rbx/ebx],eax */
                 }
+            } else if (n->unary.operand->kind==AST_MEMBER ||
+                       n->unary.operand->kind==AST_INDEX  ||
+                       n->unary.operand->kind==AST_DEREF) {
+                /* Store incremented value back to struct/array/deref lvalue */
+                asm_push_reg(a,REG_RAX); /* save incremented value */
+                codegen_lvalue(cg,n->unary.operand);
+                asm_pop_reg(a,REG_RBX); /* incremented value */
+                asm_emit2(a,0x89,0x18); /* mov [rax],ebx (32-bit store — ints/chars) */
             }
             asm_pop_reg(a,REG_RAX); /* return original value */
         } else if (strcmp(op,"++")==0||strcmp(op,"--")==0) {
@@ -2028,6 +2294,15 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                     asm_pop_reg(a,REG_RAX);
                     asm_emit2(a,0x89,0x03); /* mov [rbx/ebx],eax */
                 }
+            } else if (n->unary.operand->kind==AST_MEMBER ||
+                       n->unary.operand->kind==AST_INDEX  ||
+                       n->unary.operand->kind==AST_DEREF) {
+                /* Store incremented value back to struct/array/deref lvalue */
+                asm_push_reg(a,REG_RAX); /* save incremented value */
+                codegen_lvalue(cg,n->unary.operand);
+                asm_pop_reg(a,REG_RBX); /* incremented value */
+                asm_emit2(a,0x89,0x18); /* mov [rax],ebx */
+                asm_mov_reg_reg(a,REG_RAX,REG_RBX); /* return incremented value */
             }
         } else {
             codegen_expr(cg,n->unary.operand);
@@ -2791,12 +3066,12 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
             asm_emit3(a,0x48,0x31,0xC9);                    /* xor rcx,rcx */
             asm_def_label(a,sk1);
             asm_emit2(a,0x80,0x38); asm_emit1(a,0x20); asm_jcc_label(a,CC_NE,tk1);
-            asm_emit2(a,0xFF,0xC0); asm_jmp_label(a,sk1);
+            asm_emit3(a,0x48,0xFF,0xC0); asm_jmp_label(a,sk1); /* inc rax */
             asm_def_label(a,tk1);
             asm_emit2(a,0x80,0x38); asm_emit1(a,0x00); asm_jcc_label(a,CC_E,dn1);
             asm_emit2(a,0xFF,0xC1);
             asm_def_label(a,in1);
-            asm_emit2(a,0xFF,0xC0);
+            asm_emit3(a,0x48,0xFF,0xC0); /* inc rax */
             asm_emit2(a,0x80,0x38); asm_emit1(a,0x00); asm_jcc_label(a,CC_E,dn1);
             asm_emit2(a,0x80,0x38); asm_emit1(a,0x20); asm_jcc_label(a,CC_NE,in1);
             asm_jmp_label(a,sk1);
@@ -2822,17 +3097,17 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
             /* Pass 2: record token pointers, NUL-terminate in-place */
             asm_def_label(a,sk2);
             asm_emit2(a,0x80,0x38); asm_emit1(a,0x20); asm_jcc_label(a,CC_NE,tk2);
-            asm_emit2(a,0xFF,0xC0); asm_jmp_label(a,sk2);
+            asm_emit3(a,0x48,0xFF,0xC0); asm_jmp_label(a,sk2); /* inc rax */
             asm_def_label(a,tk2);
             asm_emit2(a,0x80,0x38); asm_emit1(a,0x00); asm_jcc_label(a,CC_E,dn2);
             asm_emit4(a,0x48,0x89,0x04,0xD1);               /* mov [rcx+rdx*8],rax */
             asm_emit2(a,0xFF,0xC2);                          /* inc edx */
             asm_def_label(a,in2);
-            asm_emit2(a,0xFF,0xC0);
+            asm_emit3(a,0x48,0xFF,0xC0); /* inc rax */
             asm_emit2(a,0x80,0x38); asm_emit1(a,0x00); asm_jcc_label(a,CC_E,dn2);
             asm_emit2(a,0x80,0x38); asm_emit1(a,0x20); asm_jcc_label(a,CC_NE,in2);
             asm_emit2(a,0xC6,0x00); asm_emit1(a,0x00);      /* NUL-terminate token */
-            asm_emit2(a,0xFF,0xC0); asm_jmp_label(a,sk2);
+            asm_emit3(a,0x48,0xFF,0xC0); asm_jmp_label(a,sk2); /* inc rax */
             asm_def_label(a,dn2);
             asm_emit3(a,0x4D,0x31,0xC0);                    /* xor r8,r8 */
             asm_emit4(a,0x4C,0x89,0x04,0xD1);               /* argv[tok_idx]=NULL */

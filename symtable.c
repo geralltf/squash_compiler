@@ -135,25 +135,87 @@ static int symtable_compute_struct_size(SymTable *st, ASTNode *struct_node) {
                 else
                     fsz = 4;
             } else {
-                /* Primitive type */
-                if (strcmp(b,"char")==0||strcmp(b,"int8_t")==0||strcmp(b,"uint8_t")==0||strcmp(b,"_Bool")==0||strcmp(b,"bool")==0) fsz=1;
-                else if (strcmp(b,"short")==0||strcmp(b,"int16_t")==0||strcmp(b,"uint16_t")==0) fsz=2;
-                else if (strcmp(b,"float")==0) fsz=4;
-                else if (strcmp(b,"double")==0||strcmp(b,"long long")==0||strcmp(b,"int64_t")==0||strcmp(b,"uint64_t")==0) fsz=8;
-                else fsz=4; /* int, long, etc */
+                /* Check if it's a typedef for a struct */
+                Symbol *td = symtable_lookup(st, b);
+                if (td && td->kind == SYM_TYPEDEF && td->type) {
+                    /* Recurse with the resolved typedef type */
+                    TypeInfo *rt = td->type;
+                    if (rt->pointer_depth > 0) {
+                        fsz = st->is_64bit ? 8 : 4;
+                    } else {
+                        const char *rb = rt->base; const char *rbare = rb;
+                        if (strncmp(rbare,"struct ",7)==0) rbare+=7;
+                        else if (strncmp(rbare,"union ",6)==0) rbare+=6;
+                        if (rbare != rb) {
+                            char rkey[256]; snprintf(rkey,sizeof rkey,"struct %s",rbare);
+                            Symbol *rss = symtable_lookup(st, rkey);
+                            if (rss && rss->struct_node)
+                                fsz = symtable_compute_struct_size(st, rss->struct_node);
+                            else if (rss && rss->struct_size > 0)
+                                fsz = rss->struct_size;
+                            else fsz = 4;
+                        } else {
+                            fsz = typeinfo_size(rt, st->is_64bit);
+                            if (fsz < 1) fsz = 4;
+                        }
+                    }
+                } else if (td && td->kind == SYM_STRUCT) {
+                    if (td->struct_node)
+                        fsz = symtable_compute_struct_size(st, td->struct_node);
+                    else if (td->struct_size > 0)
+                        fsz = td->struct_size;
+                    else fsz = 4;
+                } else {
+                    /* Primitive type */
+                    if (strcmp(b,"char")==0||strcmp(b,"int8_t")==0||strcmp(b,"uint8_t")==0||strcmp(b,"_Bool")==0||strcmp(b,"bool")==0) fsz=1;
+                    else if (strcmp(b,"short")==0||strcmp(b,"int16_t")==0||strcmp(b,"uint16_t")==0) fsz=2;
+                    else if (strcmp(b,"float")==0) fsz=4;
+                    else if (strcmp(b,"long")==0) fsz = st->is_64bit ? 8 : 4;
+                    else if (strcmp(b,"double")==0||strcmp(b,"long long")==0||strcmp(b,"int64_t")==0||strcmp(b,"uint64_t")==0) fsz=8;
+                    else fsz=4; /* int, unsigned int, etc */
+                }
             }
         }
+        int elem_fsz = (f->field.array_size > 0) ? fsz : fsz; /* element size */
         if (f->field.array_size > 0) fsz *= f->field.array_size;
         if (fsz < 1) fsz = 1;
         if (is_union) {
             if (fsz > total) total = fsz;
         } else {
-            int align = fsz < 8 ? fsz : 8;
+            /* Align field: use element size (not total array size) for alignment */
+            int align = elem_fsz < 8 ? elem_fsz : 8;
             if (align > 1) total = (total + align - 1) & ~(align - 1);
             total += fsz;
         }
     }
     if (total < 1) total = 1;
+    /* Add trailing padding to align the struct size to its own alignment
+     * (max natural alignment of any field, capped at 8). */
+    if (!is_union) {
+        int max_align = 1;
+        for (int i = 0; i < struct_node->struct_decl.nfields; i++) {
+            ASTNode *f = struct_node->struct_decl.fields[i];
+            if (!f || f->kind != AST_FIELD || !f->field.type) continue;
+            int fa = 4; /* default alignment */
+            if (f->field.type->pointer_depth > 0)
+                fa = st->is_64bit ? 8 : 4;
+            else {
+                const char *b = f->field.type->base;
+                if (!b) { fa = 4; }
+                else if (strcmp(b,"char")==0||strcmp(b,"int8_t")==0||strcmp(b,"uint8_t")==0) fa=1;
+                else if (strcmp(b,"short")==0||strcmp(b,"int16_t")==0||strcmp(b,"uint16_t")==0) fa=2;
+                else if (strcmp(b,"double")==0||strcmp(b,"long long")==0||strcmp(b,"int64_t")==0||strcmp(b,"uint64_t")==0) fa=8;
+                else if (strcmp(b,"long")==0) fa = st->is_64bit ? 8 : 4;
+                else fa = 4;
+                /* For struct-type fields, max alignment is 8 */
+                const char *bare = b;
+                if (strncmp(bare,"struct ",7)==0||strncmp(bare,"union ",6)==0) fa = 8;
+            }
+            if (fa > max_align) max_align = fa;
+        }
+        if (max_align > 8) max_align = 8;
+        if (max_align > 1) total = (total + max_align - 1) & ~(max_align - 1);
+    }
     return total;
 }
 
@@ -185,7 +247,7 @@ Symbol *symtable_define_var(SymTable *st, const char *name, TypeInfo *type) {
             }
         }
         if (slot < ptr_size) slot = ptr_size;
-        /* Override with recursively-computed size for nested structs */
+        /* Override with recursively-computed size for nested structs or typedefs */
         if (type->base && type->pointer_depth == 0) {
             const char *b2 = type->base;
             const char *bare2 = b2;
@@ -197,6 +259,27 @@ Symbol *symtable_define_var(SymTable *st, const char *name, TypeInfo *type) {
                 if (ss2 && ss2->struct_node) {
                     int real_sz = symtable_compute_struct_size(st, ss2->struct_node);
                     if (real_sz > slot) slot = real_sz;
+                }
+            } else {
+                /* Try as typedef — e.g. PPState *st = ..., where PPState is a typedef for a struct */
+                Symbol *td = symtable_lookup(st, b2);
+                if (td && td->kind == SYM_TYPEDEF && td->type && td->type->pointer_depth == 0) {
+                    const char *tb = td->type->base;
+                    const char *tbare = tb;
+                    if (strncmp(tbare,"struct ",7)==0) tbare+=7;
+                    else if (strncmp(tbare,"union ",6)==0) tbare+=6;
+                    if (tbare != tb) {
+                        char tkey[256]; snprintf(tkey,sizeof tkey,"struct %s",tbare);
+                        Symbol *tss = symtable_lookup(st, tkey);
+                        if (tss && tss->struct_node) {
+                            int real_sz = symtable_compute_struct_size(st, tss->struct_node);
+                            if (real_sz > slot) slot = real_sz;
+                        } else if (tss && tss->struct_size > 0 && tss->struct_size > slot) {
+                            slot = tss->struct_size;
+                        }
+                    }
+                } else if (td && td->kind == SYM_STRUCT) {
+                    if (td->struct_size > slot) slot = td->struct_size;
                 }
             }
         }
@@ -247,8 +330,15 @@ Symbol *symtable_define_typedef(SymTable *st, const char *name, TypeInfo *type) 
 Symbol *symtable_define_struct(SymTable *st, const char *name, ASTNode *node, int sz) {
     char key[256]; snprintf(key,sizeof key,"struct %s",name);
     Symbol *s = alloc_global_sym(st, key, typeinfo_new(key), SYM_STRUCT);
-    s->struct_node = node; s->struct_size = sz;
+    s->struct_node = node;
+    /* Compute accurate struct size using recursive field traversal */
+    int real_sz = symtable_compute_struct_size(st, node);
+    s->struct_size = (real_sz > sz) ? real_sz : sz;
     return s;
+}
+
+int symtable_sizeof_struct(SymTable *st, ASTNode *struct_node) {
+    return symtable_compute_struct_size(st, struct_node);
 }
 
 Symbol *symtable_lookup(SymTable *st, const char *name) {

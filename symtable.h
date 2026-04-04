@@ -59,6 +59,7 @@ Symbol *symtable_define_enum_val(SymTable *st, const char *name, long long val);
 Symbol *symtable_define_typedef(SymTable *st, const char *name, TypeInfo *type);
 Symbol *symtable_define_struct (SymTable *st, const char *name, ASTNode *node, int sz);
 Symbol *symtable_lookup       (SymTable *st, const char *name);
+int     symtable_sizeof_struct (SymTable *st, ASTNode *struct_node);
 void    symtable_reset_locals (SymTable *st);
 int     symtable_local_size   (SymTable *st);
 void    symtable_add_import   (SymTable *st, const char *dll_func);

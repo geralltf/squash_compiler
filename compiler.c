@@ -67,12 +67,17 @@ int main(int argc, char **argv) {
         out_path=out_buf;
     }
 
-    printf("Compiling: %s -> %s (%s) [v92]\n",src_path,out_path,is_64bit?"64-bit":"32-bit");
+    printf("Compiling: %s -> %s (%s) [v94]\n",src_path,out_path,is_64bit?"64-bit":"32-bit");
+    fflush(0);
 
     /* Stage 1: Read + preprocess */
+    printf("[dbg] stage1: read_file\n"); fflush(0);
     char *raw=read_file(src_path);
+    printf("[dbg] stage1: preprocess\n"); fflush(0);
     include_dirs[n_inc]=NULL;
     char *src=preprocess(raw,src_path,include_dirs,n_inc);
+    printf("[dbg] stage1: preprocess returned src=%p\n",(void*)src); fflush(0);
+    printf("[dbg] stage1: done, src len=%d\n",(int)strlen(src)); fflush(0);
     free(raw);
 
     /* Stage 1b: Optionally dump preprocessed output */
@@ -81,17 +86,24 @@ int main(int argc, char **argv) {
     }
 
     /* Stage 2: Lex */
+    printf("[dbg] stage2: lex\n"); fflush(0);
     Lexer lex;
+    printf("[dbg] stage2: &lex=%p\n",(void*)&lex); fflush(0);
     lexer_init(&lex,src,src_path);
+    printf("[dbg] stage2: done\n"); fflush(0);
 
     /* Stage 3: Symbol table */
+    printf("[dbg] stage3: symtable_init\n"); fflush(0);
     SymTable sym;
     symtable_init(&sym,is_64bit);
+    printf("[dbg] stage3: done\n"); fflush(0);
 
     /* Stage 4: Parse */
+    printf("[dbg] stage4: parse\n"); fflush(0);
     Parser parser;
     parser_init(&parser,&lex,&sym,src_path);
     ASTNode *prog=parse_program(&parser);
+    printf("[dbg] stage4: done\n"); fflush(0);
 
     if (parser.error_count>0) {
         printf("%d compile error(s). Aborting.\n",parser.error_count);

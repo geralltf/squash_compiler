@@ -228,17 +228,30 @@ static Token lex_char(Lexer *l) {
  * lexer_init
  * ========================================================================= */
 void lexer_init(Lexer *l, const char *src, const char *filename) {
-    l->src=src; l->filename=filename; l->pos=0; l->line=1; l->col=1;
-    memset(&l->cur,0,sizeof l->cur); l->cur.kind=TOK_EOF;
+    printf("[li] enter l=%p src=%p\n",(void*)l,(void*)src); fflush(0);
+    l->src=src;
+    printf("[li] src set\n"); fflush(0);
+    l->filename=filename;
+    printf("[li] filename set\n"); fflush(0);
+    l->pos=0; l->line=1; l->col=1;
+    printf("[li] pos/line/col set; sizeof Token=%d sizeof Lexer=%d\n",(int)sizeof(Token),(int)sizeof(Lexer)); fflush(0);
+    memset(&l->cur,0,sizeof l->cur);
+    printf("[li] memset done\n"); fflush(0);
+    l->cur.kind=TOK_EOF;
+    printf("[li] cur.kind=EOF l->src=%p l->pos=%d\n",(void*)l->src,l->pos); fflush(0);
     l->cur=lexer_next(l);
+    printf("[li] lexer_next done\n"); fflush(0);
 }
 
 /* =========================================================================
  * lexer_next
  * ========================================================================= */
 Token lexer_next(Lexer *l) {
+    printf("[ln] enter l=%p\n",(void*)l); fflush(0);
     skip_ws_comments(l);
+    printf("[ln] after skip_ws l->src=%p l->pos=%d\n",(void*)l->src,l->pos); fflush(0);
     Token t; memset(&t,0,sizeof t);
+    printf("[ln] t=%p sizeof t=%d\n",(void*)&t,(int)sizeof(t)); fflush(0);
     t.start=l->src+l->pos; t.line=l->line; t.col=l->col;
 
     if (!l->src[l->pos]) { t.kind=TOK_EOF; l->cur=t; return t; }
@@ -417,16 +430,21 @@ typedef struct {
 /* ── helpers ─────────────────────────────────────────────────────────── */
 
 static int pp_macro_find(PPState *st, const char *name, int len) {
-    for (int i = 0; i < st->nmc; i++)
+    for (int i = 0; i < st->nmc; i++) {
+        printf("[fnd] i=%d nmc=%d name=%p\n",i,st->nmc,(void*)st->macros[i].name); fflush(0);
+        if (!st->macros[i].name) continue;
         if ((int)strlen(st->macros[i].name)==len &&
             strncmp(st->macros[i].name, name, len)==0)
             return i;
+    }
     return -1;
 }
 
 static void pp_macro_define(PPState *st, const char *name, int nlen,
                              const char *value) {
+    printf("[ppd] enter name='%.*s' nmc=%d\n",nlen,name,st->nmc); fflush(0);
     int idx = pp_macro_find(st, name, nlen);
+    printf("[ppd] find done idx=%d\n",idx); fflush(0);
     if (idx >= 0) {
         free(st->macros[idx].value);
         st->macros[idx].value = my_strdup(value);
@@ -434,10 +452,15 @@ static void pp_macro_define(PPState *st, const char *name, int nlen,
         return;
     }
     if (st->nmc >= PP_MAX_MACROS) return;
+    printf("[ppd] storing at nmc=%d\n",st->nmc); fflush(0);
     { char *_snd=malloc(nlen+1); strncpy(_snd,name,nlen); _snd[nlen]='\0'; st->macros[st->nmc].name=_snd; }
+    printf("[ppd] name stored\n"); fflush(0);
     st->macros[st->nmc].value = my_strdup(value);
+    printf("[ppd] value stored\n"); fflush(0);
     st->macros[st->nmc].nparams = -1;
+    printf("[ppd] nparams stored\n"); fflush(0);
     st->nmc++;
+    printf("[ppd] nmc incremented to %d\n",st->nmc); fflush(0);
 }
 
 static void pp_macro_undef(PPState *st, const char *name) {
@@ -457,6 +480,27 @@ static int pp_macro_defined(PPState *st, const char *name) {
 }
 
 /* Expand macros in a single text token (word-boundary check). */
+/* Check if position p in string out is inside a string literal or char literal.
+ * Used to prevent macro expansion inside string/char literals. */
+static int pp_in_string(const char *out, const char *p) {
+    int in_str = 0;  /* 0=normal, 1=in double-quoted string, 2=in single-quoted char */
+    const char *c = out;
+    while (c < p) {
+        if (!in_str) {
+            if (*c == '"')  { in_str = 1; c++; continue; }
+            if (*c == '\'') { in_str = 2; c++; continue; }
+        } else if (in_str == 1) {
+            if (*c == '\\') { c += 2; continue; }  /* skip escaped char */
+            if (*c == '"')  { in_str = 0; c++; continue; }
+        } else { /* in_str == 2 */
+            if (*c == '\\') { c += 2; continue; }  /* skip escaped char */
+            if (*c == '\'') { in_str = 0; c++; continue; }
+        }
+        c++;
+    }
+    return in_str != 0;
+}
+
 static char *pp_expand(PPState *st, const char *src) {
     char *out = my_strdup(src);
     int changed = 1;
@@ -471,8 +515,9 @@ static char *pp_expand(PPState *st, const char *src) {
             char *p    = out;
             while ((p = strstr(p, mname)) != NULL) {
                 int poff = (int)(p - out);
+                /* Skip macro expansion inside string/char literals */
+                if (pp_in_string(out, p)) { p++; continue; }
                 int pre  = (p==out || !(isalnum((unsigned char)p[-1])||p[-1]=='_'));
-                int post_char = (int)(unsigned char)p[mlen];
                 int post = is_fn ? (p[mlen]=='(') : !(isalnum((unsigned char)p[mlen])||p[mlen]=='_');
                 if (!pre || !post) { p++; continue; }
 
@@ -625,10 +670,12 @@ static char *process_file(PPState *st, const char *src, const char *filename);
 
 /* ── main preprocessor ───────────────────────────────────────────────── */
 static char *process_file(PPState *st, const char *src, const char *filename) {
+    printf("[pf] enter st=%p src=%p filename=%s\n",(void*)st,(void*)src,filename?filename:"null"); fflush(0);
     /* Output buffer */
     size_t cap=65536, len=0;
     char *out = malloc(cap);
     out[0] = '\0';
+    printf("[pf] out=%p\n",(void*)out); fflush(0);
 
     /* Conditional stack:
      *   each entry is: active(1/0), seen_true(1/0), seen_else(1/0) */
@@ -868,27 +915,49 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
 /* Public API — initialises state with built-in macros, then processes. */
 char *preprocess(const char *src, const char *filename,
                  const char **inc_dirs, int n_dirs) {
+    printf("[pp] sizeof(PPState)=%d\n",(int)sizeof(PPState)); fflush(0);
     PPState *st = calloc(1, sizeof(PPState));
+    printf("[pp] st=%p\n",(void*)st); fflush(0);
     st->inc_dirs = inc_dirs;
     st->n_dirs   = n_dirs;
 
     /* Built-in macros */
+    printf("[pp] def0\n"); fflush(0);
     pp_macro_define(st,"NULL",4,"0");
+    printf("[pp] def1 nmc=%d\n",st->nmc); fflush(0);
     pp_macro_define(st,"TRUE",4,"1");
+    printf("[pp] def2 nmc=%d\n",st->nmc); fflush(0);
     pp_macro_define(st,"FALSE",5,"0");
+    printf("[pp] def3 nmc=%d\n",st->nmc); fflush(0);
     pp_macro_define(st,"EXIT_SUCCESS",12,"0");
+    printf("[pp] def4 nmc=%d\n",st->nmc); fflush(0);
     pp_macro_define(st,"EXIT_FAILURE",12,"1");
+    printf("[pp] def5 nmc=%d\n",st->nmc); fflush(0);
     /* Standard streams: use msvcrt file descriptor values */
     pp_macro_define(st,"stdin", 5,"((void*)0)");
+    printf("[pp] def6 nmc=%d\n",st->nmc); fflush(0);
     pp_macro_define(st,"stdout",6,"((void*)1)");
+    printf("[pp] def7 nmc=%d\n",st->nmc); fflush(0);
     pp_macro_define(st,"stderr",6,"((void*)2)");
+    printf("[pp] macros done nmc=%d\n",st->nmc); fflush(0);
+    printf("[pp] calling process_file src=%p filename=%s\n",(void*)src,filename); fflush(0);
 
     char *result = process_file(st, src, filename);
+    printf("[pp] process_file done result=%p nmc=%d\n",(void*)result,st->nmc); fflush(0);
 
     /* free macros */
-    for (int i=0;i<st->nmc;i++) { free(st->macros[i].name); free(st->macros[i].value); for(int j=0;j<16&&st->macros[i].params[j];j++) free(st->macros[i].params[j]); }
+    printf("[pp] freeing macros...\n"); fflush(0);
+    for (int i=0;i<st->nmc;i++) {
+        printf("[pp] free macro %d name=%p\n",i,(void*)st->macros[i].name); fflush(0);
+        free(st->macros[i].name);
+        free(st->macros[i].value);
+        for(int j=0;j<16&&st->macros[i].params[j];j++) free(st->macros[i].params[j]);
+    }
+    printf("[pp] freeing included...\n"); fflush(0);
     for (int i=0;i<st->n_included;i++) free(st->included[i]);
+    printf("[pp] freeing st...\n"); fflush(0);
     free(st);
+    printf("[pp] returning result=%p\n",(void*)result); fflush(0);
     return result;
 }
 
