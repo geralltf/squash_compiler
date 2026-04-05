@@ -20,34 +20,27 @@ static void lex_error(const Lexer *l, const char *msg) {
 /* =========================================================================
  * Keyword table
  * ========================================================================= */
-typedef struct { const char *w; TokenKind k; } KW;
-static const KW KEYWORDS[] = {
-    {"auto",     TOK_AUTO},   {"break",    TOK_BREAK},
-    {"case",     TOK_CASE},   {"char",     TOK_CHAR},
-    {"const",    TOK_CONST},  {"continue", TOK_CONTINUE},
-    {"default",  TOK_DEFAULT},{"do",       TOK_DO},
-    {"double",   TOK_DOUBLE}, {"else",     TOK_ELSE},
-    {"enum",     TOK_ENUM},   {"extern",   TOK_EXTERN},
-    {"float",    TOK_FLOAT_KW},{"for",     TOK_FOR},
-    {"goto",     TOK_GOTO},   {"if",       TOK_IF},
-    {"inline",   TOK_INLINE},
-    {"int",      TOK_INT},    {"long",     TOK_LONG},
-    {"register", TOK_REGISTER},{"return",  TOK_RETURN},
-    {"short",    TOK_SHORT},  {"signed",   TOK_SIGNED},
-    {"sizeof",   TOK_SIZEOF}, {"static",   TOK_STATIC},
-    {"struct",   TOK_STRUCT}, {"switch",   TOK_SWITCH},
-    {"typedef",  TOK_TYPEDEF},{"union",    TOK_UNION},
-    {"unsigned", TOK_UNSIGNED},{"void",    TOK_VOID},
-    {"volatile", TOK_VOLATILE},{"while",   TOK_WHILE},
-    {NULL, TOK_EOF}
-};
-
+/* Keyword match using strncmp directly — avoids global data tables */
+#define KW_CMP(word, wlen, tok) if(len==wlen && strncmp(s,word,wlen)==0) return tok
 static TokenKind kw_lookup(const char *s, int len) {
-    for (int i = 0; KEYWORDS[i].w; i++)
-        if ((int)strlen(KEYWORDS[i].w)==len && strncmp(KEYWORDS[i].w,s,len)==0)
-            return KEYWORDS[i].k;
+    switch (len) {
+    case 2: KW_CMP("do",2,TOK_DO); KW_CMP("if",2,TOK_IF); break;
+    case 3: KW_CMP("for",3,TOK_FOR); KW_CMP("int",3,TOK_INT); break;
+    case 4: KW_CMP("auto",4,TOK_AUTO); KW_CMP("case",4,TOK_CASE); KW_CMP("char",4,TOK_CHAR);
+            KW_CMP("else",4,TOK_ELSE); KW_CMP("enum",4,TOK_ENUM); KW_CMP("goto",4,TOK_GOTO);
+            KW_CMP("long",4,TOK_LONG); KW_CMP("void",4,TOK_VOID); break;
+    case 5: KW_CMP("break",5,TOK_BREAK); KW_CMP("const",5,TOK_CONST); KW_CMP("float",5,TOK_FLOAT_KW);
+            KW_CMP("short",5,TOK_SHORT); KW_CMP("union",5,TOK_UNION); KW_CMP("while",5,TOK_WHILE); break;
+    case 6: KW_CMP("double",6,TOK_DOUBLE); KW_CMP("extern",6,TOK_EXTERN); KW_CMP("inline",6,TOK_INLINE);
+            KW_CMP("return",6,TOK_RETURN); KW_CMP("signed",6,TOK_SIGNED); KW_CMP("sizeof",6,TOK_SIZEOF);
+            KW_CMP("static",6,TOK_STATIC); KW_CMP("struct",6,TOK_STRUCT); KW_CMP("switch",6,TOK_SWITCH); break;
+    case 7: KW_CMP("default",7,TOK_DEFAULT); KW_CMP("typedef",7,TOK_TYPEDEF); break;
+    case 8: KW_CMP("continue",8,TOK_CONTINUE); KW_CMP("register",8,TOK_REGISTER);
+            KW_CMP("unsigned",8,TOK_UNSIGNED); KW_CMP("volatile",8,TOK_VOLATILE); break;
+    }
     return TOK_IDENT;
 }
+#undef KW_CMP
 
 int tok_is_type(TokenKind k) {
     switch(k) {
@@ -68,7 +61,7 @@ static char pc(const Lexer *l)        { return l->src[l->pos]; }
 static char pc1(const Lexer *l)       { return l->src[l->pos] ? l->src[l->pos+1] : 0; }
 static char pc2(const Lexer *l)       { return (l->src[l->pos]&&l->src[l->pos+1]) ? l->src[l->pos+2] : 0; }
 
-static char adv(Lexer *l) {
+static char lex_adv(Lexer *l) {
     char c = l->src[l->pos++];
     if (c=='\n') { l->line++; l->col=1; } else l->col++;
     return c;
@@ -76,16 +69,16 @@ static char adv(Lexer *l) {
 
 static void skip_ws_comments(Lexer *l) {
     for (;;) {
-        while (l->src[l->pos] && isspace((unsigned char)l->src[l->pos])) adv(l);
+        while (l->src[l->pos] && isspace((unsigned char)l->src[l->pos])) lex_adv(l);
         if (l->src[l->pos]=='/' && l->src[l->pos+1]=='/') {
-            while (l->src[l->pos] && l->src[l->pos]!='\n') adv(l);
+            while (l->src[l->pos] && l->src[l->pos]!='\n') lex_adv(l);
             continue;
         }
         if (l->src[l->pos]=='/' && l->src[l->pos+1]=='*') {
-            adv(l); adv(l);
+            lex_adv(l); lex_adv(l);
             while (l->src[l->pos]) {
-                if (l->src[l->pos]=='*' && l->src[l->pos+1]=='/') { adv(l); adv(l); break; }
-                adv(l);
+                if (l->src[l->pos]=='*' && l->src[l->pos+1]=='/') { lex_adv(l); lex_adv(l); break; }
+                lex_adv(l);
             }
             continue;
         }
@@ -97,7 +90,7 @@ static void skip_ws_comments(Lexer *l) {
  * Escape sequence processor (shared for strings and char literals)
  * ========================================================================= */
 static char process_escape(Lexer *l) {
-    char e = adv(l);
+    char e = lex_adv(l);
     switch (e) {
         case 'n': return '\n'; case 'r': return '\r'; case 't': return '\t';
         case 'b': return '\b'; case 'f': return '\f'; case 'v': return '\v';
@@ -106,7 +99,7 @@ static char process_escape(Lexer *l) {
         case 'x': {
             int v = 0;
             while (isxdigit((unsigned char)l->src[l->pos])) {
-                char c2 = adv(l);
+                char c2 = lex_adv(l);
                 v = v*16 + (isdigit((unsigned char)c2) ? c2-'0' :
                             tolower((unsigned char)c2)-'a'+10);
             }
@@ -116,7 +109,7 @@ static char process_escape(Lexer *l) {
             if (isdigit((unsigned char)e)) {
                 int v = e-'0';
                 while (l->src[l->pos]>='0' && l->src[l->pos]<='7')
-                    v = v*8 + (adv(l)-'0');
+                    v = v*8 + (lex_adv(l)-'0');
                 return (char)v;
             }
             return e;
@@ -124,104 +117,95 @@ static char process_escape(Lexer *l) {
 }
 
 /* =========================================================================
- * ParseNumber — lex integer or float literal
+ * lex_parse_number — lex integer or float literal
  * ========================================================================= */
-static void ParseNumber(Lexer *l) {
-    Token t; memset(&t,0,sizeof t);
-    t.start=l->src+l->pos; t.line=l->line; t.col=l->col;
+static void lex_parse_number(Lexer *l) {
+    l->cur.start=l->src+l->pos; l->cur.line=l->line; l->cur.col=l->col;
+    l->cur.ival=0; l->cur.sval=0; l->cur.len=0;
 
     int is_float = 0;
     /* hex */
     if (l->src[l->pos]=='0' && (l->src[l->pos+1]=='x'||l->src[l->pos+1]=='X')) {
-        adv(l); adv(l);
+        lex_adv(l); lex_adv(l);
         unsigned long long v=0;
         while (isxdigit((unsigned char)l->src[l->pos])) {
-            char c=adv(l);
+            char c=lex_adv(l);
             v=v*16+(isdigit((unsigned char)c)?c-'0':tolower((unsigned char)c)-'a'+10);
         }
-        t.ival=(long long)v;
+        l->cur.ival=(long long)v;
     } else {
         long long v=0;
-        while (isdigit((unsigned char)l->src[l->pos])) v=v*10+(adv(l)-'0');
+        while (isdigit((unsigned char)l->src[l->pos])) v=v*10+(lex_adv(l)-'0');
         if (l->src[l->pos]=='.' || l->src[l->pos]=='e' || l->src[l->pos]=='E') {
             is_float=1;
-            /* reparse as double */
-            char buf[64]; int bi=0;
-            const char *s=t.start;
-            while (*s && (isdigit((unsigned char)*s)||*s=='.'||*s=='e'||*s=='E'||
-                          *s=='+'||*s=='-') && bi<62) buf[bi++]=*s++;
-            /* pos is already at the right place; restart below restores t.start */
             /* restart: back up and re-lex float */
-            l->pos = (int)(t.start - l->src);
-            l->col = t.col;
+            l->pos = (int)(l->cur.start - l->src);
+            l->col = l->cur.col;
             char fbuf[64]; int fi=0;
-            while (isdigit((unsigned char)l->src[l->pos])||l->src[l->pos]=='.') fbuf[fi++]=adv(l);
+            while (isdigit((unsigned char)l->src[l->pos])||l->src[l->pos]=='.') fbuf[fi++]=lex_adv(l);
             if (l->src[l->pos]=='e'||l->src[l->pos]=='E') {
-                fbuf[fi++]=adv(l);
-                if (l->src[l->pos]=='+'||l->src[l->pos]=='-') fbuf[fi++]=adv(l);
-                while (isdigit((unsigned char)l->src[l->pos])) fbuf[fi++]=adv(l);
+                fbuf[fi++]=lex_adv(l);
+                if (l->src[l->pos]=='+'||l->src[l->pos]=='-') fbuf[fi++]=lex_adv(l);
+                while (isdigit((unsigned char)l->src[l->pos])) fbuf[fi++]=lex_adv(l);
             }
             fbuf[fi]=0;
-            t.fval=atof(fbuf); t.ival=(long long)t.fval;
+            l->cur.fval=atof(fbuf); l->cur.ival=(long long)l->cur.fval;
         } else {
-            t.ival=v;
+            l->cur.ival=v;
         }
     }
     /* Consume integer/float suffixes: U, L, LL, UL, F, etc. */
     while (l->src[l->pos]=='u'||l->src[l->pos]=='U'||
            l->src[l->pos]=='l'||l->src[l->pos]=='L'||
-           l->src[l->pos]=='f'||l->src[l->pos]=='F') adv(l);
-    t.kind  = is_float ? TOK_FLOAT : TOK_NUMBER;
-    t.len   = (int)(l->src+l->pos-t.start);
-    l->cur  = t;
+           l->src[l->pos]=='f'||l->src[l->pos]=='F') lex_adv(l);
+    l->cur.kind  = is_float ? TOK_FLOAT : TOK_NUMBER;
+    l->cur.len   = (int)(l->src+l->pos-l->cur.start);
 }
 
 /* =========================================================================
- * ParseIdentifier — lex identifier or keyword
+ * lex_parse_identifier — lex identifier or keyword
  * ========================================================================= */
-static void ParseIdentifier(Lexer *l) {
-    Token t; memset(&t,0,sizeof t);
-    t.start=l->src+l->pos; t.line=l->line; t.col=l->col;
-    while (isalnum((unsigned char)l->src[l->pos])||l->src[l->pos]=='_') adv(l);
-    t.len  = (int)(l->src+l->pos-t.start);
-    t.kind = kw_lookup(t.start, t.len);
-    l->cur = t;
+static void lex_parse_identifier(Lexer *l) {
+    l->cur.start=l->src+l->pos; l->cur.line=l->line; l->cur.col=l->col;
+    l->cur.ival=0; l->cur.sval=0;
+    while (isalnum((unsigned char)l->src[l->pos])||l->src[l->pos]=='_') lex_adv(l);
+    l->cur.len  = (int)(l->src+l->pos-l->cur.start);
+    l->cur.kind = kw_lookup(l->cur.start, l->cur.len);
+    printf("[lpid] start=%.*s len=%d kind=%d\n",l->cur.len,l->cur.start,l->cur.len,(int)l->cur.kind); fflush(0);
 }
 
 /* =========================================================================
  * Lex string literal
  * ========================================================================= */
 static void lex_string(Lexer *l) {
-    Token t; memset(&t,0,sizeof t);
-    t.kind=TOK_STRING; t.start=l->src+l->pos; t.line=l->line; t.col=l->col;
-    adv(l); /* skip " */
+    l->cur.kind=TOK_STRING; l->cur.start=l->src+l->pos; l->cur.line=l->line; l->cur.col=l->col;
+    l->cur.ival=0;
+    lex_adv(l); /* skip " */
     char buf[4096]; int bi=0;
     while (l->src[l->pos] && l->src[l->pos]!='"') {
-        char c = (l->src[l->pos]=='\\') ? (adv(l), process_escape(l)) : adv(l);
+        char c = (l->src[l->pos]=='\\') ? (lex_adv(l), process_escape(l)) : lex_adv(l);
         if (bi<(int)sizeof(buf)-1) buf[bi++]=c;
     }
-    if (l->src[l->pos]=='"') adv(l);
+    if (l->src[l->pos]=='"') lex_adv(l);
     buf[bi]='\0';
-    t.len  = (int)(l->src+l->pos-t.start);
-    t.sval = my_strdup(buf);
-    l->cur = t;
+    l->cur.len  = (int)(l->src+l->pos-l->cur.start);
+    l->cur.sval = my_strdup(buf);
 }
 
 /* =========================================================================
  * Lex char literal
  * ========================================================================= */
 static void lex_char(Lexer *l) {
-    Token t; memset(&t,0,sizeof t);
-    t.kind=TOK_CHAR_LIT; t.start=l->src+l->pos; t.line=l->line; t.col=l->col;
-    adv(l); /* skip ' */
+    l->cur.kind=TOK_CHAR_LIT; l->cur.start=l->src+l->pos; l->cur.line=l->line; l->cur.col=l->col;
+    l->cur.sval=0;
+    lex_adv(l); /* skip ' */
     char c;
-    if (l->src[l->pos]=='\\') { adv(l); c=process_escape(l); }
-    else c=adv(l);
+    if (l->src[l->pos]=='\\') { lex_adv(l); c=process_escape(l); }
+    else c=lex_adv(l);
     if (l->src[l->pos]!='\'') lex_error(l,"unterminated character literal");
-    adv(l);
-    t.ival = (unsigned char)c;
-    t.len  = (int)(l->src+l->pos-t.start);
-    l->cur = t;
+    lex_adv(l);
+    l->cur.ival = (unsigned char)c;
+    l->cur.len  = (int)(l->src+l->pos-l->cur.start);
 }
 
 /* =========================================================================
@@ -252,43 +236,76 @@ void lexer_next(Lexer *l) {
     skip_ws_comments(l);
     printf("[ln] post-skip\n"); fflush(0);
     printf("[ln] after skip_ws l->src=%p l->pos=%d\n",(void*)l->src,l->pos); fflush(0);
-    Token t; memset(&t,0,sizeof t);
+    Token t;
+    printf("[ln] l0=%p\n",(void*)l); fflush(0);
+    t.kind=0;
+    printf("[ln] l1=%p\n",(void*)l); fflush(0);
+    t.start=0;
+    printf("[ln] l2=%p\n",(void*)l); fflush(0);
+    t.len=0;
+    printf("[ln] l3=%p\n",(void*)l); fflush(0);
+    t.ival=0;
+    printf("[ln] l4=%p\n",(void*)l); fflush(0);
+    t.sval=0;
+    printf("[ln] l5=%p\n",(void*)l); fflush(0);
+    t.line=0;
+    printf("[ln] l6=%p\n",(void*)l); fflush(0);
+    t.col=0;
+    printf("[ln] l7=%p\n",(void*)l); fflush(0);
     printf("[ln] t=%p sizeof t=%d\n",(void*)&t,(int)sizeof(t)); fflush(0);
-    t.start=l->src+l->pos; t.line=l->line; t.col=l->col;
+    printf("[ln] A src=%p pos=%d\n",(void*)l->src,l->pos); fflush(0);
+    t.start=l->src+l->pos;
+    printf("[ln] B tstart=%p\n",(void*)t.start); fflush(0);
+    t.line=l->line;
+    printf("[ln] C tline=%d\n",t.line); fflush(0);
+    t.col=l->col;
+    printf("[ln] D tcol=%d\n",t.col); fflush(0);
 
-    if (!l->src[l->pos]) { t.kind=TOK_EOF; l->cur=t; return; }
-
-    char c=l->src[l->pos], c2=pc1(l), c3=pc2(l);
-
-    if (isdigit((unsigned char)c)) { ParseNumber(l); return; }
-    if (c=='.') {
-        if (isdigit((unsigned char)c2)) { ParseNumber(l); return; }
-        if (c2=='.'&&c3=='.') { adv(l);adv(l);adv(l); t.kind=TOK_ELLIPSIS; t.len=3; l->cur=t; return; }
-        adv(l); t.kind=TOK_DOT; t.len=1; l->cur=t; return;
+    printf("[ln] E check-eof\n"); fflush(0);
+    if (!l->src[l->pos]) {
+        l->cur.kind=TOK_EOF; l->cur.start=t.start; l->cur.line=t.line; l->cur.col=t.col;
+        l->cur.len=0; l->cur.ival=0; l->cur.sval=0; return;
     }
-    if (isalpha((unsigned char)c)||c=='_') { ParseIdentifier(l); return; }
+    printf("[ln] F not-eof c=%d\n",(int)(unsigned char)l->src[l->pos]); fflush(0);
+
+    char c=l->src[l->pos];
+    printf("[ln] G c=%d\n",(int)(unsigned char)c); fflush(0);
+    char c2=pc1(l);
+    printf("[ln] H c2=%d\n",(int)(unsigned char)c2); fflush(0);
+    char c3=pc2(l);
+    printf("[ln] I c3=%d\n",(int)(unsigned char)c3); fflush(0);
+
+    if (isdigit((unsigned char)c)) { lex_parse_number(l); return; }
+    if (c=='.') {
+        if (isdigit((unsigned char)c2)) { lex_parse_number(l); return; }
+        if (c2=='.'&&c3=='.') { lex_adv(l);lex_adv(l);lex_adv(l); t.kind=TOK_ELLIPSIS; t.len=3; goto done; }
+        lex_adv(l); t.kind=TOK_DOT; t.len=1; goto done;
+    }
+    if (isalpha((unsigned char)c)||c=='_') { lex_parse_identifier(l); return; }
     if (c=='"') { lex_string(l); return; }
     if (c=='\'') { lex_char(l); return; }
 
-    adv(l); t.len=1;
+    lex_adv(l); t.len=1;
+    printf("[ln] J post-adv len=%d\n",t.len); fflush(0);
 
     /* Three-char */
-    if (c=='<'&&c2=='<'&&c3=='=') { adv(l);adv(l); t.kind=TOK_LSHIFT_EQ; t.len=3; goto done; }
-    if (c=='>'&&c2=='>'&&c3=='=') { adv(l);adv(l); t.kind=TOK_RSHIFT_EQ; t.len=3; goto done; }
+    if (c=='<'&&c2=='<'&&c3=='=') { lex_adv(l);lex_adv(l); t.kind=TOK_LSHIFT_EQ; t.len=3; goto done; }
+    if (c=='>'&&c2=='>'&&c3=='=') { lex_adv(l);lex_adv(l); t.kind=TOK_RSHIFT_EQ; t.len=3; goto done; }
 
     /* Two-char */
-    if(c=='<'&&c2=='<'){adv(l);t.kind=TOK_LSHIFT;t.len=2;goto done;}  if(c=='>'&&c2=='>'){adv(l);t.kind=TOK_RSHIFT;t.len=2;goto done;}
-    if(c=='&'&&c2=='&'){adv(l);t.kind=TOK_AND;t.len=2;goto done;}     if(c=='|'&&c2=='|'){adv(l);t.kind=TOK_OR;t.len=2;goto done;}
-    if(c=='='&&c2=='='){adv(l);t.kind=TOK_EQ;t.len=2;goto done;}      if(c=='!'&&c2=='='){adv(l);t.kind=TOK_NEQ;t.len=2;goto done;}
-    if(c=='<'&&c2=='='){adv(l);t.kind=TOK_LE;t.len=2;goto done;}      if(c=='>'&&c2=='='){adv(l);t.kind=TOK_GE;t.len=2;goto done;}
-    if(c=='+'&&c2=='+'){adv(l);t.kind=TOK_INC;t.len=2;goto done;}     if(c=='-'&&c2=='-'){adv(l);t.kind=TOK_DEC;t.len=2;goto done;}
-    if(c=='+'&&c2=='='){adv(l);t.kind=TOK_PLUS_EQ;t.len=2;goto done;} if(c=='-'&&c2=='='){adv(l);t.kind=TOK_MINUS_EQ;t.len=2;goto done;}
-    if(c=='*'&&c2=='='){adv(l);t.kind=TOK_STAR_EQ;t.len=2;goto done;} if(c=='/'&&c2=='='){adv(l);t.kind=TOK_SLASH_EQ;t.len=2;goto done;}
-    if(c=='%'&&c2=='='){adv(l);t.kind=TOK_PERCENT_EQ;t.len=2;goto done;} if(c=='&'&&c2=='='){adv(l);t.kind=TOK_AMP_EQ;t.len=2;goto done;}
-    if(c=='|'&&c2=='='){adv(l);t.kind=TOK_PIPE_EQ;t.len=2;goto done;} if(c=='^'&&c2=='='){adv(l);t.kind=TOK_CARET_EQ;t.len=2;goto done;}
-    if(c=='-'&&c2=='>'){adv(l);t.kind=TOK_ARROW;t.len=2;goto done;}
+    if(c=='<'&&c2=='<'){lex_adv(l);t.kind=TOK_LSHIFT;t.len=2;goto done;}  if(c=='>'&&c2=='>'){lex_adv(l);t.kind=TOK_RSHIFT;t.len=2;goto done;}
+    if(c=='&'&&c2=='&'){lex_adv(l);t.kind=TOK_AND;t.len=2;goto done;}     if(c=='|'&&c2=='|'){lex_adv(l);t.kind=TOK_OR;t.len=2;goto done;}
+    if(c=='='&&c2=='='){lex_adv(l);t.kind=TOK_EQ;t.len=2;goto done;}      if(c=='!'&&c2=='='){lex_adv(l);t.kind=TOK_NEQ;t.len=2;goto done;}
+    if(c=='<'&&c2=='='){lex_adv(l);t.kind=TOK_LE;t.len=2;goto done;}      if(c=='>'&&c2=='='){lex_adv(l);t.kind=TOK_GE;t.len=2;goto done;}
+    if(c=='+'&&c2=='+'){lex_adv(l);t.kind=TOK_INC;t.len=2;goto done;}     if(c=='-'&&c2=='-'){lex_adv(l);t.kind=TOK_DEC;t.len=2;goto done;}
+    if(c=='+'&&c2=='='){lex_adv(l);t.kind=TOK_PLUS_EQ;t.len=2;goto done;} if(c=='-'&&c2=='='){lex_adv(l);t.kind=TOK_MINUS_EQ;t.len=2;goto done;}
+    if(c=='*'&&c2=='='){lex_adv(l);t.kind=TOK_STAR_EQ;t.len=2;goto done;} if(c=='/'&&c2=='='){lex_adv(l);t.kind=TOK_SLASH_EQ;t.len=2;goto done;}
+    if(c=='%'&&c2=='='){lex_adv(l);t.kind=TOK_PERCENT_EQ;t.len=2;goto done;} if(c=='&'&&c2=='='){lex_adv(l);t.kind=TOK_AMP_EQ;t.len=2;goto done;}
+    if(c=='|'&&c2=='='){lex_adv(l);t.kind=TOK_PIPE_EQ;t.len=2;goto done;} if(c=='^'&&c2=='='){lex_adv(l);t.kind=TOK_CARET_EQ;t.len=2;goto done;}
+    if(c=='-'&&c2=='>'){lex_adv(l);t.kind=TOK_ARROW;t.len=2;goto done;}
 #undef TW
 
+    printf("[ln] K pre-switch c=%d\n",(int)(unsigned char)c); fflush(0);
     /* One-char */
     switch(c) {
         case '(':t.kind=TOK_LPAREN;break;   case ')':t.kind=TOK_RPAREN;break;
@@ -308,12 +325,40 @@ void lexer_next(Lexer *l) {
                     l->filename?l->filename:"?", t.line, t.col, c, (unsigned char)c);
             t.kind=TOK_ERROR; break;
     }
+    printf("[ln] L post-switch tkind=%d\n",(int)t.kind); fflush(0);
 done:
-    l->cur=t; return;
+    printf("[ln] M at-done tkind=%d l=%p\n",(int)t.kind,(void*)l); fflush(0);
+    l->cur.kind  = t.kind;  printf("[ln] N1\n"); fflush(0);
+    l->cur.start = t.start; printf("[ln] N2\n"); fflush(0);
+    l->cur.line  = t.line;  printf("[ln] N3\n"); fflush(0);
+    l->cur.col   = t.col;   printf("[ln] N4\n"); fflush(0);
+    l->cur.len   = t.len;   printf("[ln] N5\n"); fflush(0);
+    l->cur.ival  = t.ival;  printf("[ln] N6\n"); fflush(0);
+    l->cur.sval  = t.sval;  printf("[ln] N7\n"); fflush(0);
+    printf("[ln] N8 about-to-ret l=%p\n",(void*)l); fflush(0);
+    return;
 }
+/* marker - should not be reached */
 
-Token lexer_peek (Lexer *l) { return l->cur; }
+Token lexer_peek (Lexer *l) { return l->cur; }  /* GCC callers only */
 int   lexer_check(Lexer *l, TokenKind k) { return l->cur.kind==k; }
+
+/* lexer_expect_void: void version for squash-compiled callers that can't handle
+ * the large-struct return ABI.  lexer_expect (Token-returning) is kept for
+ * any remaining GCC-compiled callers. */
+void lexer_expect_void(Lexer *l, TokenKind k) {
+    printf("[lev] enter l=%p k=%d cur=%d\n",(void*)l,(int)k,(int)l->cur.kind); fflush(0);
+    if (l->cur.kind!=k) {
+        printf("%s:%d:%d: error: expected '%s' but got '%s'\n",
+                l->filename?l->filename:"?", l->cur.line, l->cur.col,
+                token_kind_name(k), token_kind_name(l->cur.kind));
+        exit(1);
+    }
+    printf("[lev] calling lexer_next\n"); fflush(0);
+    lexer_next(l);
+    printf("[lev] returned from lexer_next\n"); fflush(0);
+    printf("[lev] pre-ret l=%p\n",(void*)l); fflush(0);
+}
 
 Token lexer_expect(Lexer *l, TokenKind k) {
     Token t=l->cur;

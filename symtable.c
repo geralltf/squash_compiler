@@ -220,6 +220,7 @@ static int symtable_compute_struct_size(SymTable *st, ASTNode *struct_node) {
 }
 
 Symbol *symtable_define_var(SymTable *st, const char *name, TypeInfo *type) {
+    printf("[sdv0] name=%s\n", name?name:"?"); fflush(0);
     int ptr_size = st->is_64bit ? 8 : 4;
     int slot;
     if (type && type->array_size > 0) {
@@ -263,9 +264,11 @@ Symbol *symtable_define_var(SymTable *st, const char *name, TypeInfo *type) {
             } else {
                 /* Try as typedef — e.g. PPState *st = ..., where PPState is a typedef for a struct */
                 Symbol *td = symtable_lookup(st, b2);
+                printf("[sdv2] b2=%s td=%p kind=%d\n", b2, (void*)td, td?td->kind:-1); fflush(0);
                 if (td && td->kind == SYM_TYPEDEF && td->type && td->type->pointer_depth == 0) {
                     const char *tb = td->type->base;
                     const char *tbare = tb;
+                    printf("[sdv3] tb=%s\n", tb?tb:"?"); fflush(0);
                     if (strncmp(tbare,"struct ",7)==0) tbare+=7;
                     else if (strncmp(tbare,"union ",6)==0) tbare+=6;
                     if (tbare != tb) {
@@ -285,6 +288,7 @@ Symbol *symtable_define_var(SymTable *st, const char *name, TypeInfo *type) {
         }
     }
     st->next_offset -= (slot + 15) & ~15; /* align to 16 for safety */
+    printf("[sdv] name=%s base=%s slot=%d off=%d\n", name, (type&&type->base)?type->base:"?", slot, st->next_offset); fflush(0);
     Symbol *s = alloc_sym(st, name, type, SYM_VAR);
     s->offset = st->next_offset;
     s->array_size = type ? type->array_size : -1;

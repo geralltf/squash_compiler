@@ -11,6 +11,62 @@ static int sizeof_type_sym(TypeInfo *ti, int is_64, SymTable *sym);
 static int expr_has_call(ASTNode *n);
 
 /* =========================================================================
+ * resolve_node_type — given an expression node, return bare struct/union type name
+ * Handles AST_VAR and nested AST_MEMBER chains recursively.
+ * Returns pointer into stable AST/symtable memory (NOT a local buffer), or NULL.
+ * ========================================================================= */
+static const char *resolve_node_type(SymTable *sym, ASTNode *node) {
+    if (!node) return NULL;
+    if (node->kind == AST_VAR) {
+        Symbol *vs = symtable_lookup(sym, node->var.name);
+        if (!vs || !vs->type || !vs->type->base) return NULL;
+        const char *tn = vs->type->base;
+        if (strncmp(tn,"struct ",7)==0) return tn+7;
+        if (strncmp(tn,"union ",6)==0)  return tn+6;
+        /* typedef: resolve one level */
+        Symbol *td = symtable_lookup(sym, tn);
+        if (td && td->kind == SYM_TYPEDEF && td->type && td->type->base) {
+            const char *tb = td->type->base;
+            if (strncmp(tb,"struct ",7)==0) return tb+7;
+            if (strncmp(tb,"union ",6)==0)  return tb+6;
+        }
+        return NULL;
+    }
+    if (node->kind == AST_MEMBER) {
+        /* Recursively resolve the parent expression's struct type */
+        const char *parent_struct = resolve_node_type(sym, node->member.obj);
+        if (!parent_struct) return NULL;
+        /* Look up the parent struct definition */
+        char pkey[256]; snprintf(pkey, sizeof pkey, "struct %s", parent_struct);
+        Symbol *pss = symtable_lookup(sym, pkey);
+        if (!pss || !pss->struct_node) return NULL;
+        /* Find the named field and return its type */
+        const char *fname = node->member.field;
+        ASTNode *psd = pss->struct_node;
+        int fi;
+        for (fi = 0; fi < psd->struct_decl.nfields; fi++) {
+            ASTNode *ff = psd->struct_decl.fields[fi];
+            if (!ff || ff->kind != AST_FIELD || !ff->field.name) continue;
+            if (strcmp(ff->field.name, fname) != 0) continue;
+            if (!ff->field.type || !ff->field.type->base) return NULL;
+            const char *fbase = ff->field.type->base;
+            if (strncmp(fbase,"struct ",7)==0) return fbase+7;
+            if (strncmp(fbase,"union ",6)==0)  return fbase+6;
+            /* typedef: resolve one level */
+            Symbol *td = symtable_lookup(sym, fbase);
+            if (td && td->kind == SYM_TYPEDEF && td->type && td->type->base) {
+                const char *tb = td->type->base;
+                if (strncmp(tb,"struct ",7)==0) return tb+7;
+                if (strncmp(tb,"union ",6)==0)  return tb+6;
+            }
+            return NULL;
+        }
+        return NULL;
+    }
+    return NULL;
+}
+
+/* =========================================================================
  * field_byte_offset — walk struct/union field list and return byte offset
  * For unions every field is at offset 0.
  * Fields are stored as AST_FIELD nodes; each is sizeof(int)=4 bytes wide
@@ -115,49 +171,10 @@ static int field_byte_offset(SymTable *sym, ASTNode *obj_node, const char *field
             }
         }
     } else if (obj_node && obj_node->kind == AST_MEMBER) {
-        /* Nested member like o.a in o.a.pad — find the type of field 'a' in its parent struct */
-        /* Recursively find parent struct type, then look up the field type */
-        ASTNode *parent = obj_node->member.obj;
-        const char *parent_type = NULL;
-        if (parent && parent->kind == AST_VAR) {
-            Symbol *pv = symtable_lookup(sym, parent->var.name);
-            if (pv && pv->type) parent_type = pv->type->base;
-        }
-        if (parent_type) {
-            const char *bare = parent_type;
-            if (strncmp(bare,"struct ",7)==0) bare+=7;
-            else if (strncmp(bare,"union ",6)==0) bare+=6;
-            char pkey[256]; snprintf(pkey,sizeof pkey,"struct %s",bare);
-            Symbol *pss = symtable_lookup(sym, pkey);
-            if (!pss || !pss->struct_node) {
-                /* try typedef resolution */
-                Symbol *tds = symtable_lookup(sym, parent_type);
-                if (tds && tds->kind == SYM_TYPEDEF && tds->type && tds->type->base) {
-                    const char *tb=tds->type->base;
-                    if (strncmp(tb,"struct ",7)==0) tb+=7;
-                    else if (strncmp(tb,"union ",6)==0) tb+=6;
-                    snprintf(pkey,sizeof pkey,"struct %s",tb);
-                    pss = symtable_lookup(sym, pkey);
-                }
-            }
-            if (pss && pss->struct_node) {
-                /* Find field obj_node->member.field in parent struct to get its type */
-                const char *fname = obj_node->member.field;
-                ASTNode *psd = pss->struct_node;
-                for (int fi=0; fi<psd->struct_decl.nfields; fi++) {
-                    ASTNode *ff = psd->struct_decl.fields[fi];
-                    if (ff && ff->kind==AST_FIELD && ff->field.name &&
-                        strcmp(ff->field.name, fname)==0 && ff->field.type) {
-                        const char *fbase = ff->field.type->base;
-                        if (fbase) {
-                            if (strncmp(fbase,"struct ",7)==0) fbase+=7;
-                            else if (strncmp(fbase,"union ",6)==0) fbase+=6;
-                            type_name = fbase;
-                        }
-                        break;
-                    }
-                }
-            }
+        /* Use recursive helper to resolve nested member chains like p->lex->cur */
+        type_name = resolve_node_type(sym, obj_node);
+        if (!type_name) {
+            printf("[fbo] field=%s MEMBER chain unresolved → 0\n", field_name); fflush(0);
         }
     }
     if (!type_name) return 0;
@@ -184,7 +201,10 @@ static int field_byte_offset(SymTable *sym, ASTNode *obj_node, const char *field
              if (ss2 && ss2->struct_node) ss = ss2;
          }
      }
-    if (!ss || !ss->struct_node) return 0;
+    if (!ss || !ss->struct_node) {
+        printf("[fbo] field=%s type_name=%s NOT FOUND → 0\n", field_name, type_name?type_name:"?"); fflush(0);
+        return 0;
+    }
 
     ASTNode *sd = ss->struct_node;   /* AST_STRUCT_DECL */
     int is_union = sd->struct_decl.is_union;
@@ -216,6 +236,18 @@ static int field_byte_offset(SymTable *sym, ASTNode *obj_node, const char *field
                         Symbol *ttd = symtable_lookup(sym, tb2);
                         if (ttd && ttd->kind == SYM_TYPEDEF && ttd->type) {
                             int rs = typeinfo_size(ttd->type, sym->is_64bit);
+                            /* Also follow typedef → struct to get actual struct size */
+                            if (ttd->type->base) {
+                                const char *tbase3 = ttd->type->base;
+                                const char *tbare3 = tbase3;
+                                if (strncmp(tbare3,"struct ",7)==0) tbare3+=7;
+                                else if (strncmp(tbare3,"union ",6)==0) tbare3+=6;
+                                if (tbare3 != tbase3) {
+                                    char sk3[256]; snprintf(sk3,sizeof sk3,"struct %s",tbare3);
+                                    Symbol *ts3 = symtable_lookup(sym, sk3);
+                                    if (ts3 && ts3->struct_size > 0) rs = ts3->struct_size;
+                                }
+                            }
                             if (rs > tfsz) tfsz = rs;
                         }
                     }
@@ -227,6 +259,7 @@ static int field_byte_offset(SymTable *sym, ASTNode *obj_node, const char *field
             if (f->field.array_size > 0) tfsz *= f->field.array_size;
             int talign = elem_tsz < 8 ? elem_tsz : 8;
             if (talign > 1) offset = (offset + talign-1) & ~(talign-1);
+            printf("[fbo] field=%s type_name=%s offset=%d\n", field_name, type_name?type_name:"?", offset); fflush(0);
             return offset;
         }
         if (!is_union) {
@@ -339,9 +372,17 @@ static int elem_size_of(CodeGen *cg, ASTNode *arr_expr) {
         Symbol *asym = symtable_lookup(cg->sym, arr_expr->var.name);
         if (asym && asym->type) {
             int orig_pd = asym->type->pointer_depth;
-            TypeInfo tmp = *asym->type;
-            tmp.pointer_depth = (orig_pd > 0) ? orig_pd-1 : 0;
-            tmp.array_size = -1;
+            TypeInfo tmp;
+            tmp.base         = asym->type->base;
+            tmp.pointer_depth= (orig_pd > 0) ? orig_pd-1 : 0;
+            tmp.is_const     = asym->type->is_const;
+            tmp.is_unsigned  = asym->type->is_unsigned;
+            tmp.array_size   = -1;
+            tmp.pointed_to   = asym->type->pointed_to;
+            tmp.is_volatile  = asym->type->is_volatile;
+            tmp.is_inline    = asym->type->is_inline;
+            tmp.is_extern    = asym->type->is_extern;
+            tmp.is_float     = asym->type->is_float;
             /* If original pointer_depth > 0 and the element type is itself a pointer
              * (e.g. array of function pointers: int (*fps[3])()), return pointer size. */
             if (orig_pd > 0 && tmp.pointer_depth > 0) return cg->is_64bit ? 8 : 4;
@@ -390,10 +431,17 @@ static int elem_size_of(CodeGen *cg, ASTNode *arr_expr) {
             if (!f || f->kind != AST_FIELD) continue;
             if (f->field.name && strcmp(f->field.name, arr_expr->member.field)==0) {
                 if (f->field.type) {
-                    TypeInfo tmp = *f->field.type;
-                    /* Strip one pointer level to get element type */
-                    tmp.pointer_depth = (tmp.pointer_depth>0) ? tmp.pointer_depth-1 : 0;
-                    tmp.array_size = -1;
+                    TypeInfo tmp;
+                    tmp.base         = f->field.type->base;
+                    tmp.pointer_depth= (f->field.type->pointer_depth>0) ? f->field.type->pointer_depth-1 : 0;
+                    tmp.is_const     = f->field.type->is_const;
+                    tmp.is_unsigned  = f->field.type->is_unsigned;
+                    tmp.array_size   = -1;
+                    tmp.pointed_to   = f->field.type->pointed_to;
+                    tmp.is_volatile  = f->field.type->is_volatile;
+                    tmp.is_inline    = f->field.type->is_inline;
+                    tmp.is_extern    = f->field.type->is_extern;
+                    tmp.is_float     = f->field.type->is_float;
                     /* Use sizeof_type_sym to handle typedef→struct */
                     return sizeof_type_sym(&tmp, cg->is_64bit, cg->sym);
                 }
@@ -526,7 +574,17 @@ static int sizeof_type_sym(TypeInfo *ti, int is_64, SymTable *sym) {
     if (!ti->base) return 4;
     /* Array type: element_size * count */
     if (ti->array_size > 0) {
-        TypeInfo tmp = *ti; tmp.array_size = 0;
+        TypeInfo tmp;
+        tmp.base         = ti->base;
+        tmp.pointer_depth= ti->pointer_depth;
+        tmp.is_const     = ti->is_const;
+        tmp.is_unsigned  = ti->is_unsigned;
+        tmp.array_size   = 0;
+        tmp.pointed_to   = ti->pointed_to;
+        tmp.is_volatile  = ti->is_volatile;
+        tmp.is_inline    = ti->is_inline;
+        tmp.is_extern    = ti->is_extern;
+        tmp.is_float     = ti->is_float;
         int esz = sizeof_type_sym(&tmp, is_64, sym);
         return esz * ti->array_size;
     }
@@ -1629,19 +1687,65 @@ void codegen_lvalue(CodeGen *cg, ASTNode *n) {
     case AST_INDEX: {
         /* &array[idx] = base_addr + idx * elem_size                         */
         int esz = elem_size_of(cg, n->index.array);
-        int is_pointer_var = 0;
+        /* Determine whether the array base is a pointer VALUE (use codegen_expr)
+         * or a stack/inline array ADDRESS (use codegen_lvalue).
+         * Pointer base: pointer VAR, struct pointer field, deref, call, etc.
+         * Array base:   stack VAR array, inline array field in struct.       */
+        int is_pointer_base = 0;
         if (n->index.array->kind == AST_VAR) {
             Symbol *asym = symtable_lookup(cg->sym, n->index.array->var.name);
             if (asym && asym->type) {
                 int is_stack_array = (asym->array_size > 0);
                 if (asym->type->pointer_depth > 0 && !is_stack_array)
-                    is_pointer_var = 1;
+                    is_pointer_base = 1;
             }
+        } else if (n->index.array->kind == AST_MEMBER) {
+            /* ptr->field[i] or struct.field[i]:
+             * pointer base if the field has pointer_depth > 0 (char*, void*, etc.),
+             * array base if the field is an inline fixed-size array.         */
+            ASTNode *mnode = n->index.array;
+            ASTNode *mobj  = mnode->member.obj;
+            const char *mstype = NULL;
+            if (mobj && mobj->kind == AST_VAR) {
+                Symbol *sv = symtable_lookup(cg->sym, mobj->var.name);
+                if (sv && sv->type) mstype = sv->type->base;
+            }
+            if (mstype) {
+                const char *bare = mstype;
+                if      (strncmp(bare,"struct ",7)==0) bare+=7;
+                else if (strncmp(bare,"union ", 6)==0) bare+=6;
+                else {
+                    Symbol *td = symtable_lookup(cg->sym, mstype);
+                    if (td && td->kind==SYM_TYPEDEF && td->type) {
+                        const char *tb = td->type->base;
+                        if      (strncmp(tb,"struct ",7)==0) bare = tb+7;
+                        else if (strncmp(tb,"union ", 6)==0) bare = tb+6;
+                        else bare = tb;
+                    }
+                }
+                char sk[256]; snprintf(sk,sizeof sk,"struct %s",bare);
+                Symbol *ss = symtable_lookup(cg->sym, sk);
+                if (ss && ss->struct_node) {
+                    const char *fname = mnode->member.field;
+                    for (int _fi=0; _fi<ss->struct_node->struct_decl.nfields; _fi++) {
+                        ASTNode *ff = ss->struct_node->struct_decl.fields[_fi];
+                        if (ff && ff->field.name &&
+                            strcmp(ff->field.name, fname)==0 && ff->field.type) {
+                            if (ff->field.type->pointer_depth > 0)
+                                is_pointer_base = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            /* AST_DEREF, AST_CALL, nested AST_INDEX, cast, etc.: always a pointer */
+            is_pointer_base = 1;
         }
 
         /* Load the base: either the VALUE of the pointer (ptr[i])
          * or the ADDRESS of the array's first element (arr[i]). */
-        if (is_pointer_var) {
+        if (is_pointer_base) {
             codegen_expr(cg, n->index.array);   /* RAX = pointer value (heap addr) */
         } else {
             codegen_lvalue(cg, n->index.array); /* RAX = &arr[0] (frame-relative)  */
@@ -2999,6 +3103,7 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
  * codegen_func
  * ========================================================================= */
 void codegen_func(CodeGen *cg, ASTNode *n) {
+    printf("[cgen] %s\n", (n&&n->kind==AST_FUNC_DECL&&n->func.name)?n->func.name:"?"); fflush(0);
     Assembler *a=cg->asm_;
     if (!n||n->kind!=AST_FUNC_DECL) return;
     if (!n->func.body) return; /* forward declaration */
@@ -3179,6 +3284,7 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
     if (align < 8) align = 8;   /* minimum: at least 8 bytes for alignment */
     /* Reserve 16 extra bytes for float binary spill slots (sub rsp,16 in codegen_float_expr) */
     if (cg->is_64bit && align < 24) align = 24;
+    printf("[frame] %s: raw=%d align=%d\n", n->func.name?n->func.name:"?", raw, align); fflush(0);
     asm_patch_frame(a, frame_patch, align);
 
     symtable_pop_scope(cg->sym);

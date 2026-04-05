@@ -57,10 +57,11 @@ typedef struct {
 } Lexer;
 
 void  lexer_init  (Lexer *l, const char *src, const char *filename);
-void  lexer_next  (Lexer *l);
-Token lexer_peek  (Lexer *l);
-int   lexer_check (Lexer *l, TokenKind k);
-Token lexer_expect(Lexer *l, TokenKind k);
+void  lexer_next        (Lexer *l);
+Token lexer_peek        (Lexer *l);
+int   lexer_check       (Lexer *l, TokenKind k);
+Token lexer_expect      (Lexer *l, TokenKind k);
+void  lexer_expect_void (Lexer *l, TokenKind k);
 
 const char *token_kind_name(TokenKind k);
 void        token_print    (const Token *t);
