@@ -126,7 +126,7 @@ static char process_escape(Lexer *l) {
 /* =========================================================================
  * ParseNumber — lex integer or float literal
  * ========================================================================= */
-static Token ParseNumber(Lexer *l) {
+static void ParseNumber(Lexer *l) {
     Token t; memset(&t,0,sizeof t);
     t.start=l->src+l->pos; t.line=l->line; t.col=l->col;
 
@@ -173,25 +173,25 @@ static Token ParseNumber(Lexer *l) {
            l->src[l->pos]=='f'||l->src[l->pos]=='F') adv(l);
     t.kind  = is_float ? TOK_FLOAT : TOK_NUMBER;
     t.len   = (int)(l->src+l->pos-t.start);
-    return t;
+    l->cur  = t;
 }
 
 /* =========================================================================
  * ParseIdentifier — lex identifier or keyword
  * ========================================================================= */
-static Token ParseIdentifier(Lexer *l) {
+static void ParseIdentifier(Lexer *l) {
     Token t; memset(&t,0,sizeof t);
     t.start=l->src+l->pos; t.line=l->line; t.col=l->col;
     while (isalnum((unsigned char)l->src[l->pos])||l->src[l->pos]=='_') adv(l);
     t.len  = (int)(l->src+l->pos-t.start);
     t.kind = kw_lookup(t.start, t.len);
-    return t;
+    l->cur = t;
 }
 
 /* =========================================================================
  * Lex string literal
  * ========================================================================= */
-static Token lex_string(Lexer *l) {
+static void lex_string(Lexer *l) {
     Token t; memset(&t,0,sizeof t);
     t.kind=TOK_STRING; t.start=l->src+l->pos; t.line=l->line; t.col=l->col;
     adv(l); /* skip " */
@@ -204,13 +204,13 @@ static Token lex_string(Lexer *l) {
     buf[bi]='\0';
     t.len  = (int)(l->src+l->pos-t.start);
     t.sval = my_strdup(buf);
-    return t;
+    l->cur = t;
 }
 
 /* =========================================================================
  * Lex char literal
  * ========================================================================= */
-static Token lex_char(Lexer *l) {
+static void lex_char(Lexer *l) {
     Token t; memset(&t,0,sizeof t);
     t.kind=TOK_CHAR_LIT; t.start=l->src+l->pos; t.line=l->line; t.col=l->col;
     adv(l); /* skip ' */
@@ -221,7 +221,7 @@ static Token lex_char(Lexer *l) {
     adv(l);
     t.ival = (unsigned char)c;
     t.len  = (int)(l->src+l->pos-t.start);
-    return t;
+    l->cur = t;
 }
 
 /* =========================================================================
@@ -239,34 +239,36 @@ void lexer_init(Lexer *l, const char *src, const char *filename) {
     printf("[li] memset done\n"); fflush(0);
     l->cur.kind=TOK_EOF;
     printf("[li] cur.kind=EOF l->src=%p l->pos=%d\n",(void*)l->src,l->pos); fflush(0);
-    l->cur=lexer_next(l);
+    lexer_next(l);
     printf("[li] lexer_next done\n"); fflush(0);
 }
 
 /* =========================================================================
  * lexer_next
  * ========================================================================= */
-Token lexer_next(Lexer *l) {
+void lexer_next(Lexer *l) {
     printf("[ln] enter l=%p\n",(void*)l); fflush(0);
+    printf("[ln] pre-skip\n"); fflush(0);
     skip_ws_comments(l);
+    printf("[ln] post-skip\n"); fflush(0);
     printf("[ln] after skip_ws l->src=%p l->pos=%d\n",(void*)l->src,l->pos); fflush(0);
     Token t; memset(&t,0,sizeof t);
     printf("[ln] t=%p sizeof t=%d\n",(void*)&t,(int)sizeof(t)); fflush(0);
     t.start=l->src+l->pos; t.line=l->line; t.col=l->col;
 
-    if (!l->src[l->pos]) { t.kind=TOK_EOF; l->cur=t; return t; }
+    if (!l->src[l->pos]) { t.kind=TOK_EOF; l->cur=t; return; }
 
     char c=l->src[l->pos], c2=pc1(l), c3=pc2(l);
 
-    if (isdigit((unsigned char)c)) { l->cur=ParseNumber(l); return l->cur; }
+    if (isdigit((unsigned char)c)) { ParseNumber(l); return; }
     if (c=='.') {
-        if (isdigit((unsigned char)c2)) { l->cur=ParseNumber(l); return l->cur; }
-        if (c2=='.'&&c3=='.') { adv(l);adv(l);adv(l); t.kind=TOK_ELLIPSIS; t.len=3; l->cur=t; return t; }
-        adv(l); t.kind=TOK_DOT; t.len=1; l->cur=t; return t;
+        if (isdigit((unsigned char)c2)) { ParseNumber(l); return; }
+        if (c2=='.'&&c3=='.') { adv(l);adv(l);adv(l); t.kind=TOK_ELLIPSIS; t.len=3; l->cur=t; return; }
+        adv(l); t.kind=TOK_DOT; t.len=1; l->cur=t; return;
     }
-    if (isalpha((unsigned char)c)||c=='_') { l->cur=ParseIdentifier(l); return l->cur; }
-    if (c=='"') { l->cur=lex_string(l); return l->cur; }
-    if (c=='\'') { l->cur=lex_char(l); return l->cur; }
+    if (isalpha((unsigned char)c)||c=='_') { ParseIdentifier(l); return; }
+    if (c=='"') { lex_string(l); return; }
+    if (c=='\'') { lex_char(l); return; }
 
     adv(l); t.len=1;
 
@@ -307,7 +309,7 @@ Token lexer_next(Lexer *l) {
             t.kind=TOK_ERROR; break;
     }
 done:
-    l->cur=t; return t;
+    l->cur=t; return;
 }
 
 Token lexer_peek (Lexer *l) { return l->cur; }
