@@ -30,13 +30,13 @@
     <ClCompile Include="lexer.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="parser.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="pe_builder.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="symtable.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="parser_new4.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

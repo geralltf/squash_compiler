@@ -132,7 +132,7 @@
     <ClCompile Include="codegen.c" />
     <ClCompile Include="compiler.c" />
     <ClCompile Include="lexer.c" />
-    <ClCompile Include="parser.c" />
+    <ClCompile Include="parser_new4.c" />
     <ClCompile Include="pe_builder.c" />
     <ClCompile Include="symtable.c" />
   </ItemGroup>

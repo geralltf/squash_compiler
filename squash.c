@@ -5,7 +5,7 @@
 #include "symtable.c"
 #include "lexer.c"
 #include "assembler.c"
-#include "parser_new3.c"
+#include "parser_new4.c"
 #include "codegen.c"
 #include "pe_builder.c"
 #include "compiler.c"

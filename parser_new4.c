@@ -243,6 +243,7 @@ ASTNode *ParseNumber(Parser *p) {
  * ParseIdentifier
  * ========================================================================= */
 ASTNode *ParseIdentifier(Parser *p) {
+    Token t;
     char name[256]; snprintf(name,sizeof name,"%.*s",cur(p).len,cur(p).start);
     eat(p, TOK_IDENT);
 
@@ -263,8 +264,10 @@ ASTNode *ParseIdentifier(Parser *p) {
             char key[512]; snprintf(key,sizeof key,"%s:%s",sym->dll,name);
             symtable_add_import(p->sym, key);
         }
+        t = p->lex->cur;
         return ast_call(name, args, argc, t.line);
     }
+    t = p->lex->cur;
     return ast_var(name, t.line);
 }
 
