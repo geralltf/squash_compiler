@@ -107,6 +107,7 @@ typedef struct {
     int         data_sym_cap;
 
     int         is_64bit;
+    int         chkstk_movrax_off; /* offset of mov eax imm32 placeholder for __chkstk, -1 if none */
 } Assembler;
 
 /* =========================================================================
@@ -149,7 +150,7 @@ void asm_sub_rsp    (Assembler *a, int32_t n);      /* sub rsp/esp, imm  */
 void asm_add_rsp    (Assembler *a, int32_t n);      /* add rsp/esp, imm  */
 void asm_enter      (Assembler *a, int local_bytes); /* push rbp; mov rbp,rsp; sub rsp,N */
 /* Two-pass frame: emit prologue with placeholder, patch later */
-int  asm_enter_deferred(Assembler *a);               /* returns patch offset             */
+int  asm_enter_deferred(Assembler *a, int chkstk_lbl); /* chkstk_lbl=-1 for no probe; returns sub rsp patch offset */
 void asm_patch_frame   (Assembler *a, int patch_off, int aligned_size);
 void asm_leave      (Assembler *a);                  /* leave             */
 void asm_ret        (Assembler *a);                  /* ret               */

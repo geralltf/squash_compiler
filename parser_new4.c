@@ -14,7 +14,7 @@ char* my_strdup(const char* src);
 static void adv(Parser *p) { lexer_next(p->lex); }
 static int  adv_kind(Parser *p) { adv(p); return (int)p->lex->cur.kind; }
 static int    chk(Parser *p, TokenKind k) { return lexer_check(p->lex, k); }
-static void eat(Parser *p, TokenKind k) { lexer_expect(p->lex, k); }
+static void eat(Parser *p, TokenKind k) { lexer_expect_void(p->lex, k); }
 
 void parse_error(Parser *p, const char *msg) {
     printf("%s:%d:%d: error: %s\n", p->filename?p->filename:"?", cur(p).line, cur(p).col, msg);
@@ -246,6 +246,7 @@ ASTNode *ParseIdentifier(Parser *p) {
     Token t;
     char name[256]; snprintf(name,sizeof name,"%.*s",cur(p).len,cur(p).start);
     eat(p, TOK_IDENT);
+    printf("[pid] post-eat name=%s cur=%d\n",name,(int)p->lex->cur.kind); fflush(0);
 
     /* function call? */
     if (chk(p,TOK_LPAREN)) {
@@ -267,8 +268,12 @@ ASTNode *ParseIdentifier(Parser *p) {
         t = p->lex->cur;
         return ast_call(name, args, argc, t.line);
     }
+    printf("[pid] before-t-assign\n"); fflush(0);
     t = p->lex->cur;
-    return ast_var(name, t.line);
+    printf("[pid] after-t-assign line=%d\n", t.line); fflush(0);
+    ASTNode *vn = ast_var(name, t.line);
+    printf("[pid] ast_var done node=%p\n", (void*)vn); fflush(0);
+    return vn;
 }
 
 /* =========================================================================
@@ -404,13 +409,18 @@ ASTNode *ParseUnary(Parser *p) {
  * ========================================================================= */
 ASTNode *ParseMulDiv(Parser *p) {
     ASTNode *lhs = ParseUnary(p);
+    printf("[pmd] after-lhs lhs=%p\n",(void*)lhs); fflush(0);
     for (;;) {
         int line=cur(p).line; const char *op=NULL;
         if (chk(p,TOK_STAR))    op="*";
         else if (chk(p,TOK_SLASH))   op="/";
         else if (chk(p,TOK_PERCENT)) op="%";
         else break;
-        adv(p); lhs = ast_binary(op, lhs, ParseUnary(p), line);
+        adv(p);
+        ASTNode *rhs = ParseUnary(p);
+        printf("[pmd] after-rhs rhs=%p\n",(void*)rhs); fflush(0);
+        lhs = ast_binary(op, lhs, rhs, line);
+        printf("[pmd] after-ast_binary lhs=%p\n",(void*)lhs); fflush(0);
     }
     return lhs;
 }
@@ -799,6 +809,7 @@ ASTNode *ParseVariable(Parser *p) {
         if (chk(p,TOK_ASSIGN)) { adv(p); init=ParseAssignment(p); }
         eat(p,TOK_SEMICOLON);
         if (name[0]) {
+            if (array_size >= 0) type->array_size = array_size;
             symtable_define_var(p->sym, name, type);
             return ast_var_decl(storage[0]?storage:NULL, type, name,
                                 init, array_size, line);
@@ -845,6 +856,7 @@ ASTNode *ParseVariable(Parser *p) {
     if (chk(p, TOK_COMMA)) {
         /* Build a list of VarDecl nodes, one per declarator */
         ASTNode *decls[64]; int nd=0;
+        if (array_size >= 0) type->array_size = array_size;
         symtable_define_var(p->sym, name, type);
         decls[nd++] = ast_var_decl(storage[0]?storage:NULL, type, name, init, array_size, line);
         while (chk(p, TOK_COMMA) && nd<63) {
@@ -867,6 +879,7 @@ ASTNode *ParseVariable(Parser *p) {
             }
             ASTNode *init2=NULL;
             if (chk(p,TOK_ASSIGN)) { adv(p); init2=ParseAssignment(p); }
+            if (arr2 >= 0) t2->array_size = arr2;
             symtable_define_var(p->sym, n2, t2);
             decls[nd++] = ast_var_decl(storage[0]?storage:NULL, t2, n2, init2, arr2, line);
         }
@@ -877,6 +890,7 @@ ASTNode *ParseVariable(Parser *p) {
 
     eat(p,TOK_SEMICOLON);
 
+    if (array_size >= 0) type->array_size = array_size;
     symtable_define_var(p->sym, name, type);
     return ast_var_decl(storage[0]?storage:NULL, type, name, init, array_size, line);
 }

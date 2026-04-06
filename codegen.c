@@ -483,6 +483,7 @@ void codegen_init(CodeGen *cg, Assembler *a, SymTable *sym, int is_64bit) {
     memset(cg,0,sizeof *cg);
     cg->asm_=a; cg->sym=sym; cg->is_64bit=is_64bit;
     cg->loop_end_label=-1; cg->loop_top_label=-1; cg->switch_end_label=-1;
+    cg->chkstk_lbl=-1;
     cg->string_cap=32; cg->strings=malloc(cg->string_cap*sizeof(StringEntry));
     cg->func_cap=32;   cg->funcs  =malloc(cg->func_cap  *sizeof(FuncRecord));
     cg->wdata_cap=32;  cg->wdata  =malloc(cg->wdata_cap *sizeof(WDataEntry));
@@ -1293,7 +1294,12 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
     if (strcmp(name,"strncpy")==0 && argc>=3) {
         if (cg->is_64bit) {
             codegen_expr(cg,args[2]); asm_mov_reg_reg(a,REG_RCX,REG_RAX);
-            codegen_expr(cg,args[0]); asm_mov_reg_reg(a,REG_RDI,REG_RAX);
+            /* dst: array member fields must pass address, not loaded value */
+            if (args[0]->kind == AST_MEMBER)
+                codegen_lvalue(cg,args[0]);
+            else
+                codegen_expr(cg,args[0]);
+            asm_mov_reg_reg(a,REG_RDI,REG_RAX);
             codegen_expr(cg,args[1]); asm_mov_reg_reg(a,REG_RSI,REG_RAX);
             int lp=asm_new_label(a,"sncp_lp"),dn=asm_new_label(a,"sncp_dn");
             asm_def_label(a,lp);
@@ -1304,7 +1310,8 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             asm_jmp_label(a,lp); asm_def_label(a,dn);
         } else {
             codegen_expr(cg,args[2]); asm_emit2(a,0x89,0xC1);
-            codegen_expr(cg,args[0]); asm_emit2(a,0x89,0xC7);
+            if (args[0]->kind == AST_MEMBER) codegen_lvalue(cg,args[0]); else codegen_expr(cg,args[0]);
+            asm_emit2(a,0x89,0xC7);
             codegen_expr(cg,args[1]); asm_emit2(a,0x89,0xC6);
             int lp=asm_new_label(a,"sncp_lp"),dn=asm_new_label(a,"sncp_dn");
             asm_def_label(a,lp);
@@ -1314,7 +1321,8 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             asm_emit2(a,0xFF,0xC6); asm_emit2(a,0xFF,0xC7); asm_emit2(a,0xFF,0xC9);
             asm_jmp_label(a,lp); asm_def_label(a,dn);
         }
-        codegen_expr(cg,args[0]); return;
+        if (args[0]->kind == AST_MEMBER) codegen_lvalue(cg,args[0]); else codegen_expr(cg,args[0]);
+        return;
     }
 
     /* ---- abs(x) / labs(x) -> absolute value ---- */
@@ -2081,6 +2089,7 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
         { int foff = field_byte_offset(cg->sym, n->member.obj, n->member.field);
           /* Determine load width from field type */
           int load64 = 0;
+          int is_array_field = 0; /* fixed-size array: return address, not value */
           if (cg->is_64bit) {
               /* Look up the field's TypeInfo to check pointer_depth */
               ASTNode *mobj = n->member.obj;
@@ -2096,6 +2105,9 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                       Symbol *sv = symtable_lookup(cg->sym, op->var.name);
                       if (sv && sv->type) mstype = sv->type->base;
                   }
+              } else if (mobj->kind == AST_MEMBER) {
+                  /* Nested member access like n->binary.op — resolve chain */
+                  mstype = resolve_node_type(cg->sym, mobj);
               }
               if (mstype) {
                   const char *bare = mstype;
@@ -2108,13 +2120,20 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                           ASTNode *ff=ss->struct_node->struct_decl.fields[_i];
                           if (ff&&ff->field.name&&strcmp(ff->field.name,mfname)==0&&ff->field.type) {
                               if (ff->field.type->pointer_depth > 0) load64=1;
+                              /* Fixed-size array field: array decays to pointer to first element.
+                               * Return the address of the field instead of loading its value. */
+                              if (ff->field.type->array_size > 0 || ff->field.array_size > 0)
+                                  is_array_field = 1;
                               break;
                           }
                       }
                   }
               }
           }
-          if (load64) {
+          if (is_array_field) {
+              /* Array field: return address (add offset, do NOT load value) */
+              if (foff > 0) asm_add_imm(a, REG_RAX, foff);
+          } else if (load64) {
               /* 64-bit pointer load */
               if (foff == 0) {
                   asm_emit3(a,0x48,0x8B,0x00); /* mov rax,[rax] */
@@ -3130,7 +3149,7 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
      * compile the body (which defines locals in the symtable),
      * then patch the placeholder with the actual aligned frame size.
      * This eliminates the hardcoded sub rsp,0x108 that triggers AV. */
-    int frame_patch = asm_enter_deferred(a);
+    int frame_patch = asm_enter_deferred(a, cg->is_64bit ? cg->chkstk_lbl : -1);
 
     /* Spill register params FIRST — before CRT startup calls which clobber registers */
     if (cg->is_64bit) {
@@ -3317,6 +3336,44 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
     if (cg->stdout_handle_lbl[0]=='\0') {
         snprintf(cg->stdout_handle_lbl,sizeof cg->stdout_handle_lbl,"__stdout_h");
         intern_wdata(cg,cg->stdout_handle_lbl, cg->is_64bit ? 8 : 4);
+    }
+
+    /* Emit embedded __chkstk_probe helper at the start of .text (64-bit only).
+     * This probes stack guard pages one page at a time before sub rsp,N so
+     * Windows can extend the stack for large frames without a guard-page fault.
+     * Input: eax = frame size in bytes. Clobbers: r10. Does NOT modify rsp. */
+    if (cg->is_64bit) {
+        Assembler *a = cg->asm_;
+        cg->chkstk_lbl = asm_new_label(a, "__chkstk_probe");
+        asm_def_label(a, cg->chkstk_lbl);
+        /* Byte sequence (41 bytes):
+         *   push r10                        ; 41 52
+         *   cmp rax, 0x1000                 ; 48 3D 00 10 00 00
+         *   jle +28 (to pop r10 / ret)      ; 7E 1C
+         *   mov r10, rsp                    ; 4C 8B D4
+         * loop:
+         *   sub r10, 4096                   ; 49 81 EA 00 10 00 00
+         *   or dword ptr [r10], 0           ; 41 83 0A 00  (touch page)
+         *   sub rax, 4096                   ; 48 2D 00 10 00 00
+         *   cmp rax, 0x1000                 ; 48 3D 00 10 00 00
+         *   jg -25 (to loop)                ; 7F E7
+         * done:
+         *   pop r10                         ; 41 5A
+         *   ret                             ; C3                          */
+        static const uint8_t chkstk_bytes[] = {
+            0x41,0x52,
+            0x48,0x3D,0x00,0x10,0x00,0x00,
+            0x7E,0x1C,
+            0x4C,0x8B,0xD4,
+            0x49,0x81,0xEA,0x00,0x10,0x00,0x00,
+            0x41,0x83,0x0A,0x00,
+            0x48,0x2D,0x00,0x10,0x00,0x00,
+            0x48,0x3D,0x00,0x10,0x00,0x00,
+            0x7F,0xE7,
+            0x41,0x5A,
+            0xC3
+        };
+        asm_emit_bytes(a, chkstk_bytes, (int)sizeof(chkstk_bytes));
     }
 
     /* Pass 1: allocate labels for functions WITH bodies only.

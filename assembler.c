@@ -13,6 +13,7 @@ char* my_strdup(const char* src);
 void asm_init(Assembler *a, int is_64bit) {
     memset(a, 0, sizeof *a);
     a->is_64bit  = is_64bit;
+    a->chkstk_movrax_off = -1;
     a->code_cap  = ASM_BUF_INIT;
     a->code      = malloc(a->code_cap);
     a->reloc_cap = 256;
@@ -258,13 +259,23 @@ void asm_enter(Assembler *a, int local_bytes) {
 }
 
 /* Emit prologue with a patchable frame size.
- * Returns the byte offset of the 4-byte imm32 field in 'sub rsp, imm32'
- * so the caller can patch it later with the actual frame size.
- * Emits:  push rbp / mov rbp,rsp / sub rsp, 0  (placeholder = 0)    */
-int asm_enter_deferred(Assembler *a) {
+ * chkstk_lbl: label ID of our __chkstk helper (-1 to skip probing).
+ * For 64-bit with chkstk_lbl >= 0, emits:
+ *   push rbp / mov rbp,rsp / mov eax,0 / call __chkstk / sub rsp,0
+ * For 32-bit or chkstk_lbl < 0, emits:
+ *   push rbp / mov rbp,rsp / sub rsp,0
+ * Returns offset of the sub rsp/esp imm32 placeholder for asm_patch_frame. */
+int asm_enter_deferred(Assembler *a, int chkstk_lbl) {
+    a->chkstk_movrax_off = -1;
     asm_push_reg(a, REG_RBP);
     if (a->is_64bit) {
         asm_emit3(a, 0x48,0x89,0xE5);       /* mov rbp, rsp           */
+        if (chkstk_lbl >= 0) {
+            asm_emit1(a, 0xB8);             /* mov eax, imm32 (opcode) */
+            a->chkstk_movrax_off = a->code_len;
+            asm_emit_u32(a, 0);             /* placeholder = 0        */
+            asm_call_direct(a, chkstk_lbl); /* call __chkstk_probe    */
+        }
         asm_emit3(a, 0x48,0x81,0xEC);       /* sub rsp, imm32         */
     } else {
         asm_emit2(a, 0x89,0xE5);            /* mov ebp, esp           */
@@ -276,7 +287,8 @@ int asm_enter_deferred(Assembler *a) {
 }
 
 /* Patch the frame size emitted by asm_enter_deferred.
- * aligned_size must already be 16-byte aligned and RSP-adjusted.    */
+ * aligned_size must already be 16-byte aligned and RSP-adjusted.
+ * Also patches the mov eax imm32 for __chkstk if it was emitted.   */
 void asm_patch_frame(Assembler *a, int patch_off, int aligned_size) {
     if (patch_off >= 0 && patch_off + 4 <= a->code_len) {
         a->code[patch_off+0] = (uint8_t)(aligned_size);
@@ -284,6 +296,15 @@ void asm_patch_frame(Assembler *a, int patch_off, int aligned_size) {
         a->code[patch_off+2] = (uint8_t)(aligned_size>>16);
         a->code[patch_off+3] = (uint8_t)(aligned_size>>24);
     }
+    /* Patch the mov eax,N placeholder for __chkstk (if emitted) */
+    int mo = a->chkstk_movrax_off;
+    if (mo >= 0 && mo + 4 <= a->code_len) {
+        a->code[mo+0] = (uint8_t)(aligned_size);
+        a->code[mo+1] = (uint8_t)(aligned_size>>8);
+        a->code[mo+2] = (uint8_t)(aligned_size>>16);
+        a->code[mo+3] = (uint8_t)(aligned_size>>24);
+    }
+    a->chkstk_movrax_off = -1; /* reset for next function */
 }
 void asm_leave(Assembler *a) { asm_emit1(a, 0xC9); }
 void asm_ret  (Assembler *a) { asm_emit1(a, 0xC3); }
