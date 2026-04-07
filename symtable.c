@@ -97,11 +97,23 @@ static Symbol *alloc_sym(SymTable *st, const char *name, TypeInfo *type, SymKind
 
 static Symbol *alloc_global_sym(SymTable *st, const char *name, TypeInfo *type, SymKind kind) {
     /* Insert into global (bottom) scope */
+    printf("[ags] enter st=%p name=%s kind=%d\n",(void*)st,name,(int)kind); fflush(0);
     Scope *g = st->current;
+    printf("[ags] current=%p\n",(void*)g); fflush(0);
     while (g->parent) g=g->parent;
+    printf("[ags] global_scope=%p sizeof(Symbol)=%d\n",(void*)g,(int)sizeof(Symbol)); fflush(0);
     Symbol *s = calloc(1,sizeof(Symbol));
-    s->name=my_strdup(name); s->type=type; s->kind=kind; s->is_64bit=st->is_64bit;
+    printf("[ags] s=%p\n",(void*)s); fflush(0);
+    s->name=my_strdup(name);
+    printf("[ags] name set\n"); fflush(0);
+    s->type=type;
+    printf("[ags] type set\n"); fflush(0);
+    s->kind=kind;
+    printf("[ags] kind set\n"); fflush(0);
+    s->is_64bit=st->is_64bit;
+    printf("[ags] is_64bit set\n"); fflush(0);
     s->next=g->head; g->head=s;
+    printf("[ags] linked\n"); fflush(0);
     return s;
 }
 
@@ -321,8 +333,14 @@ Symbol *symtable_define_import(SymTable *st, const char *name, const char *dll) 
 }
 
 Symbol *symtable_define_enum_val(SymTable *st, const char *name, long long val) {
-    Symbol *s = alloc_global_sym(st, name, typeinfo_new("int"), SYM_ENUM_VAL);
+    printf("[sdev] enter st=%p name=%s val=%lld\n",(void*)st,name,val); fflush(0);
+    printf("[sdev] calling typeinfo_new\n"); fflush(0);
+    TypeInfo *ti = typeinfo_new("int");
+    printf("[sdev] typeinfo_new done ti=%p\n",(void*)ti); fflush(0);
+    Symbol *s = alloc_global_sym(st, name, ti, SYM_ENUM_VAL);
+    printf("[sdev] after alloc s=%p\n",(void*)s); fflush(0);
     s->enum_value = val;
+    printf("[sdev] after set enum_value\n"); fflush(0);
     return s;
 }
 

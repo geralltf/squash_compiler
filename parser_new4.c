@@ -11,7 +11,7 @@ char* my_strdup(const char* src);
  * ========================================================================= */
 /* cur: macro for direct access — avoids large struct return ABI issue */
 #define cur(p) ((p)->lex->cur)
-static void adv(Parser *p) { lexer_next(p->lex); }
+static void adv(Parser *p) { printf("[adv] calling\n"); fflush(0); lexer_next(p->lex); printf("[adv] returned\n"); fflush(0); }
 static int  adv_kind(Parser *p) { adv(p); return (int)p->lex->cur.kind; }
 static int    chk(Parser *p, TokenKind k) { return lexer_check(p->lex, k); }
 static void eat(Parser *p, TokenKind k) { lexer_expect_void(p->lex, k); }
@@ -172,9 +172,13 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
                     }
                 }
                 next_val=val+1;
+                printf("[enum] nv=%d val=%lld vn=%s\n", nv, val, vn); fflush(0);
                 symtable_define_enum_val(p->sym, vn, val);
+                printf("[enum] after define_enum_val\n"); fflush(0);
                 vals[nv++]=ast_enum_val(vn,val,1,cur(p).line);
+                printf("[enum] after ast_enum_val nv=%d\n", nv); fflush(0);
                 if (!chk(p,TOK_COMMA)) break; adv(p);
+                printf("[enum] after comma adv\n"); fflush(0);
             }
             eat(p,TOK_RBRACE);
         }
@@ -243,8 +247,8 @@ ASTNode *ParseNumber(Parser *p) {
  * ParseIdentifier
  * ========================================================================= */
 ASTNode *ParseIdentifier(Parser *p) {
-    Token t;
     char name[256]; snprintf(name,sizeof name,"%.*s",cur(p).len,cur(p).start);
+    int call_line = cur(p).line;
     eat(p, TOK_IDENT);
     printf("[pid] post-eat name=%s cur=%d\n",name,(int)p->lex->cur.kind); fflush(0);
 
@@ -259,19 +263,18 @@ ASTNode *ParseIdentifier(Parser *p) {
             } while (chk(p,TOK_COMMA)&&adv_kind(p)!=TOK_EOF);
         }
         eat(p,TOK_RPAREN);
+        printf("[pi] after-eat-rparen p=%p p->sym=%p name=%s\n",(void*)p,(void*)p->sym,name); fflush(0);
         /* Track Windows API imports */
         Symbol *sym = symtable_lookup(p->sym, name);
+        printf("[pi] after-lookup sym=%p\n",(void*)sym); fflush(0);
         if (sym && sym->kind==SYM_IMPORT && sym->dll) {
             char key[512]; snprintf(key,sizeof key,"%s:%s",sym->dll,name);
             symtable_add_import(p->sym, key);
         }
-        t = p->lex->cur;
-        return ast_call(name, args, argc, t.line);
+        return ast_call(name, args, argc, call_line);
     }
-    printf("[pid] before-t-assign\n"); fflush(0);
-    t = p->lex->cur;
-    printf("[pid] after-t-assign line=%d\n", t.line); fflush(0);
-    ASTNode *vn = ast_var(name, t.line);
+    printf("[pid] before-var-return\n"); fflush(0);
+    ASTNode *vn = ast_var(name, call_line);
     printf("[pid] ast_var done node=%p\n", (void*)vn); fflush(0);
     return vn;
 }
@@ -556,7 +559,9 @@ ASTNode *ParseBlock(Parser *p) {
 }
 
 ASTNode *ParseStatement(Parser *p) {
+    printf("[ps] enter p=%p\n",(void*)p); fflush(0);
     int line = cur(p).line;
+    printf("[ps] line=%d kind=%d\n",line,(int)cur(p).kind); fflush(0);
     /* Null statement: just a semicolon */
     if (chk(p,TOK_SEMICOLON)) { adv(p); return ast_number(0,line); }
 
@@ -580,7 +585,9 @@ ASTNode *ParseStatement(Parser *p) {
     if (chk(p,TOK_IF)) {
         adv(p); eat(p,TOK_LPAREN);
         ASTNode *cond = ParseExpression(p); eat(p,TOK_RPAREN);
+        printf("[pif] cond=%p p=%p p->lex=%p\n",(void*)cond,(void*)p,(void*)p->lex); fflush(0);
         ASTNode *then_ = ParseStatement(p);
+        printf("[pif] then_=%p\n",(void*)then_); fflush(0);
         ASTNode *else_ = NULL;
         if (chk(p,TOK_ELSE)) { adv(p); else_=ParseStatement(p); }
         return ast_if(cond, then_, else_, line);
@@ -680,9 +687,8 @@ ASTNode *ParseStatement(Parser *p) {
         /* If this ident is a typedef name, treat as variable declaration */
         { Symbol *ts = symtable_lookup(p->sym, tok_ident(&cur(p)));
           if (ts && ts->kind==SYM_TYPEDEF) return ParseVariable(p); }
-        /* peek one ahead to see if it's a label */
-        Token saved = cur(p);
-        char nm[256]; strncpy(nm,tok_ident(&saved),sizeof nm-1);
+        /* peek one ahead to see if it's a label — access fields directly, no struct copy */
+        char nm[256]; snprintf(nm,sizeof nm,"%.*s",cur(p).len,cur(p).start);
         adv(p);
         if (chk(p,TOK_COLON)) {
             adv(p);

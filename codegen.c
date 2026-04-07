@@ -61,6 +61,39 @@ static const char *resolve_node_type(SymTable *sym, ASTNode *node) {
             }
             return NULL;
         }
+        /* Not found at top level — search inside __anon_N fields (C anonymous unions/structs) */
+        for (fi = 0; fi < psd->struct_decl.nfields; fi++) {
+            ASTNode *ff = psd->struct_decl.fields[fi];
+            if (!ff || ff->kind != AST_FIELD || !ff->field.name) continue;
+            if (strncmp(ff->field.name, "__anon_", 7) != 0) continue;
+            if (!ff->field.type || !ff->field.type->base) continue;
+            const char *atype = ff->field.type->base;
+            const char *bare = atype;
+            if (strncmp(bare,"struct ",7)==0) bare+=7;
+            else if (strncmp(bare,"union ",6)==0) bare+=6;
+            char akey[256]; snprintf(akey, sizeof akey, "struct %s", bare);
+            Symbol *asym = symtable_lookup(sym, akey);
+            if (!asym || !asym->struct_node) continue;
+            ASTNode *asd = asym->struct_node;
+            int aj;
+            for (aj = 0; aj < asd->struct_decl.nfields; aj++) {
+                ASTNode *af = asd->struct_decl.fields[aj];
+                if (!af || af->kind != AST_FIELD || !af->field.name) continue;
+                if (strcmp(af->field.name, fname) != 0) continue;
+                if (!af->field.type || !af->field.type->base) return NULL;
+                const char *fbase2 = af->field.type->base;
+                if (strncmp(fbase2,"struct ",7)==0) return fbase2+7;
+                if (strncmp(fbase2,"union ",6)==0)  return fbase2+6;
+                /* typedef: resolve one level */
+                Symbol *td2 = symtable_lookup(sym, fbase2);
+                if (td2 && td2->kind == SYM_TYPEDEF && td2->type && td2->type->base) {
+                    const char *tb2 = td2->type->base;
+                    if (strncmp(tb2,"struct ",7)==0) return tb2+7;
+                    if (strncmp(tb2,"union ",6)==0)  return tb2+6;
+                }
+                return NULL;
+            }
+        }
         return NULL;
     }
     return NULL;
@@ -2580,26 +2613,49 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                         else{codegen_expr(cg,n->call.args[0]); asm_mov_reg_reg(a,REG_RCX,REG_RAX);}
                     }
                     if (argc>=2) {
-                        /* Only save RCX if arg1 expression contains a nested call */
+                        /* Save RCX (arg0) on stack if arg1 contains a nested call
+                         * (nested call clobbers volatile registers including RCX) */
                         int arg1_has_call = expr_has_call(n->call.args[1]);
                         int arg1_float = codegen_is_float_expr(cg,n->call.args[1]);
                         int arg0_float = codegen_is_float_expr(cg,n->call.args[0]);
                         if(arg1_has_call && !arg0_float && !arg1_float)
-                            asm_mov_reg_reg(a,REG_R10,REG_RCX); /* save RCX in R10 */
+                            asm_push_reg(a,REG_RCX); /* save RCX (arg0) on stack */
                         if(arg1_float){codegen_float_expr(cg,n->call.args[1]);}
                         else{codegen_expr(cg,n->call.args[1]); asm_mov_reg_reg(a,REG_RDX,REG_RAX);}
                         if(arg1_has_call && !arg0_float && !arg1_float)
-                            asm_mov_reg_reg(a,REG_RCX,REG_R10); /* restore RCX from R10 */
+                            asm_pop_reg(a,REG_RCX); /* restore RCX (arg0) from stack */
                     }
                     if (argc>=3) {
+                        /* Save RCX (arg0) and RDX (arg1) if arg2 contains a nested call */
+                        int arg2_has_call = expr_has_call(n->call.args[2]);
                         int af=codegen_is_float_expr(cg,n->call.args[2]);
+                        if(arg2_has_call && !af) {
+                            asm_push_reg(a,REG_RDX); /* save RDX (arg1) */
+                            asm_push_reg(a,REG_RCX); /* save RCX (arg0) */
+                        }
                         if(af){codegen_float_expr(cg,n->call.args[2]);}
                         else{codegen_expr(cg,n->call.args[2]); asm_mov_reg_reg(a,REG_R8,REG_RAX);}
+                        if(arg2_has_call && !af) {
+                            asm_pop_reg(a,REG_RCX); /* restore RCX (arg0) */
+                            asm_pop_reg(a,REG_RDX); /* restore RDX (arg1) */
+                        }
                     }
                     if (argc>=4) {
+                        /* Save RCX (arg0), RDX (arg1), R8 (arg2) if arg3 contains a nested call */
+                        int arg3_has_call = expr_has_call(n->call.args[3]);
                         int af=codegen_is_float_expr(cg,n->call.args[3]);
+                        if(arg3_has_call && !af) {
+                            asm_push_reg(a,REG_R8);  /* save R8 (arg2) */
+                            asm_push_reg(a,REG_RDX); /* save RDX (arg1) */
+                            asm_push_reg(a,REG_RCX); /* save RCX (arg0) */
+                        }
                         if(af){codegen_float_expr(cg,n->call.args[3]);}
                         else{codegen_expr(cg,n->call.args[3]); asm_mov_reg_reg(a,REG_R9,REG_RAX);}
+                        if(arg3_has_call && !af) {
+                            asm_pop_reg(a,REG_RCX); /* restore RCX (arg0) */
+                            asm_pop_reg(a,REG_RDX); /* restore RDX (arg1) */
+                            asm_pop_reg(a,REG_R8);  /* restore R8 (arg2) */
+                        }
                     }
                 }
             }

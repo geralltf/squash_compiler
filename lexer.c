@@ -231,7 +231,8 @@ void lexer_init(Lexer *l, const char *src, const char *filename) {
  * lexer_next
  * ========================================================================= */
 void lexer_next(Lexer *l) {
-    printf("[ln] enter l=%p\n",(void*)l); fflush(0);
+    volatile int stack_canary = 0xCAFEBABE;
+    printf("[ln] enter l=%p canary=%p val=0x%X\n",(void*)l,(void*)&stack_canary,(unsigned)stack_canary); fflush(0);
     printf("[ln] pre-skip\n"); fflush(0);
     skip_ws_comments(l);
     printf("[ln] post-skip\n"); fflush(0);
@@ -335,7 +336,7 @@ done:
     l->cur.len   = t.len;   printf("[ln] N5\n"); fflush(0);
     l->cur.ival  = t.ival;  printf("[ln] N6\n"); fflush(0);
     l->cur.sval  = t.sval;  printf("[ln] N7\n"); fflush(0);
-    printf("[ln] N8 about-to-ret l=%p\n",(void*)l); fflush(0);
+    printf("[ln] N8 about-to-ret l=%p canary=0x%X\n",(void*)l,(unsigned)stack_canary); fflush(0);
     return;
 }
 /* marker - should not be reached */

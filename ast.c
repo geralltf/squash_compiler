@@ -17,9 +17,13 @@ char* my_strdup(const char* src) {
  * TypeInfo
  * ========================================================================= */
 TypeInfo *typeinfo_new(const char *base) {
+    printf("[tin] enter base=%s sizeof(TypeInfo)=%d\n", base?(base):"null", (int)sizeof(TypeInfo)); fflush(0);
     TypeInfo *t = calloc(1, sizeof(TypeInfo));
+    printf("[tin] t=%p\n",(void*)t); fflush(0);
     t->base = my_strdup(base ? base : "int");
+    printf("[tin] base set\n"); fflush(0);
     t->array_size = -1;
+    printf("[tin] array_size set\n"); fflush(0);
     return t;
 }
 TypeInfo *typeinfo_ptr(TypeInfo *base) {
