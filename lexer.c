@@ -563,10 +563,13 @@ static char *pp_expand(PPState *st, const char *src) {
             char *p    = out;
             while ((p = strstr(p, mname)) != NULL) {
                 int poff = (int)(p - out);
+                /* Debug: trace MATH_ADD match */
+                if (strstr(mname,"MATH_ADD")) { printf("[ppx2] found mname=%s at poff=%d pre_ch=%d post_ch=%d\n",mname,poff,(int)(unsigned char)(poff>0?p[-1]:0),(int)(unsigned char)p[mlen]); fflush(0); }
                 /* Skip macro expansion inside string/char literals */
                 if (pp_in_string(out, p)) { p++; continue; }
                 int pre  = (p==out || !(isalnum((unsigned char)p[-1])||p[-1]=='_'));
                 int post = is_fn ? (p[mlen]=='(') : !(isalnum((unsigned char)p[mlen])||p[mlen]=='_');
+                if (strstr(mname,"MATH_ADD")) { printf("[ppx3] pre=%d post=%d is_fn=%d\n",pre,post,is_fn); fflush(0); }
                 if (!pre || !post) { p++; continue; }
 
                 if (is_fn) {
@@ -755,6 +758,9 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
             /* Regular source line: macro-expand and emit if active */
             if ((cond_active[cond_depth])) {
                 char *expanded = pp_expand(st, line);
+                if (strstr(line,"MATH_ADD")||strstr(line,"MATH_SUB")||strstr(line,"MATH_MUL")||strstr(line,"MATH_DIV")) {
+                    printf("[ppexp] orig=%.80s\n[ppexp] expa=%.80s\n",line,expanded); fflush(0);
+                }
                 do { size_t _emn=(strlen(expanded)); while(len+_emn+2>cap){cap*=2;out=(char*)realloc(out,cap);} memcpy(out+len,(expanded),_emn); len+=_emn; } while(0);
                 do { size_t _emn=(1); while(len+_emn+2>cap){cap*=2;out=(char*)realloc(out,cap);} memcpy(out+len,("\n"),_emn); len+=_emn; } while(0);
                 free(expanded);

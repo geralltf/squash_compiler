@@ -105,6 +105,7 @@ int main(int argc, char **argv) {
     ASTNode *prog=parse_program(&parser);
     printf("[dbg] stage4: done\n"); fflush(0);
 
+    printf("[dbg] stage4b: error_count=%d\n",parser.error_count); fflush(0);
     if (parser.error_count>0) {
         printf("%d compile error(s). Aborting.\n",parser.error_count);
         return 1;
@@ -116,11 +117,15 @@ int main(int argc, char **argv) {
     }
 
     /* Stage 5: Code generation */
+    printf("[dbg] stage5: asm_init\n"); fflush(0);
     Assembler as;
     asm_init(&as,is_64bit);
+    printf("[dbg] stage5: codegen_init\n"); fflush(0);
     CodeGen cg;
     codegen_init(&cg,&as,&sym,is_64bit);
+    printf("[dbg] stage5: codegen_program\n"); fflush(0);
     codegen_program(&cg,prog);
+    printf("[dbg] stage5: done\n"); fflush(0);
 
     if (dump) {
         printf("=== .text (%d bytes) ===\n",as.code_len);

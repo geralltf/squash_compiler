@@ -32,6 +32,34 @@ static const char *resolve_node_type(SymTable *sym, ASTNode *node) {
         }
         return NULL;
     }
+    if (node->kind == AST_INDEX) {
+        /* arr[i] — element type is the type of arr (with one pointer/array level stripped).
+         * Handles arr[i]->field and arr[i].field chains. */
+        ASTNode *arr = node->index.array;
+        /* Resolve element type from the array expression */
+        const char *arr_type = resolve_node_type(sym, arr);
+        if (arr_type) return arr_type; /* already a struct type */
+        /* Try: if arr is AST_VAR, look up its type and strip one pointer level */
+        if (arr && arr->kind == AST_VAR) {
+            Symbol *vs = symtable_lookup(sym, arr->var.name);
+            if (vs && vs->type && vs->type->base) {
+                const char *tn = vs->type->base;
+                if (strncmp(tn,"struct ",7)==0) return tn+7;
+                if (strncmp(tn,"union ",6)==0)  return tn+6;
+                Symbol *td = symtable_lookup(sym, tn);
+                if (td && td->kind == SYM_TYPEDEF && td->type && td->type->base) {
+                    const char *tb = td->type->base;
+                    if (strncmp(tb,"struct ",7)==0) return tb+7;
+                    if (strncmp(tb,"union ",6)==0)  return tb+6;
+                }
+            }
+        }
+        /* arr is AST_MEMBER: resolve the member's type */
+        if (arr && arr->kind == AST_MEMBER) {
+            return resolve_node_type(sym, arr);
+        }
+        return NULL;
+    }
     if (node->kind == AST_MEMBER) {
         /* Recursively resolve the parent expression's struct type */
         const char *parent_struct = resolve_node_type(sym, node->member.obj);
@@ -2123,6 +2151,9 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
           /* Determine load width from field type */
           int load64 = 0;
           int is_array_field = 0; /* fixed-size array: return address, not value */
+          int field_is_unsigned = 0; /* track for sign extension */
+          int field_sz = 4; /* default field byte size */
+          int field_found = 0; /* whether we successfully resolved the field type */
           if (cg->is_64bit) {
               /* Look up the field's TypeInfo to check pointer_depth */
               ASTNode *mobj = n->member.obj;
@@ -2138,8 +2169,8 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                       Symbol *sv = symtable_lookup(cg->sym, op->var.name);
                       if (sv && sv->type) mstype = sv->type->base;
                   }
-              } else if (mobj->kind == AST_MEMBER) {
-                  /* Nested member access like n->binary.op — resolve chain */
+              } else if (mobj->kind == AST_MEMBER || mobj->kind == AST_INDEX) {
+                  /* Nested member access or array element: resolve chain */
                   mstype = resolve_node_type(cg->sym, mobj);
               }
               if (mstype) {
@@ -2157,6 +2188,10 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                                * Return the address of the field instead of loading its value. */
                               if (ff->field.type->array_size > 0 || ff->field.array_size > 0)
                                   is_array_field = 1;
+                              field_is_unsigned = ff->field.type->is_unsigned;
+                              field_sz = typeinfo_size(ff->field.type, 1);
+                              if (field_sz < 1) field_sz = 1;
+                              field_found = 1;
                               break;
                           }
                       }
@@ -2176,13 +2211,29 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                   asm_emit3(a,0x48,0x8B,0x80); asm_emit_u32(a,(uint32_t)foff);
               }
           } else {
-              /* 32-bit int load (zero-extends to RAX) */
-              if (foff == 0) {
-                  asm_emit2(a,0x8B,0x00);       /* mov eax,[rax] */
-              } else if (foff < 128) {
-                  asm_emit3(a,0x8B,0x40,(uint8_t)foff); /* mov eax,[rax+disp8] */
+              /* 32-bit or 8-bit int load.
+               * For signed int fields (where we confirmed the type via struct lookup):
+               * use movsxd to sign-extend to 64-bit, so that negative values like -1
+               * compare correctly with >= 0.
+               * For unsigned or unknown fields: zero-extend (mov eax) is correct/safe. */
+              if (field_found && !field_is_unsigned && field_sz == 4) {
+                  /* confirmed signed 32-bit int: movsxd rax,[rax+foff] */
+                  if (foff == 0) {
+                      asm_emit3(a,0x48,0x63,0x00); /* movsxd rax,[rax] */
+                  } else if (foff < 128) {
+                      asm_emit4(a,0x48,0x63,0x40,(uint8_t)foff); /* movsxd rax,[rax+disp8] */
+                  } else {
+                      asm_emit3(a,0x48,0x63,0x80); asm_emit_u32(a,(uint32_t)foff); /* movsxd rax,[rax+disp32] */
+                  }
               } else {
-                  asm_emit2(a,0x8B,0x80); asm_emit_u32(a,(uint32_t)foff);
+                  /* unsigned, unknown, or non-32-bit: zero-extend (mov eax,[rax+foff]) */
+                  if (foff == 0) {
+                      asm_emit2(a,0x8B,0x00);
+                  } else if (foff < 128) {
+                      asm_emit3(a,0x8B,0x40,(uint8_t)foff);
+                  } else {
+                      asm_emit2(a,0x8B,0x80); asm_emit_u32(a,(uint32_t)foff);
+                  }
               }
           }
         }
@@ -3369,12 +3420,17 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
  * codegen_program
  * ========================================================================= */
 void codegen_program(CodeGen *cg, ASTNode *prog) {
-    if (!prog||prog->kind!=AST_PROGRAM) return;
+    printf("[cgp] enter prog=%p\n",(void*)prog); fflush(0);
+    if (!prog||prog->kind!=AST_PROGRAM) { printf("[cgp] null/bad prog\n"); fflush(0); return; }
+    printf("[cgp] count=%d\n",prog->program.count); fflush(0);
 
     /* Pass 0: register all global/static variables in wdata FIRST, so that
      * function codegens can reference them via asm_reloc_wdata.            */
+    printf("[cgp] pass0 start decls=%p\n",(void*)prog->program.decls); fflush(0);
     for (int i=0;i<prog->program.count;i++) {
+        printf("[cgp0] i=%d\n",i); fflush(0);
         ASTNode *d=prog->program.decls[i];
+        printf("[cgp0] d=%p kind=%d\n",(void*)d,d?d->kind:-1); fflush(0);
         if (d->kind!=AST_VAR_DECL) continue;
         const char *vname = d->var_decl.name;
         TypeInfo   *vtype = d->var_decl.type;
@@ -3389,11 +3445,12 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
 
     /* Pre-allocate stdout handle slot so all functions can reference it.
      * The slot itself is initialized in main() at runtime. */
+    printf("[cgp] pass0 done, stdout check\n"); fflush(0);
     if (cg->stdout_handle_lbl[0]=='\0') {
         snprintf(cg->stdout_handle_lbl,sizeof cg->stdout_handle_lbl,"__stdout_h");
         intern_wdata(cg,cg->stdout_handle_lbl, cg->is_64bit ? 8 : 4);
     }
-
+    printf("[cgp] pre-chkstk is_64bit=%d\n",cg->is_64bit); fflush(0);
     /* Emit embedded __chkstk_probe helper at the start of .text (64-bit only).
      * This probes stack guard pages one page at a time before sub rsp,N so
      * Windows can extend the stack for large frames without a guard-page fault.
@@ -3432,6 +3489,7 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
         asm_emit_bytes(a, chkstk_bytes, (int)sizeof(chkstk_bytes));
     }
 
+    printf("[cgp] post-chkstk, pass1 start\n"); fflush(0);
     /* Pass 1: allocate labels for functions WITH bodies only.
      * Extern/forward declarations are handled via IAT (asm_reloc_iat).    */
     for (int i=0;i<prog->program.count;i++) {
@@ -3439,11 +3497,13 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
         if (d->kind==AST_FUNC_DECL && d->func.body!=NULL)
             get_func_label(cg,d->func.name);
     }
+    printf("[cgp] pass1 done, pass2 start\n"); fflush(0);
     /* Pass 2: generate code for functions that have bodies.
      * Forward declarations (body==NULL) and typedef/struct/enum nodes are skipped. */
     for (int i=0;i<prog->program.count;i++) {
         ASTNode *d=prog->program.decls[i];
         if (d->kind==AST_FUNC_DECL && d->func.body!=NULL) {
+            printf("[cg] codegen_func: %s\n", d->func.name ? d->func.name : "?"); fflush(0);
             codegen_func(cg,d);
         }
         /* (Global VAR_DECLs handled in Pass 0 above) */
