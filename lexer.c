@@ -171,7 +171,6 @@ static void lex_parse_identifier(Lexer *l) {
     while (isalnum((unsigned char)l->src[l->pos])||l->src[l->pos]=='_') lex_adv(l);
     l->cur.len  = (int)(l->src+l->pos-l->cur.start);
     l->cur.kind = kw_lookup(l->cur.start, l->cur.len);
-    printf("[lpid] start=%.*s len=%d kind=%d\n",l->cur.len,l->cur.start,l->cur.len,(int)l->cur.kind); fflush(0);
 }
 
 /* =========================================================================
@@ -212,69 +211,33 @@ static void lex_char(Lexer *l) {
  * lexer_init
  * ========================================================================= */
 void lexer_init(Lexer *l, const char *src, const char *filename) {
-    printf("[li] enter l=%p src=%p\n",(void*)l,(void*)src); fflush(0);
     l->src=src;
-    printf("[li] src set\n"); fflush(0);
     l->filename=filename;
-    printf("[li] filename set\n"); fflush(0);
     l->pos=0; l->line=1; l->col=1;
-    printf("[li] pos/line/col set; sizeof Token=%d sizeof Lexer=%d\n",(int)sizeof(Token),(int)sizeof(Lexer)); fflush(0);
     memset(&l->cur,0,sizeof l->cur);
-    printf("[li] memset done\n"); fflush(0);
     l->cur.kind=TOK_EOF;
-    printf("[li] cur.kind=EOF l->src=%p l->pos=%d\n",(void*)l->src,l->pos); fflush(0);
     lexer_next(l);
-    printf("[li] lexer_next done\n"); fflush(0);
 }
 
 /* =========================================================================
  * lexer_next
  * ========================================================================= */
 void lexer_next(Lexer *l) {
-    volatile int stack_canary = 0xCAFEBABE;
-    printf("[ln] enter l=%p canary=%p val=0x%X\n",(void*)l,(void*)&stack_canary,(unsigned)stack_canary); fflush(0);
-    printf("[ln] pre-skip\n"); fflush(0);
     skip_ws_comments(l);
-    printf("[ln] post-skip\n"); fflush(0);
-    printf("[ln] after skip_ws l->src=%p l->pos=%d\n",(void*)l->src,l->pos); fflush(0);
     Token t;
-    printf("[ln] l0=%p\n",(void*)l); fflush(0);
-    t.kind=0;
-    printf("[ln] l1=%p\n",(void*)l); fflush(0);
-    t.start=0;
-    printf("[ln] l2=%p\n",(void*)l); fflush(0);
-    t.len=0;
-    printf("[ln] l3=%p\n",(void*)l); fflush(0);
-    t.ival=0;
-    printf("[ln] l4=%p\n",(void*)l); fflush(0);
-    t.sval=0;
-    printf("[ln] l5=%p\n",(void*)l); fflush(0);
-    t.line=0;
-    printf("[ln] l6=%p\n",(void*)l); fflush(0);
-    t.col=0;
-    printf("[ln] l7=%p\n",(void*)l); fflush(0);
-    printf("[ln] t=%p sizeof t=%d\n",(void*)&t,(int)sizeof(t)); fflush(0);
-    printf("[ln] A src=%p pos=%d\n",(void*)l->src,l->pos); fflush(0);
+    t.kind=0; t.start=0; t.len=0; t.ival=0; t.sval=0; t.line=0; t.col=0;
     t.start=l->src+l->pos;
-    printf("[ln] B tstart=%p\n",(void*)t.start); fflush(0);
     t.line=l->line;
-    printf("[ln] C tline=%d\n",t.line); fflush(0);
     t.col=l->col;
-    printf("[ln] D tcol=%d\n",t.col); fflush(0);
 
-    printf("[ln] E check-eof\n"); fflush(0);
     if (!l->src[l->pos]) {
         l->cur.kind=TOK_EOF; l->cur.start=t.start; l->cur.line=t.line; l->cur.col=t.col;
         l->cur.len=0; l->cur.ival=0; l->cur.sval=0; return;
     }
-    printf("[ln] F not-eof c=%d\n",(int)(unsigned char)l->src[l->pos]); fflush(0);
 
     char c=l->src[l->pos];
-    printf("[ln] G c=%d\n",(int)(unsigned char)c); fflush(0);
     char c2=pc1(l);
-    printf("[ln] H c2=%d\n",(int)(unsigned char)c2); fflush(0);
     char c3=pc2(l);
-    printf("[ln] I c3=%d\n",(int)(unsigned char)c3); fflush(0);
 
     if (isdigit((unsigned char)c)) { lex_parse_number(l); return; }
     if (c=='.') {
@@ -287,7 +250,6 @@ void lexer_next(Lexer *l) {
     if (c=='\'') { lex_char(l); return; }
 
     lex_adv(l); t.len=1;
-    printf("[ln] J post-adv len=%d\n",t.len); fflush(0);
 
     /* Three-char */
     if (c=='<'&&c2=='<'&&c3=='=') { lex_adv(l);lex_adv(l); t.kind=TOK_LSHIFT_EQ; t.len=3; goto done; }
@@ -306,7 +268,6 @@ void lexer_next(Lexer *l) {
     if(c=='-'&&c2=='>'){lex_adv(l);t.kind=TOK_ARROW;t.len=2;goto done;}
 #undef TW
 
-    printf("[ln] K pre-switch c=%d\n",(int)(unsigned char)c); fflush(0);
     /* One-char */
     switch(c) {
         case '(':t.kind=TOK_LPAREN;break;   case ')':t.kind=TOK_RPAREN;break;
@@ -326,17 +287,14 @@ void lexer_next(Lexer *l) {
                     l->filename?l->filename:"?", t.line, t.col, c, (unsigned char)c);
             t.kind=TOK_ERROR; break;
     }
-    printf("[ln] L post-switch tkind=%d\n",(int)t.kind); fflush(0);
 done:
-    printf("[ln] M at-done tkind=%d l=%p\n",(int)t.kind,(void*)l); fflush(0);
-    l->cur.kind  = t.kind;  printf("[ln] N1\n"); fflush(0);
-    l->cur.start = t.start; printf("[ln] N2\n"); fflush(0);
-    l->cur.line  = t.line;  printf("[ln] N3\n"); fflush(0);
-    l->cur.col   = t.col;   printf("[ln] N4\n"); fflush(0);
-    l->cur.len   = t.len;   printf("[ln] N5\n"); fflush(0);
-    l->cur.ival  = t.ival;  printf("[ln] N6\n"); fflush(0);
-    l->cur.sval  = t.sval;  printf("[ln] N7\n"); fflush(0);
-    printf("[ln] N8 about-to-ret l=%p canary=0x%X\n",(void*)l,(unsigned)stack_canary); fflush(0);
+    l->cur.kind  = t.kind;
+    l->cur.start = t.start;
+    l->cur.line  = t.line;
+    l->cur.col   = t.col;
+    l->cur.len   = t.len;
+    l->cur.ival  = t.ival;
+    l->cur.sval  = t.sval;
     return;
 }
 /* marker - should not be reached */
@@ -348,17 +306,13 @@ int   lexer_check(Lexer *l, TokenKind k) { return l->cur.kind==k; }
  * the large-struct return ABI.  lexer_expect (Token-returning) is kept for
  * any remaining GCC-compiled callers. */
 void lexer_expect_void(Lexer *l, TokenKind k) {
-    printf("[lev] enter l=%p k=%d cur=%d\n",(void*)l,(int)k,(int)l->cur.kind); fflush(0);
     if (l->cur.kind!=k) {
         printf("%s:%d:%d: error: expected '%s' but got '%s'\n",
                 l->filename?l->filename:"?", l->cur.line, l->cur.col,
                 token_kind_name(k), token_kind_name(l->cur.kind));
         exit(1);
     }
-    printf("[lev] calling lexer_next\n"); fflush(0);
     lexer_next(l);
-    printf("[lev] returned from lexer_next\n"); fflush(0);
-    printf("[lev] pre-ret l=%p\n",(void*)l); fflush(0);
 }
 
 Token lexer_expect(Lexer *l, TokenKind k) {
@@ -479,7 +433,6 @@ typedef struct {
 
 static int pp_macro_find(PPState *st, const char *name, int len) {
     for (int i = 0; i < st->nmc; i++) {
-        printf("[fnd] i=%d nmc=%d name=%p\n",i,st->nmc,(void*)st->macros[i].name); fflush(0);
         if (!st->macros[i].name) continue;
         if ((int)strlen(st->macros[i].name)==len &&
             strncmp(st->macros[i].name, name, len)==0)
@@ -490,9 +443,7 @@ static int pp_macro_find(PPState *st, const char *name, int len) {
 
 static void pp_macro_define(PPState *st, const char *name, int nlen,
                              const char *value) {
-    printf("[ppd] enter name='%.*s' nmc=%d\n",nlen,name,st->nmc); fflush(0);
     int idx = pp_macro_find(st, name, nlen);
-    printf("[ppd] find done idx=%d\n",idx); fflush(0);
     if (idx >= 0) {
         free(st->macros[idx].value);
         st->macros[idx].value = my_strdup(value);
@@ -500,15 +451,10 @@ static void pp_macro_define(PPState *st, const char *name, int nlen,
         return;
     }
     if (st->nmc >= PP_MAX_MACROS) return;
-    printf("[ppd] storing at nmc=%d\n",st->nmc); fflush(0);
     { char *_snd=malloc(nlen+1); strncpy(_snd,name,nlen); _snd[nlen]='\0'; st->macros[st->nmc].name=_snd; }
-    printf("[ppd] name stored\n"); fflush(0);
     st->macros[st->nmc].value = my_strdup(value);
-    printf("[ppd] value stored\n"); fflush(0);
     st->macros[st->nmc].nparams = -1;
-    printf("[ppd] nparams stored\n"); fflush(0);
     st->nmc++;
-    printf("[ppd] nmc incremented to %d\n",st->nmc); fflush(0);
 }
 
 static void pp_macro_undef(PPState *st, const char *name) {
@@ -563,13 +509,10 @@ static char *pp_expand(PPState *st, const char *src) {
             char *p    = out;
             while ((p = strstr(p, mname)) != NULL) {
                 int poff = (int)(p - out);
-                /* Debug: trace MATH_ADD match */
-                if (strstr(mname,"MATH_ADD")) { printf("[ppx2] found mname=%s at poff=%d pre_ch=%d post_ch=%d\n",mname,poff,(int)(unsigned char)(poff>0?p[-1]:0),(int)(unsigned char)p[mlen]); fflush(0); }
                 /* Skip macro expansion inside string/char literals */
                 if (pp_in_string(out, p)) { p++; continue; }
                 int pre  = (p==out || !(isalnum((unsigned char)p[-1])||p[-1]=='_'));
                 int post = is_fn ? (p[mlen]=='(') : !(isalnum((unsigned char)p[mlen])||p[mlen]=='_');
-                if (strstr(mname,"MATH_ADD")) { printf("[ppx3] pre=%d post=%d is_fn=%d\n",pre,post,is_fn); fflush(0); }
                 if (!pre || !post) { p++; continue; }
 
                 if (is_fn) {
@@ -721,12 +664,10 @@ static char *process_file(PPState *st, const char *src, const char *filename);
 
 /* ── main preprocessor ───────────────────────────────────────────────── */
 static char *process_file(PPState *st, const char *src, const char *filename) {
-    printf("[pf] enter st=%p src=%p filename=%s\n",(void*)st,(void*)src,filename?filename:"null"); fflush(0);
     /* Output buffer */
     size_t cap=65536, len=0;
     char *out = malloc(cap);
     out[0] = '\0';
-    printf("[pf] out=%p\n",(void*)out); fflush(0);
 
     /* Conditional stack:
      *   each entry is: active(1/0), seen_true(1/0), seen_else(1/0) */
@@ -758,9 +699,6 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
             /* Regular source line: macro-expand and emit if active */
             if ((cond_active[cond_depth])) {
                 char *expanded = pp_expand(st, line);
-                if (strstr(line,"MATH_ADD")||strstr(line,"MATH_SUB")||strstr(line,"MATH_MUL")||strstr(line,"MATH_DIV")) {
-                    printf("[ppexp] orig=%.80s\n[ppexp] expa=%.80s\n",line,expanded); fflush(0);
-                }
                 do { size_t _emn=(strlen(expanded)); while(len+_emn+2>cap){cap*=2;out=(char*)realloc(out,cap);} memcpy(out+len,(expanded),_emn); len+=_emn; } while(0);
                 do { size_t _emn=(1); while(len+_emn+2>cap){cap*=2;out=(char*)realloc(out,cap);} memcpy(out+len,("\n"),_emn); len+=_emn; } while(0);
                 free(expanded);
@@ -969,49 +907,31 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
 /* Public API — initialises state with built-in macros, then processes. */
 char *preprocess(const char *src, const char *filename,
                  const char **inc_dirs, int n_dirs) {
-    printf("[pp] sizeof(PPState)=%d\n",(int)sizeof(PPState)); fflush(0);
     PPState *st = calloc(1, sizeof(PPState));
-    printf("[pp] st=%p\n",(void*)st); fflush(0);
     st->inc_dirs = inc_dirs;
     st->n_dirs   = n_dirs;
 
     /* Built-in macros */
-    printf("[pp] def0\n"); fflush(0);
     pp_macro_define(st,"NULL",4,"0");
-    printf("[pp] def1 nmc=%d\n",st->nmc); fflush(0);
     pp_macro_define(st,"TRUE",4,"1");
-    printf("[pp] def2 nmc=%d\n",st->nmc); fflush(0);
     pp_macro_define(st,"FALSE",5,"0");
-    printf("[pp] def3 nmc=%d\n",st->nmc); fflush(0);
     pp_macro_define(st,"EXIT_SUCCESS",12,"0");
-    printf("[pp] def4 nmc=%d\n",st->nmc); fflush(0);
     pp_macro_define(st,"EXIT_FAILURE",12,"1");
-    printf("[pp] def5 nmc=%d\n",st->nmc); fflush(0);
     /* Standard streams: use msvcrt file descriptor values */
     pp_macro_define(st,"stdin", 5,"((void*)0)");
-    printf("[pp] def6 nmc=%d\n",st->nmc); fflush(0);
     pp_macro_define(st,"stdout",6,"((void*)1)");
-    printf("[pp] def7 nmc=%d\n",st->nmc); fflush(0);
     pp_macro_define(st,"stderr",6,"((void*)2)");
-    printf("[pp] macros done nmc=%d\n",st->nmc); fflush(0);
-    printf("[pp] calling process_file src=%p filename=%s\n",(void*)src,filename); fflush(0);
 
     char *result = process_file(st, src, filename);
-    printf("[pp] process_file done result=%p nmc=%d\n",(void*)result,st->nmc); fflush(0);
 
     /* free macros */
-    printf("[pp] freeing macros...\n"); fflush(0);
     for (int i=0;i<st->nmc;i++) {
-        printf("[pp] free macro %d name=%p\n",i,(void*)st->macros[i].name); fflush(0);
         free(st->macros[i].name);
         free(st->macros[i].value);
         for(int j=0;j<16&&st->macros[i].params[j];j++) free(st->macros[i].params[j]);
     }
-    printf("[pp] freeing included...\n"); fflush(0);
     for (int i=0;i<st->n_included;i++) free(st->included[i]);
-    printf("[pp] freeing st...\n"); fflush(0);
     free(st);
-    printf("[pp] returning result=%p\n",(void*)result); fflush(0);
     return result;
 }
 

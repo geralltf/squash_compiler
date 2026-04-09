@@ -97,23 +97,14 @@ static Symbol *alloc_sym(SymTable *st, const char *name, TypeInfo *type, SymKind
 
 static Symbol *alloc_global_sym(SymTable *st, const char *name, TypeInfo *type, SymKind kind) {
     /* Insert into global (bottom) scope */
-    printf("[ags] enter st=%p name=%s kind=%d\n",(void*)st,name,(int)kind); fflush(0);
     Scope *g = st->current;
-    printf("[ags] current=%p\n",(void*)g); fflush(0);
     while (g->parent) g=g->parent;
-    printf("[ags] global_scope=%p sizeof(Symbol)=%d\n",(void*)g,(int)sizeof(Symbol)); fflush(0);
     Symbol *s = calloc(1,sizeof(Symbol));
-    printf("[ags] s=%p\n",(void*)s); fflush(0);
     s->name=my_strdup(name);
-    printf("[ags] name set\n"); fflush(0);
     s->type=type;
-    printf("[ags] type set\n"); fflush(0);
     s->kind=kind;
-    printf("[ags] kind set\n"); fflush(0);
     s->is_64bit=st->is_64bit;
-    printf("[ags] is_64bit set\n"); fflush(0);
     s->next=g->head; g->head=s;
-    printf("[ags] linked\n"); fflush(0);
     return s;
 }
 
@@ -232,7 +223,6 @@ static int symtable_compute_struct_size(SymTable *st, ASTNode *struct_node) {
 }
 
 Symbol *symtable_define_var(SymTable *st, const char *name, TypeInfo *type) {
-    printf("[sdv0] name=%s\n", name?name:"?"); fflush(0);
     int ptr_size = st->is_64bit ? 8 : 4;
     int slot;
     if (type && type->array_size > 0) {
@@ -276,11 +266,9 @@ Symbol *symtable_define_var(SymTable *st, const char *name, TypeInfo *type) {
             } else {
                 /* Try as typedef — e.g. PPState *st = ..., where PPState is a typedef for a struct */
                 Symbol *td = symtable_lookup(st, b2);
-                printf("[sdv2] b2=%s td=%p kind=%d\n", b2, (void*)td, td?td->kind:-1); fflush(0);
                 if (td && td->kind == SYM_TYPEDEF && td->type && td->type->pointer_depth == 0) {
                     const char *tb = td->type->base;
                     const char *tbare = tb;
-                    printf("[sdv3] tb=%s\n", tb?tb:"?"); fflush(0);
                     if (strncmp(tbare,"struct ",7)==0) tbare+=7;
                     else if (strncmp(tbare,"union ",6)==0) tbare+=6;
                     if (tbare != tb) {
@@ -300,7 +288,6 @@ Symbol *symtable_define_var(SymTable *st, const char *name, TypeInfo *type) {
         }
     }
     st->next_offset -= (slot + 15) & ~15; /* align to 16 for safety */
-    printf("[sdv] name=%s base=%s slot=%d off=%d\n", name, (type&&type->base)?type->base:"?", slot, st->next_offset); fflush(0);
     Symbol *s = alloc_sym(st, name, type, SYM_VAR);
     s->offset = st->next_offset;
     s->array_size = type ? type->array_size : -1;
@@ -333,14 +320,9 @@ Symbol *symtable_define_import(SymTable *st, const char *name, const char *dll) 
 }
 
 Symbol *symtable_define_enum_val(SymTable *st, const char *name, long long val) {
-    printf("[sdev] enter st=%p name=%s val=%lld\n",(void*)st,name,val); fflush(0);
-    printf("[sdev] calling typeinfo_new\n"); fflush(0);
     TypeInfo *ti = typeinfo_new("int");
-    printf("[sdev] typeinfo_new done ti=%p\n",(void*)ti); fflush(0);
     Symbol *s = alloc_global_sym(st, name, ti, SYM_ENUM_VAL);
-    printf("[sdev] after alloc s=%p\n",(void*)s); fflush(0);
     s->enum_value = val;
-    printf("[sdev] after set enum_value\n"); fflush(0);
     return s;
 }
 
