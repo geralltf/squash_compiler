@@ -1764,6 +1764,7 @@ void codegen_lvalue(CodeGen *cg, ASTNode *n) {
     }
     case AST_INDEX: {
         /* &array[idx] = base_addr + idx * elem_size                         */
+        if (!n->index.array || !n->index.index) { asm_mov_reg_imm(a,REG_RAX,0); return; }
         int esz = elem_size_of(cg, n->index.array);
         /* Determine whether the array base is a pointer VALUE (use codegen_expr)
          * or a stack/inline array ADDRESS (use codegen_lvalue).
@@ -1878,6 +1879,7 @@ static int expr_has_call(ASTNode *n);
 void codegen_expr(CodeGen *cg, ASTNode *n) {
     Assembler *a=cg->asm_;
     if (!n) { asm_mov_reg_imm(a,REG_RAX,0); return; }
+    printf("[ce] kind=%d line=%d\n", n->kind, n->line); fflush(0);
 
     /* Float dispatch: route float arithmetic through SSE2/x87 codegen.
      * Only pure-value nodes: AST_FLOAT literal, AST_BINARY, AST_UNARY, AST_CAST.
@@ -2136,6 +2138,7 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
     }
 
     case AST_INDEX: {
+        if (!n->index.array || !n->index.index) { asm_mov_reg_imm(a,REG_RAX,0); break; }
         int esz = elem_size_of(cg, n->index.array);
         codegen_lvalue(cg, n);          /* RAX/EAX = address of element */
         /* Load element using appropriate width */
@@ -2799,10 +2802,8 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
     }
 
     case AST_FUNC_PTR_CALL: {
-        /* Evaluate function pointer expression into a scratch register,
-         * set up arguments in the ABI registers, then call through the register.
-         * We use RBX (callee-saved) to hold the function pointer so that
-         * argument evaluation (which uses RAX) doesn't clobber it. */
+        printf("[fpc] line=%d func_expr=%p argc=%d\n",n->line,(void*)n->fp_call.func_expr,n->fp_call.argc); fflush(0);
+        if (!n->fp_call.func_expr) { asm_mov_reg_imm(a,REG_RAX,0); break; }
         int argc = n->fp_call.argc;
         if (cg->is_64bit) {
             int extra = (argc > 4) ? (argc-4)*8 : 0;
@@ -2868,27 +2869,31 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
 void codegen_stmt(CodeGen *cg, ASTNode *n) {
     Assembler *a=cg->asm_;
     if (!n) return;
-    /* codegen_stmt */
+    printf("[cs] kind=%d line=%d\n",n->kind,n->line); fflush(0);
     switch (n->kind) {
     case AST_BLOCK: {
         /* Check if this is a flat declarator list (all children are VAR_DECL).
          * Such blocks come from multi-declarator statements like "int a=1, b=2;"
          * They must NOT push a new scope — vars belong to the current scope. */
+        printf("[blk] count=%d line=%d stmts=%p\n", n->block.count, n->line, (void*)n->block.stmts); fflush(0);
+        if (n->block.count > 0 && n->block.stmts)
+            printf("[blk0] stmts[0]=%p kind=%d line=%d\n",(void*)n->block.stmts[0],n->block.stmts[0]?n->block.stmts[0]->kind:-1,n->block.stmts[0]?n->block.stmts[0]->line:-1); fflush(0);
         int all_var_decl = (n->block.count > 0);
         for (int i=0; i<n->block.count && all_var_decl; i++)
             if (!n->block.stmts[i] || n->block.stmts[i]->kind != AST_VAR_DECL)
                 all_var_decl = 0;
         if (all_var_decl) {
-            for (int i=0;i<n->block.count;i++) codegen_stmt(cg,n->block.stmts[i]);
+            for (int i=0;i<n->block.count;i++) { printf("[bsi] i=%d ptr=%p\n",i,(void*)n->block.stmts[i]); fflush(0); codegen_stmt(cg,n->block.stmts[i]); }
         } else {
             symtable_push_scope(cg->sym);
-            for (int i=0;i<n->block.count;i++) codegen_stmt(cg,n->block.stmts[i]);
+            for (int i=0;i<n->block.count;i++) { printf("[bsi] i=%d ptr=%p\n",i,(void*)n->block.stmts[i]); fflush(0); codegen_stmt(cg,n->block.stmts[i]); }
             symtable_pop_scope(cg->sym);
         }
         break;
     }
 
     case AST_EXPR_STMT:
+        printf("[es] n=%p expr=%p\n",(void*)n,(void*)n->expr_stmt.expr); fflush(0);
         codegen_expr(cg,n->expr_stmt.expr);
         break;
 
@@ -3422,7 +3427,6 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
     if (align < 8) align = 8;   /* minimum: at least 8 bytes for alignment */
     /* Reserve 16 extra bytes for float binary spill slots (sub rsp,16 in codegen_float_expr) */
     if (cg->is_64bit && align < 24) align = 24;
-    /* frame allocated */ fflush(0);
     asm_patch_frame(a, frame_patch, align);
 
     symtable_pop_scope(cg->sym);
