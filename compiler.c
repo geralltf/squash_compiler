@@ -139,8 +139,10 @@ int main(int argc, char **argv) {
     inject_entry_reloc(&as,"main");
 
     /* Stage 6: Gather string labels */
+    printf("[dbg] stage6: rdata\n"); fflush(0);
     int rdata_len=0;
     uint8_t *rdata_data=codegen_get_rdata(&cg,&rdata_len);
+    printf("[dbg] stage6: string_count=%d\n",cg.string_count); fflush(0);
     char **str_labels=malloc(cg.string_count*sizeof(char*));
     int  *str_offsets=malloc(cg.string_count*sizeof(int));
     for (int i=0;i<cg.string_count;i++) {
@@ -149,10 +151,12 @@ int main(int argc, char **argv) {
     }
 
     /* Stage 7: PE build + link */
+    printf("[dbg] stage7: text\n"); fflush(0);
     int text_len=0;
     uint8_t *text=codegen_get_text(&cg,&text_len);
     int reloc_count=0;
     Relocation *relocs=codegen_get_relocs(&cg,&reloc_count);
+    printf("[dbg] stage7: text_len=%d reloc_count=%d\n",text_len,reloc_count); fflush(0);
 
     /* Resolve RELOC_TEXT_ABS32 (function pointer addresses in 32-bit mode) */
     uint32_t text_rva_val  = 0x1000;
@@ -160,9 +164,11 @@ int main(int argc, char **argv) {
     asm_resolve_text_relocs(&as, text_rva_val, image_base_val);
 
     /* Build wdata label/offset arrays for the PE builder */
+    printf("[dbg] stage7: wdata_count=%d wdata_pool=%d\n",cg.wdata_count,cg.wdata_pool_size); fflush(0);
     char **wdata_labels  = malloc(cg.wdata_count * sizeof(char*));
     int  *wdata_offsets  = malloc(cg.wdata_count * sizeof(int));
     for (int i=0; i<cg.wdata_count; i++) {
+        printf("[dbg] stage7: wdata[%d] label=%p offset=%d\n",i,(void*)cg.wdata[i].label,cg.wdata[i].offset); fflush(0);
         wdata_labels[i]  = cg.wdata[i].label;
         wdata_offsets[i] = cg.wdata[i].offset;
     }
@@ -188,7 +194,9 @@ int main(int argc, char **argv) {
     pbi.entry_func        = "main";
     pbi.output_path       = out_path;
 
+    printf("[dbg] stage7: pe_link_and_write\n"); fflush(0);
     int rc=pe_link_and_write(&pbi);
+    printf("[dbg] stage7: pe_link rc=%d\n",rc); fflush(0);
 
     free(src); free(str_labels); free(str_offsets);
     free(wdata_labels); free(wdata_offsets);

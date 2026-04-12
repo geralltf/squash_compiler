@@ -116,14 +116,23 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
             eat(p,TOK_RBRACE);
             char key[280]; snprintf(key,sizeof key,"%s %s",is_union?"union":"struct",sname);
             ASTNode *sd=ast_struct_decl(sname,is_union,fields,nf,cur(p).line);
-            /* compute rough size */
+            /* compute size with field alignment and tail padding */
             int sz=0;
+            int max_align=1;
             for (int i=0;i<nf;i++) {
                 int fs=typeinfo_size(fields[i]->field.type,p->sym->is_64bit);
+                int fa = fs < 8 ? fs : 8; /* natural alignment (max 8) */
+                if (fa < 1) fa = 1;
+                if (fa > max_align) max_align = fa;
                 if (fields[i]->field.array_size>0) fs*=fields[i]->field.array_size;
-                if (is_union) sz = fs>sz?fs:sz;
-                else sz+=fs;
+                if (is_union) { sz = fs>sz?fs:sz; }
+                else {
+                    if (fa > 1) sz = (sz + fa - 1) & ~(fa - 1);
+                    sz += fs;
+                }
             }
+            /* tail padding: round up to struct alignment */
+            if (max_align > 1) sz = (sz + max_align - 1) & ~(max_align - 1);
             if (!has_name) {
                 /* Generate unique name for anonymous struct/union so it can be found
                  * by field_byte_offset after typedef resolution. */

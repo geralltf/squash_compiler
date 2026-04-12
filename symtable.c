@@ -6,48 +6,32 @@
 /* portable strdup replacement */
 char* my_strdup(const char* src);
 
-typedef struct { const char *name; const char *dll; } WinAPI;
-static const WinAPI WIN_APIS[] = {
-    {"GetStdHandle","KERNEL32.dll"},{"WriteFile","KERNEL32.dll"},
-    {"WriteConsoleA","KERNEL32.dll"},{"ExitProcess","KERNEL32.dll"},
-    {"GetLastError","KERNEL32.dll"},{"CloseHandle","KERNEL32.dll"},
-    {"CreateFileA","KERNEL32.dll"},{"ReadFile","KERNEL32.dll"},
-    {"Sleep","KERNEL32.dll"},{"GetTickCount","KERNEL32.dll"},
-    {"VirtualAlloc","KERNEL32.dll"},{"VirtualFree","KERNEL32.dll"},
-    {"HeapAlloc","KERNEL32.dll"},{"HeapFree","KERNEL32.dll"},
-    {"GetProcessHeap","KERNEL32.dll"},
-    {"LocalAlloc","KERNEL32.dll"},{"LocalFree","KERNEL32.dll"},
-    {"SetConsoleTextAttribute","KERNEL32.dll"},
-    {"GetConsoleScreenBufferInfo","KERNEL32.dll"},
-    {"SetConsoleCursorPosition","KERNEL32.dll"},
-    /* UCRT/msvcrt memory */
-    {"malloc","__internal__"},{"calloc","__internal__"},
-    {"realloc","__internal__"},{"free","__internal__"},
-    {"memcpy","__internal__"},{"memset","__internal__"},
-    {"memcmp","__internal__"},{"memmove","__internal__"},
-    {"strlen","__internal__"},{"strcpy","__internal__"},
-    {"strncpy","__internal__"},{"strcmp","__internal__"},
-    {"strncmp","__internal__"},{"strcat","__internal__"},
-    {"strncat","__internal__"},{"strchr","__internal__"},
-    {"strstr","__internal__"},{"atoi","__internal__"},
-    {"atol","__internal__"},{"itoa","__internal__"},
-    {"sprintf","__internal__"},{"printf","__internal__"},
-    {"puts","__internal__"},{"putchar","__internal__"},
-    {"abort","__internal__"},
-    {"exit","__internal__"},
-    {"GetSystemTimeAsFileTime","KERNEL32.dll"},
-    {"GetCurrentProcessId","KERNEL32.dll"},
-    {"GetCurrentThreadId","KERNEL32.dll"},
-    {"InitializeSListHead","KERNEL32.dll"},
-    {"GetSystemTime","KERNEL32.dll"},
-    {"GetLocalTime","KERNEL32.dll"},
-    {"GetTickCount","KERNEL32.dll"},
-    {NULL,NULL}
-};
+/* Avoid global array initializers (squash codegen doesn't support pointer-field init).
+ * Use explicit per-entry definitions in symtable_init and find_dll instead. */
+#define SI(name,dll) symtable_define_import(st,(name),(dll))
+#define SF(name) do { TypeInfo *_t=typeinfo_new("void");_t->pointer_depth=0; symtable_define_func(st,(name),_t,-1,NULL); } while(0)
 
 static const char *find_dll(const char *name) {
-    for (int i=0;WIN_APIS[i].name;i++)
-        if (strcmp(WIN_APIS[i].name,name)==0) return WIN_APIS[i].dll;
+    if (!name) return NULL;
+    if (strcmp(name,"GetStdHandle")==0||strcmp(name,"WriteFile")==0||
+        strcmp(name,"WriteConsoleA")==0||strcmp(name,"ExitProcess")==0||
+        strcmp(name,"GetLastError")==0||strcmp(name,"CloseHandle")==0||
+        strcmp(name,"CreateFileA")==0||strcmp(name,"ReadFile")==0||
+        strcmp(name,"Sleep")==0||strcmp(name,"GetTickCount")==0||
+        strcmp(name,"VirtualAlloc")==0||strcmp(name,"VirtualFree")==0||
+        strcmp(name,"HeapAlloc")==0||strcmp(name,"HeapFree")==0||
+        strcmp(name,"GetProcessHeap")==0||strcmp(name,"HeapReAlloc")==0||
+        strcmp(name,"LocalAlloc")==0||strcmp(name,"LocalFree")==0||
+        strcmp(name,"SetConsoleTextAttribute")==0||
+        strcmp(name,"GetConsoleScreenBufferInfo")==0||
+        strcmp(name,"SetConsoleCursorPosition")==0||
+        strcmp(name,"GetCommandLineA")==0||
+        strcmp(name,"GetSystemTimeAsFileTime")==0||
+        strcmp(name,"GetCurrentProcessId")==0||
+        strcmp(name,"GetCurrentThreadId")==0||
+        strcmp(name,"InitializeSListHead")==0||
+        strcmp(name,"GetSystemTime")==0||
+        strcmp(name,"GetLocalTime")==0) return "KERNEL32.dll";
     return NULL;
 }
 
@@ -55,15 +39,41 @@ void symtable_init(SymTable *st, int is_64bit) {
     memset(st,0,sizeof *st);
     st->is_64bit = is_64bit;
     symtable_push_scope(st);
-    /* Pre-define Windows API imports */
-    for (int i=0;WIN_APIS[i].name;i++) {
-        if (strcmp(WIN_APIS[i].dll,"__internal__")==0) {
-            TypeInfo *t = typeinfo_new("void"); t->pointer_depth=0;
-            symtable_define_func(st, WIN_APIS[i].name, t, -1, NULL);
-        } else {
-            symtable_define_import(st, WIN_APIS[i].name, WIN_APIS[i].dll);
-        }
-    }
+    /* Windows API imports */
+    SI("GetStdHandle","KERNEL32.dll"); SI("WriteFile","KERNEL32.dll");
+    SI("WriteConsoleA","KERNEL32.dll"); SI("ExitProcess","KERNEL32.dll");
+    SI("GetLastError","KERNEL32.dll"); SI("CloseHandle","KERNEL32.dll");
+    SI("CreateFileA","KERNEL32.dll"); SI("ReadFile","KERNEL32.dll");
+    SI("Sleep","KERNEL32.dll"); SI("GetTickCount","KERNEL32.dll");
+    SI("VirtualAlloc","KERNEL32.dll"); SI("VirtualFree","KERNEL32.dll");
+    SI("HeapAlloc","KERNEL32.dll"); SI("HeapFree","KERNEL32.dll");
+    SI("HeapReAlloc","KERNEL32.dll"); SI("GetProcessHeap","KERNEL32.dll");
+    SI("LocalAlloc","KERNEL32.dll"); SI("LocalFree","KERNEL32.dll");
+    SI("SetConsoleTextAttribute","KERNEL32.dll");
+    SI("GetConsoleScreenBufferInfo","KERNEL32.dll");
+    SI("SetConsoleCursorPosition","KERNEL32.dll");
+    SI("GetCommandLineA","KERNEL32.dll");
+    SI("GetSystemTimeAsFileTime","KERNEL32.dll");
+    SI("GetCurrentProcessId","KERNEL32.dll");
+    SI("GetCurrentThreadId","KERNEL32.dll");
+    SI("InitializeSListHead","KERNEL32.dll");
+    SI("GetSystemTime","KERNEL32.dll");
+    SI("GetLocalTime","KERNEL32.dll");
+    /* Internal shims (handled by codegen directly) */
+    SF("malloc"); SF("calloc"); SF("realloc"); SF("free");
+    SF("memcpy"); SF("memset"); SF("memcmp"); SF("memmove");
+    SF("strlen"); SF("strcpy"); SF("strncpy"); SF("strcmp");
+    SF("strncmp"); SF("strcat"); SF("strncat"); SF("strchr");
+    SF("strstr"); SF("atoi"); SF("atol"); SF("itoa");
+    SF("sprintf"); SF("printf"); SF("puts"); SF("putchar");
+    SF("abort"); SF("exit");
+    SF("fprintf"); SF("fflush"); SF("fwrite"); SF("fread");
+    SF("fopen"); SF("fclose"); SF("fseek"); SF("ftell"); SF("rewind");
+    SF("fgets"); SF("fputs"); SF("feof"); SF("fgetc"); SF("fputc");
+    SF("ungetc"); SF("remove"); SF("rename"); SF("ferror"); SF("clearerr");
+    SF("vfprintf"); SF("vprintf"); SF("snprintf"); SF("vsnprintf");
+    SF("perror"); SF("atof"); SF("strrchr"); SF("_snprintf");
+    SF("puts"); SF("putchar");
 }
 
 void symtable_push_scope(SymTable *st) {
@@ -231,6 +241,34 @@ Symbol *symtable_define_var(SymTable *st, const char *name, TypeInfo *type) {
          * Minimum slot is ptr_size so a zero-element array still has room. */
         int elem_size = typeinfo_size(type, st->is_64bit);
         if (elem_size < 1) elem_size = 4;
+        /* For struct/union element types, look up actual size in symtable */
+        if (type->base && type->pointer_depth == 0) {
+            const char *b = type->base;
+            const char *bare = b;
+            if (strncmp(bare,"struct ",7)==0) bare+=7;
+            else if (strncmp(bare,"union ",6)==0) bare+=6;
+            if (bare != b) {
+                char key[256]; snprintf(key,sizeof key,"struct %s",bare);
+                Symbol *ss = symtable_lookup(st, key);
+                if (ss && ss->struct_size > 0) elem_size = ss->struct_size;
+                else if (ss && ss->struct_node) elem_size = symtable_compute_struct_size(st, ss->struct_node);
+            } else {
+                /* Try as typedef */
+                Symbol *td = symtable_lookup(st, b);
+                if (td && td->kind == SYM_TYPEDEF && td->type && td->type->pointer_depth == 0) {
+                    const char *tb = td->type->base;
+                    const char *tbare = tb;
+                    if (strncmp(tbare,"struct ",7)==0) tbare+=7;
+                    else if (strncmp(tbare,"union ",6)==0) tbare+=6;
+                    if (tbare != tb) {
+                        char tkey[256]; snprintf(tkey,sizeof tkey,"struct %s",tbare);
+                        Symbol *tss = symtable_lookup(st, tkey);
+                        if (tss && tss->struct_size > 0) elem_size = tss->struct_size;
+                        else if (tss && tss->struct_node) elem_size = symtable_compute_struct_size(st, tss->struct_node);
+                    }
+                }
+            }
+        }
         slot = type->array_size * elem_size;
         if (slot < ptr_size) slot = ptr_size;
     } else {
