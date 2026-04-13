@@ -45,15 +45,12 @@ void asm_free(Assembler *a) {
  * Raw emission
  * ========================================================================= */
 static void grow_code(Assembler *a, int need) {
-    printf("[gc] a=%p code=%p code_len=%d code_cap=%d need=%d\n",(void*)a,(void*)a->code,a->code_len,a->code_cap,need); fflush(0);
     while (a->code_len + need > a->code_cap) {
         a->code_cap *= 2;
         a->code = realloc(a->code, a->code_cap);
-        printf("[gc2] realloc code=%p cap=%d\n",(void*)a->code,a->code_cap); fflush(0);
     }
 }
 void asm_emit1(Assembler *a, uint8_t b) {
-    printf("[e1] a=%p b=%02x\n",(void*)a,(unsigned)b); fflush(0);
     grow_code(a,1); a->code[a->code_len++]=b;
 }
 void asm_emit2(Assembler *a, uint8_t b0, uint8_t b1) {
@@ -138,27 +135,16 @@ void asm_resolve(Assembler *a) {
  * Relocations
  * ========================================================================= */
 static void add_reloc(Assembler *a, RelocKind kind, const char *sym, int addend) {
-    printf("[ar0] a=%p cnt=%d cap=%d relocs=%p sz=%d sym=%s\n",
-           (void*)a, a->reloc_count, a->reloc_cap, (void*)a->relocs, (int)sizeof(Relocation), sym ? sym : "(null)");
-    fflush(0);
     if (a->reloc_count == a->reloc_cap) {
         a->reloc_cap *= 2;
         a->relocs = realloc(a->relocs, a->reloc_cap*sizeof(Relocation));
-        printf("[ar1] realloc done relocs=%p cap=%d\n",(void*)a->relocs,a->reloc_cap); fflush(0);
     }
-    printf("[ar2] indexing relocs[%d] stride=%d addr=%p\n",a->reloc_count,(int)sizeof(Relocation),(void*)&a->relocs[a->reloc_count]); fflush(0);
     Relocation *r = &a->relocs[a->reloc_count++];
-    printf("[ar3] r=%p setting offset=%d\n",(void*)r,a->code_len); fflush(0);
     r->offset  = a->code_len;
-    printf("[ar4] setting kind\n"); fflush(0);
     r->kind    = kind;
-    printf("[ar5] setting symbol\n"); fflush(0);
     r->symbol  = my_strdup(sym);
-    printf("[ar6] setting addend\n"); fflush(0);
     r->addend  = addend;
-    printf("[ar7] emit_u32\n"); fflush(0);
     asm_emit_u32(a, 0); /* placeholder */
-    printf("[ar8] done\n"); fflush(0);
 }
 void asm_reloc_iat (Assembler *a, const char *sym) {
     add_reloc(a, a->is_64bit ? RELOC_IAT_REL32 : RELOC_ABS32, sym, 0);
@@ -800,10 +786,7 @@ void asm_reloc_wdata(Assembler *a, const char *sym) {
 }
 
 void asm_lea_rip_wdata(Assembler *a, Reg dst, const char *sym) {
-    printf("[lrw0] a=%p dst=%d sym=%s\n",(void*)a,(int)dst,sym?sym:"(null)"); fflush(0);
-    printf("[lrw1] is_64bit_addr=%p\n",(void*)&a->is_64bit); fflush(0);
     int _is64 = a->is_64bit;
-    printf("[lrw2] is_64bit=%d\n",_is64); fflush(0);
     if (!_is64) {
         /* 32-bit: mov dst, abs_addr */
         asm_emit1(a, (uint8_t)(0xB8 | reg_enc(dst)));
@@ -813,18 +796,11 @@ void asm_lea_rip_wdata(Assembler *a, Reg dst, const char *sym) {
     /* 64-bit: 48/4C 8D reg [RIP+disp32] */
     uint8_t rex = 0x48;
     int enc = reg_enc(dst);
-    printf("[lrw3] enc=%d needs_rex=%d\n",enc,(int)needs_rex_r(dst)); fflush(0);
     if (needs_rex_r(dst)) rex |= 0x04;
-    printf("[lrw4] emitting rex=%02x\n",(unsigned)rex); fflush(0);
     asm_emit1(a, rex);
-    printf("[lrw5] emitting 0x8D\n"); fflush(0);
     asm_emit1(a, 0x8D);
-    printf("[lrw5b] after 0x8D a=%p code_len=%d\n",(void*)a,a->code_len); fflush(0);
-    printf("[lrw6] emitting modrm a=%p enc=%d\n",(void*)a,enc); fflush(0);
     asm_emit1(a, (uint8_t)(0x05 | (enc << 3)));
-    printf("[lrw7] calling reloc_wdata sym=%s\n",sym?sym:"(null)"); fflush(0);
     asm_reloc_wdata(a, sym);
-    printf("[lrw8] done\n"); fflush(0);
 }
 
 /* Add immediate to RAX/EAX — used for struct field offset */

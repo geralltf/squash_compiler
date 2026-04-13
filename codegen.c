@@ -559,9 +559,7 @@ static int is_internal_shim(const char *name) {
  * Init
  * ========================================================================= */
 void codegen_init(CodeGen *cg, Assembler *a, SymTable *sym, int is_64bit) {
-    printf("[ci0] cg=%p sz=%d\n",(void*)cg,(int)sizeof(*cg)); fflush(0);
     memset(cg,0,sizeof *cg);
-    printf("[ci1] after memset cnt=%d cap=%d wdata=%p\n",cg->wdata_count,cg->wdata_cap,(void*)cg->wdata); fflush(0);
     cg->asm_=a; cg->sym=sym; cg->is_64bit=is_64bit;
     cg->loop_end_label=-1; cg->loop_top_label=-1; cg->switch_end_label=-1;
     cg->chkstk_lbl=-1;
@@ -569,7 +567,6 @@ void codegen_init(CodeGen *cg, Assembler *a, SymTable *sym, int is_64bit) {
     cg->func_cap=32;   cg->funcs  =malloc(cg->func_cap  *sizeof(FuncRecord));
     cg->wdata_cap=32;  cg->wdata  =malloc(cg->wdata_cap *sizeof(WDataEntry));
     cg->float_const_cap=32; cg->float_consts=malloc(cg->float_const_cap*sizeof(StringEntry));
-    printf("[ci2] done cnt=%d cap=%d wdata=%p\n",cg->wdata_count,cg->wdata_cap,(void*)cg->wdata); fflush(0);
 }
 
 /* =========================================================================
@@ -596,33 +593,20 @@ static const char *intern_string(CodeGen *cg, const char *value) {
 /* Allocate a zero-filled slot in the writable .data pool.
  * Returns the label name (pointer into WDataEntry.label). */
 static const char *intern_wdata(CodeGen *cg, const char *label, int size) {
-    printf("[iwd] cg=%p wdata=%p cnt=%d cap=%d label=%s size=%d\n",
-           (void*)cg, (void*)cg->wdata, cg->wdata_count, cg->wdata_cap, label?label:"NULL", size); fflush(0);
     if (cg->wdata_count == cg->wdata_cap) {
         cg->wdata_cap *= 2;
         if (cg->wdata_cap == 0) cg->wdata_cap = 32;
         cg->wdata = realloc(cg->wdata, cg->wdata_cap * sizeof(WDataEntry));
-        printf("[iwd2] realloced cap=%d ptr=%p\n", cg->wdata_cap, (void*)cg->wdata); fflush(0);
     }
-    printf("[iwd3] indexing wdata[%d] wdata=%p pool=%d\n", cg->wdata_count, (void*)cg->wdata, cg->wdata_pool_size); fflush(0);
     WDataEntry *we = &cg->wdata[cg->wdata_count];
-    printf("[iwd4] we=%p\n", (void*)we); fflush(0);
     we->label  = my_strdup(label);
-    printf("[iwd5] label set we->label=%p\n",(void*)we->label); fflush(0);
-    printf("[iwd6] setting we->offset pool=%d we=%p we+8=%p\n",cg->wdata_pool_size,(void*)we,(void*)(we+1)); fflush(0);
     we->offset = cg->wdata_pool_size;
-    printf("[iwd7] setting we->size\n"); fflush(0);
     we->size   = size;
-    printf("[iwd8] inc wdata_count cnt=%d\n",cg->wdata_count); fflush(0);
     cg->wdata_count++;
-    printf("[iwd9] updating wdata_pool_size pool=%d\n",cg->wdata_pool_size); fflush(0);
     cg->wdata_pool_size += size;
-    printf("[iwd9b] pool after+=%d\n",cg->wdata_pool_size); fflush(0);
     /* Align to 8 bytes */
     int pad = (8 - (cg->wdata_pool_size & 7)) & 7;
-    printf("[iwd9c] pad=%d\n",pad); fflush(0);
     cg->wdata_pool_size += pad;
-    printf("[iwd9d] pool final=%d label=%p\n",cg->wdata_pool_size,(void*)we->label); fflush(0);
     return we->label;
 }
 
@@ -1801,10 +1785,6 @@ void codegen_lvalue(CodeGen *cg, ASTNode *n) {
         /* &array[idx] = base_addr + idx * elem_size                         */
         if (!n->index.array || !n->index.index) { asm_mov_reg_imm(a,REG_RAX,0); return; }
         int esz = elem_size_of(cg, n->index.array);
-        if (n->index.array->kind == AST_MEMBER && n->index.array->member.field &&
-            strcmp(n->index.array->member.field, "wdata") == 0) {
-            printf("[esz_wdata] esz=%d\n", esz); fflush(0);
-        }
         /* Determine whether the array base is a pointer VALUE (use codegen_expr)
          * or a stack/inline array ADDRESS (use codegen_lvalue).
          * Pointer base: pointer VAR, struct pointer field, deref, call, etc.
@@ -1918,7 +1898,6 @@ static int expr_has_call(ASTNode *n);
 void codegen_expr(CodeGen *cg, ASTNode *n) {
     Assembler *a=cg->asm_;
     if (!n) { asm_mov_reg_imm(a,REG_RAX,0); return; }
-    printf("[ce] kind=%d line=%d\n", n->kind, n->line); fflush(0);
 
     /* Float dispatch: route float arithmetic through SSE2/x87 codegen.
      * Only pure-value nodes: AST_FLOAT literal, AST_BINARY, AST_UNARY, AST_CAST.
@@ -2005,13 +1984,9 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             /* Load value of a global variable — always in wdata (.data section). */
             const char *lbl = (s->dll && s->dll[0]) ? s->dll : n->var.name;
             int is_array = (s->array_size > 0);
-            printf("[glb] lbl=%s is_array=%d a=%p code_len=%d\n",lbl?lbl:"NULL",is_array,(void*)a,a->code_len); fflush(0);
             if (cg->is_64bit) {
-                printf("[glb2] calling lea_rip_wdata\n"); fflush(0);
                 asm_lea_rip_wdata(a,REG_RAX,lbl);
-                printf("[glb3] done, emitting mov eax,[rax]\n"); fflush(0);
                 if (!is_array) asm_emit2(a,0x8B,0x00); /* mov eax,[rax] */
-                printf("[glb4] done\n"); fflush(0);
             } else {
                 if (!is_array) {
                     /* Read 32-bit global via EBX to avoid abs-addr heuristic */
@@ -2046,7 +2021,6 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
         if (se && se->kind == AST_VAR) {
             Symbol *esym = symtable_lookup(cg->sym, se->var.name);
             if (esym && esym->type) {
-                printf("[soe] var=%s base=%s arr=%d sym_arr=%d pdepth=%d\n",se->var.name,esym->type->base?esym->type->base:"(null)",esym->type->array_size,esym->array_size,esym->type->pointer_depth); fflush(0);
                 int sym_arr = esym->array_size;
                 /* If symbol-level array_size differs from type-level (typedef resolution),
                  * temporarily patch the type so sizeof_type_sym gets the right count. */
@@ -2055,7 +2029,6 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                     esym->type->array_size = sym_arr;
                 sz = (long long)sizeof_type_sym(esym->type, cg->is_64bit, cg->sym);
                 esym->type->array_size = old_arr;  /* restore */
-                printf("[soe2] sz=%lld\n",(long long)sz); fflush(0);
             }
         } else if (se && se->kind == AST_DEREF && se->deref.operand &&
                    se->deref.operand->kind == AST_VAR) {
@@ -2257,8 +2230,11 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                           if (ff&&ff->field.name&&strcmp(ff->field.name,mfname)==0&&ff->field.type) {
                               if (ff->field.type->pointer_depth > 0) load64=1;
                               /* Fixed-size array field: array decays to pointer to first element.
-                               * Return the address of the field instead of loading its value. */
-                              if (ff->field.type->array_size > 0 || ff->field.array_size > 0)
+                               * Return the address of the field instead of loading its value.
+                               * IMPORTANT: Use upper-bound guard < 0x40000000 to prevent false positives
+                               * when squash zero-extends int field -1 to 4294967295 (which is > 0 as 64-bit signed). */
+                              if ((ff->field.type->array_size > 0 && ff->field.type->array_size < 0x40000000) ||
+                                  (ff->field.array_size > 0 && ff->field.array_size < 0x40000000))
                                   is_array_field = 1;
                               field_is_unsigned = ff->field.type->is_unsigned;
                               field_sz = typeinfo_size(ff->field.type, 1);
@@ -2283,13 +2259,9 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                   asm_emit3(a,0x48,0x8B,0x80); asm_emit_u32(a,(uint32_t)foff);
               }
           } else {
-              /* 32-bit or 8-bit int load.
-               * For signed int fields (where we confirmed the type via struct lookup):
-               * use movsxd to sign-extend to 64-bit, so that negative values like -1
-               * compare correctly with >= 0.
-               * For unsigned or unknown fields: zero-extend (mov eax) is correct/safe. */
+              /* 32-bit or 8-bit int load. Use movsxd for confirmed signed 4-byte fields. */
               if (field_found && !field_is_unsigned && field_sz == 4) {
-                  /* confirmed signed 32-bit int: movsxd rax,[rax+foff] */
+                  /* signed 32-bit int (confirmed or assumed): movsxd rax,[rax+foff] */
                   if (foff == 0) {
                       asm_emit3(a,0x48,0x63,0x00); /* movsxd rax,[rax] */
                   } else if (foff < 128) {
@@ -2859,7 +2831,6 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
     }
 
     case AST_FUNC_PTR_CALL: {
-        printf("[fpc] line=%d func_expr=%p argc=%d\n",n->line,(void*)n->fp_call.func_expr,n->fp_call.argc); fflush(0);
         if (!n->fp_call.func_expr) { asm_mov_reg_imm(a,REG_RAX,0); break; }
         int argc = n->fp_call.argc;
         if (cg->is_64bit) {
@@ -2926,97 +2897,70 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
 void codegen_stmt(CodeGen *cg, ASTNode *n) {
     Assembler *a=cg->asm_;
     if (!n) return;
-    printf("[cs] kind=%d line=%d\n",n->kind,n->line); fflush(0);
     switch (n->kind) {
     case AST_BLOCK: {
         /* Check if this is a flat declarator list (all children are VAR_DECL).
          * Such blocks come from multi-declarator statements like "int a=1, b=2;"
          * They must NOT push a new scope — vars belong to the current scope. */
-        printf("[blk] count=%d line=%d stmts=%p\n", n->block.count, n->line, (void*)n->block.stmts); fflush(0);
-        if (n->block.count > 0 && n->block.stmts)
-            printf("[blk0] stmts[0]=%p kind=%d line=%d\n",(void*)n->block.stmts[0],n->block.stmts[0]?n->block.stmts[0]->kind:-1,n->block.stmts[0]?n->block.stmts[0]->line:-1); fflush(0);
         int all_var_decl = (n->block.count > 0);
         for (int i=0; i<n->block.count && all_var_decl; i++)
             if (!n->block.stmts[i] || n->block.stmts[i]->kind != AST_VAR_DECL)
                 all_var_decl = 0;
         if (all_var_decl) {
-            for (int i=0;i<n->block.count;i++) { printf("[bsi] i=%d ptr=%p\n",i,(void*)n->block.stmts[i]); fflush(0); codegen_stmt(cg,n->block.stmts[i]); }
+            for (int i=0;i<n->block.count;i++) { codegen_stmt(cg,n->block.stmts[i]); }
         } else {
             symtable_push_scope(cg->sym);
-            for (int i=0;i<n->block.count;i++) { printf("[bsi] i=%d ptr=%p\n",i,(void*)n->block.stmts[i]); fflush(0); codegen_stmt(cg,n->block.stmts[i]); }
+            for (int i=0;i<n->block.count;i++) { codegen_stmt(cg,n->block.stmts[i]); }
             symtable_pop_scope(cg->sym);
         }
         break;
     }
 
     case AST_EXPR_STMT:
-        printf("[es] n=%p expr=%p\n",(void*)n,(void*)n->expr_stmt.expr); fflush(0);
         codegen_expr(cg,n->expr_stmt.expr);
         break;
 
     case AST_VAR_DECL: {
-        printf("[vd] n=%p arr=%d stor=%p typ=%p nm=%p\n",(void*)n,n->var_decl.array_size,(void*)n->var_decl.storage,(void*)n->var_decl.type,(void*)n->var_decl.name); fflush(0);
         /* Stamp array_size onto the TypeInfo so symtable_define_var
            allocates the correct number of bytes for the whole array. */
-        printf("[vd2] reading array_size\n"); fflush(0);
         int arr=n->var_decl.array_size;
-        printf("[vd3] arr=%d checking type\n", arr); fflush(0);
         if (n->var_decl.type && arr > 0)
             n->var_decl.type->array_size = arr;
-        printf("[vd4] checking storage ptr\n"); fflush(0);
-        {
-            char *stor_ptr = n->var_decl.storage;
-            printf("[vd5] stor_ptr=%p\n", (void*)stor_ptr); fflush(0);
-            if (stor_ptr) { printf("[vd5b] stor_str=%s\n", stor_ptr); fflush(0); }
-        }
 
         /* Static local variables live in the data section, not on the stack.
          * We allocate space in the data segment and access via RIP-relative
          * (64-bit) or absolute address (32-bit). */
         int is_static = (n->var_decl.storage &&
                          strcmp(n->var_decl.storage,"static")==0);
-        printf("[vd6] is_static=%d\n", is_static); fflush(0);
         if (is_static) {
-            printf("[is0] entering is_static block typ=%p\n",(void*)n->var_decl.type); fflush(0);
             int elem_sz = n->var_decl.type ?
                 typeinfo_size(n->var_decl.type, cg->is_64bit) : 4;
-            printf("[is1] elem_sz=%d arr=%d\n", elem_sz, arr); fflush(0);
             if (elem_sz < 1) elem_sz = 4;
             int total_sz = (arr > 0) ? elem_sz * arr : elem_sz;
-            printf("[is2] total_sz=%d nm=%p\n", total_sz, (void*)n->var_decl.name); fflush(0);
 
             /* Unique mangled label */
             char sym_name[256];
             snprintf(sym_name, sizeof sym_name, "static_%s_%d",
                      n->var_decl.name, cg->string_count);
-            printf("[is3] sym_name=%s\n", sym_name); fflush(0);
 
             /* Allocate a zero-filled buffer — DO NOT free, StringEntry owns it */
             char *zbuf = calloc(total_sz + 1, 1);  /* +1 so strlen is safe   */
-            printf("[is4] zbuf=%p calling intern_wdata\n", (void*)zbuf); fflush(0);
 
              /* Register in writable data pool (.data section, R/W).
               * Static vars MUST be writable — they store live state across calls. */
              intern_wdata(cg, sym_name, total_sz);
              free(zbuf);  /* wdata doesn't need the buffer content               */
-             printf("[is5] intern_wdata done\n"); fflush(0);
 
             /* Register in symbol table under the ORIGINAL name so user code
              * can continue referencing "count", "total", etc.                */
-            printf("[is5b] n=%p checking var_decl.type\n",(void*)n); fflush(0);
             TypeInfo *ti = n->var_decl.type ? n->var_decl.type : typeinfo_new("int");
-            printf("[is5c] ti=%p n->var_decl.name=%p\n",(void*)ti,(void*)n->var_decl.name); fflush(0);
-            printf("[is6] calling symtable_define_global nm=%s\n", n->var_decl.name); fflush(0);
             symtable_define_global(cg->sym, n->var_decl.name, ti, arr);
-            printf("[is7] done\n"); fflush(0);
             Symbol *user_sym = symtable_lookup(cg->sym, n->var_decl.name);
             if (user_sym) {
-                printf("[is8] user_sym dll=%p\n",(void*)user_sym->dll); fflush(0);
                 /* Store the rdata label in sym->dll (repurposed for static vars)
                  * so codegen_expr can find it while lookup by original name works. */
                 free(user_sym->dll);
                 user_sym->dll = my_strdup(sym_name);
-                printf("[is9] done\n"); fflush(0);
             }
 
             /* Static variable storage is zero-initialised via calloc() in the
@@ -3320,7 +3264,6 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
  * codegen_func
  * ========================================================================= */
 void codegen_func(CodeGen *cg, ASTNode *n) {
-    printf("[cgen] %s\n", (n&&n->kind==AST_FUNC_DECL&&n->func.name)?n->func.name:"?"); fflush(0);
     Assembler *a=cg->asm_;
     if (!n||n->kind!=AST_FUNC_DECL) return;
     if (!n->func.body) return; /* forward declaration */
@@ -3559,20 +3502,24 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
          * done:
          *   pop r10                         ; 41 5A
          *   ret                             ; C3                          */
-        static const uint8_t chkstk_bytes[] = {
-            0x41,0x52,
-            0x48,0x3D,0x00,0x10,0x00,0x00,
-            0x7E,0x1C,
-            0x4C,0x8B,0xD4,
-            0x49,0x81,0xEA,0x00,0x10,0x00,0x00,
-            0x41,0x83,0x0A,0x00,
-            0x48,0x2D,0x00,0x10,0x00,0x00,
-            0x48,0x3D,0x00,0x10,0x00,0x00,
-            0x7F,0xE7,
-            0x41,0x5A,
-            0xC3
-        };
-        asm_emit_bytes(a, chkstk_bytes, (int)sizeof(chkstk_bytes));
+        /* Emit __chkstk_probe inline — avoid static byte array (squash can't init them). */
+        asm_emit1(a,0x41); asm_emit1(a,0x52);                              /* push r10        */
+        asm_emit1(a,0x48); asm_emit1(a,0x3D);                              /* cmp rax, 0x1000 */
+        asm_emit1(a,0x00); asm_emit1(a,0x10); asm_emit1(a,0x00); asm_emit1(a,0x00);
+        asm_emit1(a,0x7E); asm_emit1(a,0x1C);                              /* jle +28 (done)  */
+        asm_emit1(a,0x4C); asm_emit1(a,0x8B); asm_emit1(a,0xD4);          /* mov r10, rsp    */
+        /* loop: */
+        asm_emit1(a,0x49); asm_emit1(a,0x81); asm_emit1(a,0xEA);          /* sub r10, 4096   */
+        asm_emit1(a,0x00); asm_emit1(a,0x10); asm_emit1(a,0x00); asm_emit1(a,0x00);
+        asm_emit1(a,0x41); asm_emit1(a,0x83); asm_emit1(a,0x0A); asm_emit1(a,0x00); /* or [r10],0 */
+        asm_emit1(a,0x48); asm_emit1(a,0x2D);                              /* sub rax, 4096   */
+        asm_emit1(a,0x00); asm_emit1(a,0x10); asm_emit1(a,0x00); asm_emit1(a,0x00);
+        asm_emit1(a,0x48); asm_emit1(a,0x3D);                              /* cmp rax, 0x1000 */
+        asm_emit1(a,0x00); asm_emit1(a,0x10); asm_emit1(a,0x00); asm_emit1(a,0x00);
+        asm_emit1(a,0x7F); asm_emit1(a,0xE7);                              /* jg loop (-25)   */
+        /* done: */
+        asm_emit1(a,0x41); asm_emit1(a,0x5A);                              /* pop r10         */
+        asm_emit1(a,0xC3);                                                  /* ret             */
     }
 
     /* Pass 1: allocate labels for functions WITH bodies only.

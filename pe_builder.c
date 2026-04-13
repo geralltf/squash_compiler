@@ -217,6 +217,9 @@ void pe_build_section_header(uint8_t *buf, const char *name,
     sh->Characteristics  = chars;
 }
 
+/* Fast IAT lookup entry: function name → IAT slot virtual address */
+typedef struct { char *name; uint64_t iat_va; } PE_IATEntry;
+
 /* =========================================================================
  * Import grouping helpers
  * ========================================================================= */
@@ -495,13 +498,11 @@ int pe_link_and_write(PEBuildInput *in) {
 
     uint64_t image_base = is64 ? IMAGE_BASE_64 : (uint64_t)IMAGE_BASE_32;
 
-    typedef struct { char* name; uint64_t iat_va; } IATEntry;
-
-    printf("[pe14] step6 building IAT lookup total_funcs=%d sizeof_IATEntry=%d\n",total_funcs,(int)sizeof(IATEntry)); fflush(0);
+    printf("[pe14] step6 building IAT lookup total_funcs=%d sizeof_IATEntry=%d\n",total_funcs,(int)sizeof(PE_IATEntry)); fflush(0);
     /* Build a fast lookup: func name → IAT VA */
 
     int n_iat_entries = total_funcs;
-    IATEntry *iat_entries = malloc(n_iat_entries * sizeof(IATEntry));
+    PE_IATEntry *iat_entries = malloc(n_iat_entries * sizeof(PE_IATEntry));
     printf("[pe14b] iat_entries=%p\n",(void*)iat_entries); fflush(0);
     int iat_ei = 0;
     for (int i=0;i<gc;i++) {
