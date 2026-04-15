@@ -255,25 +255,19 @@ static void dll_group_add_func(DLLGroup *g, const char *func) {
  *                        emit PE file.
  * ========================================================================= */
 int pe_link_and_write(PEBuildInput *in) {
-    printf("[pe0] pe_link_and_write in=%p\n",(void*)in); fflush(0);
     int is64 = in->is_64bit;
-    printf("[pe1] is64=%d\n",is64); fflush(0);
     int thunk_size = is64 ? 8 : 4;
 
     /* -----------------------------------------------------------------------
      * Step 1: Parse "DLL:func" import specs, group by DLL
      * -------------------------------------------------------------------- */
     DLLGroup groups[64]; int gc = 0;
-    printf("[pe2] memset groups sizeof=%d import_count=%d\n",(int)sizeof(groups),in->import_count); fflush(0);
     memset(groups, 0, sizeof groups);
-    printf("[pe3] memset done\n"); fflush(0);
 
     /* Always include ExitProcess and GetStdHandle / WriteFile for the shim */
     /* These are added by the code generator anyway, but ensure them here */
-    printf("[pe4a] import_count=%d import_specs=%p\n",in->import_count,(void*)in->import_specs); fflush(0);
     for (int i=0;i<in->import_count;i++) {
         char spec[512];
-        printf("[pe4b] i=%d spec=%p spec_ptr=%p\n",i,(void*)spec,(void*)in->import_specs[i]); fflush(0);
         strncpy(spec, in->import_specs[i], sizeof spec-1);
         char *colon = strchr(spec, ':');
         if (!colon) continue;
@@ -288,7 +282,6 @@ int pe_link_and_write(PEBuildInput *in) {
         DLLGroup *g = find_or_add_dll(groups, &gc, dll);
         dll_group_add_func(g, func);
     }
-    printf("[pe4] gc=%d after import loop\n",gc); fflush(0);
     /* Ensure baseline KERNEL32 imports */
     { DLLGroup *g = find_or_add_dll(groups, &gc, "KERNEL32.dll");
       dll_group_add_func(g, "ExitProcess");
@@ -302,8 +295,6 @@ int pe_link_and_write(PEBuildInput *in) {
       dll_group_add_func(g, "_initterm");
       dll_group_add_func(g, "_initterm_e");
     }
-    printf("[pe5] gc=%d after baseline\n",gc); fflush(0);
-
     /* -----------------------------------------------------------------------
      * Step 2: Compute .rdata layout
      *
@@ -316,10 +307,8 @@ int pe_link_and_write(PEBuildInput *in) {
      *   [...]                 String pool (from codegen)
      * -------------------------------------------------------------------- */
     uint32_t idir_size = (uint32_t)((gc+1) * sizeof(PE_ImportDescriptor));
-    printf("[pe6] idir_size=%u sizeof_PE_ImportDescriptor=%d\n",(unsigned)idir_size,(int)sizeof(PE_ImportDescriptor)); fflush(0);
 
     /* Count total IAT slots across all DLLs */
-    printf("[pe7] counting funcs gc=%d\n",gc); fflush(0);
     int total_funcs = 0;
     for (int i=0;i<gc;i++) total_funcs += groups[i].func_count;
     /* IAT: per DLL = (func_count + 1 null) thunks; total bytes: */
@@ -359,7 +348,6 @@ int pe_link_and_write(PEBuildInput *in) {
         }
     }
 
-    printf("[pe8] strpool iat_total=%u total_funcs=%d\n",(unsigned)iat_total,total_funcs); fflush(0);
     /* String pool follows */
     uint32_t strpool_off = cur_hn;
     uint32_t rdata_size  = strpool_off + (uint32_t)in->rdata_strings_len;
@@ -374,7 +362,6 @@ int pe_link_and_write(PEBuildInput *in) {
      *   DOS header 64 + stub 64 = 128 = 0x80
      *   PE sig 4, FileHdr 20, OptHdr 224 or 240, SectionHdr 4*40=160
      */
-    printf("[pe9] step3 sizeof_OptHdr64=%d sizeof_OptHdr32=%d\n",(int)sizeof(PE_OptionalHeader64),(int)sizeof(PE_OptionalHeader32)); fflush(0);
     uint32_t oh_size  = is64 ? (uint32_t)sizeof(PE_OptionalHeader64)
                               : (uint32_t)sizeof(PE_OptionalHeader32);
     uint32_t hdr_raw  = 0x80 + 4 + 20 + oh_size + 4*40; /* 4 sections */
@@ -424,14 +411,11 @@ int pe_link_and_write(PEBuildInput *in) {
         }
     }
     uint32_t ep_rva = text_rva + ep_offset;
-    printf("[pe10] ep_offset=%u ep_rva=%u\n",(unsigned)ep_offset,(unsigned)ep_rva); fflush(0);
 
     /* -----------------------------------------------------------------------
      * Step 5: Build .rdata blob
      * -------------------------------------------------------------------- */
-    printf("[pe11] rdata_size=%u\n",(unsigned)rdata_size); fflush(0);
     uint8_t *rdata = calloc(rdata_size, 1);
-    printf("[pe12] rdata=%p\n",(void*)rdata); fflush(0);
 
     /* --- Import Descriptor Table --- */
     for (int i=0;i<gc;i++) {
@@ -479,7 +463,6 @@ int pe_link_and_write(PEBuildInput *in) {
         }
     }
 
-    printf("[pe13] import descriptors written\n"); fflush(0);
     /* --- String pool --- */
     if (in->rdata_strings && in->rdata_strings_len > 0)
         memcpy(rdata + strpool_off, in->rdata_strings, in->rdata_strings_len);
@@ -498,35 +481,25 @@ int pe_link_and_write(PEBuildInput *in) {
 
     uint64_t image_base = is64 ? IMAGE_BASE_64 : (uint64_t)IMAGE_BASE_32;
 
-    printf("[pe14] step6 building IAT lookup total_funcs=%d sizeof_IATEntry=%d\n",total_funcs,(int)sizeof(PE_IATEntry)); fflush(0);
     /* Build a fast lookup: func name → IAT VA */
-
     int n_iat_entries = total_funcs;
     PE_IATEntry *iat_entries = malloc(n_iat_entries * sizeof(PE_IATEntry));
-    printf("[pe14b] iat_entries=%p\n",(void*)iat_entries); fflush(0);
     int iat_ei = 0;
     for (int i=0;i<gc;i++) {
-        printf("[pe14c] dll[%d] func_count=%d funcs=%p\n",i,groups[i].func_count,(void*)groups[i].funcs); fflush(0);
         for (int j=0;j<groups[i].func_count;j++) {
-            printf("[pe14d] i=%d j=%d funcs[j]=%p\n",i,j,(void*)groups[i].funcs[j]); fflush(0);
             uint64_t slot_rva = iat_rva_base + dll_iat_off[i] + j*thunk_size;
             iat_entries[iat_ei].name   = groups[i].funcs[j];
             iat_entries[iat_ei].iat_va = image_base + slot_rva;
             iat_ei++;
         }
     }
-    printf("[pe14e] iat_ei=%d\n",iat_ei); fflush(0);
 
     /* Build string label → VA lookup */
     /* (string labels are stored in the string pool at strpool_off) */
 
-    printf("[pe15] reloc_count=%d sizeof(Relocation)=%d\n",in->reloc_count,(int)sizeof(Relocation)); fflush(0);
     for (int ri=0;ri<in->reloc_count;ri++) {
-        printf("[pe15r] ri=%d relocs=%p r=%p\n",ri,(void*)in->relocs,(void*)&in->relocs[ri]); fflush(0);
         Relocation *r = &in->relocs[ri];
-        printf("[pe15s] r->symbol=%p kind=%d\n",(void*)r->symbol,(int)r->kind); fflush(0);
         if (strcmp(r->symbol,"__entry__")==0) continue;
-        printf("[pe15t] r->symbol str=%s\n",r->symbol?r->symbol:"(null)"); fflush(0);
 
         int patch = r->offset;  /* offset in text[] */
 
