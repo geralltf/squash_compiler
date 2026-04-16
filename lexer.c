@@ -462,7 +462,26 @@ static void pp_macro_undef(PPState *st, const char *name) {
         if (strcmp(st->macros[i].name, name)==0) {
             free(st->macros[i].name);
             free(st->macros[i].value);
-            st->macros[i] = st->macros[--st->nmc];
+            { char **_pi = st->macros[i].params;
+              for (int _j=0;_j<16;_j++) { free(_pi[_j]); _pi[_j]=NULL; } }
+            /* Replace with last entry — use field-by-field copy to avoid struct assignment
+             * (squash codegen does not handle struct-to-struct copies of large structs). */
+            --st->nmc;
+            if (i < st->nmc) {
+                st->macros[i].name   = st->macros[st->nmc].name;
+                st->macros[i].value  = st->macros[st->nmc].value;
+                { char **_psrc = st->macros[st->nmc].params;
+                  char **_pdst = st->macros[i].params;
+                  int _j; for (_j=0;_j<16;_j++) _pdst[_j] = _psrc[_j]; }
+                st->macros[i].nparams= st->macros[st->nmc].nparams;
+                /* Zero vacated slot so its pointers aren't reused if the slot
+                 * is later filled by a new object-like macro. */
+                st->macros[st->nmc].name = NULL;
+                st->macros[st->nmc].value = NULL;
+                { char **_pz = st->macros[st->nmc].params;
+                  int _k; for (_k=0;_k<16;_k++) _pz[_k] = NULL; }
+                st->macros[st->nmc].nparams = -1;
+            }
             return;
         }
     }
@@ -495,16 +514,21 @@ static int pp_in_string(const char *out, const char *p) {
     return in_str != 0;
 }
 
+static int pp_expand_dbg = 0; /* set to 1 to enable tracing */
 static char *pp_expand(PPState *st, const char *src) {
     char *out = my_strdup(src);
     int changed = 1;
     int max_iters = 100; /* prevent infinite expansion loops */
+    if (pp_expand_dbg) { printf("[expand] src=%.80s\n",src); fflush(0); }
     while (changed && max_iters-- > 0) {
         changed = 0;
         for (int m = 0; m < st->nmc; m++) {
             const char *mname = st->macros[m].name;
+            if (!mname) { printf("[pp] expand: NULL mname at m=%d nmc=%d\n",m,st->nmc); fflush(0); continue; }
             const char *mval  = st->macros[m].value;
+            if (!mval)  { printf("[pp] expand: NULL mval  m=%d name=%s\n",m,mname); fflush(0); continue; }
             int   mlen = (int)strlen(mname);
+            if (pp_expand_dbg) { printf("[expand] m=%d name=%s mlen=%d is_fn=%d\n",m,mname,mlen,(st->macros[m].nparams>=0)); fflush(0); }
             int   is_fn = (st->macros[m].nparams >= 0);
             char *p    = out;
             while ((p = strstr(p, mname)) != NULL) {
@@ -520,8 +544,10 @@ static char *pp_expand(PPState *st, const char *src) {
                     char *ap = p + mlen + 1; /* skip '(' */
                     while (*ap==' '||*ap=='\t') ap++;
                     /* Use flat storage: args_buf[na*512 + char_offset] */
-                    char args_buf[8192]; int na=0;  /* 16 args * 512 bytes each */
+                    /* Heap alloc avoids squash codegen stack-frame bugs with large arrays */
+                    char *args_buf = (char*)malloc(8192); int na=0;  /* 16 args * 512 bytes each */
                     int depth=1;
+                    if (pp_expand_dbg) { printf("[fnarg] m=%d name=%s args_buf=%p ap=%.20s\n",m,mname,(void*)args_buf,ap); fflush(0); }
                     /* Parse comma-separated args, handling nested parens */
                     if (*ap != ')') {  /* non-empty arg list */
                         while (na < 16) {
@@ -547,14 +573,21 @@ static char *pp_expand(PPState *st, const char *src) {
                         }
                     }
                     if (*ap==')') ap++;
+                    if (pp_expand_dbg) { printf("[fnarg] parsed na=%d arg0=%.30s\n",na,args_buf); fflush(0); }
                     /* Build expanded body by substituting params */
-                    char body[4096]=""; int bi=0;
+                    /* Use heap to avoid squash codegen issues with large stack arrays */
+                    char *body = (char*)malloc(4096); body[0]='\0'; int bi=0;
+                    if (pp_expand_dbg) { printf("[body] allocated body=%p mval=%.40s\n",(void*)body,mval); fflush(0); }
+                    if (pp_expand_dbg) { printf("[body] m=%d macros[m].name=%p macros[m].nparams=%d params[0]=%p params[1]=%p\n",m,(void*)st->macros[m].name,st->macros[m].nparams,(void*)st->macros[m].params[0],(void*)st->macros[m].params[1]); fflush(0); }
+                    if (pp_expand_dbg) { printf("[body] starting loop bp=%p\n",(void*)mval); fflush(0); }
                     const char *bp=mval;
                     while (*bp && bi<4095) {
                         /* Check if current position matches a param name */
                         int matched=0;
+                        /* Use temp pointer to avoid squash nested-array-in-struct codegen bug */
+                        char **_mparams = st->macros[m].params;
                         for (int pi=0; pi<st->macros[m].nparams && pi<na; pi++) {
-                            const char *pn=st->macros[m].params[pi];
+                            const char *pn=_mparams[pi];
                             if (!pn) continue;
                             int pl=(int)strlen(pn);
                             if (strncmp(bp,pn,pl)==0 &&
@@ -577,6 +610,8 @@ static char *pp_expand(PPState *st, const char *src) {
                     memcpy(tmp,out,poff);
                     memcpy(tmp+poff,body,vl);
                     strcpy(tmp+poff+vl,out+poff+macro_len);
+                    free(args_buf);
+                    free(body);
                     free(out); out=tmp;
                     p=out+poff+vl;
                     changed=1;
@@ -682,16 +717,15 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
     /* Helper: append text to output buffer */
 
     /* Split source into lines, process each */
-    if (!src || (unsigned long long)(const void*)src < 0x1000) {
-        fprintf(stderr, "CRASH GUARD: src=%p filename=%s\n", src, filename);
-        return out;
-    }
     char *copy = my_strdup(src);
     char *line;
     char *rest = copy;
+    int pp_lineno = 0;
     while ((line = (rest && *rest) ? rest : NULL) != NULL) {
         char *_nl = strchr(rest, '\n');
         if (_nl) { *_nl = '\0'; rest = _nl+1; } else rest = NULL;
+        pp_lineno++;
+        if (pp_lineno >= 40 && pp_lineno <= 50 && filename && strstr(filename,"symtable.c")) { printf("[pp] %s line=%d: %.80s\n", filename, pp_lineno, line); fflush(0); pp_expand_dbg=1; } else pp_expand_dbg=0;
         const char *p = line;
         while (*p==' '||*p=='\t') p++;
 
@@ -837,8 +871,11 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
                 { char *_snd2=malloc(nlen+1); strncpy(_snd2,nm,nlen); _snd2[nlen]='\0'; st->macros[idx2].name=_snd2; }
                 st->macros[idx2].value=my_strdup(body);
                 st->macros[idx2].nparams=np;
-                for (int pi=0;pi<np;pi++) st->macros[idx2].params[pi]=my_strdup(pnames_buf+pi*64);
-                for (int pi=np;pi<16;pi++) st->macros[idx2].params[pi]=NULL;
+                { /* Use temp pointer to avoid squash nested-array-in-struct codegen bug */
+                    char **_pp = st->macros[idx2].params;
+                    for (int pi=0;pi<np;pi++) _pp[pi]=my_strdup(pnames_buf+pi*64);
+                    for (int pi=np;pi<16;pi++) _pp[pi]=NULL;
+                }
                 continue;
             }
             while (*p==' '||*p=='\t') p++;
@@ -900,7 +937,6 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
 
     free(copy);
     out[len] = '\0';
-
     return out;
 }
 
@@ -928,7 +964,10 @@ char *preprocess(const char *src, const char *filename,
     for (int i=0;i<st->nmc;i++) {
         free(st->macros[i].name);
         free(st->macros[i].value);
-        for(int j=0;j<16&&st->macros[i].params[j];j++) free(st->macros[i].params[j]);
+        if (st->macros[i].nparams >= 0) {
+            char **_pp = st->macros[i].params;
+            for(int j=0;j<16&&_pp[j];j++) free(_pp[j]);
+        }
     }
     for (int i=0;i<st->n_included;i++) free(st->included[i]);
     free(st);

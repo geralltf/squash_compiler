@@ -505,6 +505,10 @@ static int elem_size_of(CodeGen *cg, ASTNode *arr_expr) {
             if (!f || f->kind != AST_FIELD) continue;
             if (f->field.name && strcmp(f->field.name, arr_expr->member.field)==0) {
                 if (f->field.type) {
+                    /* Array-of-pointers field (e.g. char *params[16]): element size is
+                     * ptr_size, not sizeof(char).  Mirror the same special-case as Case 1. */
+                    if (f->field.type->pointer_depth > 0 && f->field.array_size > 0)
+                        return cg->is_64bit ? 8 : 4;
                     TypeInfo tmp;
                     tmp.base         = f->field.type->base;
                     tmp.pointer_depth= (f->field.type->pointer_depth>0) ? f->field.type->pointer_depth-1 : 0;
@@ -593,6 +597,13 @@ static const char *intern_string(CodeGen *cg, const char *value) {
 /* Allocate a zero-filled slot in the writable .data pool.
  * Returns the label name (pointer into WDataEntry.label). */
 static const char *intern_wdata(CodeGen *cg, const char *label, int size) {
+    /* Guard against NULL label (squash codegen may pass NULL for some struct-field
+     * accesses); generate a unique fallback so the entry is still addressable. */
+    char fallback[64];
+    if (!label) {
+        snprintf(fallback, sizeof fallback, "__wdata_anon_%d", cg->wdata_count);
+        label = fallback;
+    }
     if (cg->wdata_count == cg->wdata_cap) {
         cg->wdata_cap *= 2;
         if (cg->wdata_cap == 0) cg->wdata_cap = 32;
@@ -1832,7 +1843,10 @@ void codegen_lvalue(CodeGen *cg, ASTNode *n) {
                         ASTNode *ff = ss->struct_node->struct_decl.fields[_fi];
                         if (ff && ff->field.name &&
                             strcmp(ff->field.name, fname)==0 && ff->field.type) {
-                            if (ff->field.type->pointer_depth > 0)
+                            /* Inline array fields (array_size > 0) are address-based
+                             * even if element type has pointer_depth > 0 (e.g. char *[16]).
+                             * Only pure pointer fields (not arrays) are pointer-based. */
+                            if (ff->field.type->pointer_depth > 0 && ff->field.array_size <= 0)
                                 is_pointer_base = 1;
                             break;
                         }
