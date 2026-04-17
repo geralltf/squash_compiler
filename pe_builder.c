@@ -257,8 +257,6 @@ static void dll_group_add_func(DLLGroup *g, const char *func) {
 int pe_link_and_write(PEBuildInput *in) {
     int is64 = in->is_64bit;
     int thunk_size = is64 ? 8 : 4;
-    printf("[dbg] pe_link: is64=%d import_count=%d reloc_count=%d\n",is64,in->import_count,in->reloc_count); fflush(0);
-
     /* -----------------------------------------------------------------------
      * Step 1: Parse "DLL:func" import specs, group by DLL
      * -------------------------------------------------------------------- */
@@ -269,7 +267,7 @@ int pe_link_and_write(PEBuildInput *in) {
     /* These are added by the code generator anyway, but ensure them here */
     for (int i=0;i<in->import_count;i++) {
         char spec[512];
-        if (!in->import_specs[i]) { printf("[dbg] pe_link: NULL import_specs[%d]\n",i); fflush(0); continue; }
+        if (!in->import_specs[i]) continue;
         strncpy(spec, in->import_specs[i], sizeof spec-1);
         char *colon = strchr(spec, ':');
         if (!colon) continue;

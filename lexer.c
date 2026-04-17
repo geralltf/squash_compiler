@@ -514,21 +514,18 @@ static int pp_in_string(const char *out, const char *p) {
     return in_str != 0;
 }
 
-static int pp_expand_dbg = 0; /* set to 1 to enable tracing */
 static char *pp_expand(PPState *st, const char *src) {
     char *out = my_strdup(src);
     int changed = 1;
     int max_iters = 100; /* prevent infinite expansion loops */
-    if (pp_expand_dbg) { printf("[expand] src=%.80s\n",src); fflush(0); }
     while (changed && max_iters-- > 0) {
         changed = 0;
         for (int m = 0; m < st->nmc; m++) {
             const char *mname = st->macros[m].name;
-            if (!mname) { printf("[pp] expand: NULL mname at m=%d nmc=%d\n",m,st->nmc); fflush(0); continue; }
+            if (!mname) continue;
             const char *mval  = st->macros[m].value;
-            if (!mval)  { printf("[pp] expand: NULL mval  m=%d name=%s\n",m,mname); fflush(0); continue; }
+            if (!mval)  continue;
             int   mlen = (int)strlen(mname);
-            if (pp_expand_dbg) { printf("[expand] m=%d name=%s mlen=%d is_fn=%d\n",m,mname,mlen,(st->macros[m].nparams>=0)); fflush(0); }
             int   is_fn = (st->macros[m].nparams >= 0);
             char *p    = out;
             while ((p = strstr(p, mname)) != NULL) {
@@ -547,7 +544,6 @@ static char *pp_expand(PPState *st, const char *src) {
                     /* Heap alloc avoids squash codegen stack-frame bugs with large arrays */
                     char *args_buf = (char*)malloc(8192); int na=0;  /* 16 args * 512 bytes each */
                     int depth=1;
-                    if (pp_expand_dbg) { printf("[fnarg] m=%d name=%s args_buf=%p ap=%.20s\n",m,mname,(void*)args_buf,ap); fflush(0); }
                     /* Parse comma-separated args, handling nested parens */
                     if (*ap != ')') {  /* non-empty arg list */
                         while (na < 16) {
@@ -573,13 +569,9 @@ static char *pp_expand(PPState *st, const char *src) {
                         }
                     }
                     if (*ap==')') ap++;
-                    if (pp_expand_dbg) { printf("[fnarg] parsed na=%d arg0=%.30s\n",na,args_buf); fflush(0); }
                     /* Build expanded body by substituting params */
                     /* Use heap to avoid squash codegen issues with large stack arrays */
                     char *body = (char*)malloc(4096); body[0]='\0'; int bi=0;
-                    if (pp_expand_dbg) { printf("[body] allocated body=%p mval=%.40s\n",(void*)body,mval); fflush(0); }
-                    if (pp_expand_dbg) { printf("[body] m=%d macros[m].name=%p macros[m].nparams=%d params[0]=%p params[1]=%p\n",m,(void*)st->macros[m].name,st->macros[m].nparams,(void*)st->macros[m].params[0],(void*)st->macros[m].params[1]); fflush(0); }
-                    if (pp_expand_dbg) { printf("[body] starting loop bp=%p\n",(void*)mval); fflush(0); }
                     const char *bp=mval;
                     while (*bp && bi<4095) {
                         /* Check if current position matches a param name */
@@ -720,12 +712,9 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
     char *copy = my_strdup(src);
     char *line;
     char *rest = copy;
-    int pp_lineno = 0;
     while ((line = (rest && *rest) ? rest : NULL) != NULL) {
         char *_nl = strchr(rest, '\n');
         if (_nl) { *_nl = '\0'; rest = _nl+1; } else rest = NULL;
-        pp_lineno++;
-        if (pp_lineno >= 40 && pp_lineno <= 50 && filename && strstr(filename,"symtable.c")) { printf("[pp] %s line=%d: %.80s\n", filename, pp_lineno, line); fflush(0); pp_expand_dbg=1; } else pp_expand_dbg=0;
         const char *p = line;
         while (*p==' '||*p=='\t') p++;
 
