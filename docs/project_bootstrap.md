@@ -20,6 +20,11 @@ squash is a self-hosting C compiler targeting Windows x64 PE executables.
 `test_program2.c` has 43 tests covering arithmetic, structs, macros, pointers, malloc, etc.
 `test_features.c` has additional feature tests.
 
+## 3-generation bootstrap (completed 2026-04-18)
+The 3-gen chain now works: squash_msvc.exe → squash2_new.exe → squash3.exe → test_program2.exe → ALL 43 TESTS PASS.
+Build via: `C:\tmp\run_build.ps1` (PowerShell) or by running the ps_build.bat it generates.
+Note: cmd.exe invoked directly from git bash silently drops output; must use PowerShell to invoke batch files.
+
 ## Key bugs fixed (completed 2026-04-17)
 1. **Stale params[] in pp_macro_undef** (lexer.c): After swap-with-last during undef, vacated slot wasn't zeroed → stale function-like macro params used when slot reused as object-like macro. Fix: zero the vacated slot after copy.
 
@@ -35,6 +40,10 @@ squash is a self-hosting C compiler targeting Windows x64 PE executables.
    - Workaround in lexer.c: Use temp `char **_pp = st->macros[m].params` before indexing to avoid nested struct array access patterns.
 
 6. **Large stack arrays in pp_expand** (lexer.c): `char args_buf[8192]` and `char body[4096]` on stack crashed in squash-compiled binaries. Changed to heap allocations (`malloc`/`free`) to avoid squash codegen stack frame issues.
+
+7. **`char base[64]=""` not zero-initialized in squash-compiled binaries** (parser_new4.c): squash-compiled binaries don't zero-initialize `char arr[N]=""` local arrays, so `base[0]` was stack garbage. `!base[0]` check failed → `strncpy(base,"short",...)` skipped → `sizeof(short)=4` → wrong struct field offsets for all `short`/`uint16_t` fields → corrupt PE headers in squash3.exe.
+   - Fix (parser_new4.c): replaced `char base[64]=""` + strncpy with `const char *base_str = NULL` pointer assigned from string literals. Avoids local char-array initialization entirely.
+   - Key lesson: squash-compiled code does NOT reliably initialize `char arr[N] = ""` local arrays. Use pointer-to-literal instead.
 
 ## Key structs
 - **PPMacro**: `{char *name; char *value; char *params[16]; int nparams;}` — sizeof=152 bytes

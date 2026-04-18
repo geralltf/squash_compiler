@@ -58,27 +58,46 @@ int typeinfo_size(const TypeInfo *t, int is_64bit) {
     /* Strip leading unsigned/signed qualifiers for size computation */
     if (strncmp(b,"unsigned ",9)==0) b+=9;
     else if (strncmp(b,"signed ",7)==0) b+=7;
-    if (strcmp(b,"char")==0   ||
-        strcmp(b,"uint8_t")==0 || strcmp(b,"int8_t")==0 ||
-        strcmp(b,"uint_least8_t")==0 || strcmp(b,"int_least8_t")==0) return 1;
+    /* 1-byte types */
+    if (strcmp(b,"char")==0) return 1;
+    if (strcmp(b,"uint8_t")==0) return 1;
+    if (strcmp(b,"int8_t")==0) return 1;
+    if (strcmp(b,"uint_least8_t")==0) return 1;
+    if (strcmp(b,"int_least8_t")==0) return 1;
     /* bool/_Bool: our stdbool.h defines bool as typedef int (4 bytes) */
-    if (strcmp(b,"bool")==0   || strcmp(b,"_Bool")==0) return 4;
-    if (strcmp(b,"short")==0  || strcmp(b,"int16_t")==0 ||
-        strcmp(b,"uint16_t")==0 ||
-        strcmp(b,"uint_least16_t")==0 || strcmp(b,"int_least16_t")==0) return 2;
-    if (strcmp(b,"int")==0    || strcmp(b,"uint")==0 ||
-        strcmp(b,"uint32_t")==0|| strcmp(b,"int32_t")==0 ||
-        strcmp(b,"uint_least32_t")==0 || strcmp(b,"int_least32_t")==0 ||
-        strcmp(b,"intptr_t")==0 || strcmp(b,"uintptr_t")==0 ||
-        strcmp(b,"float")==0)  return 4;
-    if (strcmp(b,"long")==0)   return is_64bit ? 8 : 4;
-    if (strcmp(b,"long long")==0||strcmp(b,"int64_t")==0||
-        strcmp(b,"uint64_t")==0||strcmp(b,"ulong")==0||
-        strcmp(b,"uint_least64_t")==0||strcmp(b,"int_least64_t")==0||
-        strcmp(b,"intmax_t")==0||strcmp(b,"uintmax_t")==0||
-        strcmp(b,"time_t")==0  ||strcmp(b,"clock_t")==0||
-        strcmp(b,"double")==0 ||strcmp(b,"long double")==0) return 8;
-    if (strcmp(b,"void")==0)   return 0;
+    if (strcmp(b,"bool")==0) return 4;
+    if (strcmp(b,"_Bool")==0) return 4;
+    /* 2-byte types */
+    if (strcmp(b,"short")==0) return 2;
+    if (strcmp(b,"int16_t")==0) return 2;
+    if (strcmp(b,"uint16_t")==0) return 2;
+    if (strcmp(b,"uint_least16_t")==0) return 2;
+    if (strcmp(b,"int_least16_t")==0) return 2;
+    /* 4-byte types */
+    if (strcmp(b,"int")==0) return 4;
+    if (strcmp(b,"uint")==0) return 4;
+    if (strcmp(b,"uint32_t")==0) return 4;
+    if (strcmp(b,"int32_t")==0) return 4;
+    if (strcmp(b,"uint_least32_t")==0) return 4;
+    if (strcmp(b,"int_least32_t")==0) return 4;
+    if (strcmp(b,"intptr_t")==0) return 4;
+    if (strcmp(b,"uintptr_t")==0) return 4;
+    if (strcmp(b,"float")==0) return 4;
+    if (strcmp(b,"long")==0) return is_64bit ? 8 : 4;
+    /* 8-byte types */
+    if (strcmp(b,"long long")==0) return 8;
+    if (strcmp(b,"int64_t")==0) return 8;
+    if (strcmp(b,"uint64_t")==0) return 8;
+    if (strcmp(b,"ulong")==0) return 8;
+    if (strcmp(b,"uint_least64_t")==0) return 8;
+    if (strcmp(b,"int_least64_t")==0) return 8;
+    if (strcmp(b,"intmax_t")==0) return 8;
+    if (strcmp(b,"uintmax_t")==0) return 8;
+    if (strcmp(b,"time_t")==0) return 8;
+    if (strcmp(b,"clock_t")==0) return 8;
+    if (strcmp(b,"double")==0) return 8;
+    if (strcmp(b,"long double")==0) return 8;
+    if (strcmp(b,"void")==0) return 0;
     return 4; /* default for structs etc */
 }
 

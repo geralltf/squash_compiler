@@ -172,11 +172,12 @@ int main(int argc, char **argv) {
     pbi.output_path       = out_path;
 
     int rc=pe_link_and_write(&pbi);
-
-    free(src); free(str_labels); free(str_offsets);
+    free(src);
+    free(str_labels); free(str_offsets);
     free(wdata_labels); free(wdata_offsets);
-    if (pbi.wdata_bytes) free(pbi.wdata_bytes);
-    if (rdata_data) free(rdata_data);
-    ast_free(prog); asm_free(&as);
+    if (pbi.wdata_bytes) { free(pbi.wdata_bytes); }
+    if (rdata_data) { free(rdata_data); }
+    ast_free(prog);
+    asm_free(&as);
     return rc;
 }

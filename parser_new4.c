@@ -200,30 +200,37 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
         }
     }
 
-    /* Primitive types — accumulate qualifiers */
-    char base[64]=""; int has_long=0, has_short=0;
+    /* Primitive types — accumulate qualifiers.
+     * Use a const char* pointer (not a char array) to avoid local-array
+     * zero-init issues in squash-compiled binaries. */
+    const char *base_str = NULL; /* NULL = no explicit type token yet */
+    int has_long=0, has_short=0;
     while (1) {
         k=cur(p).kind;
         if (k==TOK_UNSIGNED) { ti->is_unsigned=1; adv(p); continue; }
         if (k==TOK_SIGNED)   { adv(p); continue; }
         if (k==TOK_LONG)     { has_long++; adv(p); continue; }
         if (k==TOK_SHORT)    { has_short=1; adv(p); continue; }
-        if (k==TOK_INT)      { strncpy(base,"int",sizeof base-1); adv(p); break; }
-        if (k==TOK_CHAR)     { strncpy(base,"char",sizeof base-1); adv(p); break; }
-        if (k==TOK_VOID)     { strncpy(base,"void",sizeof base-1); adv(p); break; }
-        if (k==TOK_DOUBLE)   { strncpy(base,"double",sizeof base-1); adv(p); break; }
-        if (k==TOK_FLOAT_KW) { strncpy(base,"float",sizeof base-1); adv(p); break; }
+        if (k==TOK_INT)      { base_str="int";    adv(p); break; }
+        if (k==TOK_CHAR)     { base_str="char";   adv(p); break; }
+        if (k==TOK_VOID)     { base_str="void";   adv(p); break; }
+        if (k==TOK_DOUBLE)   { base_str="double"; adv(p); break; }
+        if (k==TOK_FLOAT_KW) { base_str="float";  adv(p); break; }
         break;
     }
-    if (!base[0]) {
-        if (has_long) strncpy(base,"long",sizeof base-1);
-        else if (has_short) strncpy(base,"short",sizeof base-1);
-        else strncpy(base,"int",sizeof base-1);
-    } else if (has_long==2) strncpy(base,"long long",sizeof base-1);
-    else if (has_long==1 && strcmp(base,"int")==0) strncpy(base,"long",sizeof base-1);
-    else if (has_short && strcmp(base,"int")==0) strncpy(base,"short",sizeof base-1);
-
-    ti->base = my_strdup(base);
+    /* Apply long/short modifiers: only when base is NULL (no explicit token)
+     * or when base is "int" (the default integer type). */
+    int apply_mod = 0;
+    if (!base_str) apply_mod = 1;
+    else if (strcmp(base_str,"int")==0) apply_mod = 1;
+    if (apply_mod) {
+        if (has_long == 2) base_str = "long long";
+        else if (has_long >= 1) base_str = "long";
+        else if (has_short) base_str = "short";
+        else base_str = "int";
+    }
+    if (!base_str) base_str = "int"; /* safety fallback */
+    ti->base = my_strdup(base_str);
     return ti;
 }
 
