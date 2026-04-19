@@ -93,6 +93,7 @@ int main(int argc, char **argv) {
     Parser parser;
     parser_init(&parser,&lex,&sym,src_path);
     ASTNode *prog=parse_program(&parser);
+    printf("[dbg] parse done\n"); fflush(0);
     if (parser.error_count>0) {
         printf("%d compile error(s). Aborting.\n",parser.error_count);
         return 1;
@@ -108,7 +109,9 @@ int main(int argc, char **argv) {
     asm_init(&as,is_64bit);
     CodeGen cg;
     codegen_init(&cg,&as,&sym,is_64bit);
+    printf("[dbg] codegen start\n"); fflush(0);
     codegen_program(&cg,prog);
+    printf("[dbg] codegen done\n"); fflush(0);
 
     if (dump) {
         printf("=== .text (%d bytes) ===\n",as.code_len);
@@ -119,11 +122,14 @@ int main(int argc, char **argv) {
         printf("\n");
     }
 
+    printf("[dbg] stage6a inject\n"); fflush(0);
     inject_entry_reloc(&as,"main");
 
     /* Stage 6: Gather string labels */
+    printf("[dbg] stage6b rdata\n"); fflush(0);
     int rdata_len=0;
     uint8_t *rdata_data=codegen_get_rdata(&cg,&rdata_len);
+    printf("[dbg] stage6c strlabels strings=%d\n",cg.string_count); fflush(0);
     char **str_labels=malloc(cg.string_count*sizeof(char*));
     int  *str_offsets=malloc(cg.string_count*sizeof(int));
     for (int i=0;i<cg.string_count;i++) {
@@ -132,17 +138,20 @@ int main(int argc, char **argv) {
     }
 
     /* Stage 7: PE build + link */
+    printf("[dbg] stage7a text\n"); fflush(0);
     int text_len=0;
     uint8_t *text=codegen_get_text(&cg,&text_len);
     int reloc_count=0;
     Relocation *relocs=codegen_get_relocs(&cg,&reloc_count);
 
     /* Resolve RELOC_TEXT_ABS32 (function pointer addresses in 32-bit mode) */
+    printf("[dbg] stage7b resolve_text\n"); fflush(0);
     uint32_t text_rva_val  = 0x1000;
     uint64_t image_base_val = is_64bit ? 0x140000000ULL : 0x00400000ULL;
     asm_resolve_text_relocs(&as, text_rva_val, image_base_val);
 
     /* Build wdata label/offset arrays for the PE builder */
+    printf("[dbg] stage7c wdata\n"); fflush(0);
     char **wdata_labels  = malloc(cg.wdata_count * sizeof(char*));
     int  *wdata_offsets  = malloc(cg.wdata_count * sizeof(int));
     for (int i=0; i<cg.wdata_count; i++) {
@@ -150,6 +159,7 @@ int main(int argc, char **argv) {
         wdata_offsets[i] = cg.wdata[i].offset;
     }
 
+    printf("[dbg] stage7d pbi\n"); fflush(0);
     PEBuildInput pbi; memset(&pbi,0,sizeof pbi);
     pbi.is_64bit          = is_64bit;
     pbi.text              = text;
@@ -171,7 +181,23 @@ int main(int argc, char **argv) {
     pbi.entry_func        = "main";
     pbi.output_path       = out_path;
 
+    printf("[dbg] pe_link start imports=%d strings=%d relocs=%d text=%d rdata=%d wdata=%d\n",
+        pbi.import_count,pbi.string_count,pbi.reloc_count,pbi.text_len,
+        pbi.rdata_strings_len,pbi.wdata_len); fflush(0);
+    /* deep-check reloc symbols by reading first byte */
+    for (int i=0;i<pbi.reloc_count;i++) {
+        if (pbi.relocs[i].symbol && pbi.relocs[i].symbol[0]=='\0')
+            printf("[dbg] reloc[%d] empty symbol off=%d\n",i,pbi.relocs[i].offset);
+    }
+    printf("[dbg] reloc sym ok\n"); fflush(0);
+    /* validate string_labels */
+    for (int i=0;i<pbi.string_count;i++) {
+        if (!pbi.string_labels[i] || pbi.string_labels[i][0]=='\0')
+            printf("[dbg] strlabel[%d] bad\n",i);
+    }
+    printf("[dbg] strlabel ok\n"); fflush(0);
     int rc=pe_link_and_write(&pbi);
+    printf("[dbg] pe_link done rc=%d\n",rc); fflush(0);
     free(src);
     free(str_labels); free(str_offsets);
     free(wdata_labels); free(wdata_offsets);

@@ -577,9 +577,11 @@ void codegen_init(CodeGen *cg, Assembler *a, SymTable *sym, int is_64bit) {
  * String pool
  * ========================================================================= */
 static const char *intern_string(CodeGen *cg, const char *value) {
-    for (int i=0;i<cg->string_count;i++)
+    for (int i=0;i<cg->string_count;i++) {
+        if (cg->strings[i].len == 8) continue; /* skip float constant entries */
         if (strcmp(cg->strings[i].value,value)==0)
             return cg->strings[i].label;
+    }
     if (cg->string_count==cg->string_cap) {
         cg->string_cap*=2;
         cg->strings=realloc(cg->strings,cg->string_cap*sizeof(StringEntry));
@@ -2349,6 +2351,16 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 } else if (fsv && fsv->kind==SYM_GLOBAL) {
                     const char *lbl=(fsv->dll&&fsv->dll[0])?fsv->dll:n->assign.lhs->var.name;
                     if (cg->is_64bit){asm_lea_rip_wdata(a,REG_RBX,lbl);asm_movsd_store(a,REG_RBX,0,0);}
+                } else if (!fsv && cg->is_64bit &&
+                           (n->assign.lhs->kind==AST_MEMBER ||
+                            n->assign.lhs->kind==AST_INDEX  ||
+                            n->assign.lhs->kind==AST_DEREF)) {
+                    /* LHS is a member/array/deref: compute address into RAX.
+                     * codegen_lvalue uses only integer registers (RAX/RBX/etc), so XMM0
+                     * is preserved across the call. Then store with movsd [rax],xmm0. */
+                    codegen_lvalue(cg, n->assign.lhs); /* RAX = address of LHS */
+                    /* movsd [RAX], xmm0  —  F2 0F 11 00 */
+                    asm_emit4(a,0xF2,0x0F,0x11,0x00);
                 }
                 if (cg->is_64bit){asm_emit4(a,0x66,0x48,0x0F,0x7E);asm_emit1(a,0xC0);} /* movq rax,xmm0 */
                 break;
@@ -2729,7 +2741,11 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                         int arg0_float = codegen_is_float_expr(cg,n->call.args[0]);
                         if(arg1_has_call && !arg0_float && !arg1_float)
                             asm_push_reg(a,REG_RCX); /* save RCX (arg0) on stack */
-                        if(arg1_float){codegen_float_expr(cg,n->call.args[1]);}
+                        if(arg1_float){
+                            codegen_float_expr(cg,n->call.args[1]);
+                            /* Win64 ABI: float at position 1 must be in XMM1, not XMM0 */
+                            asm_movsd_xmm(a,1,0); /* movsd xmm1, xmm0 */
+                        }
                         else{codegen_expr(cg,n->call.args[1]); asm_mov_reg_reg(a,REG_RDX,REG_RAX);}
                         if(arg1_has_call && !arg0_float && !arg1_float)
                             asm_pop_reg(a,REG_RCX); /* restore RCX (arg0) from stack */
@@ -2742,7 +2758,11 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                             asm_push_reg(a,REG_RDX); /* save RDX (arg1) */
                             asm_push_reg(a,REG_RCX); /* save RCX (arg0) */
                         }
-                        if(af){codegen_float_expr(cg,n->call.args[2]);}
+                        if(af){
+                            codegen_float_expr(cg,n->call.args[2]);
+                            /* Win64 ABI: float at position 2 must be in XMM2 */
+                            asm_movsd_xmm(a,2,0); /* movsd xmm2, xmm0 */
+                        }
                         else{codegen_expr(cg,n->call.args[2]); asm_mov_reg_reg(a,REG_R8,REG_RAX);}
                         if(arg2_has_call && !af) {
                             asm_pop_reg(a,REG_RCX); /* restore RCX (arg0) */
@@ -2758,7 +2778,11 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                             asm_push_reg(a,REG_RDX); /* save RDX (arg1) */
                             asm_push_reg(a,REG_RCX); /* save RCX (arg0) */
                         }
-                        if(af){codegen_float_expr(cg,n->call.args[3]);}
+                        if(af){
+                            codegen_float_expr(cg,n->call.args[3]);
+                            /* Win64 ABI: float at position 3 must be in XMM3 */
+                            asm_movsd_xmm(a,3,0); /* movsd xmm3, xmm0 */
+                        }
                         else{codegen_expr(cg,n->call.args[3]); asm_mov_reg_reg(a,REG_R9,REG_RAX);}
                         if(arg3_has_call && !af) {
                             asm_pop_reg(a,REG_RCX); /* restore RCX (arg0) */
@@ -3682,8 +3706,11 @@ void codegen_float_expr(CodeGen *cg, ASTNode *n) {
     switch (n->kind) {
 
     case AST_FLOAT: {
-        /* Literal float/double constant */
-        const char *lbl = intern_float_const(cg, n->fnum.value);
+        /* Literal float/double constant.
+         * Copy to a local double first so squash-compiled callers pass it
+         * through the float register path (XMM1) rather than the integer path. */
+        double fval = n->fnum.value;
+        const char *lbl = intern_float_const(cg, fval);
         if (cg->is_64bit) {
             asm_movsd_rip(a, 0, lbl);  /* movsd xmm0,[rip+fconst] */
         } else {

@@ -464,8 +464,9 @@ int pe_link_and_write(PEBuildInput *in) {
     }
 
     /* --- String pool --- */
-    if (in->rdata_strings && in->rdata_strings_len > 0)
+    if (in->rdata_strings && in->rdata_strings_len > 0) {
         memcpy(rdata + strpool_off, in->rdata_strings, in->rdata_strings_len);
+    }
 
     /* -----------------------------------------------------------------------
      * Step 6: Patch relocations in .text
@@ -586,7 +587,6 @@ int pe_link_and_write(PEBuildInput *in) {
         }
     }
     free(iat_entries);
-
     /* -----------------------------------------------------------------------
      * Step 7: Build header block
      * -------------------------------------------------------------------- */
