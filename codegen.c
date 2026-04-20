@@ -2285,6 +2285,11 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                   } else {
                       asm_emit3(a,0x48,0x63,0x80); asm_emit_u32(a,(uint32_t)foff); /* movsxd rax,[rax+disp32] */
                   }
+              } else if (field_found && field_sz == 8) {
+                  /* 64-bit non-pointer field (double, long long, uint64_t, etc.) */
+                  if (foff == 0) asm_emit3(a,0x48,0x8B,0x00);
+                  else if (foff < 128) asm_emit4(a,0x48,0x8B,0x40,(uint8_t)foff);
+                  else { asm_emit3(a,0x48,0x8B,0x80); asm_emit_u32(a,(uint32_t)foff); }
               } else {
                   /* unsigned, unknown, or non-32-bit: zero-extend (mov eax,[rax+foff]) */
                   if (foff == 0) {
@@ -3679,8 +3684,37 @@ int codegen_is_float_expr(CodeGen *cg, ASTNode *n) {
         return 0;
     }
     case AST_MEMBER: {
-        /* Look up field type */
-        return 0; /* simplified — float struct fields not yet supported */
+        /* Look up field type to check if it is float/double */
+        ASTNode *mobj = n->member.obj;
+        const char *mfname = n->member.field;
+        const char *mstype = NULL;
+        if (mobj->kind == AST_VAR) {
+            Symbol *sv = symtable_lookup(cg->sym, mobj->var.name);
+            if (sv && sv->type) mstype = sv->type->base;
+        } else if (mobj->kind == AST_DEREF || n->member.arrow) {
+            ASTNode *op = (mobj->kind==AST_DEREF) ? mobj->deref.operand : mobj;
+            if (op->kind == AST_VAR) {
+                Symbol *sv2 = symtable_lookup(cg->sym, op->var.name);
+                if (sv2 && sv2->type) mstype = sv2->type->base;
+            }
+        } else if (mobj->kind == AST_MEMBER || mobj->kind == AST_INDEX) {
+            mstype = resolve_node_type(cg->sym, mobj);
+        }
+        if (mstype) {
+            const char *bare = mstype;
+            if (strncmp(bare,"struct ",7)==0) bare+=7;
+            else if (strncmp(bare,"union ",6)==0) bare+=6;
+            char sk[256]; snprintf(sk,sizeof(sk),"struct %s",bare);
+            Symbol *ss = symtable_lookup(cg->sym, sk);
+            if (ss && ss->struct_node) {
+                for (int _i=0;_i<ss->struct_node->struct_decl.nfields;_i++) {
+                    ASTNode *ff=ss->struct_node->struct_decl.fields[_i];
+                    if (ff&&ff->field.name&&strcmp(ff->field.name,mfname)==0&&ff->field.type)
+                        return is_float_type(cg, ff->field.type);
+                }
+            }
+        }
+        return 0;
     }
     case AST_ASSIGN: return codegen_is_float_expr(cg, n->assign.rhs);
     case AST_UNARY:  return codegen_is_float_expr(cg, n->unary.operand);
@@ -3702,7 +3736,6 @@ void codegen_float_expr(CodeGen *cg, ASTNode *n) {
         else { asm_fldz(a); }
         return;
     }
-
     switch (n->kind) {
 
     case AST_FLOAT: {
@@ -3929,6 +3962,16 @@ void codegen_float_expr(CodeGen *cg, ASTNode *n) {
             codegen_float_expr(cg, n->ternary.else_);
         else { codegen_expr(cg, n->ternary.else_); asm_cvtsi2sd(a, 0, REG_RAX); }
         asm_def_label(a, end_lbl);
+        break;
+    }
+
+    case AST_MEMBER: {
+        /* Float/double struct field: get base address, then movsd to load double */
+        if (n->member.arrow) codegen_expr(cg, n->member.obj);
+        else codegen_lvalue(cg, n->member.obj);
+        int foff = field_byte_offset(cg->sym, n->member.obj, n->member.field);
+        if (cg->is_64bit) asm_movsd_load(a, 0, REG_RAX, foff);
+        else asm_fld_mem64(a, REG_EAX, foff);
         break;
     }
 
