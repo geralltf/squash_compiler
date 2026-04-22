@@ -260,13 +260,12 @@ int pe_link_and_write(PEBuildInput *in) {
     /* -----------------------------------------------------------------------
      * Step 1: Parse "DLL:func" import specs, group by DLL
      * -------------------------------------------------------------------- */
-    DLLGroup groups[64]; int gc = 0;
-    memset(groups, 0, sizeof groups);
+    DLLGroup *groups = (DLLGroup*)calloc(64, sizeof(DLLGroup)); int gc = 0;
 
     /* Always include ExitProcess and GetStdHandle / WriteFile for the shim */
     /* These are added by the code generator anyway, but ensure them here */
     for (int i=0;i<in->import_count;i++) {
-        char spec[512];
+        char spec[128];
         if (!in->import_specs[i]) continue;
         strncpy(spec, in->import_specs[i], sizeof spec-1);
         char *colon = strchr(spec, ':');
@@ -641,7 +640,7 @@ int pe_link_and_write(PEBuildInput *in) {
      * Step 8: Write the output PE file
      * -------------------------------------------------------------------- */
     FILE *fp = fopen(in->output_path, "wb");
-    if (!fp) { perror("fopen output"); return 1; }
+    if (!fp) { perror("fopen output"); free(groups); return 1; }
 
     uint8_t *data_section = calloc(data_raw, 1);
     /* Copy wdata pool into .data section */
@@ -719,5 +718,6 @@ int pe_link_and_write(PEBuildInput *in) {
     free(dll_iat_off); free(dll_name_off);
     for (int i=0;i<gc;i++) { free(hn_off[i]); free(groups[i].dll); free(groups[i].funcs); }
     free(hn_off);
+    free(groups);
     return 0;
 }
