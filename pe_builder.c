@@ -179,7 +179,12 @@ void pe_build_opt_header_64(uint8_t *buf, uint32_t ep_rva, uint32_t img_size,
     oh->SizeOfInitializedData       = (((idata_size)+(FILE_ALIGN)-1) & ~((FILE_ALIGN)-1));
     oh->AddressOfEntryPoint         = ep_rva;
     oh->BaseOfCode                  = SEC_ALIGN;
-    oh->ImageBase                   = IMAGE_BASE_64;
+    /* ImageBase = 0x140000000: write as two uint32_t writes.
+     * A 32-bit squash compiler cross-compiling to 64-bit only stores the low
+     * 32 bits of a uint64_t struct field, leaving the high 32 bits at 0.
+     * ImageBase is at byte offset 24 in PE_OptionalHeader64.             */
+    pu32(buf + 24, 0x40000000U);  /* low  32 bits of 0x140000000 */
+    pu32(buf + 28, 0x00000001U);  /* high 32 bits of 0x140000000 */
     oh->SectionAlignment            = SEC_ALIGN;
     oh->FileAlignment               = FILE_ALIGN;
     oh->MajorOperatingSystemVersion = 6;
@@ -217,8 +222,10 @@ void pe_build_section_header(uint8_t *buf, const char *name,
     sh->Characteristics  = chars;
 }
 
-/* Fast IAT lookup entry: function name → IAT slot virtual address */
-typedef struct { char *name; uint64_t iat_va; } PE_IATEntry;
+/* Fast IAT lookup entry: function name → IAT slot RVA (32-bit is sufficient;
+ * image_base cancels in all RIP-relative patches, and ABS32 patches only
+ * occur in 32-bit PE where the base fits in 32 bits anyway).             */
+typedef struct { char *name; uint32_t iat_rva; } PE_IATEntry;
 
 /* =========================================================================
  * Import grouping helpers
@@ -432,9 +439,9 @@ int pe_link_and_write(PEBuildInput *in) {
     for (int i=0;i<gc;i++) {
         uint32_t base = idir_size + dll_iat_off[i];
         for (int j=0;j<groups[i].func_count;j++) {
-            uint64_t hn_rva = rdata_rva + hn_off[i][j];
-            if (thunk_size==8) pu64(rdata+base+j*8, hn_rva);
-            else               pu32(rdata+base+j*4, (uint32_t)hn_rva);
+            uint32_t hn_rva = rdata_rva + hn_off[i][j];
+            if (thunk_size==8) { pu32(rdata+base+j*8, hn_rva); pu32(rdata+base+j*8+4, 0); }
+            else               pu32(rdata+base+j*4, hn_rva);
         }
         /* null terminator already zero */
     }
@@ -479,17 +486,20 @@ int pe_link_and_write(PEBuildInput *in) {
     memset(text, 0, text_raw);
     memcpy(text, in->text, in->text_len);
 
-    uint64_t image_base = is64 ? IMAGE_BASE_64 : (uint64_t)IMAGE_BASE_32;
+    /* Use a 32-bit image base — avoids uint64_t arithmetic that squash's 32-bit
+     * codegen cannot handle.  For RIP-relative relocations image_base cancels
+     * (disp = target_rva - (text_rva+patch+4)); for ABS32 the 32-bit base fits. */
+    uint32_t image_base_lo = is64 ? 0x40000000U : IMAGE_BASE_32;
 
-    /* Build a fast lookup: func name → IAT VA */
+    /* Build a fast lookup: func name → IAT slot RVA */
     int n_iat_entries = total_funcs;
     PE_IATEntry *iat_entries = malloc(n_iat_entries * sizeof(PE_IATEntry));
     int iat_ei = 0;
     for (int i=0;i<gc;i++) {
         for (int j=0;j<groups[i].func_count;j++) {
-            uint64_t slot_rva = iat_rva_base + dll_iat_off[i] + j*thunk_size;
-            iat_entries[iat_ei].name   = groups[i].funcs[j];
-            iat_entries[iat_ei].iat_va = image_base + slot_rva;
+            uint32_t slot_rva = iat_rva_base + dll_iat_off[i] + (uint32_t)(j*thunk_size);
+            iat_entries[iat_ei].name    = groups[i].funcs[j];
+            iat_entries[iat_ei].iat_rva = slot_rva;
             iat_ei++;
         }
     }
@@ -505,29 +515,29 @@ int pe_link_and_write(PEBuildInput *in) {
         int patch = r->offset;  /* offset in text[] */
 
         if (r->kind == RELOC_IAT_REL32 || r->kind == RELOC_ABS32) {
-            /* Find the IAT slot for this symbol */
-            uint64_t target_va = 0;
+            /* Find the IAT slot RVA for this symbol */
+            uint32_t target_rva = 0;
             for (int e=0;e<iat_ei;e++) {
                 if (strcmp(iat_entries[e].name, r->symbol)==0) {
-                    target_va = iat_entries[e].iat_va;
+                    target_rva = iat_entries[e].iat_rva;
                     break;
                 }
             }
-            if (target_va == 0) {
+            if (target_rva == 0) {
                 printf("pe_link: no IAT entry for '%s'\n", r->symbol);
                 /* Don't abort — just leave zero; will crash at runtime */
             }
             if (r->kind == RELOC_IAT_REL32) {
-                /* RIP at next instruction = text_va + patch + 4 */
-                uint64_t next_rip = image_base + text_rva + patch + 4;
-                int32_t  disp     = (int32_t)(target_va - next_rip);
+                /* RIP-relative: image_base cancels out.
+                 * disp = slot_rva - (text_rva + patch + 4) — pure 32-bit. */
+                int32_t disp = (int32_t)(target_rva - (text_rva + (uint32_t)patch + 4));
                 text[patch+0] = (uint8_t)(disp);
                 text[patch+1] = (uint8_t)(disp>>8);
                 text[patch+2] = (uint8_t)(disp>>16);
                 text[patch+3] = (uint8_t)(disp>>24);
             } else {
-                /* RELOC_ABS32: write 32-bit absolute VA */
-                pu32(text+patch, (uint32_t)target_va);
+                /* RELOC_ABS32: 32-bit absolute VA (32-bit targets only) */
+                pu32(text+patch, image_base_lo + target_rva);
             }
 
         } else if (r->kind == RELOC_DATA_REL32 || r->kind == RELOC_DATA_ABS32) {
@@ -543,16 +553,15 @@ int pe_link_and_write(PEBuildInput *in) {
                 printf("pe_link: no string '%s' in pool\n", r->symbol);
             }
             if (r->kind == RELOC_DATA_REL32) {
-                uint64_t target_va = image_base + str_rva;
-                uint64_t next_rip  = image_base + text_rva + patch + 4;
-                int32_t  disp      = (int32_t)(target_va - next_rip);
+                /* RIP-relative: image_base cancels. */
+                int32_t disp = (int32_t)(str_rva - (text_rva + (uint32_t)patch + 4));
                 text[patch+0] = (uint8_t)(disp);
                 text[patch+1] = (uint8_t)(disp>>8);
                 text[patch+2] = (uint8_t)(disp>>16);
                 text[patch+3] = (uint8_t)(disp>>24);
             } else {
-                /* RELOC_DATA_ABS32: 32-bit absolute VA */
-                pu32(text+patch, (uint32_t)(image_base + str_rva));
+                /* RELOC_DATA_ABS32: 32-bit absolute VA (32-bit targets only) */
+                pu32(text+patch, image_base_lo + str_rva);
             }
 
         } else if (r->kind == RELOC_WDATA_REL32 || r->kind == RELOC_WDATA_ABS32) {
@@ -572,15 +581,14 @@ int pe_link_and_write(PEBuildInput *in) {
             } else {
                 uint32_t target_rva = wdata_rva_base + wdata_off_in_section;
                 if (r->kind == RELOC_WDATA_REL32) {
-                    uint64_t target_va = image_base + target_rva;
-                    uint64_t next_rip  = image_base + text_rva + patch + 4;
-                    int32_t  disp      = (int32_t)(target_va - next_rip);
+                    /* RIP-relative: image_base cancels. */
+                    int32_t disp = (int32_t)(target_rva - (text_rva + (uint32_t)patch + 4));
                     text[patch+0] = (uint8_t)(disp);
                     text[patch+1] = (uint8_t)(disp>>8);
                     text[patch+2] = (uint8_t)(disp>>16);
                     text[patch+3] = (uint8_t)(disp>>24);
                 } else {
-                    pu32(text+patch, (uint32_t)(image_base + target_rva));
+                    pu32(text+patch, image_base_lo + target_rva);
                 }
             }
         }

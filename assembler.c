@@ -279,6 +279,12 @@ int asm_enter_deferred(Assembler *a, int chkstk_lbl) {
         asm_emit3(a, 0x48,0x81,0xEC);       /* sub rsp, imm32         */
     } else {
         asm_emit2(a, 0x89,0xE5);            /* mov ebp, esp           */
+        if (chkstk_lbl >= 0) {
+            asm_emit1(a, 0xB8);             /* mov eax, imm32 (opcode) */
+            a->chkstk_movrax_off = a->code_len;
+            asm_emit_u32(a, 0);             /* placeholder = 0        */
+            asm_call_direct(a, chkstk_lbl); /* call __chkstk_probe32  */
+        }
         asm_emit2(a, 0x81,0xEC);            /* sub esp, imm32         */
     }
     int patch_off = a->code_len;            /* offset of the imm32    */

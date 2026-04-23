@@ -3333,7 +3333,7 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
      * compile the body (which defines locals in the symtable),
      * then patch the placeholder with the actual aligned frame size.
      * This eliminates the hardcoded sub rsp,0x108 that triggers AV. */
-    int frame_patch = asm_enter_deferred(a, cg->is_64bit ? cg->chkstk_lbl : -1);
+    int frame_patch = asm_enter_deferred(a, cg->chkstk_lbl); /* probe for both 32 and 64-bit */
 
     /* Spill register params FIRST — before CRT startup calls which clobber registers */
     if (cg->is_64bit) {
@@ -3523,10 +3523,10 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
         snprintf(cg->stdout_handle_lbl,sizeof cg->stdout_handle_lbl,"__stdout_h");
         intern_wdata(cg,cg->stdout_handle_lbl, cg->is_64bit ? 8 : 4);
     }
-    /* Emit embedded __chkstk_probe helper at the start of .text (64-bit only).
-     * This probes stack guard pages one page at a time before sub rsp,N so
+    /* Emit embedded __chkstk_probe helper at the start of .text.
+     * Probes stack guard pages one page at a time before sub rsp/esp,N so
      * Windows can extend the stack for large frames without a guard-page fault.
-     * Input: eax = frame size in bytes. Clobbers: r10. Does NOT modify rsp. */
+     * Input: eax = frame size in bytes. Does NOT modify rsp/esp. */
     if (cg->is_64bit) {
         Assembler *a = cg->asm_;
         cg->chkstk_lbl = asm_new_label(a, "__chkstk_probe");
@@ -3562,6 +3562,38 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
         asm_emit1(a,0x7F); asm_emit1(a,0xE7);                              /* jg loop (-25)   */
         /* done: */
         asm_emit1(a,0x41); asm_emit1(a,0x5A);                              /* pop r10         */
+        asm_emit1(a,0xC3);                                                  /* ret             */
+    } else {
+        /* 32-bit __chkstk_probe32 (31 bytes):
+         * Input: eax = frame size. Clobbers: ecx. Does NOT modify esp.
+         *   cmp eax, 0x1000                 ; 3D 00 10 00 00
+         *   jle +23 (done)                  ; 7E 17
+         *   mov ecx, esp                    ; 89 E1
+         * loop:
+         *   sub ecx, 0x1000                 ; 81 E9 00 10 00 00
+         *   or dword ptr [ecx], 0           ; 83 09 00   (touch page)
+         *   sub eax, 0x1000                 ; 2D 00 10 00 00
+         *   cmp eax, 0x1000                 ; 3D 00 10 00 00
+         *   jg -21 (loop)                   ; 7F EB
+         * done:
+         *   ret                             ; C3                          */
+        Assembler *a = cg->asm_;
+        cg->chkstk_lbl = asm_new_label(a, "__chkstk_probe32");
+        asm_def_label(a, cg->chkstk_lbl);
+        asm_emit1(a,0x3D); asm_emit1(a,0x00); asm_emit1(a,0x10);          /* cmp eax,0x1000  */
+        asm_emit1(a,0x00); asm_emit1(a,0x00);
+        asm_emit1(a,0x7E); asm_emit1(a,0x17);                              /* jle done (+23)  */
+        asm_emit1(a,0x89); asm_emit1(a,0xE1);                              /* mov ecx,esp     */
+        /* loop: */
+        asm_emit1(a,0x81); asm_emit1(a,0xE9); asm_emit1(a,0x00);          /* sub ecx,0x1000  */
+        asm_emit1(a,0x10); asm_emit1(a,0x00); asm_emit1(a,0x00);
+        asm_emit1(a,0x83); asm_emit1(a,0x09); asm_emit1(a,0x00);          /* or [ecx],0      */
+        asm_emit1(a,0x2D); asm_emit1(a,0x00); asm_emit1(a,0x10);          /* sub eax,0x1000  */
+        asm_emit1(a,0x00); asm_emit1(a,0x00);
+        asm_emit1(a,0x3D); asm_emit1(a,0x00); asm_emit1(a,0x10);          /* cmp eax,0x1000  */
+        asm_emit1(a,0x00); asm_emit1(a,0x00);
+        asm_emit1(a,0x7F); asm_emit1(a,0xEB);                              /* jg loop (-21)   */
+        /* done: */
         asm_emit1(a,0xC3);                                                  /* ret             */
     }
 
