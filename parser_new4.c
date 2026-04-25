@@ -120,11 +120,41 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
             int sz=0;
             int max_align=1;
             for (int i=0;i<nf;i++) {
-                int fs=typeinfo_size(fields[i]->field.type,p->sym->is_64bit);
+                ASTNode *fi = fields[i];
+                int fs=typeinfo_size(fi->field.type,p->sym->is_64bit);
+                /* typeinfo_size returns 4 for typedefs/structs — resolve via symtable */
+                if (fi->field.type && fi->field.type->pointer_depth==0 && fi->field.type->base) {
+                    const char *fb=fi->field.type->base;
+                    const char *bare=fb;
+                    if (strncmp(bare,"struct ",7)==0) bare+=7;
+                    else if (strncmp(bare,"union ",6)==0) bare+=6;
+                    if (bare!=fb) {
+                        char sk[280]; snprintf(sk,sizeof sk,"struct %s",bare);
+                        Symbol *ss2=symtable_lookup(p->sym,sk);
+                        if (ss2 && ss2->struct_size>0) fs=ss2->struct_size;
+                        else if (ss2 && ss2->struct_node) fs=symtable_sizeof_struct(p->sym,ss2->struct_node);
+                    } else {
+                        Symbol *td=symtable_lookup(p->sym,fb);
+                        if (td && td->kind==SYM_TYPEDEF && td->type && td->type->pointer_depth==0) {
+                            const char *tb=td->type->base; const char *tbare=tb;
+                            if (strncmp(tbare,"struct ",7)==0) tbare+=7;
+                            else if (strncmp(tbare,"union ",6)==0) tbare+=6;
+                            if (tbare!=tb) {
+                                char tk[280]; snprintf(tk,sizeof tk,"struct %s",tbare);
+                                Symbol *tss=symtable_lookup(p->sym,tk);
+                                if (tss && tss->struct_size>0) fs=tss->struct_size;
+                                else if (tss && tss->struct_node) fs=symtable_sizeof_struct(p->sym,tss->struct_node);
+                            } else {
+                                int ts=typeinfo_size(td->type,p->sym->is_64bit);
+                                if (ts>fs) fs=ts;
+                            }
+                        }
+                    }
+                }
                 int fa = fs < 8 ? fs : 8; /* natural alignment (max 8) */
                 if (fa < 1) fa = 1;
                 if (fa > max_align) max_align = fa;
-                if (fields[i]->field.array_size>0) fs*=fields[i]->field.array_size;
+                if (fi->field.array_size>0) fs*=fi->field.array_size;
                 if (is_union) { sz = fs>sz?fs:sz; }
                 else {
                     if (fa > 1) sz = (sz + fa - 1) & ~(fa - 1);
@@ -966,8 +996,10 @@ ASTNode *ParseFunction(Parser *p, const char *storage, TypeInfo *ret, const char
  * ========================================================================= */
 ASTNode *parse_program(Parser *p) {
     ASTNode *decls[1024]; int count=0;
+    printf("[PP_LOOP] start count=%d eof=%d\n",count,chk(p,TOK_EOF)); fflush(0);
     while (!chk(p,TOK_EOF)) {
         int line=cur(p).line;
+        printf("[PP_ITER] count=%d tokKind=%d\n",count,(int)cur(p).kind); fflush(0);
 
         /* struct / union definition at top level */
         if (chk(p,TOK_STRUCT)||chk(p,TOK_UNION)) {
@@ -1071,7 +1103,9 @@ ASTNode *parse_program(Parser *p) {
         char name[256]; strncpy(name,tok_ident(&cur(p)),sizeof name-1); adv(p);
 
         if (chk(p,TOK_LPAREN)) {
+            printf("[PP_FUNC] parsing func '%s' count=%d\n",name,count); fflush(0);
             decls[count++] = ParseFunction(p, storage[0]?storage:NULL, ret, name);
+            printf("[PP_FUNC_DONE] count=%d lexpos=%d eof=%d curtok=%d\n",count,p->lex->pos,chk(p,TOK_EOF),(int)cur(p).kind); fflush(0);
         } else {
             /* global variable */
             int arr=-1;

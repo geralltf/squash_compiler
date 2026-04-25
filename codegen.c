@@ -832,7 +832,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             /* EAX = heap handle; fix up the placeholder on stack           */
             /* [ESP+0] = placeholder we just pushed; EAX = real handle      */
             /* Re-push in correct order: handle, flags=8, size              */
-            asm_pop_reg(a, REG_EBX);            /* discard placeholder       */
+            asm_add_rsp(a, 4);                  /* discard placeholder (keep EBX clean) */
             asm_pop_reg(a, REG_ECX);            /* ECX = size                */
             asm_push_reg(a, REG_ECX);           /* push size                 */
             asm_push_imm32(a, 0);               /* push HeapAlloc flags=0    */
@@ -854,8 +854,8 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             codegen_expr(cg, args[0]);          /* count in RAX              */
             asm_push_reg(a, REG_RAX);
             codegen_expr(cg, args[1]);          /* size  in RAX              */
-            asm_pop_reg(a, REG_RBX);
-            asm_imul_reg_reg(a, REG_RAX, REG_RBX); /* RAX = count*size      */
+            asm_pop_reg(a, REG_RCX);            /* ECX/RCX = count (scratch, not callee-saved) */
+            asm_imul_reg_reg(a, REG_RAX, REG_RCX); /* RAX = count*size      */
         } else if (argc >= 1) {
             codegen_expr(cg, args[0]);
         } else {
@@ -877,7 +877,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             asm_push_reg(a, REG_EAX);
             asm_push_imm32(a, 0);
             asm_call_import32(a, "GetProcessHeap");
-            asm_pop_reg(a, REG_EBX);
+            asm_add_rsp(a, 4);                  /* discard placeholder (keep EBX clean) */
             asm_pop_reg(a, REG_ECX);
             asm_push_reg(a, REG_ECX);
             asm_push_imm32(a, 8); /* HEAP_ZERO_MEMORY */
@@ -938,7 +938,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             asm_push_reg(a, REG_EAX);               /* save size */
             asm_push_imm32(a, 0);                   /* placeholder */
             asm_call_import32(a, "GetProcessHeap");
-            asm_pop_reg(a, REG_EBX);                /* discard placeholder */
+            asm_add_rsp(a, 4);                      /* discard placeholder (keep EBX clean) */
             /* stack: [size, ptr], EAX = heap */
             asm_pop_reg(a, REG_ECX);                /* ECX = size */
             asm_pop_reg(a, REG_EDX);                /* EDX = ptr */
@@ -977,7 +977,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             asm_push_reg(a, REG_EAX);           /* save ptr                  */
             asm_push_imm32(a, 0);               /* placeholder               */
             asm_call_import32(a, "GetProcessHeap");
-            asm_pop_reg(a, REG_EBX);            /* discard placeholder       */
+            asm_add_rsp(a, 4);                  /* discard placeholder (keep EBX clean) */
             asm_pop_reg(a, REG_ECX);            /* ECX = ptr                 */
             asm_push_reg(a, REG_ECX);           /* push ptr (lpMem)          */
             asm_push_imm32(a, 0);               /* push flags=0              */
@@ -1914,6 +1914,7 @@ static int expr_has_call(ASTNode *n);
 void codegen_expr(CodeGen *cg, ASTNode *n) {
     Assembler *a=cg->asm_;
     if (!n) { asm_mov_reg_imm(a,REG_RAX,0); return; }
+    printf("[CE] kind=%d\n",n->kind); fflush(0);
 
     /* Float dispatch: route float arithmetic through SSE2/x87 codegen.
      * Only pure-value nodes: AST_FLOAT literal, AST_BINARY, AST_UNARY, AST_CAST.
@@ -2215,8 +2216,8 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
           int field_is_unsigned = 0; /* track for sign extension */
           int field_sz = 4; /* default field byte size */
           int field_found = 0; /* whether we successfully resolved the field type */
-          if (cg->is_64bit) {
-              /* Look up the field's TypeInfo to check pointer_depth */
+          /* Field type resolution — needed in both 32-bit and 64-bit modes */
+          {
               ASTNode *mobj = n->member.obj;
               const char *mfname = n->member.field;
               const char *mstype = NULL;
@@ -2224,14 +2225,12 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                   Symbol *sv = symtable_lookup(cg->sym, mobj->var.name);
                   if (sv && sv->type) mstype = sv->type->base;
               } else if (mobj->kind == AST_DEREF || n->member.arrow) {
-                  /* ptr->field: need to find the pointed-to struct type */
                   ASTNode *op = (mobj->kind==AST_DEREF) ? mobj->deref.operand : mobj;
                   if (op->kind == AST_VAR) {
                       Symbol *sv = symtable_lookup(cg->sym, op->var.name);
                       if (sv && sv->type) mstype = sv->type->base;
                   }
               } else if (mobj->kind == AST_MEMBER || mobj->kind == AST_INDEX) {
-                  /* Nested member access or array element: resolve chain */
                   mstype = resolve_node_type(cg->sym, mobj);
               }
               if (mstype) {
@@ -2244,16 +2243,16 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                       for (int _i=0;_i<ss->struct_node->struct_decl.nfields;_i++) {
                           ASTNode *ff=ss->struct_node->struct_decl.fields[_i];
                           if (ff&&ff->field.name&&strcmp(ff->field.name,mfname)==0&&ff->field.type) {
-                              if (ff->field.type->pointer_depth > 0) load64=1;
+                              if (ff->field.type->pointer_depth > 0) load64 = cg->is_64bit ? 1 : 0;
                               /* Fixed-size array field: array decays to pointer to first element.
                                * Return the address of the field instead of loading its value.
                                * IMPORTANT: Use upper-bound guard < 0x40000000 to prevent false positives
-                               * when squash zero-extends int field -1 to 4294967295 (which is > 0 as 64-bit signed). */
+                               * when squash zero-extends int field -1 to 4294967295. */
                               if ((ff->field.type->array_size > 0 && ff->field.type->array_size < 0x40000000) ||
                                   (ff->field.array_size > 0 && ff->field.array_size < 0x40000000))
                                   is_array_field = 1;
                               field_is_unsigned = ff->field.type->is_unsigned;
-                              field_sz = typeinfo_size(ff->field.type, 1);
+                              field_sz = typeinfo_size(ff->field.type, cg->is_64bit);
                               if (field_sz < 1) field_sz = 1;
                               field_found = 1;
                               break;
@@ -2274,24 +2273,43 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
               } else {
                   asm_emit3(a,0x48,0x8B,0x80); asm_emit_u32(a,(uint32_t)foff);
               }
-          } else {
-              /* 32-bit or 8-bit int load. Use movsxd for confirmed signed 4-byte fields. */
+          } else if (cg->is_64bit) {
+              /* 64-bit mode: use movsxd for signed 4-byte, mov rax for 8-byte */
               if (field_found && !field_is_unsigned && field_sz == 4) {
-                  /* signed 32-bit int (confirmed or assumed): movsxd rax,[rax+foff] */
                   if (foff == 0) {
-                      asm_emit3(a,0x48,0x63,0x00); /* movsxd rax,[rax] */
+                      asm_emit3(a,0x48,0x63,0x00);
                   } else if (foff < 128) {
-                      asm_emit4(a,0x48,0x63,0x40,(uint8_t)foff); /* movsxd rax,[rax+disp8] */
+                      asm_emit4(a,0x48,0x63,0x40,(uint8_t)foff);
                   } else {
-                      asm_emit3(a,0x48,0x63,0x80); asm_emit_u32(a,(uint32_t)foff); /* movsxd rax,[rax+disp32] */
+                      asm_emit3(a,0x48,0x63,0x80); asm_emit_u32(a,(uint32_t)foff);
                   }
               } else if (field_found && field_sz == 8) {
-                  /* 64-bit non-pointer field (double, long long, uint64_t, etc.) */
                   if (foff == 0) asm_emit3(a,0x48,0x8B,0x00);
                   else if (foff < 128) asm_emit4(a,0x48,0x8B,0x40,(uint8_t)foff);
                   else { asm_emit3(a,0x48,0x8B,0x80); asm_emit_u32(a,(uint32_t)foff); }
               } else {
-                  /* unsigned, unknown, or non-32-bit: zero-extend (mov eax,[rax+foff]) */
+                  if (foff == 0) {
+                      asm_emit2(a,0x8B,0x00);
+                  } else if (foff < 128) {
+                      asm_emit3(a,0x8B,0x40,(uint8_t)foff);
+                  } else {
+                      asm_emit2(a,0x8B,0x80); asm_emit_u32(a,(uint32_t)foff);
+                  }
+              }
+          } else {
+              /* 32-bit mode loads */
+              if (field_found && field_sz == 1) {
+                  /* movzx eax, byte[eax+foff] */
+                  if (foff == 0) { asm_emit3(a,0x0F,0xB6,0x00); }
+                  else if (foff < 128) { asm_emit4(a,0x0F,0xB6,0x40,(uint8_t)foff); }
+                  else { asm_emit3(a,0x0F,0xB6,0x80); asm_emit_u32(a,(uint32_t)foff); }
+              } else if (field_found && field_sz == 2) {
+                  /* movzx eax, word[eax+foff] */
+                  if (foff == 0) { asm_emit3(a,0x0F,0xB7,0x00); }
+                  else if (foff < 128) { asm_emit4(a,0x0F,0xB7,0x40,(uint8_t)foff); }
+                  else { asm_emit3(a,0x0F,0xB7,0x80); asm_emit_u32(a,(uint32_t)foff); }
+              } else {
+                  /* 4-byte load: mov eax, [eax+foff] */
                   if (foff == 0) {
                       asm_emit2(a,0x8B,0x00);
                   } else if (foff < 128) {
@@ -2422,11 +2440,13 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
              * For array subscripts use elem_size_of; for struct members
              * look up the actual field TypeInfo; for pointer vars use 8. */
             int store_sz = 4;
-            if (cg->is_64bit) {
+            {
                 ASTNode *lhs = n->assign.lhs;
                 if (lhs->kind == AST_INDEX) {
-                    store_sz = elem_size_of(cg, lhs->index.array);
-                } else if (lhs->kind == AST_MEMBER) {
+                    int esz = elem_size_of(cg, lhs->index.array);
+                    if (!cg->is_64bit) { if (esz == 1 || esz == 2) store_sz = esz; }
+                    else store_sz = esz;
+                } else if (cg->is_64bit && lhs->kind == AST_MEMBER) {
                     /* Walk to the containing struct and get the field's TypeInfo */
                     ASTNode *obj = lhs->member.obj;
                     const char *fname = lhs->member.field;
@@ -2474,10 +2494,10 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                             }
                         }
                     }
-                } else if (lhs->kind == AST_VAR) {
+                } else if (cg->is_64bit && lhs->kind == AST_VAR) {
                     Symbol *sv = symtable_lookup(cg->sym, lhs->var.name);
                     if (sv && sv->type && sv->type->pointer_depth > 0) store_sz = 8;
-                } else if (lhs->kind == AST_DEREF) {
+                } else if (cg->is_64bit && lhs->kind == AST_DEREF) {
                     /* *ptr = val — width from ptr's base type */
                     ASTNode *op = lhs->deref.operand;
                     if (op && op->kind == AST_VAR) {
@@ -2680,7 +2700,7 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
 
         if (is_internal_shim(name)) {
             /* shim_uses_regs: string/memory shims that clobber ESI/EDI/EBX in 32-bit */
-                        if (!cg->is_64bit && (!strcmp(name,"strcpy")||!strcmp(name,"strcmp")||!strcmp(name,"strnamecmp")||                !strcmp(name,"strcat")||!strcmp(name,"strnamecat")||!strcmp(name,"strchr")||!strcmp(name,"strstr")||                !strcmp(name,"strnamecpy")||!strcmp(name,"atoi")||!strcmp(name,"atol")||!strcmp(name,"memcmp")||                !strcmp(name,"memcpy")||!strcmp(name,"memmove")||!strcmp(name,"memset"))) {
+                        if (!cg->is_64bit && (!strcmp(name,"strcpy")||!strcmp(name,"strcmp")||!strcmp(name,"strncmp")||                !strcmp(name,"strcat")||!strcmp(name,"strncat")||!strcmp(name,"strchr")||!strcmp(name,"strstr")||                !strcmp(name,"strncpy")||!strcmp(name,"atoi")||!strcmp(name,"atol")||!strcmp(name,"memcmp")||                !strcmp(name,"memcpy")||!strcmp(name,"memmove")||!strcmp(name,"memset"))) {
                 /* Save callee-preserved registers that shims may clobber in 32-bit */
                 asm_push_reg(a, REG_EBX);
                 asm_push_reg(a, REG_ESI);
@@ -2940,6 +2960,7 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
 void codegen_stmt(CodeGen *cg, ASTNode *n) {
     Assembler *a=cg->asm_;
     if (!n) return;
+    printf("[CS] kind=%d\n",n->kind); fflush(0);
     switch (n->kind) {
     case AST_BLOCK: {
         /* Check if this is a flat declarator list (all children are VAR_DECL).
@@ -3269,7 +3290,9 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
     }
 
     case AST_RETURN:
+        printf("[RET] ret.expr=%p\n",(void*)n->ret.expr); fflush(0);
         if (n->ret.expr) {
+            printf("[RET2] kind=%d\n",n->ret.expr->kind); fflush(0);
             if (codegen_is_float_expr(cg, n->ret.expr)) {
                 /* Float-returning function: result must be in XMM0 (64-bit)
                  * or ST0 (32-bit x87). */
@@ -3311,6 +3334,7 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
     if (!n||n->kind!=AST_FUNC_DECL) return;
     if (!n->func.body) return; /* forward declaration */
 
+    printf("[CGF] %s\n",n->func.name); fflush(0);
     int lid=get_func_label(cg,n->func.name);
     asm_def_label(a,lid);
 
@@ -3475,7 +3499,9 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
         }
     }
     /* Generate function body; locals accumulate into sym->next_offset */
+    printf("[CGF_BODY] %s\n",n->func.name); fflush(0);
     codegen_stmt(cg,n->func.body);
+    printf("[CGF_DONE] %s\n",n->func.name); fflush(0);
 
     /* Default return 0 at fall-through */
     asm_mov_reg_imm(a,REG_RAX,0);
@@ -3608,12 +3634,16 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
      * Forward declarations (body==NULL) and typedef/struct/enum nodes are skipped. */
     for (int i=0;i<prog->program.count;i++) {
         ASTNode *d=prog->program.decls[i];
+        printf("[P2] i=%d count=%d d=%p kind=%d\n",i,prog->program.count,(void*)d,d?d->kind:-1); fflush(0);
+        if (!d) continue;
         if (d->kind==AST_FUNC_DECL && d->func.body!=NULL) {
             codegen_func(cg,d);
         }
         /* (Global VAR_DECLs handled in Pass 0 above) */
     }
+    printf("[CG_RESOLVE] calling asm_resolve label_count=%d\n",cg->asm_->label_count); fflush(0);
     asm_resolve(cg->asm_);
+    printf("[CG_RESOLVE_DONE]\n"); fflush(0);
 }
 
 uint8_t    *codegen_get_text  (CodeGen *cg, int *len) { *len=cg->asm_->code_len; return cg->asm_->code; }
@@ -3698,12 +3728,19 @@ int codegen_is_float_expr(CodeGen *cg, ASTNode *n) {
     }
     case AST_CAST: return n->cast.type && is_float_type(cg, n->cast.type);
     case AST_BINARY: {
+        printf("[FLT] binary op=%c%c left=%p right=%p\n",n->binary.op[0],n->binary.op[1],(void*)n->binary.left,(void*)n->binary.right); fflush(0);
+        if (n->binary.left)  { printf("[FLT_L] left->kind=%d\n",n->binary.left->kind);  fflush(0); }
+        if (n->binary.right) { printf("[FLT_R] right->kind=%d\n",n->binary.right->kind); fflush(0); }
+        printf("[FLT_OP] op addr=%p op0=%d\n",(void*)n->binary.op,(int)n->binary.op[0]); fflush(0);
         const char *op = n->binary.op;
+        printf("[FLT_STRCMP] op=%s\n",op); fflush(0);
         /* Comparison ops always return int (0/1), even if operands are float */
         int is_cmp = (!strcmp(op,"==")||!strcmp(op,"!=")||!strcmp(op,"<")||
                      !strcmp(op,"<=")||!strcmp(op,">")||!strcmp(op,">="));
+        printf("[FLT_ISCMP] is_cmp=%d\n",is_cmp); fflush(0);
         if (is_cmp) return 0;
         /* For arithmetic ops: if either operand is float, result is float */
+        printf("[FLT2] going recursive left=%p right=%p\n",(void*)n->binary.left,(void*)n->binary.right); fflush(0);
         return codegen_is_float_expr(cg, n->binary.left) ||
                codegen_is_float_expr(cg, n->binary.right);
     }

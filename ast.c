@@ -5,7 +5,7 @@
 
 char* my_strdup(const char* src) {
     if (!src) return NULL;
-    size_t len = strlen(src) + 1;
+    int len = (int)strlen(src) + 1;
     char* dest = malloc(len);
     if (dest == NULL) return NULL;
     memcpy(dest, src, len);

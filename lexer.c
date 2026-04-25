@@ -451,10 +451,17 @@ static void pp_macro_define(PPState *st, const char *name, int nlen,
         return;
     }
     if (st->nmc >= PP_MAX_MACROS) return;
-    { char *_snd=malloc(nlen+1); strncpy(_snd,name,nlen); _snd[nlen]='\0'; st->macros[st->nmc].name=_snd; }
+    { char *_snd=malloc(nlen+1);
+      printf("[PPD] malloc=%x nlen=%d\n",(int)(long)_snd,nlen); fflush(0);
+      strncpy(_snd,name,nlen);
+      _snd[nlen]='\0';
+      printf("[PPD] after nulterm\n"); fflush(0);
+      st->macros[st->nmc].name=_snd; }
+    printf("[PPD] before value\n"); fflush(0);
     st->macros[st->nmc].value = my_strdup(value);
     st->macros[st->nmc].nparams = -1;
     st->nmc++;
+    printf("[PPD] done nmc=%d\n",st->nmc); fflush(0);
 }
 
 static void pp_macro_undef(PPState *st, const char *name) {
@@ -932,20 +939,22 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
 /* Public API — initialises state with built-in macros, then processes. */
 char *preprocess(const char *src, const char *filename,
                  const char **inc_dirs, int n_dirs) {
+    printf("[PP] calloc\n"); fflush(0);
     PPState *st = calloc(1, sizeof(PPState));
+    printf("[PP] st=%x sz=%d\n",(int)st,(int)sizeof(PPState)); fflush(0);
     st->inc_dirs = inc_dirs;
     st->n_dirs   = n_dirs;
 
     /* Built-in macros */
-    pp_macro_define(st,"NULL",4,"0");
-    pp_macro_define(st,"TRUE",4,"1");
-    pp_macro_define(st,"FALSE",5,"0");
-    pp_macro_define(st,"EXIT_SUCCESS",12,"0");
-    pp_macro_define(st,"EXIT_FAILURE",12,"1");
-    /* Standard streams: use msvcrt file descriptor values */
-    pp_macro_define(st,"stdin", 5,"((void*)0)");
-    pp_macro_define(st,"stdout",6,"((void*)1)");
-    pp_macro_define(st,"stderr",6,"((void*)2)");
+    printf("[PP] NULL\n"); fflush(0); pp_macro_define(st,"NULL",4,"0");
+    printf("[PP] TRUE\n"); fflush(0); pp_macro_define(st,"TRUE",4,"1");
+    printf("[PP] FALSE\n"); fflush(0); pp_macro_define(st,"FALSE",5,"0");
+    printf("[PP] EXIT_SUCCESS\n"); fflush(0); pp_macro_define(st,"EXIT_SUCCESS",12,"0");
+    printf("[PP] EXIT_FAILURE\n"); fflush(0); pp_macro_define(st,"EXIT_FAILURE",12,"1");
+    printf("[PP] stdin\n"); fflush(0); pp_macro_define(st,"stdin", 5,"((void*)0)");
+    printf("[PP] stdout\n"); fflush(0); pp_macro_define(st,"stdout",6,"((void*)1)");
+    printf("[PP] stderr\n"); fflush(0); pp_macro_define(st,"stderr",6,"((void*)2)");
+    printf("[PP] macros done\n"); fflush(0);
 
     char *result = process_file(st, src, filename);
 
