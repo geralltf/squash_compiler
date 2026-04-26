@@ -387,10 +387,29 @@ Symbol *symtable_lookup(SymTable *st, const char *name) {
     Scope *sc = st->current;
     while (sc) {
         Symbol *s = sc->head;
-        while (s) { if (strcmp(s->name,name)==0) return s; s=s->next; }
+        while (s) {
+            if (strcmp(s->name,name)==0) return s;
+            s=s->next;
+        }
         sc=sc->parent;
     }
     return NULL;
+}
+
+/* Debug helper: count global scope symbols */
+int symtable_global_count(SymTable *st) {
+    Scope *g = st->current;
+    while (g->parent) g=g->parent;
+    int c=0; Symbol *s=g->head; while(s){c++;s=s->next;} return c;
+}
+/* Debug: print last N in global chain */
+void symtable_check_global(SymTable *st, const char *tag) {
+    Scope *g = st->current;
+    while (g->parent) g=g->parent;
+    int c=0; Symbol *s=g->head;
+    Symbol *prev=NULL;
+    while(s){c++;prev=s;s=s->next;}
+    printf("[SCG] %s count=%d last=%p\n", tag, c, (void*)prev); fflush(0);
 }
 
 void symtable_reset_locals(SymTable *st) { st->next_offset=0; }

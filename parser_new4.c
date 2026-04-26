@@ -996,10 +996,8 @@ ASTNode *ParseFunction(Parser *p, const char *storage, TypeInfo *ret, const char
  * ========================================================================= */
 ASTNode *parse_program(Parser *p) {
     ASTNode *decls[1024]; int count=0;
-    printf("[PP_LOOP] start count=%d eof=%d\n",count,chk(p,TOK_EOF)); fflush(0);
     while (!chk(p,TOK_EOF)) {
         int line=cur(p).line;
-        printf("[PP_ITER] count=%d tokKind=%d\n",count,(int)cur(p).kind); fflush(0);
 
         /* struct / union definition at top level */
         if (chk(p,TOK_STRUCT)||chk(p,TOK_UNION)) {
@@ -1103,9 +1101,7 @@ ASTNode *parse_program(Parser *p) {
         char name[256]; strncpy(name,tok_ident(&cur(p)),sizeof name-1); adv(p);
 
         if (chk(p,TOK_LPAREN)) {
-            printf("[PP_FUNC] parsing func '%s' count=%d\n",name,count); fflush(0);
             decls[count++] = ParseFunction(p, storage[0]?storage:NULL, ret, name);
-            printf("[PP_FUNC_DONE] count=%d lexpos=%d eof=%d curtok=%d\n",count,p->lex->pos,chk(p,TOK_EOF),(int)cur(p).kind); fflush(0);
         } else {
             /* global variable */
             int arr=-1;

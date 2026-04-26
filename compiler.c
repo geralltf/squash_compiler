@@ -71,12 +71,9 @@ int main(int argc, char **argv) {
     fflush(0);
 
     /* Stage 1: Read + preprocess */
-    printf("[DBG] before read_file\n"); fflush(0);
     char *raw=read_file(src_path);
-    printf("[DBG] after read_file, before preprocess\n"); fflush(0);
     include_dirs[n_inc]=NULL;
     char *src=preprocess(raw,src_path,include_dirs,n_inc);
-    printf("[DBG] after preprocess\n"); fflush(0);
     free(raw);
 
     /* Stage 1b: Optionally dump preprocessed output */
@@ -86,24 +83,22 @@ int main(int argc, char **argv) {
 
     /* Stage 2: Lex */
     Lexer lex;
-    printf("[DBG] before lexer_init\n"); fflush(0);
     lexer_init(&lex,src,src_path);
 
     /* Stage 3: Symbol table */
     SymTable sym;
-    printf("[DBG] before symtable_init\n"); fflush(0);
     symtable_init(&sym,is_64bit);
 
     /* Stage 4: Parse */
     Parser parser;
-    printf("[DBG] before parse_program\n"); fflush(0);
     parser_init(&parser,&lex,&sym,src_path);
+    printf("[PARSE] start\n"); fflush(0);
     ASTNode *prog=parse_program(&parser);
+    printf("[PARSE] done prog=%p errors=%d\n",(void*)prog,parser.error_count); fflush(0);
     if (parser.error_count>0) {
         printf("%d compile error(s). Aborting.\n",parser.error_count);
         return 1;
     }
-    printf("[DBG] after parse_program\n"); fflush(0);
 
     if (dump) {
         printf("\n=== AST ===\n"); ast_print(prog,0);
@@ -116,7 +111,6 @@ int main(int argc, char **argv) {
     CodeGen cg;
     codegen_init(&cg,&as,&sym,is_64bit);
     codegen_program(&cg,prog);
-    printf("[DBG] after codegen_program\n"); fflush(0);
 
     if (dump) {
         printf("=== .text (%d bytes) ===\n",as.code_len);
@@ -127,47 +121,36 @@ int main(int argc, char **argv) {
         printf("\n");
     }
 
-    printf("[DBG] inject_entry_reloc\n"); fflush(0);
     inject_entry_reloc(&as,"main");
-    printf("[DBG] inject_entry_reloc done\n"); fflush(0);
 
     /* Stage 6: Gather string labels */
     int rdata_len=0;
-    printf("[DBG] get_rdata string_count=%d\n",cg.string_count); fflush(0);
     uint8_t *rdata_data=codegen_get_rdata(&cg,&rdata_len);
-    printf("[DBG] get_rdata done rdata_len=%d\n",rdata_len); fflush(0);
     char **str_labels=malloc(cg.string_count*sizeof(char*));
     int  *str_offsets=malloc(cg.string_count*sizeof(int));
     for (int i=0;i<cg.string_count;i++) {
         str_labels[i]=cg.strings[i].label;
         str_offsets[i]=cg.strings[i].offset;
     }
-    printf("[DBG] str_labels done\n"); fflush(0);
 
     /* Stage 7: PE build + link */
     int text_len=0;
     uint8_t *text=codegen_get_text(&cg,&text_len);
-    printf("[DBG] get_text done text_len=%d\n",text_len); fflush(0);
     int reloc_count=0;
     Relocation *relocs=codegen_get_relocs(&cg,&reloc_count);
-    printf("[DBG] get_relocs done reloc_count=%d\n",reloc_count); fflush(0);
 
     /* Resolve RELOC_TEXT_ABS32 (function pointer addresses in 32-bit mode) */
     uint32_t text_rva_val  = 0x1000;
     uint64_t image_base_val = is_64bit ? 0x140000000ULL : 0x00400000ULL;
-    printf("[DBG] asm_resolve_text_relocs\n"); fflush(0);
     asm_resolve_text_relocs(&as, text_rva_val, image_base_val);
-    printf("[DBG] asm_resolve_text_relocs done\n"); fflush(0);
 
     /* Build wdata label/offset arrays for the PE builder */
-    printf("[DBG] wdata_count=%d wdata_pool_size=%d\n",cg.wdata_count,cg.wdata_pool_size); fflush(0);
     char **wdata_labels  = malloc(cg.wdata_count * sizeof(char*));
     int  *wdata_offsets  = malloc(cg.wdata_count * sizeof(int));
     for (int i=0; i<cg.wdata_count; i++) {
         wdata_labels[i]  = cg.wdata[i].label;
         wdata_offsets[i] = cg.wdata[i].offset;
     }
-    printf("[DBG] wdata_labels done\n"); fflush(0);
 
     PEBuildInput pbi; memset(&pbi,0,sizeof pbi);
     pbi.is_64bit          = is_64bit;
@@ -190,7 +173,6 @@ int main(int argc, char **argv) {
     pbi.entry_func        = "main";
     pbi.output_path       = out_path;
 
-    printf("[DBG] pe_link_and_write\n"); fflush(0);
     int rc=pe_link_and_write(&pbi);
     free(src);
     free(str_labels); free(str_offsets);

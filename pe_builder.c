@@ -264,7 +264,6 @@ static void dll_group_add_func(DLLGroup *g, const char *func) {
 int pe_link_and_write(PEBuildInput *in) {
     int is64 = in->is_64bit;
     int thunk_size = is64 ? 8 : 4;
-    printf("[PE1] import_count=%d text_len=%d reloc_count=%d\n",in->import_count,in->text_len,in->reloc_count); fflush(0);
     /* -----------------------------------------------------------------------
      * Step 1: Parse "DLL:func" import specs, group by DLL
      * -------------------------------------------------------------------- */
@@ -422,7 +421,6 @@ int pe_link_and_write(PEBuildInput *in) {
     /* -----------------------------------------------------------------------
      * Step 5: Build .rdata blob
      * -------------------------------------------------------------------- */
-    printf("[PE5] gc=%d text_raw=%u rdata_size=%u\n",gc,(unsigned)text_raw,(unsigned)rdata_size); fflush(0);
     uint8_t *rdata = calloc(rdata_size, 1);
 
     /* --- Import Descriptor Table --- */
@@ -484,7 +482,6 @@ int pe_link_and_write(PEBuildInput *in) {
      *   RELOC_ABS32:      patch with absolute VA of IAT slot or data label
      *   RELOC_DATA_REL32: patch with RIP-relative disp to string in .rdata
      * -------------------------------------------------------------------- */
-    printf("[PE6] text_raw=%u patching %d relocs\n",(unsigned)text_raw,in->reloc_count); fflush(0);
     uint8_t *text = malloc(text_raw);
     memset(text, 0, text_raw);
     memcpy(text, in->text, in->text_len);
@@ -597,7 +594,6 @@ int pe_link_and_write(PEBuildInput *in) {
         }
     }
     free(iat_entries);
-    printf("[PE7] reloc patching done, building header\n"); fflush(0);
     /* -----------------------------------------------------------------------
      * Step 7: Build header block
      * -------------------------------------------------------------------- */
@@ -648,27 +644,23 @@ int pe_link_and_write(PEBuildInput *in) {
         SEC_ALIGN, bss_rva, 0, 0,
         0x00000080|0x40000000|0x80000000); /* CNT_UNINIT|R|W */
 
-    printf("[PE8] hdr_size=%u opening file %s\n",(unsigned)hdr_size,in->output_path); fflush(0);
     /* -----------------------------------------------------------------------
      * Step 8: Write the output PE file
      * -------------------------------------------------------------------- */
     FILE *fp = fopen(in->output_path, "wb");
     if (!fp) { perror("fopen output"); free(groups); return 1; }
 
-    printf("[PE8b] data_raw=%u\n",(unsigned)data_raw); fflush(0);
     uint8_t *data_section = calloc(data_raw, 1);
     /* Copy wdata pool into .data section */
     if (in->wdata_bytes && in->wdata_len > 0)
         memcpy(data_section, in->wdata_bytes, in->wdata_len);
 
-    printf("[PE8c] writing %u+%u+%u+%u bytes\n",(unsigned)hdr_size,(unsigned)text_raw,(unsigned)rdata_size,(unsigned)data_raw); fflush(0);
     fwrite(hdr,          1, hdr_size,  fp);
     fwrite(text,         1, text_raw,  fp);
     fwrite(rdata,        1, rdata_size,fp);
     fwrite(data_section, 1, data_raw,  fp);
 
     fclose(fp);
-    printf("[PE8d] file written, computing checksum\n"); fflush(0);
 
     /* Compute and patch the PE checksum.
      * The checksum is at: e_lfanew + 4 + 20 + 64 = e_lfanew + 88 bytes.
@@ -712,10 +704,7 @@ int pe_link_and_write(PEBuildInput *in) {
         }
     }
 
-    printf("[PE9] all done\n"); fflush(0);
-    printf("[PE9b] printing summary gc=%d\n",gc); fflush(0);
     printf("PE written: %s\n", in->output_path);
-    printf("[PE9c] PE written printed\n"); fflush(0);
     printf("  %-10s file=0x%04X  RVA=0x%04X  size=%u\n",
            ".text",  text_foff,  text_rva,  (unsigned)in->text_len);
     printf("  %-10s file=0x%04X  RVA=0x%04X  size=%u\n",
@@ -733,16 +722,14 @@ int pe_link_and_write(PEBuildInput *in) {
     }
 
     /* Cleanup */
-    printf("[PE_CLEANUP]\n"); fflush(0);
-    free(hdr); printf("[PE_CL1]\n"); fflush(0);
-    free(text); printf("[PE_CL2]\n"); fflush(0);
-    free(rdata); printf("[PE_CL3]\n"); fflush(0);
-    free(data_section); printf("[PE_CL4]\n"); fflush(0);
-    free(dll_iat_off); printf("[PE_CL5]\n"); fflush(0);
-    free(dll_name_off); printf("[PE_CL6]\n"); fflush(0);
+    free(hdr);
+    free(text);
+    free(rdata);
+    free(data_section);
+    free(dll_iat_off);
+    free(dll_name_off);
     for (int i=0;i<gc;i++) { free(hn_off[i]); free(groups[i].dll); free(groups[i].funcs); }
-    printf("[PE_CL7]\n"); fflush(0);
-    free(hn_off); printf("[PE_CL8]\n"); fflush(0);
-    free(groups); printf("[PE_CL9]\n"); fflush(0);
+    free(hn_off);
+    free(groups);
     return 0;
 }
