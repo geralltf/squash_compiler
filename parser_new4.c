@@ -663,15 +663,15 @@ ASTNode *ParseStatement(Parser *p) {
         while (!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF)) {
             if (chk(p,TOK_CASE)) {
                 adv(p);
-                long long val=0;
+                int val=0;
                 /* check for enum value or number */
-                if (chk(p,TOK_NUMBER)) { val=cur(p).ival; adv(p); }
+                if (chk(p,TOK_NUMBER)) { val=(int)cur(p).ival; adv(p); }
                 else if (chk(p,TOK_IDENT)) {
                     Symbol *s=symtable_lookup(p->sym,tok_ident(&cur(p)));
-                    if (s&&s->kind==SYM_ENUM_VAL) val=s->enum_value;
+                    if (s&&s->kind==SYM_ENUM_VAL) val=(int)s->enum_value;
                     else parse_error(p,"case value must be constant");
                     adv(p);
-                } else if (chk(p,TOK_CHAR_LIT)) { val=cur(p).ival; adv(p); }
+                } else if (chk(p,TOK_CHAR_LIT)) { val=(int)cur(p).ival; adv(p); }
                 else { parse_error(p,"expected case constant"); }
                 eat(p,TOK_COLON);
                 ASTNode *body[256]; int nb=0;

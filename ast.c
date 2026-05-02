@@ -213,7 +213,7 @@ ASTNode *ast_switch(ASTNode *expr, ASTNode **cases, int nc, int line) {
     if (nc>0) { n->switch_.cases=malloc(nc*sizeof(ASTNode*)); memcpy(n->switch_.cases,cases,nc*sizeof(ASTNode*)); }
     return n;
 }
-ASTNode *ast_case(long long value, ASTNode **body, int nb, int line) {
+ASTNode *ast_case(int value, ASTNode **body, int nb, int line) {
     ASTNode *n=an(AST_CASE,line); n->case_.value=value; n->case_.is_default=0; n->case_.nb=nb;
     if (nb>0) { n->case_.body=malloc(nb*sizeof(ASTNode*)); memcpy(n->case_.body,body,nb*sizeof(ASTNode*)); }
     return n;

@@ -98,7 +98,7 @@ struct ASTNode {
         struct { ASTNode *body; ASTNode *cond; }          do_while;
         struct { ASTNode *init; ASTNode *cond; ASTNode *step; ASTNode *body; } for_;
         struct { ASTNode *expr; ASTNode **cases; int nc; } switch_;
-        struct { long long value; ASTNode **body; int nb; int is_default; } case_;
+        struct { int value; ASTNode **body; int nb; int is_default; } case_;
         struct { ASTNode **body; int nb; }                default_;
         struct { ASTNode *expr; }                         ret;
         struct { char *label; }                           goto_;
@@ -180,7 +180,7 @@ ASTNode *ast_while      (ASTNode *cond, ASTNode *body, int line);
 ASTNode *ast_do_while   (ASTNode *body, ASTNode *cond, int line);
 ASTNode *ast_for        (ASTNode *init, ASTNode *cond, ASTNode *step, ASTNode *body, int line);
 ASTNode *ast_switch     (ASTNode *expr, ASTNode **cases, int nc, int line);
-ASTNode *ast_case       (long long value, ASTNode **body, int nb, int line);
+ASTNode *ast_case       (int value, ASTNode **body, int nb, int line);
 ASTNode *ast_default    (ASTNode **body, int nb, int line);
 ASTNode *ast_return     (ASTNode *expr, int line);
 ASTNode *ast_break      (int line);

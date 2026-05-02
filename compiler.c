@@ -92,9 +92,7 @@ int main(int argc, char **argv) {
     /* Stage 4: Parse */
     Parser parser;
     parser_init(&parser,&lex,&sym,src_path);
-    printf("[PARSE] start\n"); fflush(0);
     ASTNode *prog=parse_program(&parser);
-    printf("[PARSE] done prog=%p errors=%d\n",(void*)prog,parser.error_count); fflush(0);
     if (parser.error_count>0) {
         printf("%d compile error(s). Aborting.\n",parser.error_count);
         return 1;

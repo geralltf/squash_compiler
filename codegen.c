@@ -747,7 +747,6 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
         {
             char key[64]; snprintf(key,sizeof key,"msvcrt.dll:%s",name);
             symtable_add_import(cg->sym,key);
-            printf("[PF_A] name=%s is_64bit=%d argc=%d\n",name,cg->is_64bit,argc); fflush(0);
             if (cg->is_64bit) {
                 /* Eval args into RCX,RDX,R8,R9 FIRST (no shadow yet - no red zone).
                  * Save already-set regs if subsequent arg evaluation clobbers them
@@ -783,9 +782,7 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
                     if(af){codegen_float_expr(cg,args[i]);asm_movsd_store(a,REG_RSP,32+(i-4)*8,0);}
                     else{codegen_expr(cg,args[i]);asm_mov_mem_reg(a,REG_RSP,32+(i-4)*8,REG_RAX);}
                 }
-                printf("[PF_B] calling asm_call_import name=%s\n",name); fflush(0);
                 asm_call_import(a,name);
-                printf("[PF_C] done\n"); fflush(0);
                 asm_add_rsp(a,frame);
             } else {
                 /* 32-bit cdecl: push args right-to-left */
@@ -934,23 +931,36 @@ static void emit_internal_call(CodeGen *cg, const char *name, ASTNode **args, in
             asm_add_rsp(a, 40);
             asm_def_label(a, done_lbl);
         } else {
-            /* 32-bit stdcall HeapReAlloc(heap, flags, ptr, size) */
+            /* 32-bit: realloc(ptr,size) → HeapAlloc if ptr==NULL, else HeapReAlloc */
             asm_push_reg(a, REG_EAX);               /* save ptr */
             if (argc >= 2) codegen_expr(cg, args[1]);
             else           asm_mov_reg_imm(a, REG_RAX, 0);
             asm_push_reg(a, REG_EAX);               /* save size */
-            asm_push_imm32(a, 0);                   /* placeholder */
+            asm_push_imm32(a, 0);                   /* placeholder for GetProcessHeap call */
             asm_call_import32(a, "GetProcessHeap");
-            asm_add_rsp(a, 4);                      /* discard placeholder (keep EBX clean) */
+            asm_add_rsp(a, 4);                      /* discard placeholder */
             /* stack: [size, ptr], EAX = heap */
             asm_pop_reg(a, REG_ECX);                /* ECX = size */
             asm_pop_reg(a, REG_EDX);                /* EDX = ptr */
-            /* push stdcall args right-to-left: heap, flags, ptr, size */
+            /* if ptr==NULL use HeapAlloc (HeapReAlloc crashes on NULL ptr) */
+            int _ra32_alloc = asm_new_label(a, "realloc_alloc32");
+            int _ra32_done  = asm_new_label(a, "realloc_done32");
+            asm_emit2(a, 0x85, 0xD2);               /* test edx,edx */
+            asm_jcc_label(a, CC_E, _ra32_alloc);
+            /* HeapReAlloc(heap, 0, ptr, size) — ptr is non-NULL */
             asm_push_reg(a, REG_ECX);               /* push size */
             asm_push_reg(a, REG_EDX);               /* push ptr */
             asm_push_imm32(a, 0);                   /* push flags=0 */
             asm_push_reg(a, REG_EAX);               /* push heap */
             asm_call_import32(a, "HeapReAlloc");
+            asm_jmp_label(a, _ra32_done);
+            asm_def_label(a, _ra32_alloc);
+            /* HeapAlloc(heap, 0, size) — ptr was NULL */
+            asm_push_reg(a, REG_ECX);               /* push size */
+            asm_push_imm32(a, 0);                   /* push flags=0 */
+            asm_push_reg(a, REG_EAX);               /* push heap */
+            asm_call_import32(a, "HeapAlloc");
+            asm_def_label(a, _ra32_done);
         }
         return;
     }
@@ -1917,8 +1927,6 @@ static int expr_has_call(ASTNode *n);
 void codegen_expr(CodeGen *cg, ASTNode *n) {
     Assembler *a=cg->asm_;
     if (!n) { asm_mov_reg_imm(a,REG_RAX,0); return; }
-    printf("[CX] kind=%d\n", n->kind); fflush(0);
-
     /* Float dispatch: route float arithmetic through SSE2/x87 codegen.
      * Only pure-value nodes: AST_FLOAT literal, AST_BINARY, AST_UNARY, AST_CAST.
      * AST_ASSIGN and AST_VAR are handled below to avoid mutual recursion.    */
@@ -2701,12 +2709,16 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
 
     case AST_CALL: {
         const char *name=n->call.name;
-        printf("[CX_CALL] name=%s argc=%d\n", name?name:"null", n->call.argc); fflush(0);
         Symbol *sym=symtable_lookup(cg->sym,name);
-
         if (is_internal_shim(name)) {
-            /* shim_uses_regs: string/memory shims that clobber ESI/EDI/EBX in 32-bit */
-                        if (!cg->is_64bit && (!strcmp(name,"strcpy")||!strcmp(name,"strcmp")||!strcmp(name,"strncmp")||                !strcmp(name,"strcat")||!strcmp(name,"strncat")||!strcmp(name,"strchr")||!strcmp(name,"strstr")||                !strcmp(name,"strncpy")||!strcmp(name,"atoi")||!strcmp(name,"atol")||!strcmp(name,"memcmp")||                !strcmp(name,"memcpy")||!strcmp(name,"memmove")||!strcmp(name,"memset"))) {
+            int _snrs = 0;
+            if (!cg->is_64bit) {
+                _snrs = (!strcmp(name,"strcpy")||!strcmp(name,"strcmp")||!strcmp(name,"strncmp")||
+                    !strcmp(name,"strcat")||!strcmp(name,"strncat")||!strcmp(name,"strchr")||!strcmp(name,"strstr")||
+                    !strcmp(name,"strncpy")||!strcmp(name,"atoi")||!strcmp(name,"atol")||!strcmp(name,"memcmp")||
+                    !strcmp(name,"memcpy")||!strcmp(name,"memmove")||!strcmp(name,"memset"));
+            }
+            if (_snrs) {
                 /* Save callee-preserved registers that shims may clobber in 32-bit */
                 asm_push_reg(a, REG_EBX);
                 asm_push_reg(a, REG_ESI);
@@ -2986,7 +2998,6 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
     }
 
     case AST_EXPR_STMT:
-        printf("[CE_STMT] expr=%p kind=%d\n",(void*)n->expr_stmt.expr, n->expr_stmt.expr?n->expr_stmt.expr->kind:-1); fflush(0);
         codegen_expr(cg,n->expr_stmt.expr);
         break;
 
@@ -3334,7 +3345,6 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
  * codegen_func
  * ========================================================================= */
 void codegen_func(CodeGen *cg, ASTNode *n) {
-    printf("[CF] func=%s\n", n?n->func.name:"null"); fflush(0);
     Assembler *a=cg->asm_;
     if (!n||n->kind!=AST_FUNC_DECL) return;
     if (!n->func.body) return; /* forward declaration */
@@ -3361,11 +3371,7 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
      * compile the body (which defines locals in the symtable),
      * then patch the placeholder with the actual aligned frame size.
      * This eliminates the hardcoded sub rsp,0x108 that triggers AV. */
-    printf("[CF2] enter_deferred\n"); fflush(0);
     int frame_patch = asm_enter_deferred(a, cg->chkstk_lbl); /* probe for both 32 and 64-bit */
-    printf("[CF3] frame_patch=%d\n", frame_patch); fflush(0);
-
-    printf("[CF4] spill params paramc=%d\n", n->func.paramc); fflush(0);
     /* Spill register params FIRST — before CRT startup calls which clobber registers */
     if (cg->is_64bit) {
         /* Avoid static Reg arrays (squash can't init non-zero local statics). */
@@ -3382,7 +3388,6 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
         }
 #undef PR_REG
     }
-    printf("[CF5] check main argc paramc=%d\n", n->func.paramc); fflush(0);
     /* stdout via msvcrt printf - no GetStdHandle/WriteFile needed */
     /* If main() has argc/argv params, populate them from GetCommandLineA */
     if (strcmp(n->func.name,"main")==0 && n->func.paramc >= 1) {
@@ -3506,7 +3511,6 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
             asm_pop_reg(a,REG_EDI); asm_pop_reg(a,REG_ESI); asm_pop_reg(a,REG_EBX);
         }
     }
-    printf("[CF6] body=%p kind=%d\n",(void*)n->func.body, n->func.body?n->func.body->kind:-1); fflush(0);
     /* Generate function body; locals accumulate into sym->next_offset */
     codegen_stmt(cg,n->func.body);
 
@@ -3531,7 +3535,6 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
  * codegen_program
  * ========================================================================= */
 void codegen_program(CodeGen *cg, ASTNode *prog) {
-    if (cg->is_64bit) symtable_check_global(cg->sym, "cp_enter");
     if (!prog||prog->kind!=AST_PROGRAM) return;
 
     /* Pass 0: register all global/static variables in wdata FIRST, so that
@@ -3551,14 +3554,12 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
     }
 
 
-    if (cg->is_64bit) symtable_check_global(cg->sym, "cp_pass0_done");
     /* Pre-allocate stdout handle slot so all functions can reference it.
      * The slot itself is initialized in main() at runtime. */
     if (cg->stdout_handle_lbl[0]=='\0') {
         snprintf(cg->stdout_handle_lbl,sizeof cg->stdout_handle_lbl,"__stdout_h");
         intern_wdata(cg,cg->stdout_handle_lbl, cg->is_64bit ? 8 : 4);
     }
-    if (cg->is_64bit) symtable_check_global(cg->sym, "cp_stdout_done");
     /* Emit embedded __chkstk_probe helper at the start of .text.
      * Probes stack guard pages one page at a time before sub rsp/esp,N so
      * Windows can extend the stack for large frames without a guard-page fault.
@@ -3599,7 +3600,6 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
         /* done: */
         asm_emit1(a,0x41); asm_emit1(a,0x5A);                              /* pop r10         */
         asm_emit1(a,0xC3);                                                  /* ret             */
-        if (cg->is_64bit) symtable_check_global(cg->sym, "cp_chkstk_done");
     } else {
         /* 32-bit __chkstk_probe32 (31 bytes):
          * Input: eax = frame size. Clobbers: ecx. Does NOT modify esp.
@@ -3632,10 +3632,8 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
         asm_emit1(a,0x7F); asm_emit1(a,0xEB);                              /* jg loop (-21)   */
         /* done: */
         asm_emit1(a,0xC3);                                                  /* ret             */
-        printf("[CP3] chkstk32 done\n"); fflush(0);
     }
 
-    if (cg->is_64bit) symtable_check_global(cg->sym, "cp_pass1_start");
     /* Pass 1: allocate labels for functions WITH bodies only.
      * Extern/forward declarations are handled via IAT (asm_reloc_iat).    */
     for (int i=0;i<prog->program.count;i++) {
@@ -3643,7 +3641,6 @@ void codegen_program(CodeGen *cg, ASTNode *prog) {
         if (d->kind==AST_FUNC_DECL && d->func.body!=NULL)
             get_func_label(cg,d->func.name);
     }
-    printf("[CP5] starting pass2\n"); fflush(0);
     /* Pass 2: generate code for functions that have bodies.
      * Forward declarations (body==NULL) and typedef/struct/enum nodes are skipped. */
     for (int i=0;i<prog->program.count;i++) {
