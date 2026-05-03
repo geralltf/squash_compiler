@@ -2240,6 +2240,9 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                   if (op->kind == AST_VAR) {
                       Symbol *sv = symtable_lookup(cg->sym, op->var.name);
                       if (sv && sv->type) mstype = sv->type->base;
+                  } else if (op->kind == AST_MEMBER || op->kind == AST_INDEX) {
+                      /* chained arrow: (expr)->field where expr is not a simple var */
+                      mstype = resolve_node_type(cg->sym, op);
                   }
               } else if (mobj->kind == AST_MEMBER || mobj->kind == AST_INDEX) {
                   mstype = resolve_node_type(cg->sym, mobj);
@@ -2250,6 +2253,17 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                   else if (strncmp(bare,"union ",6)==0) bare+=6;
                   char sk[256]; snprintf(sk,sizeof sk,"struct %s",bare);
                   Symbol *ss = symtable_lookup(cg->sym, sk);
+                  if (!ss) {
+                      /* typedef resolution: e.g. CodeGen/Assembler/SymTable -> struct $anonN */
+                      Symbol *td = symtable_lookup(cg->sym, mstype);
+                      if (td && td->kind==SYM_TYPEDEF && td->type) {
+                          const char *tb = td->type->base;
+                          if (strncmp(tb,"struct ",7)==0) tb+=7;
+                          else if (strncmp(tb,"union ",6)==0) tb+=6;
+                          snprintf(sk,sizeof sk,"struct %s",tb);
+                          ss = symtable_lookup(cg->sym, sk);
+                      }
+                  }
                   if (ss && ss->struct_node) {
                       for (int _i=0;_i<ss->struct_node->struct_decl.nfields;_i++) {
                           ASTNode *ff=ss->struct_node->struct_decl.fields[_i];
