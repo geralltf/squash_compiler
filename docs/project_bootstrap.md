@@ -20,10 +20,18 @@ squash is a self-hosting C compiler targeting Windows x64 PE executables.
 `test_program2.c` has 43 tests covering arithmetic, structs, macros, pointers, malloc, etc.
 `test_features.c` has additional feature tests.
 
-## 3-generation bootstrap (completed 2026-04-18)
-The 3-gen chain now works: squash_msvc.exe → squash2_new.exe → squash3.exe → test_program2.exe → ALL 43 TESTS PASS.
+## 3-generation bootstrap (completed 2026-04-18, re-verified 2026-05-03)
+The 3-gen chain now works: squash_msvc.exe → squash2_new.exe → squash3_new.exe → squash4_new.exe all compile squash.c successfully without crashing.
 Build via: `C:\tmp\run_build.ps1` (PowerShell) or by running the ps_build.bat it generates.
 Note: cmd.exe invoked directly from git bash silently drops output; must use PowerShell to invoke batch files.
+Note: squash3 text size is 8 bytes larger than squash2/squash4 (oscillation between two stable states); both produce correct executables — stress_v5.c test exits 1 (ok=1).
+
+## Critical LOAD path fix (2026-05-03)
+**Root cause of ASLR-dependent heap crash**: The `AST_MEMBER` load path in `codegen_expr` (codegen.c) was missing typedef resolution. Tag-less typedef structs (`Assembler`, `SymTable`, `CodeGen`, etc.) are stored in symtable as `"struct $anonN"`, not `"struct Assembler"`. The load path looked up `"struct Assembler"` (not found → ss=NULL), so all pointer fields were loaded with 32-bit `mov eax,[rax+off]` instead of 64-bit `mov rax,[rax+off]`. When ASLR places heap above 4GB, the upper 32 bits are lost → wrong pointer → crash.
+
+**Fix applied** (codegen.c lines ~2238-2287): Two sub-fixes to the load path's struct field type resolution block:
+1. **Chained arrow fallback**: When `n->member.arrow=1` and `mobj` is `AST_MEMBER` or `AST_INDEX` (not `AST_VAR`), calls `resolve_node_type(cg->sym, op)` to get the struct type. Fixes patterns like `cg->sym->imports`.
+2. **Typedef resolution**: When `symtable_lookup("struct TypedefName")` returns NULL, tries to resolve the typedef to its underlying `"struct $anonN"` type. Fixes ALL field accesses on tag-less typedef structs.
 
 ## Key bugs fixed (completed 2026-04-17)
 1. **Stale params[] in pp_macro_undef** (lexer.c): After swap-with-last during undef, vacated slot wasn't zeroed → stale function-like macro params used when slot reused as object-like macro. Fix: zero the vacated slot after copy.
