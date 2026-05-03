@@ -2438,7 +2438,10 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                     asm_emit1(a,0xBB); asm_reloc_wdata(a,glbl);
                 }
                 asm_pop_reg(a,REG_RAX);
-                asm_emit2(a,0x89,0x03);  /* mov [rbx/ebx], eax */
+                if (cg->is_64bit && s->type && (s->type->pointer_depth > 0 || typeinfo_size(s->type, 1) == 8))
+                    asm_emit3(a,0x48,0x89,0x03); /* REX.W mov [rbx], rax */
+                else
+                    asm_emit2(a,0x89,0x03);  /* mov [rbx/ebx], eax */
             }
         } else {
             asm_push_reg(a,REG_RAX);
@@ -2475,6 +2478,9 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                                 stype = sv->type->base;
                             }
                         }
+                    } else if (obj && (obj->kind == AST_MEMBER || obj->kind == AST_INDEX)) {
+                        /* Chained member: n->struct_.field = val — use recursive resolver */
+                        stype = resolve_node_type(cg->sym, obj);
                     }
                     if (stype) {
                         const char *bare = stype;
@@ -2507,7 +2513,10 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                     }
                 } else if (cg->is_64bit && lhs->kind == AST_VAR) {
                     Symbol *sv = symtable_lookup(cg->sym, lhs->var.name);
-                    if (sv && sv->type && sv->type->pointer_depth > 0) store_sz = 8;
+                    if (sv && sv->type) {
+                        if (sv->type->pointer_depth > 0) store_sz = 8;
+                        else if (typeinfo_size(sv->type, 1) == 8) store_sz = 8;
+                    }
                 } else if (lhs->kind == AST_DEREF) {
                     /* *ptr = val — width from ptr's base type */
                     ASTNode *op = lhs->deref.operand;
@@ -2573,7 +2582,10 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                     if (cg->is_64bit) asm_lea_rip_wdata(a,REG_RBX,glbl);
                     else { asm_emit1(a,0xBB); asm_reloc_wdata(a,glbl); }
                     asm_pop_reg(a,REG_RAX);
-                    asm_emit2(a,0x89,0x03); /* mov [rbx/ebx],eax */
+                    if (cg->is_64bit && s->type && (s->type->pointer_depth > 0 || typeinfo_size(s->type, 1) == 8))
+                        asm_emit3(a,0x48,0x89,0x03); /* REX.W mov [rbx], rax */
+                    else
+                        asm_emit2(a,0x89,0x03); /* mov [rbx/ebx],eax */
                 }
             } else if (n->unary.operand->kind==AST_MEMBER ||
                        n->unary.operand->kind==AST_INDEX  ||
@@ -2607,7 +2619,10 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                     if (cg->is_64bit) asm_lea_rip_wdata(a,REG_RBX,glbl);
                     else { asm_emit1(a,0xBB); asm_reloc_wdata(a,glbl); }
                     asm_pop_reg(a,REG_RAX);
-                    asm_emit2(a,0x89,0x03); /* mov [rbx/ebx],eax */
+                    if (cg->is_64bit && s->type && (s->type->pointer_depth > 0 || typeinfo_size(s->type, 1) == 8))
+                        asm_emit3(a,0x48,0x89,0x03); /* REX.W mov [rbx], rax */
+                    else
+                        asm_emit2(a,0x89,0x03); /* mov [rbx/ebx],eax */
                 }
             } else if (n->unary.operand->kind==AST_MEMBER ||
                        n->unary.operand->kind==AST_INDEX  ||
@@ -3664,13 +3679,14 @@ Relocation *codegen_get_relocs(CodeGen *cg, int *cnt) { *cnt=cg->asm_->reloc_cou
 const char *intern_float_const(CodeGen *cg, double val) {
     /* Store float constant directly in the string pool (.rdata) so that
      * RELOC_DATA_REL32 / RELOC_DATA_ABS32 can resolve it via string_labels[]. */
-    uint64_t bits; memcpy(&bits, &val, 8);
-    /* Check if already interned (scan string pool for matching 8-byte double) */
+    char val_buf[8]; memcpy(val_buf, &val, 8);
+    /* Check if already interned — use memcmp (not uint64_t ==) so that the
+     * 32-bit self-hosted compiler compares all 8 bytes, not just the low 4.
+     * Example: -0.0 (0x8000000000000000) has low-32=0 same as 0.0 (0), so
+     * a plain 32-bit == comparison would wrongly return the 0.0 label. */
     for (int i = 0; i < cg->string_count; i++) {
-        if (cg->strings[i].len == 8) {
-            uint64_t eb; memcpy(&eb, cg->strings[i].value, 8);
-            if (eb == bits) return cg->strings[i].label;
-        }
+        if (cg->strings[i].len == 8 && memcmp(cg->strings[i].value, val_buf, 8) == 0)
+            return cg->strings[i].label;
     }
     /* Allocate 8-byte entry in string pool */
     if (cg->string_count == cg->string_cap) {
@@ -3681,7 +3697,7 @@ const char *intern_float_const(CodeGen *cg, double val) {
     int off = (cg->string_pool_size + 7) & ~7;
     cg->string_pool_size = off + 8;
 
-    char *buf = malloc(8); memcpy(buf, &val, 8);
+    char *buf = malloc(8); memcpy(buf, val_buf, 8);
     char *lbl = malloc(32);
     snprintf(lbl, 32, "fconst_%d", cg->string_count);
 
