@@ -1,0 +1,11 @@
+main() entered
+after SDL_Init
+after SDL_CreateSurface
+after filling pixels
+surf->w=0x0000000000000011
+surf->h=0x000000000000000d
+surf->pitch=0x0000000000000044
+surf->format=0x0000000016762004
+surf->pixels=0x000000000109e600
+SDL_BYTESPERPIXEL=0x0000000000000004
+before direct tdefl_write_image_to_png_file_in_memory_ex call

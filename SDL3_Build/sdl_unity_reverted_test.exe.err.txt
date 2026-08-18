@@ -1,0 +1,20 @@
+SDL3 (squash build) initialised OK
+SDL_iostream round trip OK: "hello from squash SDL_iostream test"
+filesystem create/stat/rename/remove round trip OK
+SDL_GetBasePath: C:\Users\Admin\OneDrive\Documents\Projects\squash_compiler\SDL3_Build\
+SDL_GetCurrentDirectory: C:\Users\Admin\OneDrive\Documents\Projects\squash_compiler\
+SDL_GetPrefPath: C:\Users\Admin\AppData\Roaming\squash_org\squash_app\
+SDL_GetPrefPath/SDL_GetUserFolder round trip OK
+SDL_properties round trip OK: number=42 string="hello properties"
+SDL_storage round trip OK: "hello from squash SDL_storage test" (34 bytes)
+SDL_GetPowerInfo: state=0 seconds=-1 percent=-1
+SDL_GetJoysticks: count=0
+SDL_GetSensors: count=0
+SDL_hints round trip OK: "squash_hint_value"
+SDL_process: exitcode=0 output=[squash_process_test_output
+]
+SDL_process round trip OK
+SDL_InitSubSystem(VIDEO) OK
+SDL_CreateWindowAndRenderer OK
+video/render frame loop finished (60 frames)
+video/render round trip OK

@@ -1,0 +1,103 @@
+main entered
+before tdefl_write_image_to_png_file_in_memory_ex
+ENTER tdefl_output_buffer_putter
+pBuf=0xcff6a0
+len=0x21
+pUser=0xcff730
+p->m_size=0x0
+p->m_capacity=0x3ba
+p->m_pBuf=0xed05d0
+p->m_expandable=0x1
+new_size=0x21
+EXIT tdefl_output_buffer_putter
+ENTER tdefl_output_buffer_putter
+pBuf=0x7ff63b8933eb
+len=0x8
+pUser=0xcff730
+p->m_size=0x21
+p->m_capacity=0x3ba
+p->m_pBuf=0xed05d0
+p->m_expandable=0x1
+new_size=0x29
+EXIT tdefl_output_buffer_putter
+ENTER tdefl_flush_block
+before tdefl_compress_block
+ENTER tdefl_compress_block
+before tdefl_start_dynamic_block
+before tdefl_optimize_huffman_table(0)
+ENTER tdefl_optimize_huffman_table
+before building syms0
+after building syms0
+before tdefl_radix_sort_syms
+after tdefl_radix_sort_syms, before tdefl_calculate_minimum_redundancy
+after tdefl_calculate_minimum_redundancy
+after num_codes accumulation
+before tdefl_huffman_enforce_max_code_size
+after tdefl_huffman_enforce_max_code_size
+after code_sizes assignment loop
+after next_code computation
+EXIT tdefl_optimize_huffman_table
+before tdefl_optimize_huffman_table(1)
+ENTER tdefl_optimize_huffman_table
+before building syms0
+after building syms0
+before tdefl_radix_sort_syms
+after tdefl_radix_sort_syms, before tdefl_calculate_minimum_redundancy
+after tdefl_calculate_minimum_redundancy
+after num_codes accumulation
+before tdefl_huffman_enforce_max_code_size
+after tdefl_huffman_enforce_max_code_size
+after code_sizes assignment loop
+after next_code computation
+EXIT tdefl_optimize_huffman_table
+after tdefl_optimize_huffman_table(1)
+ENTER tdefl_optimize_huffman_table
+before building syms0
+after building syms0
+before tdefl_radix_sort_syms
+after tdefl_radix_sort_syms, before tdefl_calculate_minimum_redundancy
+after tdefl_calculate_minimum_redundancy
+after num_codes accumulation
+before tdefl_huffman_enforce_max_code_size
+after tdefl_huffman_enforce_max_code_size
+after code_sizes assignment loop
+after next_code computation
+EXIT tdefl_optimize_huffman_table
+after tdefl_start_dynamic_block
+before tdefl_compress_lz_codes
+after tdefl_compress_lz_codes
+after tdefl_compress_block
+before raw-block-check
+taking raw-block branch
+after raw-block branch
+before flush-tail block
+before final TDEFL_PUT_BITS bit-align
+before zlib adler32 footer bits
+after zlib adler32 footer bits
+after flush-tail block
+after huff_count memsets
+after LZ pointer resets
+before final n-compute / put_buf_func dispatch
+d->m_pOutput_buf=0xf0dd9a
+pOutput_buf_start=0xf0c13a
+localA=0xf0dd9a
+localB=0xf0c13a
+rawdiff (ptrdiff_t)=0x1c60
+rawdiff2 (long long)=0x1c60
+rawdiff3 (int)=0x1c60
+n (right after compute)=0xfffffffff96ad3ca
+n (right before call)=0xfffffffff96ad3ca
+before (*d->m_pPut_buf_func)(...) call
+ENTER tdefl_output_buffer_putter
+pBuf=0xf0c13a
+len=0xfffffffff96ad3ca
+pUser=0xcff730
+p->m_size=0x29
+p->m_capacity=0x3ba
+p->m_pBuf=0xed05d0
+p->m_expandable=0x1
+new_size=0xfffffffff96ad3f3
+putter: growing buffer
+putter: after decls
+putter: after new_capacity = p->m_capacity
+putter: before capacity-doubling loop

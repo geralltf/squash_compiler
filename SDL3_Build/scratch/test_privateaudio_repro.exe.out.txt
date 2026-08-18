@@ -1,0 +1,10 @@
+main: start, bufsize=16384
+OpenDevice_repro: waveOutOpen OK
+main: iteration=0 cur=1 total_spins_so_far=0
+main: iteration=10 cur=1 total_spins_so_far=66
+main: iteration=20 cur=1 total_spins_so_far=138
+main: iteration=30 cur=1 total_spins_so_far=212
+main: iteration=40 cur=1 total_spins_so_far=285
+main: iteration=50 cur=1 total_spins_so_far=370
+main: completed all 60 iterations with no stuck WaitDevice, total_spins=436
+main: done, exiting cleanly (stuck=0)

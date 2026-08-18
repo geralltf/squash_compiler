@@ -1,0 +1,4 @@
+localA=0x12ff890
+localB=0x12fdc30
+nlocal=0x1c60
+n=0xfffffffff7b11710

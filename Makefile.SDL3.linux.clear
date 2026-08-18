@@ -1,0 +1,53 @@
+# Dedicated Makefile for building and testing just the "clear" example
+# (examples/renderer/01-clear/clear.c) on Linux via the squash compiler.
+# Invoke as `make -f Makefile.SDL3.linux.clear <target>` from the squash
+# compiler's own repo root (same convention as Makefile.SDL3/
+# Makefile.SDL3.linux — see their own header comments for why: squash's
+# bundled libc shim resolves via a hardcoded CWD-relative lookup, unrelated
+# to -I, so every squash invocation below runs in place with no `cd`).
+#
+# This was split out from Makefile.SDL3.linux while fixing a real bug: this
+# example failed to link/run at all under Makefile.SDL3.linux's normal
+# cached-.sqo path. Root cause (see SDL3_Build/sdl_core.inc's own extensive
+# comments for the full history): sdl_core.inc's threading, timer,
+# filesystem, process, and windowing backends were ENTIRELY Windows-only —
+# they only *compiled* under -linux because squash's bundled windows.h shim
+# is always available regardless of target platform, but every one of those
+# Win32 calls was an unresolved symbol at runtime. Fixed by adding real
+# Linux implementations (pthread-based semaphore/thread/mutex, clock_gettime
+# timer, a real X11 windowing backend, dummy filesystem/process backends)
+# alongside the existing Windows ones, all selected by #ifdef __linux__.
+# Along the way, two genuine squash codegen bugs were found and fixed too
+# (see sdl_core.inc's SDL_CreateMutex/SDL_CheckInitLog_fixed comments) plus
+# several real, pre-existing, platform-independent gaps (SDL_StretchSurface,
+# SDL_CalculateBlit, SDL_CalculateYUVSize, rotate, BMP were never linked
+# into this build at all).
+#
+# Uses the plain from-source build path (like sdl_unity.c), NOT the cached
+# ".sqo" object-file path the other 38 examples use via build_example.sh —
+# see SDL3_Build/clear_linux_unity.c's own header comment for why (a
+# separate, real squash objfile_merge cross-object symbol resolution bug in
+# that path, still unresolved).
+SQUASH   = ./squash
+SRC      = SDL3_Build/clear_linux_unity.c
+OUT      = SDL3_Build/clear_linux
+
+INCLUDES = -ISDL3/SDL/include -ISDL3/SDL/src -ISDL3_Build -ISDL3/SDL/include/build_config -ISDL3/SDL
+
+all: $(OUT)
+
+# -lX11: the real Linux windowing backend (see sdl_core.inc's PRIVATE_*
+# video driver, __linux__ branch) talks to the system's real libX11.so.6
+# via a minimal hand-declared ABI surface (matching this project's existing
+# SDL3_Build/scratch/platform_shim.h convention) instead of pulling in the
+# full system Xlib.h, which squash's C frontend has known limits parsing.
+$(OUT): SDL3_Build/clear_linux_unity.c SDL3_Build/sdl_core.inc SDL3/SDL/examples/renderer/01-clear/clear.c squash
+	$(SQUASH) -linux -64 $(INCLUDES) $(SRC) -o $(OUT) -lX11
+
+run: $(OUT)
+	./$(OUT)
+
+clean:
+	rm -f SDL3_Build/clear_linux
+
+.PHONY: all run clean

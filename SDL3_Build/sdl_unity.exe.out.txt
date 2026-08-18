@@ -1,0 +1,11 @@
+main() entered
+after HeapSetInformation
+after SDL_Init(0)
+after SDL_Log initialised OK
+before SDL_InitSubSystem(VIDEO)
+after SDL_InitSubSystem(VIDEO)
+before SDL_CreateWindowAndRenderer
+after SDL_CreateWindowAndRenderer
+after first frame present
+after frame loop
+after QuitSubSystem(VIDEO)

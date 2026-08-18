@@ -1,0 +1,75 @@
+# Makefile for SQW, the SDL3+Vulkan HTML5 browser subproject, built with the
+# squash compiler, on Linux. Invoke as `make -f Makefile.SQW.linux <target>`
+# from the squash compiler repo root (same convention as Makefile.SDL3.linux
+# and its Windows sibling Makefile.SQW).
+#
+# SQUASH points straight at the self-hosted ./squash (the Linux ELF
+# compiler already used by Makefile.SDL3.linux for the whole SDL3 build and
+# the Vulkan/Xlib scratch demos) rather than an MSVC-built stage-1 compiler:
+# Makefile.SQW's own SQUASH comment documents a self-hosting segfault that
+# is specific to squash.exe on Windows (reproduced independently of any SQW
+# change, fixed by switching to squash_msvc.exe); Makefile.SDL3.linux
+# already compiles this exact SDL3_Build/sdl_common_obj.c body with
+# ./squash with no equivalent problem noted, so that divergence does not
+# reproduce on Linux self-hosting.
+SQUASH   = ./squash
+
+SDL_INCLUDES = -ISDL3/SDL/include -ISDL3/SDL/src -ISDL3_Build -ISDL3/SDL/include/build_config -ISDL3/SDL
+
+# -lvulkan -lX11: SQW calls vkCreate*/vkGet*/vkQueue* directly (vk_context.c)
+# and the Linux half of SDL3_Build/sdl_core.inc's PRIVATE video driver calls
+# libX11 (XOpenDisplay etc.) for its window -- squash only emits a DT_NEEDED
+# entry for a shared library when told to via -l (see elf_builder.c), so both
+# must be passed explicitly at the final link step, matching the identical
+# -lvulkan -lX11 DEMO_RULE in Makefile.SDL3.linux for the Vulkan/Xlib scratch
+# demos this code was modeled on.
+all: SQW/SQW
+
+# NOTE: sqw_main.c #includes vk_context.c directly (single TU) rather than
+# this Makefile compiling it separately via "squash -c" to its own .sqo and
+# linking it in -- see Makefile.SQW's identical note for why (a real,
+# currently-unresolved squash cross-object-linking bug for large functions,
+# reproduced on Windows via heap corruption right after Vulkan setup
+# completes). Kept as a single TU here too even though that specific crash
+# was only confirmed on Windows: no reason to risk the same bug class on
+# Linux when the #include path is already proven to sidestep it.
+#
+# Unlike Makefile.SQW (Windows), this rule does NOT link against the
+# cached SDL3_Build/sdl_common.sqo -- sqw_main.c instead #includes
+# SDL3_Build/sdl_core.inc directly on Linux (see that #include's own
+# comment in sqw_main.c), because linking this particular build against
+# the .sqo hits a real, separate squash objfile_merge cross-object symbol
+# resolution bug (a symbol the .sqo's own export table genuinely contains,
+# e.g. SDL_fabsf, still resolves as an unresolved dynamic import at final
+# link). Same bug and same single-TU workaround as
+# SDL3_Build/clear_linux_unity.c / Makefile.SDL3.linux.clear.
+# -ISDL3_Build/scratch: renderer_vk.c #includes triangle_spirv.h (the
+# precompiled SPIR-V for the vertex-color triangle shader, reused as-is for
+# flat-colored 2D boxes -- see renderer_vk.h's own comment).
+SQW/SQW: SQW/sqw_main.c SQW/vk_context.c SQW/vk_context.h SQW/dom.c SQW/dom.h SQW/html_lexer.c SQW/html_lexer.h SQW/dom_walk.c SQW/dom_walk.h SQW/layout.c SQW/layout.h SQW/renderer_vk.c SQW/renderer_vk.h SDL3_Build/sdl_core.inc squash
+	$(SQUASH) -linux -64 -Iinclude -ISDL3_Build/scratch $(SDL_INCLUDES) SQW/sqw_main.c -o SQW/SQW -lvulkan -lX11
+
+run: SQW/SQW
+	./SQW/SQW
+
+# --- Phase 2: DOM tests -------------------------------------------------
+# Same single-TU story as SQW above: test_dom.c #includes dom_walk.c, which
+# #includes dom.c, which #includes html_lexer.c -- separate "squash -c" .sqo
+# compilation of these also reliably crashed on Windows when linked
+# together (see Makefile.SQW), the identical cross-object-link bug class.
+# #include chain sidesteps it. Neither test touches SDL3/Vulkan/X11 at all,
+# so no -lvulkan/-lX11 needed here.
+SQW/tests/test_dom: SQW/tests/test_dom.c SQW/dom_walk.c SQW/dom.c SQW/html_lexer.c SQW/dom_walk.h SQW/dom.h SQW/html_lexer.h
+	$(SQUASH) -linux -64 -ISQW SQW/tests/test_dom.c -o SQW/tests/test_dom
+
+test-dom: SQW/tests/test_dom
+	./SQW/tests/test_dom
+
+SQW/tests/test_layout: SQW/tests/test_layout.c SQW/dom_walk.c SQW/dom.c SQW/html_lexer.c SQW/layout.c SQW/layout.h
+	$(SQUASH) -linux -64 -ISQW SQW/tests/test_layout.c -o SQW/tests/test_layout
+
+test-layout: SQW/tests/test_layout
+	./SQW/tests/test_layout
+
+clean:
+	rm -f SQW/*.sqo SQW/SQW SQW/tests/test_dom SQW/tests/test_layout

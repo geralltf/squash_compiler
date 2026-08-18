@@ -1,0 +1,22 @@
+CC=gcc
+CFLAGS=-I. -Wall -pedantic
+# squash's own preprocessor/parser recurse once per nested #include (and
+# per nested expression/statement) -- the default 1MB Windows thread stack
+# is exhausted by deeply-nested real-world header trees (confirmed via a
+# real Windows SDK <windows.h> import attempt: STATUS_STACK_OVERFLOW inside
+# ___chkstk_ms, well before running out of memory). 16MB gives real headroom
+# without meaningfully affecting startup cost.
+LDFLAGS=
+DEPS =
+HEADERS =
+OBJ = compiler.o assembler.o ast.o codegen.o arm64_asm.o codegen_arm64.o lexer.o parser_new4.o pe_builder.o elf_builder.o macho_builder.o symtable.o linker.o winlinker.o objfile.o implib.o diag.o
+
+%.o: %.c $(DEPS)
+	$(CC) -c -o $@ $< $(CFLAGS)
+
+all: $(OBJ)
+	$(CC) -o squash $^ $(CFLAGS) $(LDFLAGS)
+	
+clean:
+	rm -rf *.o
+	rm -rf squash

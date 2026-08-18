@@ -1,0 +1,26 @@
+CC=./squash
+CFLAGS=-64 -macos -I. 
+# squash's own preprocessor/parser recurse once per nested #include (and
+# per nested expression/statement) -- the default 1MB Windows thread stack
+# is exhausted by deeply-nested real-world header trees (confirmed via a
+# real Windows SDK <windows.h> import attempt: STATUS_STACK_OVERFLOW inside
+# ___chkstk_ms, well before running out of memory). 16MB gives real headroom
+# without meaningfully affecting startup cost.
+LDFLAGS=
+DEPS =
+HEADERS =
+OBJ = compiler.sqo assembler.sqo ast.sqo codegen.sqo arm64_asm.sqo codegen_arm64.sqo lexer.sqo parser_new4.sqo pe_builder.sqo elf_builder.sqo macho_builder.sqo symtable.sqo linker.sqo winlinker.sqo objfile.sqo implib.sqo diag.sqo
+
+%.sqo: %.c $(DEPS)
+	$(CC) -c $(CFLAGS) $< -o $@
+
+# compiler.c's own CLI always requires a source file to compile (it has no
+# "link N .sqo, no .c" mode) -- pass it as source (redundant with
+# compiler.sqo, but cheap) and link the other 15 .sqo against it.
+all: $(OBJ)
+	$(CC) compiler.c $(filter-out compiler.sqo,$^) $(CFLAGS) $(LDFLAGS) -o squash2
+	
+clean:
+	rm -rf *.o
+	rm -rf *.sqo
+	rm -rf squash2

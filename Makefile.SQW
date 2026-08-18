@@ -1,0 +1,60 @@
+# Makefile for SQW, the SDL3+Vulkan HTML5 browser subproject, built with the
+# squash compiler. Invoke as `make -f Makefile.SQW <target>` from the squash
+# compiler repo root (same convention as Makefile.SDL3).
+#
+# SQUASH points at squash_msvc.exe (the MSVC-built stage-1 compiler) rather
+# than the self-hosted squash.exe/squash: compiling SDL3_Build/sdl_common_obj.c
+# (the ~2MB shared SDL3 body SQW links against) with the self-hosted
+# squash.exe segfaults inside ntdll's heap manager -- reproduced independently
+# of any SQW change (confirmed by reverting SDL3_Build/sdl_core.inc and
+# retrying), so it's a real self-hosting divergence bug in squash.c itself,
+# not something specific to this build. squash_msvc.exe (the exact same
+# compiler source, just MSVC-compiled) builds it correctly. Left as a
+# standing follow-up: whoever picks this up next should minimize a repro and
+# fix the codegen bug so squash.exe can rebuild its own SDL3 dependency again.
+SQUASH   = ./squash_msvc.exe
+
+SDL_INCLUDES = -ISDL3/SDL/include -ISDL3/SDL/src -ISDL3_Build -ISDL3/SDL/include/build_config -ISDL3/SDL
+
+all: SQW/SQW.exe
+
+# NOTE: sqw_main.c #includes vk_context.c directly (single TU) rather than
+# this Makefile compiling it separately via "squash -c" to its own .sqo and
+# linking it in. That two-step path was tried first and reliably crashes
+# (heap corruption inside ntdll, right after Vulkan setup completes) --
+# reproduced independent of any SQW-specific code via a minimal repro that
+# differs ONLY in going through the .sqo object-merge path vs. a direct
+# single-TU compile. A real, currently-unresolved squash compiler bug in
+# cross-object linking for large functions -- left as a standing follow-up
+# (same class of issue as the self-hosting sdl_common_obj.c crash noted
+# above SQUASH:=). Until it's fixed, keep vk_context.c as a #include, not a
+# separate compilation unit.
+# -ISDL3_Build/scratch: renderer_vk.c #includes triangle_spirv.h (the
+# precompiled SPIR-V for the vertex-color triangle shader, reused as-is for
+# flat-colored 2D boxes -- see renderer_vk.h's own comment).
+SQW/SQW.exe: SQW/sqw_main.c SQW/vk_context.c SQW/vk_context.h SQW/dom.c SQW/dom.h SQW/html_lexer.c SQW/html_lexer.h SQW/dom_walk.c SQW/dom_walk.h SQW/layout.c SQW/layout.h SQW/renderer_vk.c SQW/renderer_vk.h SDL3_Build/sdl_common.sqo
+	$(SQUASH) -windows -64 -Iinclude -ISDL3_Build/scratch $(SDL_INCLUDES) SQW/sqw_main.c SDL3_Build/sdl_common.sqo -o SQW/SQW.exe
+
+run: SQW/SQW.exe
+	./SQW/SQW.exe
+
+# --- Phase 2: DOM tests -------------------------------------------------
+# Same single-TU story as SQW.exe above: test_dom.c #includes dom_walk.c,
+# which #includes dom.c, which #includes html_lexer.c -- separate "squash -c"
+# .sqo compilation of these also reliably crashed (access violation, no
+# output at all) when linked together, the identical cross-object-link bug
+# class. #include chain sidesteps it.
+SQW/tests/test_dom.exe: SQW/tests/test_dom.c SQW/dom_walk.c SQW/dom.c SQW/html_lexer.c SQW/dom_walk.h SQW/dom.h SQW/html_lexer.h
+	$(SQUASH) -windows -64 -ISQW SQW/tests/test_dom.c -o SQW/tests/test_dom.exe
+
+test-dom: SQW/tests/test_dom.exe
+	./SQW/tests/test_dom.exe
+
+SQW/tests/test_layout.exe: SQW/tests/test_layout.c SQW/dom_walk.c SQW/dom.c SQW/html_lexer.c SQW/layout.c SQW/layout.h
+	$(SQUASH) -windows -64 -ISQW SQW/tests/test_layout.c -o SQW/tests/test_layout.exe
+
+test-layout: SQW/tests/test_layout.exe
+	./SQW/tests/test_layout.exe
+
+clean:
+	rm -f SQW/*.sqo SQW/*.exe SQW/tests/*.exe

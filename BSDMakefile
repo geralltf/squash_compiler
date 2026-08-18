@@ -1,0 +1,62 @@
+CC=cc
+CFLAGS=-I. -Wall -pedantic
+# squash's own preprocessor/parser recurse once per nested #include (and
+# per nested expression/statement) -- the default 1MB Windows thread stack
+# is exhausted by deeply-nested real-world header trees (confirmed via a
+# real Windows SDK <windows.h> import attempt: STATUS_STACK_OVERFLOW inside
+# ___chkstk_ms, well before running out of memory). 16MB gives real headroom
+# without meaningfully affecting startup cost.
+LDFLAGS=
+DEPS =
+HEADERS =
+OBJ = compiler.o assembler.o ast.o codegen.o arm64_asm.o codegen_arm64.o lexer.o parser_new4.o pe_builder.o elf_builder.o macho_builder.o symtable.o linker.o winlinker.o objfile.o implib.o diag.o
+
+.PHONY: all clean
+
+# "all" must stay the first target in this file: both GNU make and BSD make
+# pick the first rule as the default goal when "make" is run with no target
+# argument. With the per-object rules listed first, a bare "make -f
+# BSDMakefile" only ever built compiler.o and stopped -- squash itself was
+# never linked, silently, with a clean exit status.
+all: $(OBJ)
+	$(CC) -o squash  $(OBJ) $(CFLAGS) $(LDFLAGS)
+
+compiler.o: compiler.c
+	$(CC) -c compiler.c -o compiler.o $(DEPS) $(CFLAGS)
+assembler.o: assembler.c
+	$(CC) -c assembler.c -o assembler.o $(DEPS) $(CFLAGS)
+ast.o: ast.c
+	$(CC) -c ast.c -o ast.o $(DEPS) $(CFLAGS)
+codegen.o: codegen.c
+	$(CC) -c codegen.c -o codegen.o $(DEPS) $(CFLAGS)
+arm64_asm.o: arm64_asm.c
+	$(CC) -c arm64_asm.c -o arm64_asm.o $(DEPS) $(CFLAGS)
+codegen_arm64.o: codegen_arm64.c
+	$(CC) -c codegen_arm64.c -o codegen_arm64.o $(DEPS) $(CFLAGS)
+lexer.o: lexer.c
+	$(CC) -c lexer.c -o lexer.o $(DEPS) $(CFLAGS)
+parser_new4.o: parser_new4.c
+	$(CC) -c parser_new4.c -o parser_new4.o $(DEPS) $(CFLAGS)
+pe_builder.o: pe_builder.c
+	$(CC) -c pe_builder.c -o pe_builder.o $(DEPS) $(CFLAGS)
+elf_builder.o: elf_builder.c
+	$(CC) -c elf_builder.c -o elf_builder.o $(DEPS) $(CFLAGS)
+macho_builder.o: macho_builder.c
+	$(CC) -c macho_builder.c -o macho_builder.o $(DEPS) $(CFLAGS)
+symtable.o: symtable.c
+	$(CC) -c symtable.c -o symtable.o $(DEPS) $(CFLAGS)
+linker.o: linker.c
+	$(CC) -c linker.c -o linker.o $(DEPS) $(CFLAGS)
+winlinker.o: winlinker.c
+	$(CC) -c winlinker.c -o winlinker.o $(DEPS) $(CFLAGS)
+objfile.o: objfile.c
+	$(CC) -c objfile.c -o objfile.o $(DEPS) $(CFLAGS)
+implib.o: implib.c
+	$(CC) -c implib.c -o implib.o $(DEPS) $(CFLAGS)
+diag.o: diag.c
+	$(CC) -c diag.c -o diag.o $(DEPS) $(CFLAGS)
+
+clean:
+	rm -rf *.o
+	rm -rf squash.exe
+	rm -rf squash

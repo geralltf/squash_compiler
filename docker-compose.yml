@@ -1,0 +1,4 @@
+services:
+  my-service:
+    image: test_program2:arm64
+    platform: linux/arm64

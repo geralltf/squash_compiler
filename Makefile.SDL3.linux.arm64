@@ -1,0 +1,300 @@
+# Makefile for building a subset of SDL3 with the squash compiler.
+# Invoke as `make -f Makefile.SDL3 <target>` from the squash compiler's own
+# repo root (this file lives there, alongside squash and include/).
+#
+# squash compiles a single .c translation unit straight to an executable, but
+# DOES also support a limited separate-compilation mode ("squash -c" emits a
+# ".sqo" object file — see objfile.h) that this Makefile uses to avoid
+# recompiling all of SDL3 from source for every single example: the shared
+# subsystem body (SDL3_Build/sdl_core.inc) is compiled ONCE into
+# SDL3_Build/sdl_common.sqo (see the "sqo" target below), and every
+# example's own small driver file just links against that cache — ~2s per
+# example instead of ~80s. sdl_unity itself still takes the plain
+# from-source path (SDL3_Build/sdl_unity.c #includes sdl_core.inc plus a
+# tiny demo main()) since it's built far less often than the 38 examples are.
+# See the comment at the top of SDL3_Build/sdl_unity.c for exactly which
+# SDL3 files are included and why (dummy/portable backends only; a handful
+# of core files are excluded due to a squash codegen crash discovered during
+# this build — also documented there).
+
+# squash resolves its OWN bundled libc shim (assert.h, stdio.h, etc.) via a
+# hardcoded, CWD-relative "include/<name>.h" lookup — it is not affected by
+# -I. Running squash from inside SDL3/SDL would shadow that lookup with
+# SDL's own public include/ directory (which has no stddef.h, stdint.h,
+# etc. of its own — it expects a real system libc). This Makefile lives at
+# the compiler's own root (SDL3_Build was moved out from under SDL3/SDL for
+# exactly this reason — to keep the SDL3 checkout itself untouched/clean),
+# so every squash invocation below just runs in place with no `cd` needed.
+SQUASH   = ./squash
+SRC      = SDL3_Build/sdl_unity.c
+OUT      = SDL3_Build/sdl_unity
+
+INCLUDES = -ISDL3/SDL/include -ISDL3/SDL/src -ISDL3_Build -ISDL3/SDL/include/build_config -ISDL3/SDL
+
+# --- Examples ---------------------------------------------------------------
+# Every real example under SDL3/SDL/examples/ (excluding the non-runnable
+# examples/template.c) gets its own small driver build, linked against the
+# cached SDL3_Build/sdl_common.sqo (see the "sqo" target above):
+# SDL3_Build/build_example.sh generates SDL3_Build/examples_gen/<name>.c
+# (just the example's own unmodified source + example_shim.inc's SDL_main
+# callback-loop driver — NOT sdl_core.inc, which is already baked into the
+# .sqo) and compiles+links it. See build_example.sh's own header comment for
+# the exact mechanism, and sdl_core.inc / example_shim.inc for what each
+# piece does.
+#
+# RESOLVED: SDL_VideoInit() used to crash/hang before a window was ever
+# created (three real squash compiler bugs, all fixed), then a follow-up
+# session found and fixed a Win64 callee-saved-register bug (the actual
+# PumpEvents crash root cause), a build-config gap around SDL_AUDIO_DISABLED,
+# a missing SDL_SYS_DelayNS implementation, and a unity-build-only macro
+# leak from SDL_qsort.c's unclosed "#define free SDL_free" corrupting
+# SDL_VideoQuit()'s cleanup call — see [[project-squash-sdl3-build]] memory
+# notes and sdl_unity.c's own header comment for the full list. `make run`'s
+# sdl_unity now runs the complete SDL_Init -> SDL_InitSubSystem(VIDEO) ->
+# SDL_CreateWindowAndRenderer -> 60-frame render loop -> SDL_DestroyRenderer/
+# SDL_DestroyWindow/SDL_QuitSubSystem/SDL_Quit sequence end-to-end with
+# ExitCode=0, confirmed across multiple consecutive runs. NOTE: don't trust a
+# bare cmd "%ERRORLEVEL%" check here — it under-reported an earlier
+# crash as success in testing; use PowerShell's
+# System.Diagnostics.Process.ExitCode directly instead.
+#
+# `make examples` builds 38/38 examples cleanly (was 36/38 — the 2 former
+# holdouts, blending.c and woodeneye-008.c, both compile now too, fixed as a
+# side effect of the parser fixes made while getting stb_image.h/miniz.h to
+# compile — see [[project-squash-sdl3-build]] memory notes).
+#
+# EXAMPLES is built from a find rooted at SDL3/SDL/examples (SDL3/SDL is
+# untouched and stays the pristine upstream checkout) and then stripped back
+# down to paths relative to SDL3/SDL — build_example.sh's own convention
+# (see its usage comment) — since that's what it #includes relative to the
+# -ISDL3/SDL search path.
+EXAMPLES := $(patsubst SDL3/SDL/%,%,$(shell find SDL3/SDL/examples -name '*.c' ! -path '*/template.c'))
+# build_example.sh names its output by basename only (see its own
+# GEN/OUT construction) — not by the full examples/<category>/<n>/ path —
+# so the generated  list must match that flat scheme. Confirmed no two
+# examples share a basename (find examples -name '*.c' | xargs -n1 basename
+# | sort | uniq -d --> empty), so flattening is safe.
+EXAMPLE_EXES := $(foreach f,$(EXAMPLES),SDL3_Build/examples_gen/$(notdir $(basename $(f))))
+
+all: SDL3_Build/sdl_unity
+
+SDL3_Build/sdl_unity: SDL3_Build/sdl_unity.c SDL3_Build/sdl_core.inc
+	$(SQUASH) -linux -arm64 $(INCLUDES) $(SRC) -o $(OUT)
+
+# --- Cached shared-object build (used by every example target below) --------
+# SDL3_Build/sdl_common.sqo is SDL3_Build/sdl_core.inc (all of this
+# build's SDL3 subsystem subset — the ~2MB shared body that's IDENTICAL
+# across every example) compiled ONCE via "squash -c", then linked against
+# by each example's own small driver file instead of recompiling all of SDL3
+# from source every time. This is the difference between ~80s/example
+# (recompiling everything) and ~2s/example (compiling just the example's own
+# few hundred lines) — see build_example.sh and objfile.h for the mechanism.
+# Depends on sdl_core.inc AND squash itself so a compiler fix or a
+# sdl_core.inc edit correctly invalidates the cache instead of silently
+# linking stale generated code.
+SDL3_Build/sdl_common.sqo: SDL3_Build/sdl_common_obj.c SDL3_Build/sdl_core.inc squash
+	$(SQUASH) -c -linux -arm64 $(INCLUDES) SDL3_Build/sdl_common_obj.c -o SDL3_Build/sdl_common.sqo
+
+sqo: SDL3_Build/sdl_common.sqo
+
+# --- Experimental: per-subsystem split build (sqo-split) --------------------
+# sdl_core.inc split into 3 independently-compiled, independently-cacheable
+# translation units (sdl_part_core.c/sdl_part_audio.c/sdl_part_video.c —
+# generated from sdl_core.inc, see each one's own header comment) instead of
+# one monolithic sdl_common.sqo, so changing (say) only the audio backend no
+# longer requires recompiling video/render/stb_image.h too. This exercises
+# objfile.c's objfile_merge() with 3 objects instead of 1, including a real
+# cross-object GLOBAL VARIABLE write (squash_init_private_bootstrap(), in
+# sdl_part_video.c, sets fields on sdl_part_audio.c's PRIVATEAUDIO_bootstrap
+# global directly) — this only works because objfile_merge() gained
+# cross-object global-variable resolution alongside this split (see
+# objfile.c's is_global_var_wdata_name()/canon_find()); previously a plain
+# "extern int x;" with no local definition silently got its own disconnected
+# zero-initialized slot in every TU that referenced it instead of sharing one.
+#
+# STATUS: sdl_part_core.sqo + sdl_part_audio.sqo verified working end-to-end
+# (SDL_Init/SDL_Quit, iostream, filesystem, storage, hints, process — see
+# `make sqo-split-test`, matches sdl_unity's own output through the
+# audio/core round trips). sdl_part_video.sqo compiles cleanly but crashes at
+# runtime partway through SDL_InitSubSystem(VIDEO) — a real, currently-
+# unresolved bug (confirmed via minidebug.ps1 + the objfile export-table
+# lookup technique documented in [[project-squash-sdl3-build]] memory notes:
+# SDL_FindInHashTable, called from somewhere in the video init path, calls
+# through a NULL function pointer — looks like a hashtable's hash/match
+# callback field reads back zeroed, possibly related to the same class of
+# "function-pointer-field struct read back as garbage" issue already worked
+# around elsewhere in this file, but not yet root-caused for this call site).
+# NOT wired into the "examples"/"run" targets below because of this — those
+# still use the single, fully-verified sdl_common.sqo. Left as a standing
+# investigation for whoever picks up the video-subsystem split next.
+SDL3_Build/sdl_part_core.sqo: SDL3_Build/sdl_part_core.c SDL3_Build/sdl_shared_defs.inc squash
+	$(SQUASH) -c -linux -arm64 $(INCLUDES) SDL3_Build/sdl_part_core.c -o SDL3_Build/sdl_part_core.sqo
+
+SDL3_Build/sdl_part_audio.sqo: SDL3_Build/sdl_part_audio.c SDL3_Build/sdl_shared_defs.inc squash
+	$(SQUASH) -c -linux -arm64 $(INCLUDES) SDL3_Build/sdl_part_audio.c -o SDL3_Build/sdl_part_audio.sqo
+
+SDL3_Build/sdl_part_video.sqo: SDL3_Build/sdl_part_video.c SDL3_Build/sdl_shared_defs.inc squash
+	$(SQUASH) -c -linux -arm64 $(INCLUDES) SDL3_Build/sdl_part_video.c -o SDL3_Build/sdl_part_video.sqo
+
+sqo-split: SDL3_Build/sdl_part_core.sqo SDL3_Build/sdl_part_audio.sqo SDL3_Build/sdl_part_video.sqo
+
+SDL3_Build/sdl_unity_split_test: SDL3_Build/sdl_unity_split_test.c SDL3_Build/sdl_part_core.sqo SDL3_Build/sdl_part_audio.sqo SDL3_Build/sdl_part_video.sqo
+	$(SQUASH) -linux -arm64 $(INCLUDES) SDL3_Build/sdl_unity_split_test.c SDL3_Build/sdl_part_core.sqo SDL3_Build/sdl_part_audio.sqo SDL3_Build/sdl_part_video.sqo -o SDL3_Build/sdl_unity_split_test
+
+sqo-split-test: SDL3_Build/sdl_unity_split_test
+	./SDL3_Build/sdl_unity_split_test
+
+run: SDL3_Build/sdl_unity
+	./SDL3_Build/sdl_unity
+
+# --- Per-example targets -----------------------------------------------------
+# One real Makefile rule per example (generated below via foreach+eval), each
+# depending on its own specific source file plus the shared sdl_common.sqo/
+# example_shim.inc — NOT a single shell for-loop over all of them. This lets
+# a single example be built/tested in isolation:
+#   make -f Makefile.SDL3 SDL3_Build/examples_gen/clear
+# and lets `make` skip any example whose  is already newer than its
+# source and the shared includes, instead of unconditionally rebuilding all
+# 38 every time (as an old shell-loop "examples:" target once did).
+define EXAMPLE_RULE
+SDL3_Build/examples_gen/$(notdir $(basename $(1))): SDL3/SDL/$(1) SDL3_Build/sdl_common.sqo SDL3_Build/example_shim.inc
+	bash SDL3_Build/build_example.sh $(1) -linux -arm64 ./squash
+endef
+$(foreach ex,$(EXAMPLES),$(eval $(call EXAMPLE_RULE,$(ex))))
+
+# Build one example by its source path (relative to SDL3/SDL), e.g.:
+#   make -f Makefile.SDL3 example EX=examples/renderer/01-clear/clear.c
+# Equivalent to the per-example target above but takes the full source path
+# instead of requiring you to know/type the output basename.
+example:
+	bash SDL3_Build/build_example.sh $(EX) -linux -arm64 ./squash
+
+# Build every example that isn't already up to date. Prefer the per-example
+# targets above when working on or testing one specific example — this bulk
+# target is for full regression sweeps, not iterative single-example testing.
+examples: $(EXAMPLE_EXES)
+
+# --- PNG (stb_image.h + miniz.h) tests ---------------------------------------
+# Both tests #include sdl_core.inc directly (a plain, from-source compile,
+# like sdl_unity above) rather than linking against the cached
+# sdl_common.sqo — squash's ".sqo" object-file format doesn't yet serialize
+# a static local's compile-time-constant initializer bytes (see
+# codegen.c's WDataEntry.content / compiler.c's wdata-copy comments), so a
+# function compiled into the .sqo with a "static const T table[] = {...};"
+# local (several of which exist in stb_image.h/miniz.h) would silently fall
+# back to an all-zero table if built via the cached-object path.
+#
+# test-png-load: real stb_image.h PNG decode, via SDL_LoadPNG on a real file
+# (SDL3_Build/squash_test_image.png). REGRESSED as of the SDL3_Build move:
+# now crashes (STATUS_ACCESS_VIOLATION) inside stbi__start_callbacks's
+# "s->io = *c;" struct-pointer-dereference assignment, called from
+# stbi_load_from_callbacks_with_palette (this test image is PNG color type
+# 3/indexed, so SDL_LoadPNG_IO takes the _with_palette path — 6 total
+# params, 2 stack-passed beyond the first 4 register args). Root-caused via
+# minidebug.ps1 + objdump disassembly to: the crashing instruction derefs
+# `c` (correctly passed into the callee as rdx, confirmed via disassembly)
+# yet reads back a small-integer, non-pointer value at runtime — a
+# squash codegen bug, most likely scale-dependent (same class as the
+# already-documented SDL_SavePNG bug below): an isolated repro mimicking
+# the same 6-param/large-local-frame/nested-3-param-struct-copy shape did
+# NOT reproduce it standalone, so it needs the full sdl_core.inc TU to
+# trigger. Left as a standing regression for whoever picks this up next —
+# see minidebug.ps1 for the crash-address tooling used to find this.
+#
+# test-png-roundtrip: real end-to-end SDL_SavePNG (miniz deflate encoder) +
+# SDL_LoadPNG round trip. miniz.h's PNG writer has been verified correct in
+# isolation (SDL3_Build/scratch/write_png_file.c — a standalone,
+# miniz.h-only program, produces a valid, correctly-decoded PNG), but
+# SDL_SavePNG still crashes when compiled as part of the FULL combined
+# sdl_core.inc translation unit (all of SDL3 + stb_image.h + miniz.h in one
+# TU) — a real, currently-unresolved, scale-dependent squash codegen bug
+# distinct from every issue fixed this session. See [[project-squash-sdl3-build]]
+# memory notes for the full investigation. Kept as a standing regression
+# test for whoever picks this up next.
+SDL3_Build/png_load_test: SDL3_Build/png_load_test.c SDL3_Build/sdl_core.inc
+	$(SQUASH) -linux -arm64 $(INCLUDES) SDL3_Build/png_load_test.c -o SDL3_Build/png_load_test
+
+SDL3_Build/png_roundtrip_test: SDL3_Build/png_roundtrip_test.c SDL3_Build/sdl_core.inc
+	$(SQUASH) -linux -arm64 $(INCLUDES) SDL3_Build/png_roundtrip_test.c -o SDL3_Build/png_roundtrip_test
+
+test-png-load: SDL3_Build/png_load_test
+	cd SDL3_Build && ./png_load_test
+
+test-png-roundtrip: SDL3_Build/png_roundtrip_test
+	cd SDL3_Build && ./png_roundtrip_test
+
+# --- Vulkan/OpenCL demos (SDL3_Build/scratch) --------------------------------
+# Standalone squash programs exercising real Vulkan against the genuine
+# system libraries (libvulkan.so.1, libX11.so.6) -- no SDL3 involved at all,
+# so these use squash's own include/ headers directly (-Iinclude) instead of
+# the SDL3 $(INCLUDES) used everywhere else in this file, plus real windowing
+# via Xlib (see SDL3_Build/scratch/platform_shim.h / include/vulkan_xlib.h —
+# the Linux sibling of the Win32 windowing the Windows Makefile's identical
+# demos use). Each opens its own window and runs a bounded number of frames
+# (300) then exits cleanly. NOTE: triangle_d3d11.c is Windows-only (Direct3D
+# 11 doesn't exist on Linux) and is intentionally excluded here — see
+# Makefile.SDL3's own demos target for it.
+#   triangle_vulkan    - animated, per-vertex-color-interpolated triangle
+#                            via real Vulkan (SPIR-V compiled offline, see
+#                            triangle_spirv.h / triangle.vert / triangle.frag).
+#   particles_physics  - gravity + wall-bounce physics on 200 particles, run
+#                            entirely on the GPU as a real Vulkan compute
+#                            shader (SPIR-V hand-assembled via spirv-as/
+#                            spirv-val from particles_step.comp.spvasm — see
+#                            that file's header comment — into
+#                            particles_compute_spirv.h; no CPU readback in
+#                            the frame loop) rendered as Vulkan point sprites
+#                            (see particles_spirv.h / particles.vert, reusing
+#                            triangle.frag). Formerly ran the same physics as
+#                            a real OpenCL kernel compiled at runtime; see
+#                            git history and particles_physics.c's own header
+#                            comment for that version and why it changed.
+#
+# One eval-templated rule per (demo, arch) pair — matches this file's own
+# EXAMPLE_RULE pattern above — so both x64 and arm64 outputs coexist without
+# clobbering each other (arm64 outputs get a "_arm64" suffix) and `make`
+# rebuilds only what's stale. `demos` = x64 (the default, fully verified
+# target); `demos-arm64` = the arm64 variant (execution needs a real arm64
+# Linux host or a properly configured cross-sysroot's arm64 libvulkan.so.1/
+# libX11.so.6 — qemu-user alone can't dynamically link an arm64 binary
+# against this host's x86_64 shared libraries).
+define DEMO_RULE
+SDL3_Build/scratch/$(1)$(3): SDL3_Build/scratch/$(1).c $(2) squash SDL3_Build/scratch/platform_shim.h
+	$(SQUASH) -linux $(4) -Iinclude SDL3_Build/scratch/$(1).c -o SDL3_Build/scratch/$(1)$(3) -lvulkan -lX11
+endef
+$(eval $(call DEMO_RULE,triangle_vulkan,SDL3_Build/scratch/triangle_spirv.h,,-arm64))
+$(eval $(call DEMO_RULE,particles_physics,SDL3_Build/scratch/particles_spirv.h SDL3_Build/scratch/particles_compute_spirv.h,,-arm64))
+
+# This whole Makefile already targets arm64 natively (see the -64->-arm64
+# substitution throughout), so there's no separate cross-compiled "_arm64"
+# variant here the way Makefile.SDL3.linux has one -- both names just point
+# at the same native build.
+demos: SDL3_Build/scratch/triangle_vulkan SDL3_Build/scratch/particles_physics
+demos-arm64: demos
+
+# --- Audio playback hang repro -----------------------------------------------
+# No audible output bug: see the KNOWN BUG comment right above
+# SDL3_Build/sdl_core.inc's "#include audio/SDL_sysaudio.h" for the full
+# writeup. This is a pure SDL_INIT_AUDIO repro (no window/renderer needed to
+# reproduce) that hangs forever (the main thread never returns from its
+# first SDL_PutAudioStreamData/SDL_GetAudioStreamQueued call) -- run with a
+# timeout, e.g. `timeout 5 ./SDL3_Build/repro_audio_only_hang`, and
+# expect to see it stop right after "resumed, entering loop" with no
+# "iter=..." lines ever following.
+SDL3_Build/repro_audio_only_hang: SDL3_Build/repro_audio_only_hang.c SDL3_Build/sdl_core.inc
+	$(SQUASH) -linux -arm64 $(INCLUDES) SDL3_Build/repro_audio_only_hang.c -o SDL3_Build/repro_audio_only_hang
+
+clean:
+	rm -f SDL3_Build/sdl_unity
+	rm -f SDL3_Build/png_load_test SDL3_Build/png_roundtrip_test
+	rm -f SDL3_Build/sdl_unity_split_test
+	rm -f SDL3_Build/repro_audio_only_hang
+	rm -f SDL3_Build/scratch/triangle_vulkan SDL3_Build/scratch/triangle_vulkan_arm64
+	rm -f SDL3_Build/scratch/particles_physics SDL3_Build/scratch/particles_physics_arm64
+	rm -rf SDL3_Build/examples_gen
+
+clean-sqo:
+	rm -f SDL3_Build/sdl_common.sqo
+	rm -f SDL3_Build/sdl_part_core.sqo SDL3_Build/sdl_part_audio.sqo SDL3_Build/sdl_part_video.sqo
+
+.PHONY: all run clean clean-sqo example examples sqo sqo-split sqo-split-test test-png-load test-png-roundtrip demos demos-arm64

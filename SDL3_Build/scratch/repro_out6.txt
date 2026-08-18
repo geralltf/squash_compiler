@@ -1,0 +1,3 @@
+d->m_pA=0xf6f5c0
+pOutput_buf_start=0xf6d960
+n=0x1c60

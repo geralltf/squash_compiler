@@ -1,0 +1,8 @@
+main: start
+main: waveOutOpen OK
+main: device thread created
+main: produced=4
+main: production done, produced=7 iterations=7
+device_thread: exiting, submitted=7 completed=7
+main: device thread wait result=0
+main: done, exiting cleanly

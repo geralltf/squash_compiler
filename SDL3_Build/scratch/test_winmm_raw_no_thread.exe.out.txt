@@ -1,0 +1,7 @@
+main: start
+main: waveOutOpen OK, hwo=0000000000D87720
+main: queued initial buffer 0
+main: queued initial buffer 1
+main: buffers_played=4
+main: playback loop finished, buffers_played=7 iterations=89
+main: done, exiting cleanly

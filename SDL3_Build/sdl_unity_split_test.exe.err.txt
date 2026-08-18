@@ -1,0 +1,26 @@
+SDL3 (squash build) initialised OK
+SDL_iostream round trip OK: "hello from squash SDL_iostream test"
+filesystem create/stat/rename/remove round trip OK
+SDL_GetBasePath: C:\Users\Admin\OneDrive\Documents\Projects\squash_compiler\SDL3_Build\
+SDL_GetCurrentDirectory: C:\Users\Admin\OneDrive\Documents\Projects\squash_compiler\
+SDL_GetPrefPath: C:\Users\Admin\AppData\Roaming\squash_org\squash_app\
+SDL_GetPrefPath/SDL_GetUserFolder round trip OK
+SDL_properties round trip OK: number=42 string="hello properties"
+SDL_storage round trip OK: "hello from squash SDL_storage test" (34 bytes)
+SDL_GetPowerInfo: state=0 seconds=-1 percent=-1
+SDL_GetJoysticks: count=0
+SDL_GetSensors: count=0
+SDL_hints round trip OK: "squash_hint_value"
+SDL_process: exitcode=0 output=[squash_process_test_output
+]
+SDL_process round trip OK
+squash_repro_hashtable_test: calling real SDL_CreateHashTable cross-object...
+squash_repro_hashtable_test: SDL_CreateHashTable returned 0xb8b9e0
+squash_repro_hashtable_test: shadow->lock=0xb8ad70 shadow->table=0xb7bb30 shadow->hash=0x7ff73d18c314 shadow->keymatch=0x7ff73d18c389 shadow->destroy=0x7ff73d18c4ff shadow->userdata=(null) shadow->hash_mask=3 shadow->max_probe_len=0 shadow->num_occupied_slots=0
+squash_repro_hashtable_test: calling SDL_FindInHashTable...
+squash_repro_hashtable_test: SDL_FindInHashTable returned 0 (survived the call)
+squash_repro_hashtable_test: done
+SDL_InitSubSystem(VIDEO) OK
+SDL_CreateWindowAndRenderer OK
+video/render frame loop finished (60 frames)
+video/render round trip OK
