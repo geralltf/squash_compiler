@@ -15,7 +15,9 @@ static void box_color(SqwBoxKind kind, float *r, float *g, float *b) {
         case SQW_BOX_SPAN:   *r = 0.85f; *g = 0.55f; *b = 0.15f; break; /* orange */
         case SQW_BOX_A:      *r = 0.80f; *g = 0.25f; *b = 0.35f; break; /* red/pink */
         case SQW_BOX_IMG:    *r = 0.85f; *g = 0.80f; *b = 0.20f; break; /* yellow */
-        default:             *r = 0.45f; *g = 0.45f; *b = 0.45f; break; /* gray (text/other) */
+        case SQW_BOX_BUTTON: *r = 0.75f; *g = 0.75f; *b = 0.78f; break; /* light gray button face */
+        case SQW_BOX_PRE:    *r = 0.93f; *g = 0.93f; *b = 0.90f; break; /* pale code-block background */
+        default:             *r = 0.45f; *g = 0.45f; *b = 0.45f; break; /* gray (other) */
     }
 }
 
@@ -74,21 +76,24 @@ int sqw_renderer_init(SqwVkContext *vk, SqwRenderer *r) {
     iaState.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     iaState.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-    VkViewport viewport;
-    viewport.x = 0; viewport.y = 0;
-    viewport.width = (float)vk->extent.width; viewport.height = (float)vk->extent.height;
-    viewport.minDepth = 0.0f; viewport.maxDepth = 1.0f;
-    VkRect2D scissor;
-    scissor.offset.x = 0; scissor.offset.y = 0;
-    scissor.extent = vk->extent;
-
+    /* Viewport/scissor COUNTS only here (no actual VkViewport/VkRect2D
+     * values) -- both are VK_DYNAMIC_STATE now, set once per frame in
+     * sqw_vk_begin_frame() from the current swapchain extent, so this
+     * pipeline survives sqw_vk_recreate_swapchain() resizes unchanged. */
     VkPipelineViewportStateCreateInfo vpState;
     memset(&vpState, 0, sizeof(vpState));
     vpState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     vpState.viewportCount = 1;
-    vpState.pViewports = &viewport;
     vpState.scissorCount = 1;
-    vpState.pScissors = &scissor;
+
+    VkDynamicState dynStates[2];
+    dynStates[0] = VK_DYNAMIC_STATE_VIEWPORT;
+    dynStates[1] = VK_DYNAMIC_STATE_SCISSOR;
+    VkPipelineDynamicStateCreateInfo dynState;
+    memset(&dynState, 0, sizeof(dynState));
+    dynState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynState.dynamicStateCount = 2;
+    dynState.pDynamicStates = dynStates;
 
     VkPipelineRasterizationStateCreateInfo rsState;
     memset(&rsState, 0, sizeof(rsState));
@@ -139,6 +144,7 @@ int sqw_renderer_init(SqwVkContext *vk, SqwRenderer *r) {
     gpInfo.pRasterizationState = &rsState;
     gpInfo.pMultisampleState = &msState;
     gpInfo.pColorBlendState = &cbState;
+    gpInfo.pDynamicState = &dynState;
     gpInfo.layout = r->pipelineLayout;
     gpInfo.renderPass = vk->renderPass;
     gpInfo.subpass = 0;
@@ -184,7 +190,8 @@ int sqw_renderer_init(SqwVkContext *vk, SqwRenderer *r) {
 }
 
 void sqw_renderer_draw(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cmd,
-                        LayoutList *boxes, float viewport_w, float viewport_h) {
+                        LayoutList *boxes, float viewport_w, float viewport_h,
+                        float scroll_x, float scroll_y) {
     int n = boxes->count;
     if (n > SQW_RENDERER_MAX_BOXES) n = SQW_RENDERER_MAX_BOXES;
 
@@ -193,11 +200,27 @@ void sqw_renderer_draw(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cmd,
     int i;
     for (i = 0; i < n; i++) {
         LayoutBox *b = &boxes->boxes[i];
+        /* SQW_BOX_TEXT boxes are drawn separately by the glyph text
+         * renderer (text_renderer_vk.c) -- no flat-color rect here, or
+         * every word/line would get an opaque background box behind its
+         * actual glyphs. SQW_BOX_A/SPAN are plain inline text wrappers --
+         * real browsers give them no background by default either (the
+         * old solid-color placeholder rects made sense before real text
+         * existed; now that anchor text is real glyphs colored/underlined
+         * by sqw_main.c's own draw pass, a background box here would just
+         * paint over/behind it). */
+        if (b->kind == SQW_BOX_TEXT || b->kind == SQW_BOX_A || b->kind == SQW_BOX_SPAN) continue;
+        /* Layout boxes live in CONTENT space (unaffected by scrolling --
+         * see layout.h); subtract the current scroll offset here, once,
+         * right at the point of converting to screen-space NDC, so
+         * scrolling never requires a re-layout. */
+        float bx = b->x - scroll_x;
+        float by = b->y - scroll_y;
         /* pixel (top-left origin) -> Vulkan NDC (already y-down, so no flip) */
-        float x0 = (b->x / viewport_w) * 2.0f - 1.0f;
-        float y0 = (b->y / viewport_h) * 2.0f - 1.0f;
-        float x1 = ((b->x + b->w) / viewport_w) * 2.0f - 1.0f;
-        float y1 = ((b->y + b->h) / viewport_h) * 2.0f - 1.0f;
+        float x0 = (bx / viewport_w) * 2.0f - 1.0f;
+        float y0 = (by / viewport_h) * 2.0f - 1.0f;
+        float x1 = ((bx + b->w) / viewport_w) * 2.0f - 1.0f;
+        float y1 = ((by + b->h) / viewport_h) * 2.0f - 1.0f;
 
         float cr, cg, cb;
         box_color(b->kind, &cr, &cg, &cb);
@@ -221,4 +244,32 @@ void sqw_renderer_draw(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cmd,
     vkCmdPushConstants(cmd, r->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
 
     if (vcount > 0) vkCmdDraw(cmd, vcount, 1, 0, 0);
+}
+
+void sqw_renderer_draw_rect(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cmd,
+                             float x, float y, float w, float h,
+                             float red, float green, float blue,
+                             float viewport_w, float viewport_h) {
+    (void)vk;
+    float x0 = (x / viewport_w) * 2.0f - 1.0f;
+    float y0 = (y / viewport_h) * 2.0f - 1.0f;
+    float x1 = ((x + w) / viewport_w) * 2.0f - 1.0f;
+    float y1 = ((y + h) / viewport_h) * 2.0f - 1.0f;
+
+    SqwVertex *verts = (SqwVertex *)r->mapped;
+    SqwVertex tl, trv, bl, br;
+    tl.x = x0; tl.y = y0; tl.r = red; tl.g = green; tl.b = blue;
+    trv.x = x1; trv.y = y0; trv.r = red; trv.g = green; trv.b = blue;
+    bl.x = x0; bl.y = y1; bl.r = red; bl.g = green; bl.b = blue;
+    br.x = x1; br.y = y1; br.r = red; br.g = green; br.b = blue;
+    verts[0] = tl; verts[1] = trv; verts[2] = bl;
+    verts[3] = trv; verts[4] = br; verts[5] = bl;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipeline);
+    VkDeviceSize offset0 = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &r->vertexBuffer, &offset0);
+    SqwPushConstants pc;
+    pc.angle = 0.0f;
+    vkCmdPushConstants(cmd, r->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 6, 1, 0, 0);
 }

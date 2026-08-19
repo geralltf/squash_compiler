@@ -50,6 +50,7 @@ VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkDeviceMemory);
 VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkDescriptorSetLayout);
 VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkDescriptorPool);
 VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkDescriptorSet);
+VK_DEFINE_NON_DISPATCHABLE_HANDLE(VkSampler);
 
 typedef enum VkResult {
     VK_SUCCESS = 0,
@@ -106,9 +107,22 @@ typedef enum VkFormat {
     VK_FORMAT_UNDEFINED = 0,
     VK_FORMAT_R32G32_SFLOAT = 103,
     VK_FORMAT_R32G32B32_SFLOAT = 106,
+    VK_FORMAT_R32G32B32A32_SFLOAT = 109,
     VK_FORMAT_B8G8R8A8_UNORM = 44,
     VK_FORMAT_B8G8R8A8_SRGB = 50
 } VkFormat;
+
+/* VkBlendFactor / VkBlendOp: VkPipelineColorBlendAttachmentState's
+ * srcColorBlendFactor/dstColorBlendFactor/colorBlendOp/... fields above are
+ * plain uint32_t (this project's existing convention for enum-typed struct
+ * fields, see that struct's own definition), so these are #defines rather
+ * than a named enum type -- added for the text renderer's alpha blending
+ * (text_renderer_vk.c), the first pipeline in this project to enable it. */
+#define VK_BLEND_FACTOR_ZERO 0
+#define VK_BLEND_FACTOR_ONE 1
+#define VK_BLEND_FACTOR_SRC_ALPHA 6
+#define VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA 7
+#define VK_BLEND_OP_ADD 0
 
 typedef enum VkImageLayout {
     VK_IMAGE_LAYOUT_UNDEFINED = 0,
@@ -785,5 +799,116 @@ void WINAPI vkCmdPipelineBarrier(VkCommandBuffer commandBuffer, VkFlags srcStage
     uint32_t imageMemoryBarrierCount, const VkImageMemoryBarrier *pImageMemoryBarriers);
 void WINAPI vkCmdCopyImageToBuffer(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
     VkBuffer dstBuffer, uint32_t regionCount, const VkBufferImageCopy *pRegions);
+
+/* --- Sampled-texture support (VkImage/VkSampler + upload), added for
+ * SQW's Vulkan bitmap-font glyph-atlas text renderer (text_renderer_vk.c)
+ * -- the first thing in this project to actually sample a texture rather
+ * than just draw flat-colored/vertex-colored triangles. Real Vulkan 1.0
+ * core enum/sType values throughout (this is a real loader + real ICD at
+ * the other end, not squash's own ABI, so these have to be exactly right,
+ * not just internally consistent). */
+#define VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO ((VkStructureType)14)
+#define VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO ((VkStructureType)31)
+
+/* VK_FORMAT_R8_UNORM: extends the VkFormat enum above (already-declared
+ * enumerators can't be re-added to that typedef, so this is a #define
+ * alias of the correct enumerator value, same trick already used for
+ * VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER above). */
+#define VK_FORMAT_R8_UNORM ((VkFormat)9)
+#define VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ((VkImageLayout)5)
+#define VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ((VkImageLayout)7)
+
+typedef enum VkImageType { VK_IMAGE_TYPE_2D = 1 } VkImageType;
+typedef enum VkImageTiling { VK_IMAGE_TILING_OPTIMAL = 0 } VkImageTiling;
+typedef enum VkFilter { VK_FILTER_NEAREST = 0, VK_FILTER_LINEAR = 1 } VkFilter;
+typedef enum VkSamplerMipmapMode { VK_SAMPLER_MIPMAP_MODE_NEAREST = 0 } VkSamplerMipmapMode;
+typedef enum VkSamplerAddressMode { VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE = 2 } VkSamplerAddressMode;
+typedef enum VkBorderColor { VK_BORDER_COLOR_INT_TRANSPARENT_BLACK = 1 } VkBorderColor;
+#define VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ((VkDescriptorType)1)
+
+#define VK_IMAGE_USAGE_TRANSFER_DST_BIT 0x2
+#define VK_IMAGE_USAGE_SAMPLED_BIT 0x4
+#define VK_BUFFER_USAGE_TRANSFER_SRC_BIT 0x1
+#define VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT 0x1
+#define VK_ACCESS_TRANSFER_WRITE_BIT 0x1000
+#define VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT 0x80
+#define VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT 0x1
+
+typedef struct VkImageCreateInfo {
+    VkStructureType sType;
+    const void *pNext;
+    VkFlags flags;
+    VkImageType imageType;
+    VkFormat format;
+    VkExtent3D extent;
+    uint32_t mipLevels;
+    uint32_t arrayLayers;
+    uint32_t samples; /* VkSampleCountFlagBits */
+    VkImageTiling tiling;
+    VkFlags usage;
+    VkSharingMode sharingMode;
+    uint32_t queueFamilyIndexCount;
+    const uint32_t *pQueueFamilyIndices;
+    VkImageLayout initialLayout;
+} VkImageCreateInfo;
+
+typedef struct VkSamplerCreateInfo {
+    VkStructureType sType;
+    const void *pNext;
+    VkFlags flags;
+    VkFilter magFilter;
+    VkFilter minFilter;
+    VkSamplerMipmapMode mipmapMode;
+    VkSamplerAddressMode addressModeU;
+    VkSamplerAddressMode addressModeV;
+    VkSamplerAddressMode addressModeW;
+    float mipLodBias;
+    VkBool32 anisotropyEnable;
+    float maxAnisotropy;
+    VkBool32 compareEnable;
+    uint32_t compareOp; /* VkCompareOp */
+    float minLod;
+    float maxLod;
+    VkBorderColor borderColor;
+    VkBool32 unnormalizedCoordinates;
+} VkSamplerCreateInfo;
+
+/* VkWriteDescriptorSet.pImageInfo (declared as "const void *" above, since
+ * it's a real Vulkan union-by-convention field shared with buffer/texel-
+ * buffer descriptor writes) gets cast to this when writing a combined-
+ * image-sampler descriptor. */
+typedef struct VkDescriptorImageInfo {
+    VkSampler sampler;
+    VkImageView imageView;
+    VkImageLayout imageLayout;
+} VkDescriptorImageInfo;
+
+VkResult WINAPI vkCreateImage(VkDevice device, const VkImageCreateInfo *pCreateInfo, const void *pAllocator, VkImage *pImage);
+void WINAPI vkDestroyImage(VkDevice device, VkImage image, const void *pAllocator);
+void WINAPI vkGetImageMemoryRequirements(VkDevice device, VkImage image, VkMemoryRequirements *pMemoryRequirements);
+VkResult WINAPI vkBindImageMemory(VkDevice device, VkImage image, VkDeviceMemory memory, VkDeviceSize memoryOffset);
+VkResult WINAPI vkCreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo, const void *pAllocator, VkSampler *pSampler);
+void WINAPI vkDestroySampler(VkDevice device, VkSampler sampler, const void *pAllocator);
+void WINAPI vkCmdCopyBufferToImage(VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkImage dstImage, VkImageLayout dstImageLayout,
+    uint32_t regionCount, const VkBufferImageCopy *pRegions);
+void WINAPI vkFreeCommandBuffers(VkDevice device, VkCommandPool commandPool, uint32_t commandBufferCount, const VkCommandBuffer *pCommandBuffers);
+
+/* --- Dynamic viewport/scissor state: lets a pipeline be created once and
+ * reused across sqw_vk_recreate_swapchain() resizes (vkCmdSetViewport/
+ * vkCmdSetScissor set the real values per-frame instead) rather than
+ * needing every pipeline rebuilt on every resize. VkGraphicsPipelineCreateInfo.
+ * pDynamicState above is already "const void *" (a real Vulkan union-by-
+ * convention field), so no signature change needed there -- just cast. */
+#define VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO ((VkStructureType)27)
+typedef enum VkDynamicState { VK_DYNAMIC_STATE_VIEWPORT = 0, VK_DYNAMIC_STATE_SCISSOR = 1 } VkDynamicState;
+typedef struct VkPipelineDynamicStateCreateInfo {
+    VkStructureType sType;
+    const void *pNext;
+    VkFlags flags;
+    uint32_t dynamicStateCount;
+    const VkDynamicState *pDynamicStates;
+} VkPipelineDynamicStateCreateInfo;
+/* vkCmdSetViewport/vkCmdSetScissor are already declared above (used
+ * elsewhere in this header already, near the other vkCmd* prototypes). */
 
 #endif /* _VULKAN_CORE_H */

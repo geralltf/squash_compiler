@@ -22,6 +22,17 @@ typedef struct DomNode {
     int child_cap;
 
     struct DomNode *parent;
+
+    /* Interactive state, checked/set by sqw_main.c's hit-testing and
+     * click handling and read by the renderer for per-state color (e.g.
+     * an <a> goes blue->purple once visited) -- lives directly on the
+     * node rather than a side-table since the DOM already lives for the
+     * whole process/page lifetime. Meaningful only for <a> (visited,
+     * hover) and <button> (hover, active/pressed) nodes; left 0 for
+     * everything else. */
+    int visited;
+    int hover;
+    int active;
 } DomNode;
 
 DomNode *dom_parse(const char *html);

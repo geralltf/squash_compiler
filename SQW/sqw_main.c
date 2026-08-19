@@ -45,6 +45,7 @@
 #include "dom_walk.c"
 #include "layout.c"
 #include "renderer_vk.c"
+#include "text_renderer_vk.c"
 
 #ifdef __linux__
 /* squash_init_private_bootstrap()/SQW_GetWindowX11Display()/
@@ -75,10 +76,173 @@ static const char *SQW_TEST_HTML =
     "<html><body>"
     "<div class=\"outer\">"
       "<center><p>Hello <span>world</span></p></center>"
-      "<a href=\"http://example.com\">link</a>"
+      "<p>This is a real paragraph of ordinary body text, long enough that "
+      "it has to wrap across several lines at the current viewport width "
+      "instead of running off the right edge of the window the way the "
+      "very first text-rendering test did.</p>"
+      "<pre>a pre block does NOT wrap, even if\n"
+      "this particular line is a good deal wider than the viewport itself</pre>"
+      "<p>Click <a href=\"http://example.com\">this link</a> or press "
+      "<button>a button</button>.</p>"
       "<img src=\"pic.png\">"
     "</div>"
     "</body></html>";
+
+/* Concatenates `node`'s DIRECT text-node children (no descent -- matches
+ * layout.c's direct_text_width(), which sized the box this labels) into
+ * `buf`. Used at draw time for <a>/<span>/<button>, none of which get
+ * their own SQW_BOX_TEXT run from layout_compute() (they're laid out as
+ * one opaque inline box, see layout.c's kind_for_tag comment). Returns
+ * the number of characters written (not counting the NUL). */
+static int concat_direct_text(const DomNode *node, char *buf, int bufcap) {
+    int i, n = 0;
+    for (i = 0; i < node->child_count && n < bufcap - 1; i++) {
+        const DomNode *c = node->children[i];
+        if (!dom_is_text(c)) continue;
+        int len = (int)strlen(c->text);
+        int room = bufcap - 1 - n;
+        if (len > room) len = room;
+        memcpy(buf + n, c->text, len);
+        n += len;
+    }
+    buf[n] = 0;
+    return n;
+}
+
+/* Classic web anchor palette: unvisited blue, visited purple (see
+ * DomNode.visited in dom.h, set on click by the input-handling loop). */
+static void anchor_color(const DomNode *a, float *r, float *g, float *b) {
+    if (a->visited) { *r = 0.33f; *g = 0.10f; *b = 0.54f; }
+    else            { *r = 0.00f; *g = 0.00f; *b = 0.93f; }
+}
+
+/* Draws every SQW_BOX_TEXT run plus the label text of every A/SPAN/BUTTON
+ * box (see concat_direct_text's comment for why those need separate
+ * handling), including the anchor underline. All queued glyph/rect draws
+ * for the frame; caller must still sqw_text_renderer_flush() and this
+ * function's own sqw_renderer_draw_rect() calls are already real draw
+ * calls (not batched, see that function's own comment). */
+static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer *renderer, VkCommandBuffer cmd,
+                              LayoutList *boxes, float viewport_w, float viewport_h,
+                              float scroll_x, float scroll_y) {
+    int i;
+    char label[256];
+    for (i = 0; i < boxes->count; i++) {
+        LayoutBox *b = &boxes->boxes[i];
+        float bx = b->x - scroll_x;
+        float by = b->y - scroll_y;
+        if (b->kind == SQW_BOX_TEXT) {
+            sqw_text_draw_string(tr, bx, by, b->node->text + b->text_start, b->text_len,
+                SQW_TEXT_SCALE, 0.0f, 0.0f, 0.0f, 1.0f, viewport_w, viewport_h);
+        } else if (b->kind == SQW_BOX_A) {
+            float r, g, bl;
+            anchor_color(b->node, &r, &g, &bl);
+            /* Subtle hover feedback: a translucent-looking lighter tint by
+             * blending toward white, cheap and doesn't need real alpha
+             * blending on the (opaque) box pipeline. */
+            if (b->node->hover) { r = r + (1.0f - r) * 0.35f; g = g + (1.0f - g) * 0.35f; bl = bl + (1.0f - bl) * 0.35f; }
+            sqw_renderer_draw_rect(vk, renderer, cmd, bx, by + b->h - 2.0f, b->w, 2.0f, r, g, bl, viewport_w, viewport_h);
+            concat_direct_text(b->node, label, sizeof label);
+            sqw_text_draw_string(tr, bx, by, label, (int)strlen(label),
+                SQW_TEXT_SCALE, r, g, bl, 1.0f, viewport_w, viewport_h);
+        } else if (b->kind == SQW_BOX_SPAN) {
+            concat_direct_text(b->node, label, sizeof label);
+            sqw_text_draw_string(tr, bx, by, label, (int)strlen(label),
+                SQW_TEXT_SCALE, 0.0f, 0.0f, 0.0f, 1.0f, viewport_w, viewport_h);
+        } else if (b->kind == SQW_BOX_BUTTON) {
+            concat_direct_text(b->node, label, sizeof label);
+            float tr_col = b->node->active ? 0.9f : 0.1f;
+            sqw_text_draw_string(tr, bx + 4.0f, by + 2.0f, label, (int)strlen(label),
+                SQW_TEXT_SCALE, tr_col, tr_col, tr_col, 1.0f, viewport_w, viewport_h);
+        }
+    }
+}
+
+#define SQW_SCROLLBAR_THICKNESS 12.0f
+#define SQW_SCROLLBAR_MIN_THUMB 24.0f
+
+typedef struct {
+    const char *target_id;
+    DomNode *found;
+} FindByIdCtx;
+
+static void find_by_id_visit(DomNode *node, int depth, void *ctx) {
+    (void)depth;
+    FindByIdCtx *c = (FindByIdCtx *)ctx;
+    if (c->found) return;
+    const char *id = dom_get_attr(node, "id");
+    if (id && strcmp(id, c->target_id) == 0) c->found = node;
+}
+
+/* Finds the element with the given id anywhere under root (dom_walk(), not
+ * hand-rolled recursion -- matches this project's established iterative-
+ * traversal convention, see dom_walk.c's own comment on why). */
+static DomNode *find_by_id(DomNode *root, const char *id) {
+    FindByIdCtx ctx;
+    ctx.target_id = id; ctx.found = NULL;
+    dom_walk(root, find_by_id_visit, &ctx);
+    return ctx.found;
+}
+
+/* Finds the first LayoutBox whose ->node is exactly `node` -- used to
+ * resolve an in-page "#fragment" anchor target (found via find_by_id) to
+ * an actual on-screen position to scroll to. */
+static LayoutBox *find_box_for_node(LayoutList *list, DomNode *node) {
+    int i;
+    for (i = 0; i < list->count; i++) if (list->boxes[i].node == node) return &list->boxes[i];
+    return NULL;
+}
+
+/* Clamps a scroll offset to [0, max(0, content_extent - viewport_extent)]. */
+static float clamp_scroll(float value, float content_extent, float viewport_extent) {
+    float max_scroll = content_extent - viewport_extent;
+    if (max_scroll < 0) max_scroll = 0;
+    if (value < 0) return 0;
+    if (value > max_scroll) return max_scroll;
+    return value;
+}
+
+/* Draws the vertical/horizontal scrollbar track+thumb (only when content
+ * overflows that axis) and returns their thumb rects via out params so
+ * the caller can hit-test drag start against them -- 0-size (w==0/h==0)
+ * when that axis doesn't need a scrollbar. Uses sqw_renderer_draw_rect
+ * (see its own comment: real per-call draws, not part of the batched
+ * LayoutList pass) since these aren't part of the page's own layout. */
+static void draw_scrollbars(SqwVkContext *vk, SqwRenderer *renderer, VkCommandBuffer cmd,
+                             float content_w, float content_h, float viewport_w, float viewport_h,
+                             float scroll_x, float scroll_y, LayoutBox *out_vthumb, LayoutBox *out_hthumb) {
+    out_vthumb->w = 0; out_hthumb->h = 0;
+    if (content_h > viewport_h) {
+        float track_x = viewport_w - SQW_SCROLLBAR_THICKNESS;
+        sqw_renderer_draw_rect(vk, renderer, cmd, track_x, 0.0f, SQW_SCROLLBAR_THICKNESS, viewport_h,
+            0.85f, 0.85f, 0.85f, viewport_w, viewport_h);
+        float thumb_h = viewport_h * (viewport_h / content_h);
+        if (thumb_h < SQW_SCROLLBAR_MIN_THUMB) thumb_h = SQW_SCROLLBAR_MIN_THUMB;
+        float track_free = viewport_h - thumb_h;
+        float max_scroll = content_h - viewport_h;
+        float thumb_y = (max_scroll > 0) ? (scroll_y / max_scroll) * track_free : 0.0f;
+        sqw_renderer_draw_rect(vk, renderer, cmd, track_x, thumb_y, SQW_SCROLLBAR_THICKNESS, thumb_h,
+            0.55f, 0.55f, 0.55f, viewport_w, viewport_h);
+        out_vthumb->x = track_x; out_vthumb->y = thumb_y; out_vthumb->w = SQW_SCROLLBAR_THICKNESS; out_vthumb->h = thumb_h;
+    }
+    if (content_w > viewport_w) {
+        float track_y = viewport_h - SQW_SCROLLBAR_THICKNESS;
+        sqw_renderer_draw_rect(vk, renderer, cmd, 0.0f, track_y, viewport_w, SQW_SCROLLBAR_THICKNESS,
+            0.85f, 0.85f, 0.85f, viewport_w, viewport_h);
+        float thumb_w = viewport_w * (viewport_w / content_w);
+        if (thumb_w < SQW_SCROLLBAR_MIN_THUMB) thumb_w = SQW_SCROLLBAR_MIN_THUMB;
+        float track_free = viewport_w - thumb_w;
+        float max_scroll = content_w - viewport_w;
+        float thumb_x = (max_scroll > 0) ? (scroll_x / max_scroll) * track_free : 0.0f;
+        sqw_renderer_draw_rect(vk, renderer, cmd, thumb_x, track_y, thumb_w, SQW_SCROLLBAR_THICKNESS,
+            0.55f, 0.55f, 0.55f, viewport_w, viewport_h);
+        out_hthumb->x = thumb_x; out_hthumb->y = track_y; out_hthumb->w = thumb_w; out_hthumb->h = SQW_SCROLLBAR_THICKNESS;
+    }
+}
+
+static int point_in_rect(float px, float py, const LayoutBox *r) {
+    return px >= r->x && px < r->x + r->w && py >= r->y && py < r->y + r->h;
+}
 
 int main(void) {
     squash_init_private_bootstrap();
@@ -131,32 +295,190 @@ int main(void) {
         return 1;
     }
 
+    SqwTextRenderer *text_renderer = (SqwTextRenderer *)malloc(sizeof(SqwTextRenderer));
+    if (!sqw_text_renderer_init(vk, text_renderer)) {
+        fprintf(stderr, "SQW: text renderer init failed\n"); fflush(stdout);
+        return 1;
+    }
+
     DomNode *root = dom_parse(SQW_TEST_HTML);
     LayoutList boxes;
-    layout_compute(root, SQW_VIEWPORT_W, SQW_VIEWPORT_H, &boxes);
-    fprintf(stderr, "SQW: DOM parsed, layout computed (%d boxes)\n", boxes.count); fflush(stdout);
+    float viewport_w = SQW_VIEWPORT_W, viewport_h = SQW_VIEWPORT_H;
+    layout_compute(root, viewport_w, viewport_h, &boxes);
+    fprintf(stderr, "SQW: DOM parsed, layout computed (%d boxes, content %.0fx%.0f)\n",
+        boxes.count, boxes.content_w, boxes.content_h); fflush(stdout);
+
+    float scroll_x = 0.0f, scroll_y = 0.0f;
+    DomNode *hover_node = NULL;
+    DomNode *active_node = NULL;
+    int dragging_v = 0, dragging_h = 0;
+    float drag_anchor_mouse = 0.0f, drag_anchor_scroll = 0.0f;
+    float mouse_x = 0.0f, mouse_y = 0.0f;
+
+    /* Test-only synthetic input hook (SQW_TEST_CLICK_X/Y env vars): pushes
+     * real SDL events through SDL_PushEvent() -- not a shortcut that
+     * bypasses the event loop, the exact same SDL_PollEvent() path a real
+     * XTest-injected or physical click takes -- at a fixed frame so local
+     * automated testing doesn't depend on XTest actually reaching this
+     * window (confirmed unreliable under this environment's Xwayland
+     * setup: XTestFakeMotionEvent/ButtonEvent calls succeeded but SQW
+     * never received a single resulting SDL_EVENT_MOUSE_MOTION). Off by
+     * default; only active with the env var set. */
+    int test_click_x = -1, test_click_y = -1;
+    {
+        const char *ex = getenv("SQW_TEST_CLICK_X");
+        const char *ey = getenv("SQW_TEST_CLICK_Y");
+        if (ex && ey) { test_click_x = atoi(ex); test_click_y = atoi(ey); }
+    }
+    if (getenv("SQW_DUMP_BOXES")) {
+        int bi;
+        for (bi = 0; bi < boxes.count; bi++) {
+            LayoutBox *db = &boxes.boxes[bi];
+            fprintf(stderr, "[box] i=%d kind=%d x=%d y=%d w=%d h=%d\n",
+                bi, db->kind, (int)db->x, (int)db->y, (int)db->w, (int)db->h);
+        }
+        fflush(stderr);
+    }
 
     fprintf(stderr, "SQW: entering render loop\n"); fflush(stdout);
     int running = 1;
     int frame_count = 0;
-    const int max_frames = 300; /* bounded, matching the proven triangle_vulkan.c pattern */
-    while (running && frame_count < max_frames) {
+    while (running) {
+        if (test_click_x >= 0 && frame_count == 30) {
+            SDL_Event mv; memset(&mv, 0, sizeof mv);
+            mv.type = SDL_EVENT_MOUSE_MOTION;
+            mv.motion.x = (float)test_click_x; mv.motion.y = (float)test_click_y;
+            SDL_PushEvent(&mv);
+        }
+        if (test_click_x >= 0 && frame_count == 60) {
+            SDL_Event bd; memset(&bd, 0, sizeof bd);
+            bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            bd.button.button = 1; bd.button.down = 1;
+            bd.button.x = (float)test_click_x; bd.button.y = (float)test_click_y;
+            SDL_PushEvent(&bd);
+            SDL_Event bu; memset(&bu, 0, sizeof bu);
+            bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            bu.button.button = 1; bu.button.down = 0;
+            bu.button.x = (float)test_click_x; bu.button.y = (float)test_click_y;
+            SDL_PushEvent(&bu);
+        }
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_EVENT_QUIT || ev.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
                 running = 0;
+            } else if (ev.type == SDL_EVENT_WINDOW_RESIZED) {
+                int new_w = ev.window.data1, new_h = ev.window.data2;
+                if (new_w > 0 && new_h > 0) {
+                    uint32_t packed = ((uint32_t)new_w << 16) | (uint32_t)new_h;
+                    sqw_vk_recreate_swapchain(vk, packed);
+                    viewport_w = (float)new_w; viewport_h = (float)new_h;
+                    layout_list_free(&boxes);
+                    layout_compute(root, viewport_w, viewport_h, &boxes);
+                    scroll_x = clamp_scroll(scroll_x, boxes.content_w, viewport_w);
+                    scroll_y = clamp_scroll(scroll_y, boxes.content_h, viewport_h);
+                }
+            } else if (ev.type == SDL_EVENT_MOUSE_MOTION) {
+                mouse_x = ev.motion.x; mouse_y = ev.motion.y;
+                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[motion] x=%d y=%d\n", (int)mouse_x, (int)mouse_y); fflush(stderr); }
+                if (dragging_v) {
+                    float track_free = viewport_h - SQW_SCROLLBAR_MIN_THUMB;
+                    float thumb_h = viewport_h * (viewport_h / boxes.content_h);
+                    if (thumb_h < SQW_SCROLLBAR_MIN_THUMB) thumb_h = SQW_SCROLLBAR_MIN_THUMB;
+                    track_free = viewport_h - thumb_h;
+                    float delta_mouse = mouse_y - drag_anchor_mouse;
+                    float scale = (track_free > 0) ? (boxes.content_h - viewport_h) / track_free : 0.0f;
+                    scroll_y = clamp_scroll(drag_anchor_scroll + delta_mouse * scale, boxes.content_h, viewport_h);
+                } else if (dragging_h) {
+                    float thumb_w = viewport_w * (viewport_w / boxes.content_w);
+                    if (thumb_w < SQW_SCROLLBAR_MIN_THUMB) thumb_w = SQW_SCROLLBAR_MIN_THUMB;
+                    float track_free = viewport_w - thumb_w;
+                    float delta_mouse = mouse_x - drag_anchor_mouse;
+                    float scale = (track_free > 0) ? (boxes.content_w - viewport_w) / track_free : 0.0f;
+                    scroll_x = clamp_scroll(drag_anchor_scroll + delta_mouse * scale, boxes.content_w, viewport_w);
+                } else {
+                    float cx = mouse_x + scroll_x, cy = mouse_y + scroll_y;
+                    int hit = layout_hit_test(&boxes, cx, cy);
+                    DomNode *new_hover = NULL;
+                    if (hit >= 0) {
+                        SqwBoxKind k = boxes.boxes[hit].kind;
+                        if (k == SQW_BOX_A || k == SQW_BOX_BUTTON) new_hover = boxes.boxes[hit].node;
+                    }
+                    if (new_hover != hover_node) {
+                        if (hover_node) hover_node->hover = 0;
+                        if (new_hover) new_hover->hover = 1;
+                        hover_node = new_hover;
+                    }
+                }
+            } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == 1) {
+                LayoutBox vthumb, hthumb;
+                vthumb.w = 0; hthumb.h = 0;
+                if (boxes.content_h > viewport_h) {
+                    float thumb_h = viewport_h * (viewport_h / boxes.content_h);
+                    if (thumb_h < SQW_SCROLLBAR_MIN_THUMB) thumb_h = SQW_SCROLLBAR_MIN_THUMB;
+                    float track_free = viewport_h - thumb_h;
+                    float max_scroll = boxes.content_h - viewport_h;
+                    float thumb_y = (max_scroll > 0) ? (scroll_y / max_scroll) * track_free : 0.0f;
+                    vthumb.x = viewport_w - SQW_SCROLLBAR_THICKNESS; vthumb.y = thumb_y;
+                    vthumb.w = SQW_SCROLLBAR_THICKNESS; vthumb.h = thumb_h;
+                }
+                if (boxes.content_w > viewport_w) {
+                    float thumb_w = viewport_w * (viewport_w / boxes.content_w);
+                    if (thumb_w < SQW_SCROLLBAR_MIN_THUMB) thumb_w = SQW_SCROLLBAR_MIN_THUMB;
+                    float track_free = viewport_w - thumb_w;
+                    float max_scroll = boxes.content_w - viewport_w;
+                    float thumb_x = (max_scroll > 0) ? (scroll_x / max_scroll) * track_free : 0.0f;
+                    hthumb.x = thumb_x; hthumb.y = viewport_h - SQW_SCROLLBAR_THICKNESS;
+                    hthumb.w = thumb_w; hthumb.h = SQW_SCROLLBAR_THICKNESS;
+                }
+                if (vthumb.w > 0 && point_in_rect(ev.button.x, ev.button.y, &vthumb)) {
+                    dragging_v = 1; drag_anchor_mouse = ev.button.y; drag_anchor_scroll = scroll_y;
+                } else if (hthumb.h > 0 && point_in_rect(ev.button.x, ev.button.y, &hthumb)) {
+                    dragging_h = 1; drag_anchor_mouse = ev.button.x; drag_anchor_scroll = scroll_x;
+                } else {
+                    float cx = ev.button.x + scroll_x, cy = ev.button.y + scroll_y;
+                    int hit = layout_hit_test(&boxes, cx, cy);
+                    if (hit >= 0) {
+                        LayoutBox *hb = &boxes.boxes[hit];
+                        if (hb->kind == SQW_BOX_A) {
+                            hb->node->visited = 1;
+                            hb->node->active = 1;
+                            active_node = hb->node;
+                            const char *href = dom_get_attr(hb->node, "href");
+                            if (href && href[0] == '#') {
+                                DomNode *target = find_by_id(root, href + 1);
+                                LayoutBox *tb = target ? find_box_for_node(&boxes, target) : NULL;
+                                if (tb) scroll_y = clamp_scroll(tb->y, boxes.content_h, viewport_h);
+                            } else if (href) {
+                                fprintf(stderr, "SQW: (navigation not yet implemented) would follow href=%s\n", href); fflush(stdout);
+                            }
+                        } else if (hb->kind == SQW_BOX_BUTTON) {
+                            hb->node->active = 1;
+                            active_node = hb->node;
+                        }
+                    }
+                }
+            } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP && ev.button.button == 1) {
+                dragging_v = 0; dragging_h = 0;
+                if (active_node) { active_node->active = 0; active_node = NULL; }
+            } else if (ev.type == SDL_EVENT_MOUSE_WHEEL) {
+                scroll_y = clamp_scroll(scroll_y - ev.wheel.y * ((SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f)), boxes.content_h, viewport_h);
+                if (ev.wheel.x != 0.0f) scroll_x = clamp_scroll(scroll_x - ev.wheel.x * ((SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f)), boxes.content_w, viewport_w);
             }
         }
         if (!running) break;
 
         uint32_t imageIndex = 0;
         VkCommandBuffer cmd = sqw_vk_begin_frame(vk, 0.95f, 0.95f, 0.95f, 1.0f, &imageIndex);
-        if (!cmd) break;
-        sqw_renderer_draw(vk, renderer, cmd, &boxes, SQW_VIEWPORT_W, SQW_VIEWPORT_H);
+        if (!cmd) continue; /* e.g. minimized (0x0 extent) -- just skip this frame, not fatal */
+        sqw_renderer_draw(vk, renderer, cmd, &boxes, viewport_w, viewport_h, scroll_x, scroll_y);
+        draw_layout_text(text_renderer, vk, renderer, cmd, &boxes, viewport_w, viewport_h, scroll_x, scroll_y);
+        LayoutBox vthumb_dummy, hthumb_dummy;
+        draw_scrollbars(vk, renderer, cmd, boxes.content_w, boxes.content_h, viewport_w, viewport_h, scroll_x, scroll_y, &vthumb_dummy, &hthumb_dummy);
+        sqw_text_renderer_flush(vk, text_renderer, cmd, viewport_w, viewport_h);
         sqw_vk_end_frame(vk, cmd, imageIndex);
 
         frame_count++;
-        if (frame_count % 60 == 0) { fprintf(stderr, "SQW: frame=%d\n", frame_count); fflush(stdout); }
+        if (frame_count % 300 == 0) { fprintf(stderr, "SQW: frame=%d\n", frame_count); fflush(stdout); }
     }
 
     fprintf(stderr, "SQW: render loop finished, frame_count=%d\n", frame_count); fflush(stdout);

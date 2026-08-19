@@ -1991,8 +1991,14 @@ static void emit_linux_libc_call(CodeGen *cg, const char *fname, ASTNode **args,
         }
         i = 0;
         while (i < nextra) {
-            codegen_expr(cg, args[6+i]);
-            asm_mov_mem_reg(a, REG_RSP, i*8, REG_RAX);
+            /* See the identical fix (and its longer comment) on the direct-
+             * call SysV path in the AST_CALL codegen -- same bug, same fix,
+             * for this libc-import call path (e.g. an fprintf/snprintf
+             * call with more than 6 total arguments, one of the 7th+ being
+             * a float/double). */
+            int af = codegen_is_float_expr(cg, args[6+i]);
+            if (af) { codegen_float_expr(cg, args[6+i]); asm_movsd_store(a, REG_RSP, i*8, 0); }
+            else    { codegen_expr(cg, args[6+i]); asm_mov_mem_reg(a, REG_RSP, i*8, REG_RAX); }
             i++;
         }
         {
@@ -4367,6 +4373,66 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                     else asm_movsd_load(a,0,REG_RBP,fsv->offset); /* XMM0 = old lhs */
                     asm_sub_rsp(a,16);
                     asm_emit4(a,0xF2,0x0F,0x11,0x04); asm_emit1(a,0x24); /* movsd [rsp],xmm0 */
+                } else if (is_compound && !fsv && cg->is_64bit &&
+                           (n->assign.lhs->kind==AST_MEMBER ||
+                            n->assign.lhs->kind==AST_INDEX  ||
+                            n->assign.lhs->kind==AST_DEREF)) {
+                    /* Same "spill old lhs onto stack before evaluating
+                     * rhs" dance as the SYM_VAR/PARAM/GLOBAL branches
+                     * above, for a member/array-element/deref lhs (e.g.
+                     * "f->cursor_x += w;" or "arr[i].total += x;") — this
+                     * branch didn't exist at all until now, meaning the
+                     * SAME missing-push-but-unconditional-pop bug applied
+                     * here too (confirmed via a standalone repro: a
+                     * struct field accumulated through a pointer in a
+                     * loop, "f->cursor_x += w + gap;", produced a
+                     * non-monotonic running total instead of a real
+                     * accumulation — this is what was silently corrupting
+                     * SQW's own word-wrap cursor position before layout.c
+                     * was rewritten to avoid the pattern; fixing it here
+                     * properly means future code doesn't have to). Unlike
+                     * the other lhs kinds, the "address" itself (not just
+                     * the old value) must survive across rhs evaluation,
+                     * since the eventual store needs it again and
+                     * rhs evaluation is free to clobber RAX/RBX — computed
+                     * once here and pushed, then reused (popped, not
+                     * recomputed via a second codegen_lvalue call) by the
+                     * is_compound branch of the store dispatch below. */
+                    codegen_lvalue(cg, n->assign.lhs); /* RAX = address of LHS */
+                    asm_push_reg(a, REG_RAX);
+                    int msz = float_store_target_size(cg, n->assign.lhs);
+                    if (msz==4) { asm_movss_load(a,0,REG_RAX,0); asm_cvtss2sd(a,0,0); }
+                    else asm_movsd_load(a,0,REG_RAX,0); /* XMM0 = old lhs */
+                    asm_sub_rsp(a,16);
+                    asm_emit4(a,0xF2,0x0F,0x11,0x04); asm_emit1(a,0x24); /* movsd [rsp],xmm0 */
+                } else if (is_compound && fsv && cg->is_64bit && fsv->kind==SYM_GLOBAL) {
+                    /* Same "spill old lhs onto stack before evaluating rhs"
+                     * dance as the SYM_VAR/SYM_PARAM branch just above, for
+                     * a global lhs -- this branch didn't exist at all until
+                     * now, meaning "someGlobalFloat += x;" (or -=/*=//=)
+                     * unconditionally popped an "old lhs" that was NEVER
+                     * pushed a few lines below (that pop/add-rsp is
+                     * unconditional on is_compound, not on which of these
+                     * two branches ran) — reading 16 bytes of unrelated
+                     * stack contents as the old value AND leaving RSP
+                     * desynced by 16 bytes for the rest of the function
+                     * (confirmed via a standalone repro: a file-scope
+                     * "static float total; total += w + gap;" called
+                     * repeatedly in a loop produced a wrong, non-
+                     * monotonic running total instead of a real
+                     * accumulation, e.g. 342, 206, 180, 368 instead of
+                     * 342, 503, 638, 961). Global storage is always the
+                     * full declared width already (see the plain "="
+                     * SYM_GLOBAL branches elsewhere in this function,
+                     * which narrow correctly), so no width-detection dance
+                     * is needed here — just load and spill it. */
+                    const char *oldlbl=(fsv->dll&&fsv->dll[0])?fsv->dll:n->assign.lhs->var.name;
+                    int oldgfsz = fsv->type ? typeinfo_size(fsv->type,cg->is_64bit) : 8;
+                    asm_lea_rip_wdata(a,REG_RBX,oldlbl);
+                    if (oldgfsz==4) { asm_movss_load(a,0,REG_RBX,0); asm_cvtss2sd(a,0,0); }
+                    else asm_movsd_load(a,0,REG_RBX,0); /* XMM0 = old lhs */
+                    asm_sub_rsp(a,16);
+                    asm_emit4(a,0xF2,0x0F,0x11,0x04); asm_emit1(a,0x24); /* movsd [rsp],xmm0 */
                 }
                 /* Evaluate rhs into XMM0 */
                 if (rhs_is_float) codegen_float_expr(cg, n->assign.rhs);
@@ -4397,7 +4463,24 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                     } else { asm_fstp_mem64(a,REG_EBP,fsv->offset); asm_fld_mem64(a,REG_EBP,fsv->offset); }
                 } else if (fsv && fsv->kind==SYM_GLOBAL) {
                     const char *lbl=(fsv->dll&&fsv->dll[0])?fsv->dll:n->assign.lhs->var.name;
-                    if (cg->is_64bit){asm_lea_rip_wdata(a,REG_RBX,lbl);asm_movsd_store(a,REG_RBX,0,0);}
+                    if (cg->is_64bit){
+                        /* Match the SYM_VAR/SYM_PARAM branch just above:
+                         * narrow to single precision before storing when
+                         * the global itself is declared "float" (4 bytes),
+                         * not "double" (8) -- an unconditional 8-byte
+                         * movsd here silently corrupted a `float` global's
+                         * own storage (only 4 bytes actually allocated for
+                         * it) and left it unreadable (a later float-sized
+                         * read via movss saw only the double bit pattern's
+                         * low 4 bytes, exactly zero for any "round" value —
+                         * confirmed via a standalone repro: "float g; void
+                         * f(float h){g=h;}" left g reading back as 0.0 for
+                         * every non-fractional h). */
+                        int gfsz=fsv->type?typeinfo_size(fsv->type,cg->is_64bit):8;
+                        asm_lea_rip_wdata(a,REG_RBX,lbl);
+                        if (gfsz==4){asm_cvtsd2ss(a,0,0);asm_movss_store(a,REG_RBX,0,0);}
+                        else asm_movsd_store(a,REG_RBX,0,0);
+                    }
                     else {
                         /* 32-bit: fstp to global wdata address, then reload */
                         asm_emit2(a,0xDD,0x1D); asm_reloc_wdata(a,lbl); /* fstp qword [lbl] */
@@ -4407,12 +4490,22 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                            (n->assign.lhs->kind==AST_MEMBER ||
                             n->assign.lhs->kind==AST_INDEX  ||
                             n->assign.lhs->kind==AST_DEREF)) {
-                    /* LHS is a member/array/deref: compute address into RAX.
-                     * codegen_lvalue uses only integer registers (RAX/RBX/etc), so XMM0
-                     * is preserved across the call. Store width must match the target's
-                     * actual size — always storing 8 bytes corrupts whatever 4-byte
-                     * `float` element/field follows it in memory. */
-                    codegen_lvalue(cg, n->assign.lhs); /* RAX = address of LHS */
+                    /* LHS is a member/array/deref: get its address into
+                     * RAX. Plain "=": compute it fresh here (rhs is
+                     * already safely in XMM0, and codegen_lvalue only
+                     * touches integer registers). Compound "+="/etc: the
+                     * pre-rhs branch above already computed this same
+                     * address and pushed it (it had to survive across
+                     * rhs evaluation, which recomputing here can't
+                     * retroactively fix) — reuse that instead of
+                     * recomputing, both for correctness when the lvalue
+                     * expression has side effects and to keep the push/pop
+                     * this function does balanced. Store width must match
+                     * the target's actual size — always storing 8 bytes
+                     * corrupts whatever 4-byte `float` element/field
+                     * follows it in memory. */
+                    if (is_compound) asm_pop_reg(a, REG_RAX);
+                    else codegen_lvalue(cg, n->assign.lhs); /* RAX = address of LHS */
                     if (float_store_target_size(cg, n->assign.lhs) == 4) {
                         asm_cvtsd2ss(a,0,0);
                         asm_emit4(a,0xF3,0x0F,0x11,0x00); /* movss [rax], xmm0 */
@@ -5172,8 +5265,32 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 }
                 _i = 0;
                 while (_i < nextra) {
-                    codegen_expr(cg, n->call.args[6+_i]);
-                    asm_mov_mem_reg(a, REG_RSP, _i*8, REG_RAX);
+                    /* Stack-passed overflow args (7th+ position) must be
+                     * type-checked the same way the first 6 (register-
+                     * bound) args are just above -- a float/double here
+                     * evaluated via the plain int path (codegen_expr) reads
+                     * back as garbage in the callee (confirmed via a
+                     * standalone 9-float-parameter repro: params 7-9 came
+                     * back as 0.0 instead of their real values). Mirrors
+                     * the nreg loop's own float/int split -- INCLUDING the
+                     * single-precision narrow: a "float"-typed (not
+                     * "double") parameter is read back by the callee via
+                     * a 4-byte movss at its stack slot (codegen_float_expr's
+                     * own AST_VAR case, keyed off the declared type's
+                     * size), not the 8-byte movsd used to get the value
+                     * there -- storing the full double bit pattern without
+                     * narrowing first leaves the movss read seeing the
+                     * DOUBLE's low 4 bytes, which are exactly zero for any
+                     * "round" value (confirmed: 7.0/70.0 both reproduced as
+                     * exactly 0.0 in the callee before this narrow was
+                     * added). */
+                    int af = codegen_is_float_expr(cg, n->call.args[6+_i]);
+                    if (af) {
+                        codegen_float_expr(cg, n->call.args[6+_i]);
+                        if (param_is_single_float(sym, 6+_i, cg->sym, cg->is_64bit)) asm_cvtsd2ss(a,0,0);
+                        asm_movsd_store(a, REG_RSP, _i*8, 0);
+                    }
+                    else    { codegen_expr(cg, n->call.args[6+_i]); asm_mov_mem_reg(a, REG_RSP, _i*8, REG_RAX); }
                     _i++;
                 }
             }
@@ -5772,8 +5889,24 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 }
                 _i = 0;
                 while (_i < nextra) {
-                    codegen_expr(cg, n->fp_call.args[6+_i]);
-                    asm_mov_mem_reg(a, REG_RSP, _i*8, REG_RAX);
+                    /* See the identical fix on the direct-call SysV path
+                     * above -- same "extras always evaluated as int" bug,
+                     * same float/int type check fix, for the function-
+                     * pointer-call path. NOT applying the sibling fix's
+                     * single-precision cvtsd2ss narrow here: unlike a
+                     * direct call, there is no resolved function Symbol at
+                     * an indirect call site to ask "is this declared
+                     * 'float' vs 'double'" (n->fp_call.func_expr is an
+                     * arbitrary expression, not a name), and this file's
+                     * nreg loop just above has the identical gap already
+                     * (stores every float register arg via 8-byte movsd
+                     * with no narrow) -- so this stays internally
+                     * consistent with the rest of this call path rather
+                     * than narrowing only the overflow args and not the
+                     * register ones. */
+                    int af = codegen_is_float_expr(cg, n->fp_call.args[6+_i]);
+                    if (af) { codegen_float_expr(cg, n->fp_call.args[6+_i]); asm_movsd_store(a, REG_RSP, _i*8, 0); }
+                    else    { codegen_expr(cg, n->fp_call.args[6+_i]); asm_mov_mem_reg(a, REG_RSP, _i*8, REG_RAX); }
                     _i++;
                 }
             }
@@ -8660,8 +8793,22 @@ void codegen_float_expr(CodeGen *cg, ASTNode *n) {
             } else if (s && s->kind==SYM_GLOBAL) {
                 const char *lbl=(s->dll&&s->dll[0])?s->dll:lhs->var.name;
                 if (cg->is_64bit) {
+                    /* Match the SYM_VAR/SYM_PARAM branch just above: a
+                     * "float" (4-byte) global must be narrowed and stored
+                     * with movss, not always written as an 8-byte movsd —
+                     * the global's own storage is only 4 bytes for a float
+                     * (see wdata allocation), so an unconditional 8-byte
+                     * store here corrupted the next 4 bytes of .data AND
+                     * left this global unreadable as a float (a later
+                     * float-sized read via movss saw the double bit
+                     * pattern's low 4 bytes, which are exactly zero for
+                     * any "round" value — confirmed via a standalone
+                     * repro: "float g; void f(float h){g=h;}" left g
+                     * reading back as 0.0 for every non-fractional h). */
+                    int sz=s->type?typeinfo_size(s->type,1):8;
                     asm_lea_rip_wdata(a,REG_RBX,lbl);
-                    asm_movsd_store(a,REG_RBX,0,0);
+                    if (sz==4) { asm_cvtsd2ss(a,0,0); asm_movss_store(a,REG_RBX,0,0); }
+                    else asm_movsd_store(a,REG_RBX,0,0);
                 } else {
                     /* 32-bit: fstp to global wdata address, then reload */
                     asm_emit2(a,0xDD,0x1D); asm_reloc_wdata(a,lbl); /* fstp qword [lbl] */

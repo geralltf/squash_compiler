@@ -48,6 +48,16 @@ typedef struct {
     VkPhysicalDeviceMemoryProperties memProps;
 } SqwVkContext;
 
+/* A single combined-image-sampler texture (the glyph atlas today; general
+ * enough to reuse for a future <img> decode-and-upload path). */
+typedef struct {
+    VkImage        image;
+    VkDeviceMemory memory;
+    VkImageView    view;
+    VkSampler      sampler;
+    uint32_t       width, height;
+} SqwTexture;
+
 /* Returns 1 on success, 0 on failure (matching triangle_vulkan.c's own
  * VkResult-checked-inline style, collapsed to a single bool here since
  * every step failing is equally fatal at this stage). */
@@ -69,5 +79,24 @@ VkCommandBuffer sqw_vk_begin_frame(SqwVkContext *vk, float r, float g, float b, 
 void sqw_vk_end_frame(SqwVkContext *vk, VkCommandBuffer cmd, uint32_t imageIndex);
 
 uint32_t sqw_vk_find_memory_type(SqwVkContext *vk, uint32_t typeBits, VkFlags props);
+
+/* Creates a single-channel (R8_UNORM) sampled texture from `pixels`
+ * (width*height bytes), uploaded via a temporary host-visible staging
+ * buffer + one-shot command buffer (allocated from vk->commandPool,
+ * submitted and waited on synchronously -- this only ever runs a handful
+ * of times at startup, so a dedicated transfer-queue/async path isn't
+ * warranted). Returns 1 on success, 0 on failure. */
+int sqw_vk_create_texture_r8(SqwVkContext *vk, const unsigned char *pixels, uint32_t w, uint32_t h, SqwTexture *out);
+void sqw_vk_destroy_texture(SqwVkContext *vk, SqwTexture *tex);
+
+/* Rebuilds the swapchain, image views, and framebuffers in place (same
+ * render pass, same command pool/buffers -- those don't depend on
+ * swapchain extent) for a new window size. Callers using a pipeline with
+ * VK_DYNAMIC_STATE_VIEWPORT/SCISSOR (both new pipelines added alongside
+ * this do) never need to touch their VkPipeline on resize. Returns 1 on
+ * success, 0 on failure (e.g. a 0x0 minimized-window extent, in which case
+ * the caller should just skip rendering that frame rather than treat it as
+ * fatal). */
+int sqw_vk_recreate_swapchain(SqwVkContext *vk, uint32_t width_height_packed);
 
 #endif /* SQW_VK_CONTEXT_H */
