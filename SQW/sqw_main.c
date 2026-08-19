@@ -118,9 +118,15 @@ static void sqw_dirname(const char *path, char *out) {
 /* Loads and parses `path` as the new current page, replacing *root_ptr
  * and recomputing layout in place. On failure (file not found/unreadable)
  * leaves the current page entirely untouched and just logs a warning --
- * a broken local link should never crash or blank the browser. */
+ * a broken local link should never crash or blank the browser.
+ * current_base_url is cleared: this page was reached via a local file
+ * path, so it has no network origin for the click handler's href
+ * resolution to fall back to (see that logic's own comment) -- without
+ * this, navigating LOCAL -> NETWORK -> back to a LOCAL page over a plain
+ * relative href would incorrectly keep treating further relative hrefs on
+ * this local page as network-relative. */
 static void sqw_navigate_to(const char *path, DomNode **root_ptr, LayoutList *boxes_ptr,
-                             char *current_dir, float viewport_w, float viewport_h) {
+                             char *current_dir, char *current_base_url, float viewport_w, float viewport_h) {
     char *html = sqw_read_file(path);
     if (!html) {
         fprintf(stderr, "SQW: navigate: cannot open %s\n", path); fflush(stdout);
@@ -133,25 +139,35 @@ static void sqw_navigate_to(const char *path, DomNode **root_ptr, LayoutList *bo
     layout_list_free(boxes_ptr);
     layout_compute(*root_ptr, viewport_w, viewport_h, boxes_ptr);
     sqw_dirname(path, current_dir);
+    current_base_url[0] = '\0';
     fprintf(stderr, "SQW: navigated to %s (%d boxes)\n", path, boxes_ptr->count); fflush(stdout);
 }
 
 /* Same document-swap as sqw_navigate_to(), but from an in-memory HTML
  * buffer (a fetched network response body) instead of a local file --
  * used by the SQW_TEST_CLICK_X/Y-independent real http(s):// anchor path.
- * current_dir is reset to empty: a page fetched over the network has no
- * local directory of its own for further relative-hrefs to resolve
- * against (out of scope here -- see net_client.h's own comment on URL
- * parsing being deliberately minimal). */
-static void sqw_navigate_to_html(const char *html, DomNode **root_ptr, LayoutList *boxes_ptr,
-                                  char *current_dir, float viewport_w, float viewport_h) {
+ * current_dir is cleared (no local directory applies to a fetched page),
+ * and current_base_url is set to `url`'s own directory (e.g.
+ * "http://127.0.0.1:8080/") via the same sqw_dirname() logic local paths
+ * already use -- it's equally valid on a '/'-delimited URL. Real browsers
+ * resolve a plain relative href on a page fetched over the network against
+ * THAT page's own URL, fetching the result over the network too, not as a
+ * local file -- see the click handler's own href-resolution comment for
+ * why this matters (this is the actual fix for "page 3, reached via the
+ * network anchor from page 1, links back to page 1 by a plain
+ * href=\"index.html\" -- clicking it silently failed to open a local file
+ * literally named \"index.html\" instead of re-fetching
+ * http://127.0.0.1:8080/index.html", confirmed as the real repro). */
+static void sqw_navigate_to_html(const char *html, const char *url, DomNode **root_ptr, LayoutList *boxes_ptr,
+                                  char *current_dir, char *current_base_url, float viewport_w, float viewport_h) {
     DomNode *new_root = dom_parse(html);
     dom_free(*root_ptr);
     *root_ptr = new_root;
     layout_list_free(boxes_ptr);
     layout_compute(*root_ptr, viewport_w, viewport_h, boxes_ptr);
     current_dir[0] = '\0';
-    fprintf(stderr, "SQW: navigated to fetched page (%d boxes)\n", boxes_ptr->count); fflush(stdout);
+    sqw_dirname(url, current_base_url);
+    fprintf(stderr, "SQW: navigated to fetched page %s (%d boxes)\n", url, boxes_ptr->count); fflush(stdout);
 }
 
 /* Concatenates `node`'s DIRECT text-node children (no descent -- matches
@@ -391,6 +407,18 @@ int main(void) {
 
     char current_dir[SQW_PATH_MAX];
     sqw_dirname(SQW_INITIAL_PAGE, current_dir);
+    /* Non-empty only when the CURRENT page was reached over the network
+     * (e.g. "http://127.0.0.1:8080/") -- see sqw_navigate_to_html()'s own
+     * comment for why a plain relative href needs this to resolve
+     * correctly on such a page instead of being (wrongly) treated as a
+     * local file path. */
+    char current_base_url[SQW_PATH_MAX];
+    current_base_url[0] = '\0';
+    /* Set right before starting a fetch, read back once it completes, so
+     * sqw_navigate_to_html() knows what URL the fetched page's own
+     * relative hrefs should resolve against next. */
+    char pending_fetch_url[SQW_PATH_MAX];
+    pending_fetch_url[0] = '\0';
     char *initial_html = sqw_read_file(SQW_INITIAL_PAGE);
     if (!initial_html) {
         fprintf(stderr, "SQW: cannot open initial page %s\n", SQW_INITIAL_PAGE); fflush(stdout);
@@ -426,6 +454,18 @@ int main(void) {
         const char *ex = getenv("SQW_TEST_CLICK_X");
         const char *ey = getenv("SQW_TEST_CLICK_Y");
         if (ex && ey) { test_click_x = atoi(ex); test_click_y = atoi(ey); }
+    }
+    /* SQW_TEST_CLICK2_X/Y (frame 300, well after the first click's own
+     * network fetch at frame 60 has had time to complete): a SECOND
+     * synthetic click, for testing multi-step navigation (e.g. "click a
+     * network anchor, then click a relative link on the page it fetched")
+     * that a single test click can't exercise. Same real-event-loop
+     * rationale as SQW_TEST_CLICK_X/Y above. */
+    int test_click2_x = -1, test_click2_y = -1;
+    {
+        const char *ex = getenv("SQW_TEST_CLICK2_X");
+        const char *ey = getenv("SQW_TEST_CLICK2_Y");
+        if (ex && ey) { test_click2_x = atoi(ex); test_click2_y = atoi(ey); }
     }
     /* SQW_TEST_KEY: same rationale as SQW_TEST_CLICK_X/Y above -- names one
      * of "pagedown"/"pageup"/"home"/"end"/"up"/"down", pushed as a real
@@ -473,6 +513,24 @@ int main(void) {
             bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
             bu.button.button = 1; bu.button.down = 0;
             bu.button.x = (float)test_click_x; bu.button.y = (float)test_click_y;
+            SDL_PushEvent(&bu);
+        }
+        if (test_click2_x >= 0 && frame_count == 270) {
+            SDL_Event mv; memset(&mv, 0, sizeof mv);
+            mv.type = SDL_EVENT_MOUSE_MOTION;
+            mv.motion.x = (float)test_click2_x; mv.motion.y = (float)test_click2_y;
+            SDL_PushEvent(&mv);
+        }
+        if (test_click2_x >= 0 && frame_count == 290) {
+            SDL_Event bd; memset(&bd, 0, sizeof bd);
+            bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            bd.button.button = 1; bd.button.down = 1;
+            bd.button.x = (float)test_click2_x; bd.button.y = (float)test_click2_y;
+            SDL_PushEvent(&bd);
+            SDL_Event bu; memset(&bu, 0, sizeof bu);
+            bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            bu.button.button = 1; bu.button.down = 0;
+            bu.button.x = (float)test_click2_x; bu.button.y = (float)test_click2_y;
             SDL_PushEvent(&bu);
         }
         if (test_key != SDL_SCANCODE_UNKNOWN && frame_count == 30) {
@@ -616,14 +674,37 @@ int main(void) {
                                     sqw_net_result_free(pending_fetch);
                                 }
                                 fprintf(stderr, "SQW: fetching %s ...\n", href); fflush(stdout);
+                                strncpy(pending_fetch_url, href, sizeof pending_fetch_url - 1);
+                                pending_fetch_url[sizeof pending_fetch_url - 1] = 0;
                                 pending_fetch = sqw_net_fetch_async(href);
+                            } else if (href[0] && current_base_url[0]) {
+                                /* A plain relative href on a page that was
+                                 * itself reached over the network resolves
+                                 * against THAT page's own URL and is fetched
+                                 * over the network too -- real browser
+                                 * behavior, and the actual fix for "page 3
+                                 * (reached via the network anchor) links back
+                                 * to page 1 by a plain href=\"index.html\";
+                                 * clicking it did nothing" (see
+                                 * sqw_navigate_to_html()'s own comment for
+                                 * the full story: current_base_url is empty
+                                 * for a LOCALLY loaded page, which is what
+                                 * routes this same href through the local
+                                 * branch below instead). */
+                                char full_url[SQW_PATH_MAX];
+                                snprintf(full_url, sizeof full_url, "%s%s", current_base_url, href);
+                                if (pending_fetch) sqw_net_result_free(pending_fetch);
+                                fprintf(stderr, "SQW: fetching %s ...\n", full_url); fflush(stdout);
+                                strncpy(pending_fetch_url, full_url, sizeof pending_fetch_url - 1);
+                                pending_fetch_url[sizeof pending_fetch_url - 1] = 0;
+                                pending_fetch = sqw_net_fetch_async(full_url);
                             } else if (href[0]) {
                                 /* Local relative path: resolve against the
                                  * CURRENT page's own directory, not a fixed
                                  * base -- see sqw_dirname()'s comment. */
                                 char full_path[SQW_PATH_MAX];
                                 snprintf(full_path, sizeof full_path, "%s%s", current_dir, href);
-                                sqw_navigate_to(full_path, &root, &boxes, current_dir, viewport_w, viewport_h);
+                                sqw_navigate_to(full_path, &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h);
                                 scroll_x = 0.0f; scroll_y = 0.0f;
                                 hover_node = NULL; active_node = NULL; /* old DOM (and target_node) is gone */
                             }
@@ -675,7 +756,7 @@ int main(void) {
             pthread_mutex_unlock(&pending_fetch->mutex);
             if (fetch_ready) {
                 if (fetch_success) {
-                    sqw_navigate_to_html(fetch_body, &root, &boxes, current_dir, viewport_w, viewport_h);
+                    sqw_navigate_to_html(fetch_body, pending_fetch_url, &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h);
                     scroll_x = 0.0f; scroll_y = 0.0f;
                     hover_node = NULL; active_node = NULL; /* old DOM is gone */
                 } else {
