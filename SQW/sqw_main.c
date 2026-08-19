@@ -170,6 +170,33 @@ static void sqw_navigate_to_html(const char *html, const char *url, DomNode **ro
     fprintf(stderr, "SQW: navigated to fetched page %s (%d boxes)\n", url, boxes_ptr->count); fflush(stdout);
 }
 
+/* Shared by the Go button and pressing Enter in the URL bar: navigates to
+ * whatever's currently typed, the same way an anchor click would --
+ * http(s):// URLs go through the async background-thread fetch (see
+ * net_client.h's own comment on the async model), anything else is
+ * treated as a local path relative to wherever SQW itself was launched
+ * from (typing a full path, not a relative one, is the address-bar
+ * convention here -- there is no "current page" to resolve a bare
+ * filename against the way an in-page anchor's href can). Does nothing on
+ * an empty bar. */
+static void sqw_go_navigate(const char *url_text, SqwNetResult **pending_fetch, char *pending_fetch_url,
+                             DomNode **root_ptr, LayoutList *boxes_ptr, char *current_dir, char *current_base_url,
+                             float viewport_w, float viewport_h, float *scroll_x, float *scroll_y,
+                             DomNode **hover_node, DomNode **active_node) {
+    if (!url_text[0]) return;
+    if (strncmp(url_text, "http://", 7) == 0 || strncmp(url_text, "https://", 8) == 0) {
+        if (*pending_fetch) sqw_net_result_free(*pending_fetch);
+        fprintf(stderr, "SQW: fetching %s ...\n", url_text); fflush(stdout);
+        strncpy(pending_fetch_url, url_text, SQW_PATH_MAX - 1);
+        pending_fetch_url[SQW_PATH_MAX - 1] = 0;
+        *pending_fetch = sqw_net_fetch_async(url_text);
+    } else {
+        sqw_navigate_to(url_text, root_ptr, boxes_ptr, current_dir, current_base_url, viewport_w, viewport_h);
+        *scroll_x = 0.0f; *scroll_y = 0.0f;
+        *hover_node = NULL; *active_node = NULL;
+    }
+}
+
 /* Concatenates `node`'s DIRECT text-node children (no descent -- matches
  * layout.c's direct_text_width(), which sized the box this labels) into
  * `buf`. Used at draw time for <a>/<span>/<button>, none of which get
@@ -242,6 +269,16 @@ static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer 
 
 #define SQW_SCROLLBAR_THICKNESS 12.0f
 #define SQW_SCROLLBAR_MIN_THUMB 24.0f
+/* URL/search bar strip pinned to the top of the real window -- every
+ * content-area computation (layout, scrollbar geometry/hit-test, mouse
+ * wheel/keyboard paging, hover/click hit-test) subtracts this from the
+ * window's real height so page content never renders under or gets
+ * covered by it; every content DRAW call adds it back as a Y offset so
+ * content actually paints below it instead of underneath. See main()'s
+ * event loop for both halves of that split. */
+#define SQW_TOOLBAR_H 40.0f
+#define SQW_URLBAR_PAD 8.0f
+#define SQW_URLBAR_GO_W 56.0f
 
 typedef struct {
     const char *target_id;
@@ -316,15 +353,16 @@ static void draw_scrollbars(SqwVkContext *vk, SqwRenderer *renderer, VkCommandBu
                              float content_w, float content_h, float viewport_w, float viewport_h,
                              float scroll_x, float scroll_y, LayoutBox *out_vthumb, LayoutBox *out_hthumb) {
     out_vthumb->w = 0; out_hthumb->h = 0;
-    if (content_h > viewport_h) {
+    float content_view_h = viewport_h - SQW_TOOLBAR_H; /* visible content height, below the URL bar */
+    if (content_h > content_view_h) {
         float track_x = viewport_w - SQW_SCROLLBAR_THICKNESS;
-        sqw_renderer_draw_rect(vk, renderer, cmd, track_x, 0.0f, SQW_SCROLLBAR_THICKNESS, viewport_h,
+        sqw_renderer_draw_rect(vk, renderer, cmd, track_x, SQW_TOOLBAR_H, SQW_SCROLLBAR_THICKNESS, content_view_h,
             0.85f, 0.85f, 0.85f, viewport_w, viewport_h);
-        float thumb_h = viewport_h * (viewport_h / content_h);
+        float thumb_h = content_view_h * (content_view_h / content_h);
         if (thumb_h < SQW_SCROLLBAR_MIN_THUMB) thumb_h = SQW_SCROLLBAR_MIN_THUMB;
-        float track_free = viewport_h - thumb_h;
-        float max_scroll = content_h - viewport_h;
-        float thumb_y = (max_scroll > 0) ? (scroll_y / max_scroll) * track_free : 0.0f;
+        float track_free = content_view_h - thumb_h;
+        float max_scroll = content_h - content_view_h;
+        float thumb_y = SQW_TOOLBAR_H + ((max_scroll > 0) ? (scroll_y / max_scroll) * track_free : 0.0f);
         sqw_renderer_draw_rect(vk, renderer, cmd, track_x, thumb_y, SQW_SCROLLBAR_THICKNESS, thumb_h,
             0.55f, 0.55f, 0.55f, viewport_w, viewport_h);
         out_vthumb->x = track_x; out_vthumb->y = thumb_y; out_vthumb->w = SQW_SCROLLBAR_THICKNESS; out_vthumb->h = thumb_h;
@@ -346,6 +384,53 @@ static void draw_scrollbars(SqwVkContext *vk, SqwRenderer *renderer, VkCommandBu
 
 static int point_in_rect(float px, float py, const LayoutBox *r) {
     return px >= r->x && px < r->x + r->w && py >= r->y && py < r->y + r->h;
+}
+
+/* Geometry of the URL bar and Go button, shared by draw_toolbar() (so
+ * rendering matches) and main()'s own toolbar click-hit-testing (so a
+ * click lands exactly where it visually looks like it should) -- computing
+ * this in two places from scratch would eventually drift out of sync. */
+static void toolbar_geometry(float viewport_w, LayoutBox *out_bar, LayoutBox *out_go) {
+    float bar_h = SQW_TOOLBAR_H - 2.0f * SQW_URLBAR_PAD;
+    out_bar->x = SQW_URLBAR_PAD; out_bar->y = SQW_URLBAR_PAD;
+    out_bar->w = viewport_w - 3.0f * SQW_URLBAR_PAD - SQW_URLBAR_GO_W;
+    if (out_bar->w < 10.0f) out_bar->w = 10.0f;
+    out_bar->h = bar_h;
+    out_go->x = out_bar->x + out_bar->w + SQW_URLBAR_PAD; out_go->y = SQW_URLBAR_PAD;
+    out_go->w = SQW_URLBAR_GO_W; out_go->h = bar_h;
+}
+
+/* Draws the toolbar strip: background, URL text box (border tints blue
+ * while focused, matching real browsers' own focus-ring convention), the
+ * typed text with a simple end-of-text caret when focused (editing is
+ * append/backspace-at-the-end only -- see main()'s SDL_EVENT_TEXT_INPUT/
+ * BACKSPACE handling -- so the caret is always exactly at the text's own
+ * end, no separate cursor-position tracking needed), and the Go button. */
+static void draw_toolbar(SqwVkContext *vk, SqwRenderer *renderer, SqwTextRenderer *tr, VkCommandBuffer cmd,
+                          const char *url_text, int url_focused, float viewport_w, float viewport_h) {
+    sqw_renderer_draw_rect(vk, renderer, cmd, 0.0f, 0.0f, viewport_w, SQW_TOOLBAR_H,
+        0.90f, 0.90f, 0.90f, viewport_w, viewport_h);
+
+    LayoutBox bar, go;
+    toolbar_geometry(viewport_w, &bar, &go);
+
+    float br = url_focused ? 0.20f : 0.65f, bg = url_focused ? 0.45f : 0.65f, bb = url_focused ? 0.85f : 0.65f;
+    sqw_renderer_draw_rect(vk, renderer, cmd, bar.x - 1.5f, bar.y - 1.5f, bar.w + 3.0f, bar.h + 3.0f,
+        br, bg, bb, viewport_w, viewport_h);
+    sqw_renderer_draw_rect(vk, renderer, cmd, bar.x, bar.y, bar.w, bar.h, 1.0f, 1.0f, 1.0f, viewport_w, viewport_h);
+
+    int url_len = (int)strlen(url_text);
+    sqw_text_draw_string(tr, bar.x + 6.0f, bar.y + 3.0f, url_text, url_len,
+        SQW_TEXT_SCALE, 0.05f, 0.05f, 0.05f, 1.0f, viewport_w, viewport_h);
+    if (url_focused) {
+        float caret_x = bar.x + 6.0f + sqw_text_measure(url_text, url_len, SQW_TEXT_SCALE);
+        sqw_renderer_draw_rect(vk, renderer, cmd, caret_x, bar.y + 3.0f, 2.0f, bar.h - 6.0f,
+            0.1f, 0.1f, 0.1f, viewport_w, viewport_h);
+    }
+
+    sqw_renderer_draw_rect(vk, renderer, cmd, go.x, go.y, go.w, go.h, 0.20f, 0.45f, 0.85f, viewport_w, viewport_h);
+    sqw_text_draw_string(tr, go.x + 16.0f, go.y + 3.0f, "Go", 2,
+        SQW_TEXT_SCALE, 1.0f, 1.0f, 1.0f, 1.0f, viewport_w, viewport_h);
 }
 
 int main(void) {
@@ -440,6 +525,31 @@ int main(void) {
     float mouse_x = 0.0f, mouse_y = 0.0f;
     SqwNetResult *pending_fetch = NULL; /* non-NULL while an http(s):// anchor click's background fetch is outstanding */
 
+    /* URL/search bar state -- always shows the current page's own path/URL
+     * (updated after every successful navigation, local or network, same
+     * as a real browser's address bar) unless the user is actively
+     * editing it (url_bar_focused). Editing is append/backspace-at-the-end
+     * only (see SDL_EVENT_TEXT_INPUT/BACKSPACE handling below) -- no
+     * mid-string cursor movement, arrow-key editing, or selection; a
+     * minimal but fully usable "type a URL, press Enter or click Go"
+     * bar, not a full text-field widget. */
+    char url_bar_text[SQW_PATH_MAX];
+    strncpy(url_bar_text, SQW_INITIAL_PAGE, sizeof url_bar_text - 1);
+    url_bar_text[sizeof url_bar_text - 1] = 0;
+    int url_bar_focused = 0;
+    /* SQW_TEST_GOTO_URL: pre-fills the URL bar as if the user had typed it
+     * (bypassing per-character SDL_EVENT_TEXT_INPUT simulation, a separate
+     * concern already covered by real SDL3's own SDL_SendKeyboardText
+     * plumbing) so a synthetic Go-button click (see SQW_TEST_CLICK2_X/Y
+     * timed to land on the Go button) exercises the real navigation path
+     * end-to-end for local-run testing. */
+    {
+        const char *tu = getenv("SQW_TEST_GOTO_URL");
+        if (tu) { strncpy(url_bar_text, tu, sizeof url_bar_text - 1); url_bar_text[sizeof url_bar_text - 1] = 0; }
+    }
+    const char *test_type_text = getenv("SQW_TEST_TYPE_TEXT");
+    if (test_type_text) url_bar_text[0] = 0; /* clean slate so the appended text is clearly visible */
+
     /* Test-only synthetic input hook (SQW_TEST_CLICK_X/Y env vars): pushes
      * real SDL events through SDL_PushEvent() -- not a shortcut that
      * bypasses the event loop, the exact same SDL_PollEvent() path a real
@@ -515,6 +625,35 @@ int main(void) {
             bu.button.x = (float)test_click_x; bu.button.y = (float)test_click_y;
             SDL_PushEvent(&bu);
         }
+        /* SQW_TEST_TYPE_TEXT: clicks the URL bar to focus it (frame 10),
+         * then pushes one real SDL_EVENT_TEXT_INPUT carrying the whole
+         * string (frame 20) -- exercises the exact same append path a
+         * sequence of real per-character events would (main()'s own
+         * handler just appends whatever ev.text.text contains, whether
+         * that's one character or many), without needing a separate
+         * synthetic event per character. */
+        if (test_type_text && frame_count == 10) {
+            SDL_Event mv; memset(&mv, 0, sizeof mv);
+            mv.type = SDL_EVENT_MOUSE_MOTION;
+            mv.motion.x = 100.0f; mv.motion.y = 20.0f;
+            SDL_PushEvent(&mv);
+            SDL_Event bd; memset(&bd, 0, sizeof bd);
+            bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            bd.button.button = 1; bd.button.down = 1;
+            bd.button.x = 100.0f; bd.button.y = 20.0f;
+            SDL_PushEvent(&bd);
+            SDL_Event bu; memset(&bu, 0, sizeof bu);
+            bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            bu.button.button = 1; bu.button.down = 0;
+            bu.button.x = 100.0f; bu.button.y = 20.0f;
+            SDL_PushEvent(&bu);
+        }
+        if (test_type_text && frame_count == 20) {
+            SDL_Event ti; memset(&ti, 0, sizeof ti);
+            ti.type = SDL_EVENT_TEXT_INPUT;
+            ti.text.text = test_type_text;
+            SDL_PushEvent(&ti);
+        }
         if (test_click2_x >= 0 && frame_count == 270) {
             SDL_Event mv; memset(&mv, 0, sizeof mv);
             mv.type = SDL_EVENT_MOUSE_MOTION;
@@ -552,19 +691,19 @@ int main(void) {
                     layout_list_free(&boxes);
                     layout_compute(root, viewport_w, viewport_h, &boxes);
                     scroll_x = clamp_scroll(scroll_x, boxes.content_w, viewport_w);
-                    scroll_y = clamp_scroll(scroll_y, boxes.content_h, viewport_h);
+                    scroll_y = clamp_scroll(scroll_y, boxes.content_h, viewport_h - SQW_TOOLBAR_H);
                 }
             } else if (ev.type == SDL_EVENT_MOUSE_MOTION) {
                 mouse_x = ev.motion.x; mouse_y = ev.motion.y;
                 if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[motion] x=%d y=%d\n", (int)mouse_x, (int)mouse_y); fflush(stderr); }
                 if (dragging_v) {
-                    float track_free = viewport_h - SQW_SCROLLBAR_MIN_THUMB;
-                    float thumb_h = viewport_h * (viewport_h / boxes.content_h);
+                    float content_view_h = viewport_h - SQW_TOOLBAR_H;
+                    float thumb_h = content_view_h * (content_view_h / boxes.content_h);
                     if (thumb_h < SQW_SCROLLBAR_MIN_THUMB) thumb_h = SQW_SCROLLBAR_MIN_THUMB;
-                    track_free = viewport_h - thumb_h;
+                    float track_free = content_view_h - thumb_h;
                     float delta_mouse = mouse_y - drag_anchor_mouse;
-                    float scale = (track_free > 0) ? (boxes.content_h - viewport_h) / track_free : 0.0f;
-                    scroll_y = clamp_scroll(drag_anchor_scroll + delta_mouse * scale, boxes.content_h, viewport_h);
+                    float scale = (track_free > 0) ? (boxes.content_h - content_view_h) / track_free : 0.0f;
+                    scroll_y = clamp_scroll(drag_anchor_scroll + delta_mouse * scale, boxes.content_h, content_view_h);
                 } else if (dragging_h) {
                     float thumb_w = viewport_w * (viewport_w / boxes.content_w);
                     if (thumb_w < SQW_SCROLLBAR_MIN_THUMB) thumb_w = SQW_SCROLLBAR_MIN_THUMB;
@@ -572,8 +711,8 @@ int main(void) {
                     float delta_mouse = mouse_x - drag_anchor_mouse;
                     float scale = (track_free > 0) ? (boxes.content_w - viewport_w) / track_free : 0.0f;
                     scroll_x = clamp_scroll(drag_anchor_scroll + delta_mouse * scale, boxes.content_w, viewport_w);
-                } else {
-                    float cx = mouse_x + scroll_x, cy = mouse_y + scroll_y;
+                } else if (mouse_y >= SQW_TOOLBAR_H) {
+                    float cx = mouse_x + scroll_x, cy = (mouse_y - SQW_TOOLBAR_H) + scroll_y;
                     int hit = layout_hit_test(&boxes, cx, cy);
                     DomNode *new_hover = NULL;
                     if (hit >= 0) {
@@ -586,17 +725,40 @@ int main(void) {
                         if (new_hover) new_hover->hover = 1;
                         hover_node = new_hover;
                     }
+                } else if (hover_node) {
+                    /* Cursor moved up into the toolbar -- clear any page
+                     * hover state so a link doesn't stay highlighted while
+                     * the mouse is nowhere near it. */
+                    hover_node->hover = 0;
+                    hover_node = NULL;
                 }
             } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == 1) {
                 if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[button-down] x=%d y=%d\n", (int)ev.button.x, (int)ev.button.y); fflush(stderr); }
+                if (ev.button.y < SQW_TOOLBAR_H) {
+                    LayoutBox bar, go;
+                    toolbar_geometry(viewport_w, &bar, &go);
+                    if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[toolbar-click] bar=(%d,%d,%d,%d) go=(%d,%d,%d,%d)\n", (int)bar.x,(int)bar.y,(int)bar.w,(int)bar.h,(int)go.x,(int)go.y,(int)go.w,(int)go.h); fflush(stderr); }
+                    if (point_in_rect(ev.button.x, ev.button.y, &bar)) {
+                        url_bar_focused = 1;
+                    } else if (point_in_rect(ev.button.x, ev.button.y, &go)) {
+                        url_bar_focused = 0;
+                        sqw_go_navigate(url_bar_text, &pending_fetch, pending_fetch_url,
+                                        &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h,
+                                        &scroll_x, &scroll_y, &hover_node, &active_node);
+                    } else {
+                        url_bar_focused = 0;
+                    }
+                } else {
+                url_bar_focused = 0; /* clicking the page always exits URL-bar editing, same as a real browser */
                 LayoutBox vthumb, hthumb;
+                float content_view_h = viewport_h - SQW_TOOLBAR_H;
                 vthumb.w = 0; hthumb.h = 0;
-                if (boxes.content_h > viewport_h) {
-                    float thumb_h = viewport_h * (viewport_h / boxes.content_h);
+                if (boxes.content_h > content_view_h) {
+                    float thumb_h = content_view_h * (content_view_h / boxes.content_h);
                     if (thumb_h < SQW_SCROLLBAR_MIN_THUMB) thumb_h = SQW_SCROLLBAR_MIN_THUMB;
-                    float track_free = viewport_h - thumb_h;
-                    float max_scroll = boxes.content_h - viewport_h;
-                    float thumb_y = (max_scroll > 0) ? (scroll_y / max_scroll) * track_free : 0.0f;
+                    float track_free = content_view_h - thumb_h;
+                    float max_scroll = boxes.content_h - content_view_h;
+                    float thumb_y = SQW_TOOLBAR_H + ((max_scroll > 0) ? (scroll_y / max_scroll) * track_free : 0.0f);
                     vthumb.x = viewport_w - SQW_SCROLLBAR_THICKNESS; vthumb.y = thumb_y;
                     vthumb.w = SQW_SCROLLBAR_THICKNESS; vthumb.h = thumb_h;
                 }
@@ -610,8 +772,8 @@ int main(void) {
                     hthumb.w = thumb_w; hthumb.h = SQW_SCROLLBAR_THICKNESS;
                 }
                 LayoutBox vtrack, htrack;
-                vtrack.x = viewport_w - SQW_SCROLLBAR_THICKNESS; vtrack.y = 0.0f;
-                vtrack.w = SQW_SCROLLBAR_THICKNESS; vtrack.h = viewport_h;
+                vtrack.x = viewport_w - SQW_SCROLLBAR_THICKNESS; vtrack.y = SQW_TOOLBAR_H;
+                vtrack.w = SQW_SCROLLBAR_THICKNESS; vtrack.h = content_view_h;
                 htrack.x = 0.0f; htrack.y = viewport_h - SQW_SCROLLBAR_THICKNESS;
                 htrack.w = viewport_w; htrack.h = SQW_SCROLLBAR_THICKNESS;
                 if (vthumb.w > 0 && point_in_rect(ev.button.x, ev.button.y, &vthumb)) {
@@ -629,13 +791,13 @@ int main(void) {
                      * platforms use only as an opt-in setting) and NOT to
                      * start a drag -- a single track click is one discrete
                      * page step, not a drag gesture. */
-                    if (ev.button.y < vthumb.y) scroll_y = clamp_scroll(scroll_y - viewport_h, boxes.content_h, viewport_h);
-                    else scroll_y = clamp_scroll(scroll_y + viewport_h, boxes.content_h, viewport_h);
+                    if (ev.button.y < vthumb.y) scroll_y = clamp_scroll(scroll_y - content_view_h, boxes.content_h, content_view_h);
+                    else scroll_y = clamp_scroll(scroll_y + content_view_h, boxes.content_h, content_view_h);
                 } else if (hthumb.h > 0 && point_in_rect(ev.button.x, ev.button.y, &htrack)) {
                     if (ev.button.x < hthumb.x) scroll_x = clamp_scroll(scroll_x - viewport_w, boxes.content_w, viewport_w);
                     else scroll_x = clamp_scroll(scroll_x + viewport_w, boxes.content_w, viewport_w);
                 } else {
-                    float cx = ev.button.x + scroll_x, cy = ev.button.y + scroll_y;
+                    float cx = ev.button.x + scroll_x, cy = (ev.button.y - SQW_TOOLBAR_H) + scroll_y;
                     int hit = layout_hit_test(&boxes, cx, cy);
                     if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[hit-test] cx=%d cy=%d hit=%d kind=%d\n", (int)cx, (int)cy, hit, hit>=0?(int)boxes.boxes[hit].kind:-1); fflush(stderr); }
                     if (hit >= 0) {
@@ -666,7 +828,7 @@ int main(void) {
                             if (href[0] == '#') {
                                 DomNode *target = find_by_id(root, href + 1);
                                 LayoutBox *tb = target ? find_box_for_node(&boxes, target) : NULL;
-                                if (tb) scroll_y = clamp_scroll(tb->y, boxes.content_h, viewport_h);
+                                if (tb) scroll_y = clamp_scroll(tb->y, boxes.content_h, content_view_h);
                             } else if (strncmp(href, "http://", 7) == 0 || strncmp(href, "https://", 8) == 0) {
                                 if (pending_fetch) {
                                     /* a previous fetch is still outstanding -- drop it rather than
@@ -705,6 +867,7 @@ int main(void) {
                                 char full_path[SQW_PATH_MAX];
                                 snprintf(full_path, sizeof full_path, "%s%s", current_dir, href);
                                 sqw_navigate_to(full_path, &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h);
+                                strncpy(url_bar_text, full_path, sizeof url_bar_text - 1); url_bar_text[sizeof url_bar_text - 1] = 0;
                                 scroll_x = 0.0f; scroll_y = 0.0f;
                                 hover_node = NULL; active_node = NULL; /* old DOM (and target_node) is gone */
                             }
@@ -714,13 +877,51 @@ int main(void) {
                         }
                     }
                 }
+                }
             } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP && ev.button.button == 1) {
                 if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[button-up] x=%d y=%d\n", (int)ev.button.x, (int)ev.button.y); fflush(stderr); }
                 dragging_v = 0; dragging_h = 0;
                 if (active_node) { active_node->active = 0; active_node = NULL; }
             } else if (ev.type == SDL_EVENT_MOUSE_WHEEL) {
-                scroll_y = clamp_scroll(scroll_y - ev.wheel.y * ((SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f)), boxes.content_h, viewport_h);
+                scroll_y = clamp_scroll(scroll_y - ev.wheel.y * ((SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f)), boxes.content_h, viewport_h - SQW_TOOLBAR_H);
                 if (ev.wheel.x != 0.0f) scroll_x = clamp_scroll(scroll_x - ev.wheel.x * ((SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f)), boxes.content_w, viewport_w);
+            } else if (ev.type == SDL_EVENT_KEY_DOWN && url_bar_focused) {
+                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[key-down-focused] scancode=%d\n", (int)ev.key.scancode); fflush(stderr); }
+                /* URL bar editing: Backspace trims the last character,
+                 * Enter/Return submits (same as clicking Go), Escape
+                 * cancels editing and reverts the bar to the current
+                 * page's own URL/path. Everything else (including the
+                 * page-scroll keys handled in the other branch below) is
+                 * deliberately ignored while editing -- real browsers
+                 * don't scroll the page out from under you while you're
+                 * typing in the address bar either. */
+                int ulen = (int)strlen(url_bar_text);
+                if (ev.key.scancode == SDL_SCANCODE_BACKSPACE) {
+                    if (ulen > 0) url_bar_text[ulen - 1] = 0;
+                } else if (ev.key.scancode == SDL_SCANCODE_RETURN) {
+                    url_bar_focused = 0;
+                    sqw_go_navigate(url_bar_text, &pending_fetch, pending_fetch_url,
+                                    &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h,
+                                    &scroll_x, &scroll_y, &hover_node, &active_node);
+                } else if (ev.key.scancode == SDL_SCANCODE_ESCAPE) {
+                    url_bar_focused = 0;
+                    if (current_base_url[0]) { strncpy(url_bar_text, pending_fetch_url, sizeof url_bar_text - 1); }
+                    else { snprintf(url_bar_text, sizeof url_bar_text, "%sindex.html", current_dir); }
+                    url_bar_text[sizeof url_bar_text - 1] = 0;
+                }
+            } else if (ev.type == SDL_EVENT_TEXT_INPUT && url_bar_focused) {
+                /* Real, keyboard-layout-aware printable text (see
+                 * PRIVATE_PumpEvents' own XLookupString comment) --
+                 * append-only, capped so it always leaves room for the
+                 * final NUL. */
+                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[text-input] text=\"%s\"\n", ev.text.text ? ev.text.text : "(null)"); fflush(stderr); }
+                int ulen = (int)strlen(url_bar_text);
+                int tlen = (int)strlen(ev.text.text);
+                int room = (int)sizeof(url_bar_text) - 1 - ulen;
+                if (tlen > room) tlen = room;
+                if (tlen > 0) { memcpy(url_bar_text + ulen, ev.text.text, (size_t)tlen); url_bar_text[ulen + tlen] = 0; }
+            } else if (ev.type == SDL_EVENT_TEXT_INPUT) {
+                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[text-input] IGNORED (url_bar_focused=%d) text=\"%s\"\n", url_bar_focused, ev.text.text ? ev.text.text : "(null)"); fflush(stderr); }
             } else if (ev.type == SDL_EVENT_KEY_DOWN) {
                 if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[key-down] scancode=%d\n", (int)ev.key.scancode); fflush(stderr); }
                 /* Page Up/Down page by one viewport (matches the scrollbar
@@ -731,18 +932,19 @@ int main(void) {
                  * events by SDL3_Build/sdl_core.inc's own PRIVATE_PumpEvents
                  * (only this small fixed set of navigation keys, not a full
                  * keymap -- see that function's own comment). */
+                float content_view_h = viewport_h - SQW_TOOLBAR_H;
                 if (ev.key.scancode == SDL_SCANCODE_PAGEDOWN) {
-                    scroll_y = clamp_scroll(scroll_y + viewport_h, boxes.content_h, viewport_h);
+                    scroll_y = clamp_scroll(scroll_y + content_view_h, boxes.content_h, content_view_h);
                 } else if (ev.key.scancode == SDL_SCANCODE_PAGEUP) {
-                    scroll_y = clamp_scroll(scroll_y - viewport_h, boxes.content_h, viewport_h);
+                    scroll_y = clamp_scroll(scroll_y - content_view_h, boxes.content_h, content_view_h);
                 } else if (ev.key.scancode == SDL_SCANCODE_HOME) {
                     scroll_y = 0.0f;
                 } else if (ev.key.scancode == SDL_SCANCODE_END) {
-                    scroll_y = clamp_scroll(boxes.content_h, boxes.content_h, viewport_h);
+                    scroll_y = clamp_scroll(boxes.content_h, boxes.content_h, content_view_h);
                 } else if (ev.key.scancode == SDL_SCANCODE_DOWN) {
-                    scroll_y = clamp_scroll(scroll_y + (SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f), boxes.content_h, viewport_h);
+                    scroll_y = clamp_scroll(scroll_y + (SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f), boxes.content_h, content_view_h);
                 } else if (ev.key.scancode == SDL_SCANCODE_UP) {
-                    scroll_y = clamp_scroll(scroll_y - (SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f), boxes.content_h, viewport_h);
+                    scroll_y = clamp_scroll(scroll_y - (SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f), boxes.content_h, content_view_h);
                 }
             }
         }
@@ -757,6 +959,7 @@ int main(void) {
             if (fetch_ready) {
                 if (fetch_success) {
                     sqw_navigate_to_html(fetch_body, pending_fetch_url, &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h);
+                    strncpy(url_bar_text, pending_fetch_url, sizeof url_bar_text - 1); url_bar_text[sizeof url_bar_text - 1] = 0;
                     scroll_x = 0.0f; scroll_y = 0.0f;
                     hover_node = NULL; active_node = NULL; /* old DOM is gone */
                 } else {
@@ -770,10 +973,20 @@ int main(void) {
         uint32_t imageIndex = 0;
         VkCommandBuffer cmd = sqw_vk_begin_frame(vk, 0.95f, 0.95f, 0.95f, 1.0f, &imageIndex);
         if (!cmd) continue; /* e.g. minimized (0x0 extent) -- just skip this frame, not fatal */
-        sqw_renderer_draw(vk, renderer, cmd, &boxes, viewport_w, viewport_h, scroll_x, scroll_y);
-        draw_layout_text(text_renderer, vk, renderer, cmd, &boxes, viewport_w, viewport_h, scroll_x, scroll_y);
+        /* "scroll_y - SQW_TOOLBAR_H" (not raw scroll_y): both draw calls
+         * compute each box's screen Y as "box.y - scroll_y", so passing a
+         * SMALLER effective scroll value shifts every drawn box DOWN by
+         * exactly the difference -- i.e. by SQW_TOOLBAR_H -- without
+         * needing to touch renderer_vk.c or draw_layout_text() at all.
+         * The real scroll_y (unshifted) is still what every hit-test/
+         * scrollbar/paging computation above uses -- only these two
+         * draw calls see the adjusted value. */
+        float draw_scroll_y = scroll_y - SQW_TOOLBAR_H;
+        sqw_renderer_draw(vk, renderer, cmd, &boxes, viewport_w, viewport_h, scroll_x, draw_scroll_y);
+        draw_layout_text(text_renderer, vk, renderer, cmd, &boxes, viewport_w, viewport_h, scroll_x, draw_scroll_y);
         LayoutBox vthumb_dummy, hthumb_dummy;
         draw_scrollbars(vk, renderer, cmd, boxes.content_w, boxes.content_h, viewport_w, viewport_h, scroll_x, scroll_y, &vthumb_dummy, &hthumb_dummy);
+        draw_toolbar(vk, renderer, text_renderer, cmd, url_bar_text, url_bar_focused, viewport_w, viewport_h);
         sqw_text_renderer_flush(vk, text_renderer, cmd, viewport_w, viewport_h);
         sqw_vk_end_frame(vk, cmd, imageIndex);
 

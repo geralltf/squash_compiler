@@ -28,7 +28,21 @@
 typedef struct {
     int fd;
     SSL *ssl; /* NULL for plain HTTP connections */
+    int is_https;
+    char peer_ip[64];
+    int peer_port;
 } SqsConn;
+
+/* Console visibility into WHO is connecting and WHAT they're asking for --
+ * explicitly requests only, never responses/bodies (see sqs_handle_request's
+ * own logging, which stops right after the request line + User-Agent).
+ * total_connections only ever increments (a running count of every
+ * connection accepted since startup); active_connections tracks how many
+ * are open RIGHT NOW. Mutex-guarded since every acceptor thread and every
+ * per-connection thread touches these concurrently. */
+static pthread_mutex_t g_stats_mutex = PTHREAD_MUTEX_INITIALIZER;
+static long g_total_connections = 0;
+static long g_active_connections = 0;
 
 /* Real send()/recv() for plain HTTP, SSL_write()/SSL_read() for HTTPS --
  * every other function in this file only ever calls these two, never the
@@ -66,15 +80,46 @@ static void sqs_send_response(SqsConn *c, int status, const char *status_text,
     if (body_len > 0) sqs_conn_write(c, body, body_len);
 }
 
+/* Case-insensitive search for a "\r\nHeaderName: " line within the raw
+ * request buffer, copying its value (up to the trailing \r\n) into `out`.
+ * Used only for the User-Agent header -- see sqs_handle_request's own
+ * console-logging comment on why (request visibility, not response
+ * inspection). Returns 1 and fills out on success, 0 (out set to "(none)")
+ * if the header is absent -- a request needn't be, and often isn't, sent
+ * by anything that bothers with one at all (curl -A "" style tools, raw
+ * netcat testing, etc). */
+static int sqs_find_header(const char *req, const char *name, char *out, int outcap) {
+    int name_len = (int)strlen(name);
+    const char *p = req;
+    while ((p = strstr(p, name)) != NULL) {
+        /* Must start right after a line boundary (or the very start of the
+         * buffer) to avoid matching the header name as a substring of some
+         * unrelated header value. */
+        if (p != req && !(p[-1] == '\n')) { p++; continue; }
+        const char *v = p + name_len;
+        if (*v != ':') { p++; continue; }
+        v++;
+        while (*v == ' ') v++;
+        int i = 0;
+        while (v[i] && v[i] != '\r' && v[i] != '\n' && i < outcap - 1) { out[i] = v[i]; i++; }
+        out[i] = 0;
+        return 1;
+    }
+    strncpy(out, "(none)", outcap - 1);
+    out[outcap - 1] = 0;
+    return 0;
+}
+
 static void sqs_handle_request(SqsConn *c) {
     char req[SQS_REQ_BUF];
     long n = sqs_conn_read(c, req, sizeof req - 1);
     if (n <= 0) return;
     req[n] = 0;
 
-    /* Parse only the request line ("GET /path HTTP/1.1") -- headers and
-     * body (irrelevant for a GET-only static file server) are read but
-     * ignored. */
+    /* Parse only the request line ("GET /path HTTP/1.1") plus the
+     * User-Agent header for console logging -- every other header, and
+     * the request body, are read but otherwise ignored (irrelevant for a
+     * GET-only static file server). */
     char method[16]; char path[SQS_REQ_BUF];
     method[0] = 0; path[0] = 0;
     {
@@ -86,7 +131,15 @@ static void sqs_handle_request(SqsConn *c) {
         while (req[i] && req[i] != ' ' && req[i] != '\r' && req[i] != '\n' && j < SQS_REQ_BUF - 1) path[j++] = req[i++];
         path[j] = 0;
     }
-    fprintf(stderr, "SQS: %s %s\n", method, path); fflush(stderr);
+    char user_agent[256];
+    sqs_find_header(req, "User-Agent", user_agent, sizeof user_agent);
+    /* Console output is deliberately request-only -- method, path, User-
+     * Agent, and (right below) the path-resolution outcome -- never the
+     * response status/body/headers this server sends back, per the "just
+     * show incoming requests" brief. */
+    fprintf(stderr, "SQS: %s %s [%s] from %s:%d  User-Agent: %s\n",
+        method, path, c->is_https ? "https" : "http", c->peer_ip, c->peer_port, user_agent);
+    fflush(stderr);
 
     if (strcmp(method, "GET") != 0) {
         sqs_send_response(c, 405, "Method Not Allowed", "text/plain", "method not allowed", 19);
@@ -97,6 +150,15 @@ static void sqs_handle_request(SqsConn *c) {
     if (!sqs_resolve_path(path, fs_path)) {
         sqs_send_response(c, 400, "Bad Request", "text/plain", "bad request", 11);
         return;
+    }
+    /* "/" resolving to "index.html" is the one implicit path rewrite this
+     * server does -- the closest thing to a "redirect" a GET-only static
+     * file server has (there's no real 3xx Location-header redirect
+     * anywhere in this minimal server; see this file's own top comment on
+     * scope). Logged separately, clearly labeled, so it's not confused
+     * with a genuine distinct request. */
+    if (strcmp(path, "/") == 0) {
+        fprintf(stderr, "SQS: redirect: / -> /index.html\n"); fflush(stderr);
     }
 
     FILE *fp = fopen(fs_path, "rb");
@@ -130,6 +192,9 @@ static void *sqs_conn_thread(void *arg) {
         sqs_handle_request(c);
     }
     close(c->fd);
+    pthread_mutex_lock(&g_stats_mutex);
+    g_active_connections--;
+    pthread_mutex_unlock(&g_stats_mutex);
     free(c);
     return NULL;
 }
@@ -168,10 +233,26 @@ static void *sqs_accept_loop(void *arg) {
         SqsConn *c = (SqsConn *)malloc(sizeof(SqsConn));
         c->fd = cfd;
         c->ssl = NULL;
+        c->is_https = aa->ssl_ctx != ((void*)0);
+        inet_ntop(AF_INET, &peer.sin_addr, c->peer_ip, sizeof c->peer_ip);
+        c->peer_port = (int)ntohs(peer.sin_port);
         if (aa->ssl_ctx) {
             c->ssl = SSL_new(aa->ssl_ctx);
             SSL_set_fd(c->ssl, cfd);
         }
+        long total, active;
+        pthread_mutex_lock(&g_stats_mutex);
+        g_total_connections++;
+        g_active_connections++;
+        total = g_total_connections; active = g_active_connections;
+        pthread_mutex_unlock(&g_stats_mutex);
+        /* Connection-level visibility, separate from the per-request log
+         * line sqs_handle_request prints once it's actually parsed a
+         * request off this connection -- a connection that never sends a
+         * valid request (or fails its TLS handshake) still shows up here. */
+        fprintf(stderr, "SQS: connection accepted from %s:%d [%s]  (active=%ld, total=%ld)\n",
+            c->peer_ip, c->peer_port, c->is_https ? "https" : "http", active, total);
+        fflush(stderr);
         pthread_t th;
         pthread_attr_t th_attr;
         pthread_attr_init(&th_attr);

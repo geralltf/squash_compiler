@@ -9,6 +9,15 @@ typedef struct {
     char url[SQW_NET_URL_MAX];
 } SqwNetFetchArgs;
 
+/* A plausible, current-looking Microsoft Edge (Chromium-based) UA string --
+ * matches real Edge's own format exactly (Mozilla/Chrome/Safari/Edg
+ * tokens, in that order, is what a genuine Chromium Edge build sends).
+ * Sent on every request and NEVER varies with anything about this actual
+ * process (window size, OS, real hostname, SQW's own name/version, etc.)
+ * -- see sqw_net_worker()'s own comment on why the request is otherwise
+ * held completely static across a live window resize, too. */
+#define SQW_USER_AGENT "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
+
 /* Parses "http(s)://HOST[:PORT][/PATH]" into its parts. HOST must be an IPv4
  * dotted-quad literal (e.g. "127.0.0.1") -- there is no DNS resolver here
  * (no getaddrinfo declared anywhere in this project's include/ headers),
@@ -73,9 +82,24 @@ static void *sqw_net_worker(void *arg) {
                     if (SSL_connect(ssl) <= 0) conn_ok = 0;
                 }
                 if (conn_ok) {
+                    /* Request is built from ONLY the target URL's own
+                     * host/path plus a fixed User-Agent string -- nothing
+                     * here is ever derived from this process's own state
+                     * (window size, whether/how the window was just
+                     * resized, real OS/hostname, SQW's own name, thread
+                     * ID, timing, etc). A live window resize while a fetch
+                     * is in flight touches viewport_w/viewport_h and
+                     * triggers a relayout (see main()'s own
+                     * SDL_EVENT_WINDOW_RESIZED handling) but NEVER reaches
+                     * this function at all -- sqw_net_worker() runs on its
+                     * own detached background thread with its own stack,
+                     * with no reference to the window/viewport state in
+                     * any way, so there is no code path by which a resize
+                     * could change what gets sent here, deliberately. */
                     char req[512];
                     int rl = snprintf(req, sizeof req,
-                        "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host);
+                        "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: " SQW_USER_AGENT "\r\nConnection: close\r\n\r\n",
+                        path, host);
                     if (is_https) SSL_write(ssl, req, rl); else send(fd, req, (unsigned long)rl, 0);
 
                     long cap = 65536, len = 0;

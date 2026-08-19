@@ -1762,6 +1762,16 @@ int XPutImage(Display *dpy, Window d, GC gc, XImage *image, int src_x, int src_y
  * type, so the raw unsigned long is used directly rather than introducing
  * a KeySym typedef purely for its own sake. */
 unsigned long XLookupKeysym(XKeyEvent *key_event, int index);
+/* Real signature's 5th param is "XComposeStatus *", opaque here (NULL is
+ * always passed -- disables compose-key sequence handling, which this
+ * project's plain ASCII URL bar has no need of; real libX11 handles a
+ * NULL status_in_out fine, same as any minimal X11 app that skips compose
+ * support). Unlike XLookupKeysym (one fixed keysym per keycode+index,
+ * ignoring modifiers beyond that index), XLookupString is the real,
+ * keyboard-layout- and Shift-state-aware text translation -- e.g. it
+ * returns 'A' vs 'a' or '?' vs '/' correctly depending on Shift, which a
+ * fixed keysym index can't. */
+int XLookupString(XKeyEvent *event, char *buffer_return, int bytes_buffer, unsigned long *keysym_return, void *status_in_out);
 int XSetInputFocus(Display *dpy, Window focus, int revert_to, unsigned long time);
 
 #define SQ_ZPixmap        2
@@ -1795,6 +1805,9 @@ int XSetInputFocus(Display *dpy, Window focus, int revert_to, unsigned long time
 #define SQ_XK_Down      0xff54
 #define SQ_XK_Page_Down 0xff56
 #define SQ_XK_End       0xff57
+#define SQ_XK_BackSpace 0xff08
+#define SQ_XK_Return    0xff0d
+#define SQ_XK_Escape    0xff1b
 
 /* Real X.h values -- used only by the XSetInputFocus call in
  * PRIVATE_ShowWindow (see its own comment for why that call exists). */
@@ -1956,6 +1969,27 @@ static void PRIVATE_ShowWindow(SDL_VideoDevice *_this, SDL_Window *window)
      * would eventually do anyway) removes the dependency on that first
      * real event's coordinates ever satisfying SDL_MousePositionInWindow. */
     SDL_SetMouseFocus(window);
+    /* SDL_Mouse and SDL_Keyboard are two entirely separate focus concepts
+     * in real SDL3 -- SDL_SetMouseFocus() above only ever sets mouse->focus.
+     * SDL_SendKeyboardText() (see PRIVATE_PumpEvents' own KeyPress
+     * handling) checks "!keyboard->focus || !SDL_TextInputActive(keyboard
+     * ->focus)" -- with keyboard->focus never set, that first clause alone
+     * was already true, so EVERY typed character was silently dropped
+     * before it ever became an SDL_EVENT_TEXT_INPUT event, regardless of
+     * SDL_StartTextInput() below (confirmed as the actual root cause of
+     * "the URL bar doesn't update when typing" -- SQW's own click-to-focus
+     * logic and SDL_StartTextInput() were both already correct; this was
+     * the one remaining missing piece). */
+    SDL_SetKeyboardFocus(window);
+    /* Enabled unconditionally, once, here -- SDL_SendKeyboardText() (see
+     * PRIVATE_PumpEvents' own KeyPress handling) silently no-ops unless
+     * SDL_TextInputActive() is true for the focused window, and this
+     * minimal driver has no per-widget IME/text-input-region concept to
+     * toggle it on/off around -- SQW's own URL bar focus state (see
+     * sqw_main.c) already gates whether typed text actually gets
+     * consumed, so there's nothing gained by starting/stopping this at
+     * the OS level too. */
+    SDL_StartTextInput(window);
     XFlush(g_x11_display);
 }
 
@@ -2096,11 +2130,12 @@ static void PRIVATE_PumpEvents(SDL_VideoDevice *_this)
                 window = window->next;
             }
         } else if (ev.type == SQ_KeyPress || ev.type == SQ_KeyRelease) {
-            /* Only the handful of navigation keys SQW's own scrolling
-             * needs (Page Up/Down, Home/End, arrow Up/Down) get translated
-             * -- a full X11 keycode->keysym->SDL_Scancode table for every
-             * key is real SDL3 X11 backend territory (XkbKeycodeToKeysym +
-             * a ~256-entry table), well beyond what this minimal driver
+            /* Only a small, fixed set of keys get a real SDL_Scancode --
+             * navigation (Page Up/Down, Home/End, arrow Up/Down) plus
+             * Backspace/Return/Escape for the URL bar -- a full X11
+             * keycode->keysym->SDL_Scancode table for every key is real
+             * SDL3 X11 backend territory (XkbKeycodeToKeysym + a
+             * ~256-entry table), well beyond what this minimal driver
              * needs. XLookupKeysym (not XkbKeycodeToKeysym) is used
              * deliberately: it needs no XkbDescPtr/XOpenDisplay Xkb setup,
              * just the raw XKeyEvent already in hand, and index 0 (no
@@ -2114,8 +2149,36 @@ static void PRIVATE_PumpEvents(SDL_VideoDevice *_this)
             else if (ks == SQ_XK_End)       scancode = SDL_SCANCODE_END;
             else if (ks == SQ_XK_Up)        scancode = SDL_SCANCODE_UP;
             else if (ks == SQ_XK_Down)      scancode = SDL_SCANCODE_DOWN;
+            else if (ks == SQ_XK_BackSpace) scancode = SDL_SCANCODE_BACKSPACE;
+            else if (ks == SQ_XK_Return)    scancode = SDL_SCANCODE_RETURN;
+            else if (ks == SQ_XK_Escape)    scancode = SDL_SCANCODE_ESCAPE;
             if (scancode >= 0) {
                 SDL_SendKeyboardKey(0, 0, 0, (SDL_Scancode)scancode, ev.type == SQ_KeyPress);
+            }
+            /* Real printable-character text (for the URL bar): XLookupString
+             * is the keyboard-layout- and Shift-aware translation (unlike
+             * the fixed XLookupKeysym(...,0) above) -- e.g. Shift+2 becomes
+             * '@' on a US layout, Shift+minus becomes '_', 'a' vs 'A'
+             * depending on Shift/CapsLock, all handled correctly by real
+             * libX11 rather than reimplemented here. Only on KeyPress (a
+             * release never produces text). SDL_SendKeyboardText() itself
+             * already discards control characters (Enter/Backspace/Escape
+             * come through here too, since XLookupString still maps them to
+             * their ASCII control codes) -- see its own real SDL3 source
+             * (src/events/SDL_keyboard.c) -- so no need to filter those out
+             * again here. */
+            if (ev.type == SQ_KeyPress) {
+                char text_buf[16];
+                unsigned long dummy_keysym;
+                int n = XLookupString(&ev.xkey, text_buf, (int)sizeof(text_buf) - 1, &dummy_keysym, ((void*)0));
+                if (getenv("SQW_INPUT_DEBUG")) {
+                    fprintf(stderr, "[x11-raw] KeyPress ks=%lu scancode=%d XLookupString n=%d\n", ks, scancode, n);
+                    fflush(stderr);
+                }
+                if (n > 0) {
+                    text_buf[n] = 0;
+                    SDL_SendKeyboardText(text_buf);
+                }
             }
         }
     }
