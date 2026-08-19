@@ -54,12 +54,34 @@ struct Symbol {
     ASTNode  *struct_node;  /* for SYM_STRUCT — the full struct_decl */
     ASTNode  *func_node;    /* for SYM_FUNC   — the func_decl        */
     Symbol   *next;
+    Symbol   *hnext;        /* hash-chain link within Scope.hbuckets — see
+                                Scope.hbuckets' own comment */
 };
 
 typedef struct Scope Scope;
 struct Scope {
     Symbol *head;
     Scope  *parent;
+    /* Name-indexed hash index, lazily allocated only for the global (base,
+     * parent-less) scope — see alloc_global_sym()/symtable_lookup() in
+     * symtable.c. A single squash-compiled translation unit can flatten
+     * (via #include) tens of thousands of source lines and several
+     * thousand top-level declarations (e.g. SQW's build, which #includes
+     * the entirety of SDL3 plus its own files into one TU) all landing in
+     * this one scope; symtable_lookup() used to be a plain O(n) scan of
+     * `head`'s linked list, so a TU this size made every single identifier
+     * reference (every call, every type name, every variable read) scan a
+     * multi-thousand-entry list, an O(n^2) blowup overall that in practice
+     * looked exactly like the compiler hanging forever partway through
+     * SDL_iostream.c when building SQW (Makefile.SQW.linux) — confirmed by
+     * timing top-level-declaration throughput, which collapsed steadily as
+     * the global scope grew rather than ever truly stalling on one line.
+     * NULL/0 for every other (local/function)
+     * scope, which stay small and short-lived enough that the original
+     * linear `head` scan remains both correct and fast — see
+     * symtable_lookup()'s scope-local branch. */
+    Symbol **hbuckets;
+    int      hcap;
 };
 
 typedef struct {

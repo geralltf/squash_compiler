@@ -7,6 +7,36 @@
 /* portable strdup replacement */
 char* my_strdup(const char* src);
 
+/* FNV-1a over the symbol name — used only to index the global scope's
+ * hbuckets (see Scope.hbuckets' comment in symtable.h). Any decent
+ * string hash works here; FNV-1a is simple, has no external dependency,
+ * and spreads real-world identifier names (SDL3's own naming conventions
+ * included) evenly enough that chain lengths stay short. */
+static unsigned long sym_hash(const char *s) {
+    unsigned long h = 2166136261UL;
+    while (*s) { h ^= (unsigned char)*s++; h *= 16777619UL; }
+    return h;
+}
+
+/* Bucket count for the global scope's hash index. Fixed rather than
+ * grow-on-demand: real single-TU builds top out at a few thousand global
+ * symbols (SQW's build, which #includes all of SDL3 plus its own files
+ * into one TU, is ~6500+), so 32768 buckets keeps the average chain under
+ * 1 even for TUs several times larger, without needing rehash logic. */
+#define SYM_GLOBAL_HASH_BUCKETS 32768
+
+/* Insert a just-allocated global-scope Symbol into its scope's hash
+ * index, lazily allocating the bucket array on first use. */
+static void global_hash_insert(Scope *g, Symbol *s) {
+    if (!g->hbuckets) {
+        g->hbuckets = calloc(SYM_GLOBAL_HASH_BUCKETS, sizeof(Symbol*));
+        g->hcap = SYM_GLOBAL_HASH_BUCKETS;
+    }
+    unsigned long h = sym_hash(s->name) % (unsigned long)g->hcap;
+    s->hnext = g->hbuckets[h];
+    g->hbuckets[h] = s;
+}
+
 
 /* Avoid global array initializers (squash codegen doesn't support pointer-field init).
  * Use explicit per-entry definitions in symtable_init and find_dll instead. */
@@ -548,6 +578,7 @@ void symtable_pop_scope(SymTable *st) {
         free(sym->name); free(sym->dll);
         free(sym); sym=nx;
     }
+    free(dead->hbuckets);
     free(dead);
 }
 
@@ -572,6 +603,7 @@ static Symbol *alloc_global_sym(SymTable *st, const char *name, TypeInfo *type, 
     s->kind=kind;
     s->is_64bit=st->is_64bit;
     s->next=g->head; g->head=s;
+    global_hash_insert(g, s);
     return s;
 }
 
@@ -1121,10 +1153,22 @@ Symbol *symtable_lookup(SymTable *st, const char *name) {
     Symbol *found = NULL;
     Scope *sc = st->current;
     while (sc && !found) {
-        Symbol *s = sc->head;
-        while (s) {
-            if (strcmp(s->name, name) == 0) { found = s; break; }
-            s = s->next;
+        if (sc->hcap > 0) {
+            /* Global scope (see Scope.hbuckets' comment): hash lookup
+             * instead of scanning every symbol ever declared at file
+             * scope. Chain order (newest-inserted first) matches the
+             * plain-list scan below, so a same-name redefinition within
+             * this scope still resolves to the same symbol either way. */
+            unsigned long h = sym_hash(name) % (unsigned long)sc->hcap;
+            for (Symbol *s = sc->hbuckets[h]; s; s = s->hnext) {
+                if (strcmp(s->name, name) == 0) { found = s; break; }
+            }
+        } else {
+            Symbol *s = sc->head;
+            while (s) {
+                if (strcmp(s->name, name) == 0) { found = s; break; }
+                s = s->next;
+            }
         }
         if (!found) sc = sc->parent;
     }
