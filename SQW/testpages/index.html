@@ -1,0 +1,16 @@
+<html><body>
+<div class="outer">
+<center><p>SQW test page 1</p></center>
+<p id="top">This is a real paragraph of ordinary body text, long enough that
+it has to wrap across several lines at the current viewport width instead of
+running off the right edge of the window.</p>
+<pre>a pre block does NOT wrap, even if
+this particular line is a good deal wider than the viewport itself, which is exactly the point of a pre block</pre>
+<p>In-page anchor: <a href="#bottom">jump to bottom</a></p>
+<p>Local page anchor: <a href="page2.html">go to page 2</a></p>
+<p>Network anchor (SQS, plain HTTP): <a href="http://127.0.0.1:8080/page3.html">fetch page 3 over http</a></p>
+<p>Network anchor (SQS, HTTPS): <a href="https://127.0.0.1:8443/page3.html">fetch page 3 over https</a></p>
+<p>Press <button>a button</button> to do nothing in particular.</p>
+<p id="bottom">You have reached the bottom of page 1. <a href="#top">back to top</a></p>
+</div>
+</body></html>

@@ -46,8 +46,8 @@ all: SQW/SQW
 # -ISDL3_Build/scratch: renderer_vk.c #includes triangle_spirv.h (the
 # precompiled SPIR-V for the vertex-color triangle shader, reused as-is for
 # flat-colored 2D boxes -- see renderer_vk.h's own comment).
-SQW/SQW: SQW/sqw_main.c SQW/vk_context.c SQW/vk_context.h SQW/dom.c SQW/dom.h SQW/html_lexer.c SQW/html_lexer.h SQW/dom_walk.c SQW/dom_walk.h SQW/layout.c SQW/layout.h SQW/renderer_vk.c SQW/renderer_vk.h SDL3_Build/sdl_core.inc squash
-	$(SQUASH) -linux -64 -Iinclude -ISDL3_Build/scratch $(SDL_INCLUDES) SQW/sqw_main.c -o SQW/SQW -lvulkan -lX11
+SQW/SQW: SQW/sqw_main.c SQW/vk_context.c SQW/vk_context.h SQW/dom.c SQW/dom.h SQW/html_lexer.c SQW/html_lexer.h SQW/dom_walk.c SQW/dom_walk.h SQW/layout.c SQW/layout.h SQW/renderer_vk.c SQW/renderer_vk.h SQW/text_renderer_vk.c SQW/text_renderer_vk.h SQW/net_client.c SQW/net_client.h SDL3_Build/sdl_core.inc squash
+	$(SQUASH) -linux -64 -Iinclude -ISDL3_Build/scratch $(SDL_INCLUDES) SQW/sqw_main.c -o SQW/SQW -lvulkan -lX11 -lpthread -lssl -lcrypto
 
 run: SQW/SQW
 	./SQW/SQW

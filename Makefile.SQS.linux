@@ -1,0 +1,27 @@
+# Makefile for SQS, the local HTTP/HTTPS test server companion to SQW, built
+# with the squash compiler, on Linux. Invoke as `make -f Makefile.SQS.linux
+# <target>` from the squash compiler repo root (same convention as
+# Makefile.SQW.linux).
+SQUASH = ./squash
+
+all: SQS/SQS
+
+# -lpthread: one thread per accepted connection (see sqs_main.c's own
+# comment). -lssl -lcrypto: real system OpenSSL for the HTTPS listener --
+# same versioned-.so linker fallback already used for -lvulkan/-lX11 in
+# Makefile.SQW.linux (see linker.c). Single-TU (no #include chain here --
+# sqs_main.c is self-contained), so no cross-object-link workaround needed.
+SQS/SQS: SQS/sqs_main.c SQS/dev_cert.pem SQS/dev_key.pem include/openssl/ssl.h include/sys/socket.h include/netinet/in.h include/arpa/inet.h squash
+	$(SQUASH) -linux -64 -Iinclude SQS/sqs_main.c -o SQS/SQS -lpthread -lssl -lcrypto
+
+# Regenerates the local self-signed dev cert/key (see gen_dev_cert.sh's own
+# comment) -- not a build dependency of SQS/SQS itself (an existing cert is
+# reused as-is), just a convenience target for regenerating them.
+SQS/dev_cert.pem SQS/dev_key.pem:
+	./SQS/gen_dev_cert.sh
+
+run: SQS/SQS
+	./SQS/SQS
+
+clean:
+	rm -f SQS/SQS

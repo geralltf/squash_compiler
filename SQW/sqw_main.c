@@ -10,6 +10,11 @@
  * same #ifdef __linux__ convention as SDL3_Build/scratch/platform_shim.h. */
 #ifdef __linux__
 #include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <openssl/ssl.h>
 /* Direct single-TU include of the shared SDL3 subsystem body, NOT a link
  * against the cached SDL3_Build/sdl_common.sqo (the path Makefile.SQW uses
  * on Windows and every other file in this project defaults to) -- this
@@ -46,6 +51,7 @@
 #include "layout.c"
 #include "renderer_vk.c"
 #include "text_renderer_vk.c"
+#include "net_client.c"
 
 #ifdef __linux__
 /* squash_init_private_bootstrap()/SQW_GetWindowX11Display()/
@@ -71,22 +77,82 @@ extern void *SQW_GetWindowHWND(SDL_Window *window);
 
 #define SQW_VIEWPORT_W 1024.0f
 #define SQW_VIEWPORT_H 768.0f
+#define SQW_PATH_MAX 512
 
-static const char *SQW_TEST_HTML =
-    "<html><body>"
-    "<div class=\"outer\">"
-      "<center><p>Hello <span>world</span></p></center>"
-      "<p>This is a real paragraph of ordinary body text, long enough that "
-      "it has to wrap across several lines at the current viewport width "
-      "instead of running off the right edge of the window the way the "
-      "very first text-rendering test did.</p>"
-      "<pre>a pre block does NOT wrap, even if\n"
-      "this particular line is a good deal wider than the viewport itself</pre>"
-      "<p>Click <a href=\"http://example.com\">this link</a> or press "
-      "<button>a button</button>.</p>"
-      "<img src=\"pic.png\">"
-    "</div>"
-    "</body></html>";
+static const char *SQW_INITIAL_PAGE = "SQW/testpages/index.html";
+
+/* Reads a whole local file into a heap buffer (NUL-terminated), or returns
+ * NULL on failure -- NOT fatal (unlike compiler.c's own read_file(), which
+ * exit(1)s: a bad local href here is a normal, recoverable browsing event,
+ * not a compiler input error). */
+static char *sqw_read_file(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return NULL;
+    fseek(fp, 0, SEEK_END);
+    long sz = ftell(fp);
+    rewind(fp);
+    if (sz < 0) { fclose(fp); return NULL; }
+    char *buf = (char *)malloc((size_t)sz + 1);
+    size_t got = fread(buf, 1, (size_t)sz, fp);
+    buf[got] = '\0';
+    fclose(fp);
+    return buf;
+}
+
+/* Copies the directory part of `path` (including a trailing '/', or empty
+ * if `path` has no '/') into `out` (size SQW_PATH_MAX) -- used to resolve
+ * a page's own relative hrefs against wherever THAT page was actually
+ * loaded from, not a fixed base directory, so a chain of relative links
+ * (page in dir A links to a page in dir B, which links to a sibling of
+ * itself) keeps resolving correctly. */
+static void sqw_dirname(const char *path, char *out) {
+    int len = (int)strlen(path);
+    int cut = 0;
+    int i;
+    for (i = 0; i < len; i++) if (path[i] == '/') cut = i + 1;
+    if (cut >= SQW_PATH_MAX) cut = SQW_PATH_MAX - 1;
+    memcpy(out, path, (size_t)cut);
+    out[cut] = '\0';
+}
+
+/* Loads and parses `path` as the new current page, replacing *root_ptr
+ * and recomputing layout in place. On failure (file not found/unreadable)
+ * leaves the current page entirely untouched and just logs a warning --
+ * a broken local link should never crash or blank the browser. */
+static void sqw_navigate_to(const char *path, DomNode **root_ptr, LayoutList *boxes_ptr,
+                             char *current_dir, float viewport_w, float viewport_h) {
+    char *html = sqw_read_file(path);
+    if (!html) {
+        fprintf(stderr, "SQW: navigate: cannot open %s\n", path); fflush(stdout);
+        return;
+    }
+    DomNode *new_root = dom_parse(html);
+    free(html);
+    dom_free(*root_ptr);
+    *root_ptr = new_root;
+    layout_list_free(boxes_ptr);
+    layout_compute(*root_ptr, viewport_w, viewport_h, boxes_ptr);
+    sqw_dirname(path, current_dir);
+    fprintf(stderr, "SQW: navigated to %s (%d boxes)\n", path, boxes_ptr->count); fflush(stdout);
+}
+
+/* Same document-swap as sqw_navigate_to(), but from an in-memory HTML
+ * buffer (a fetched network response body) instead of a local file --
+ * used by the SQW_TEST_CLICK_X/Y-independent real http(s):// anchor path.
+ * current_dir is reset to empty: a page fetched over the network has no
+ * local directory of its own for further relative-hrefs to resolve
+ * against (out of scope here -- see net_client.h's own comment on URL
+ * parsing being deliberately minimal). */
+static void sqw_navigate_to_html(const char *html, DomNode **root_ptr, LayoutList *boxes_ptr,
+                                  char *current_dir, float viewport_w, float viewport_h) {
+    DomNode *new_root = dom_parse(html);
+    dom_free(*root_ptr);
+    *root_ptr = new_root;
+    layout_list_free(boxes_ptr);
+    layout_compute(*root_ptr, viewport_w, viewport_h, boxes_ptr);
+    current_dir[0] = '\0';
+    fprintf(stderr, "SQW: navigated to fetched page (%d boxes)\n", boxes_ptr->count); fflush(stdout);
+}
 
 /* Concatenates `node`'s DIRECT text-node children (no descent -- matches
  * layout.c's direct_text_width(), which sized the box this labels) into
@@ -301,7 +367,15 @@ int main(void) {
         return 1;
     }
 
-    DomNode *root = dom_parse(SQW_TEST_HTML);
+    char current_dir[SQW_PATH_MAX];
+    sqw_dirname(SQW_INITIAL_PAGE, current_dir);
+    char *initial_html = sqw_read_file(SQW_INITIAL_PAGE);
+    if (!initial_html) {
+        fprintf(stderr, "SQW: cannot open initial page %s\n", SQW_INITIAL_PAGE); fflush(stdout);
+        return 1;
+    }
+    DomNode *root = dom_parse(initial_html);
+    free(initial_html);
     LayoutList boxes;
     float viewport_w = SQW_VIEWPORT_W, viewport_h = SQW_VIEWPORT_H;
     layout_compute(root, viewport_w, viewport_h, &boxes);
@@ -314,6 +388,7 @@ int main(void) {
     int dragging_v = 0, dragging_h = 0;
     float drag_anchor_mouse = 0.0f, drag_anchor_scroll = 0.0f;
     float mouse_x = 0.0f, mouse_y = 0.0f;
+    SqwNetResult *pending_fetch = NULL; /* non-NULL while an http(s):// anchor click's background fetch is outstanding */
 
     /* Test-only synthetic input hook (SQW_TEST_CLICK_X/Y env vars): pushes
      * real SDL events through SDL_PushEvent() -- not a shortcut that
@@ -443,13 +518,36 @@ int main(void) {
                             hb->node->visited = 1;
                             hb->node->active = 1;
                             active_node = hb->node;
-                            const char *href = dom_get_attr(hb->node, "href");
-                            if (href && href[0] == '#') {
+                            /* dom_get_attr's returned pointer lives inside the
+                             * CURRENT DomNode -- copy it before any possible
+                             * sqw_navigate_to() below, which frees the whole
+                             * current DOM tree (including hb->node itself,
+                             * making hb/active_node dangling). */
+                            const char *href_raw = dom_get_attr(hb->node, "href");
+                            char href[SQW_PATH_MAX];
+                            href[0] = 0;
+                            if (href_raw) { strncpy(href, href_raw, sizeof href - 1); href[sizeof href - 1] = 0; }
+                            if (href[0] == '#') {
                                 DomNode *target = find_by_id(root, href + 1);
                                 LayoutBox *tb = target ? find_box_for_node(&boxes, target) : NULL;
                                 if (tb) scroll_y = clamp_scroll(tb->y, boxes.content_h, viewport_h);
-                            } else if (href) {
-                                fprintf(stderr, "SQW: (navigation not yet implemented) would follow href=%s\n", href); fflush(stdout);
+                            } else if (strncmp(href, "http://", 7) == 0 || strncmp(href, "https://", 8) == 0) {
+                                if (pending_fetch) {
+                                    /* a previous fetch is still outstanding -- drop it rather than
+                                     * leak it or race two responses against one DOM swap */
+                                    sqw_net_result_free(pending_fetch);
+                                }
+                                fprintf(stderr, "SQW: fetching %s ...\n", href); fflush(stdout);
+                                pending_fetch = sqw_net_fetch_async(href);
+                            } else if (href[0]) {
+                                /* Local relative path: resolve against the
+                                 * CURRENT page's own directory, not a fixed
+                                 * base -- see sqw_dirname()'s comment. */
+                                char full_path[SQW_PATH_MAX];
+                                snprintf(full_path, sizeof full_path, "%s%s", current_dir, href);
+                                sqw_navigate_to(full_path, &root, &boxes, current_dir, viewport_w, viewport_h);
+                                scroll_x = 0.0f; scroll_y = 0.0f;
+                                hover_node = NULL; active_node = NULL; /* old DOM (and hb) is gone */
                             }
                         } else if (hb->kind == SQW_BOX_BUTTON) {
                             hb->node->active = 1;
@@ -466,6 +564,25 @@ int main(void) {
             }
         }
         if (!running) break;
+
+        if (pending_fetch) {
+            pthread_mutex_lock(&pending_fetch->mutex);
+            int fetch_ready = pending_fetch->ready;
+            int fetch_success = pending_fetch->success;
+            char *fetch_body = pending_fetch->body;
+            pthread_mutex_unlock(&pending_fetch->mutex);
+            if (fetch_ready) {
+                if (fetch_success) {
+                    sqw_navigate_to_html(fetch_body, &root, &boxes, current_dir, viewport_w, viewport_h);
+                    scroll_x = 0.0f; scroll_y = 0.0f;
+                    hover_node = NULL; active_node = NULL; /* old DOM is gone */
+                } else {
+                    fprintf(stderr, "SQW: fetch failed\n"); fflush(stdout);
+                }
+                sqw_net_result_free(pending_fetch);
+                pending_fetch = NULL;
+            }
+        }
 
         uint32_t imageIndex = 0;
         VkCommandBuffer cmd = sqw_vk_begin_frame(vk, 0.95f, 0.95f, 0.95f, 1.0f, &imageIndex);

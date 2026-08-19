@@ -16,6 +16,7 @@ static int is_64bit_int_arg(CodeGen *cg, ASTNode *n);
 static void push_64bit_int_arg(CodeGen *cg, ASTNode *n);
 static int field_scalar_size(CodeGen *cg, ASTNode *obj, const char *field_name, int *out_is2d);
 static TypeInfo *field_type_of(CodeGen *cg, ASTNode *obj, const char *field_name);
+static int field_array_size_of(CodeGen *cg, ASTNode *obj, const char *field_name);
 static int effective_typeinfo_size(CodeGen *cg, TypeInfo *t, int is_64bit);
 static int elem_size_of(CodeGen *cg, ASTNode *arr_expr);
 static int pointer_pointee_size(CodeGen *cg, ASTNode *node);
@@ -3817,6 +3818,12 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             TypeInfo *mft = field_type_of(cg, se->member.obj, se->member.field);
             if (mft && mft->pointer_depth == 0) {
                 sz = (long long)sizeof_type_sym(mft, cg->is_64bit, cg->sym);
+                /* sizeof_type_sym(mft,...) alone gives just ONE element's
+                 * size for an array-typed field -- see
+                 * field_array_size_of()'s own comment on why the true
+                 * element count can't be read off mft->array_size itself. */
+                int arr = field_array_size_of(cg, se->member.obj, se->member.field);
+                if (arr > 0) sz *= arr;
             } else if (mft) {
                 sz = cg->is_64bit ? 8 : 4; /* pointer-typed field */
             }
@@ -8360,6 +8367,65 @@ static TypeInfo *field_type_of(CodeGen *cg, ASTNode *obj, const char *field_name
         }
     }
     return NULL;
+}
+
+/* An array-typed struct field's element count lives on the AST_FIELD node
+ * itself (ff->field.array_size, set by ast_field() in the parser), NOT on
+ * ff->field.type->array_size -- struct offset/size computation (see the
+ * "Walk fields" loop above this function) deliberately relies on
+ * ff->field.type->array_size staying unset for array fields: it sizes one
+ * ELEMENT via sizeof_type_sym(f->field.type,...) and multiplies by
+ * f->field.array_size itself afterward. So this must NOT be "fixed" by
+ * patching ff->field.type->array_size in place (tried that first -- it
+ * silently double-multiplied every array field's contribution to struct
+ * size/offsets computed afterward, corrupting layout for any struct with
+ * an array field, a much worse regression than the bug it fixed). Returns
+ * 0 if `field_name` isn't found or isn't an array field. */
+static int field_array_size_of(CodeGen *cg, ASTNode *obj, const char *field_name) {
+    if (!obj || !field_name) return 0;
+    const char *stype = NULL;
+    if (obj->kind == AST_VAR) {
+        Symbol *sv = symtable_lookup(cg->sym, obj->var.name);
+        if (sv && sv->type) stype = sv->type->base;
+    } else if (obj->kind == AST_DEREF) {
+        ASTNode *op = obj->deref.operand;
+        if (op->kind == AST_VAR) {
+            Symbol *sv2 = symtable_lookup(cg->sym, op->var.name);
+            if (sv2 && sv2->type) stype = sv2->type->base;
+        }
+    } else if (obj->kind == AST_MEMBER || obj->kind == AST_INDEX) {
+        stype = resolve_node_type(cg->sym, obj);
+    }
+    if (!stype) return 0;
+    const char *bare = stype;
+    if (strncmp(bare,"struct ",7)==0) bare+=7;
+    else if (strncmp(bare,"union ",6)==0) bare+=6;
+    char sk[256]; snprintf(sk,sizeof sk,"struct %s",bare);
+    Symbol *ss = symtable_lookup(cg->sym, sk);
+    if (!ss || !ss->struct_node) {
+        snprintf(sk,sizeof sk,"union %s",bare);
+        ss = symtable_lookup(cg->sym, sk);
+    }
+    if (!ss || !ss->struct_node) {
+        Symbol *td = symtable_lookup(cg->sym, bare);
+        if (td && td->kind==SYM_TYPEDEF && td->type && td->type->pointer_depth==0 && td->type->base) {
+            const char *tb = td->type->base;
+            const char *tbare = tb;
+            if (strncmp(tbare,"struct ",7)==0) tbare+=7;
+            else if (strncmp(tbare,"union ",6)==0) tbare+=6;
+            char tk[256]; snprintf(tk,sizeof tk,"struct %s",tbare);
+            Symbol *tss = symtable_lookup(cg->sym, tk);
+            if (tss && tss->struct_node) ss = tss;
+        }
+    }
+    if (ss && ss->struct_node) {
+        for (int i=0;i<ss->struct_node->struct_decl.nfields;i++) {
+            ASTNode *ff = ss->struct_node->struct_decl.fields[i];
+            if (ff && ff->field.name && strcmp(ff->field.name,field_name)==0)
+                return ff->field.array_size > 0 ? ff->field.array_size : 0;
+        }
+    }
+    return 0;
 }
 
 /* Byte width (4 or 8) of a float/double-valued expression — only meaningful
