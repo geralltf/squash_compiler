@@ -1662,10 +1662,67 @@ typedef struct {
     int override_redirect;
 } XConfigureEvent;
 
+/* Real Xlib.h ABI (Time = unsigned long, Bool = int) -- these events are
+ * produced entirely by the real libX11.so's own XNextEvent, never
+ * constructed here, so field order/types must match the genuine struct
+ * exactly, same convention as XConfigureEvent/XClientMessageEvent above. */
+typedef struct {
+    int type;
+    unsigned long serial;
+    int send_event;
+    Display *display;
+    Window window;
+    Window root;
+    Window subwindow;
+    unsigned long time;
+    int x, y;
+    int x_root, y_root;
+    unsigned int state;
+    unsigned int button;
+    int same_screen;
+} XButtonEvent;
+
+typedef struct {
+    int type;
+    unsigned long serial;
+    int send_event;
+    Display *display;
+    Window window;
+    Window root;
+    Window subwindow;
+    unsigned long time;
+    int x, y;
+    int x_root, y_root;
+    unsigned int state;
+    char is_hint;
+    int same_screen;
+} XMotionEvent;
+
+/* Real Xlib.h ABI, same field layout as XButtonEvent (both have an
+ * "unsigned int" 12th member -- "button" there, "keycode" here). */
+typedef struct {
+    int type;
+    unsigned long serial;
+    int send_event;
+    Display *display;
+    Window window;
+    Window root;
+    Window subwindow;
+    unsigned long time;
+    int x, y;
+    int x_root, y_root;
+    unsigned int state;
+    unsigned int keycode;
+    int same_screen;
+} XKeyEvent;
+
 typedef union {
     int type;
     XClientMessageEvent xclient;
     XConfigureEvent xconfigure;
+    XButtonEvent xbutton;
+    XMotionEvent xmotion;
+    XKeyEvent xkey;
     long pad[24]; /* matches real Xlib.h's XEvent size-guaranteeing member */
 } XEvent;
 
@@ -1699,11 +1756,44 @@ XImage *XCreateImage(Display *dpy, Visual *visual, unsigned int depth, int forma
 int XDestroyImage(XImage *ximage);
 int XPutImage(Display *dpy, Window d, GC gc, XImage *image, int src_x, int src_y,
     int dest_x, int dest_y, unsigned int width, unsigned int height);
+/* KeySym is really "typedef XID KeySym" (an unsigned long) in real Xlib.h --
+ * only used here to translate a small, fixed set of navigation keys (see
+ * PRIVATE_PumpEvents' own comment), never stored/compared as a distinct
+ * type, so the raw unsigned long is used directly rather than introducing
+ * a KeySym typedef purely for its own sake. */
+unsigned long XLookupKeysym(XKeyEvent *key_event, int index);
 
 #define SQ_ZPixmap        2
 #define SQ_StructureNotifyMask (1L << 17)
+#define SQ_KeyPressMask        (1L << 0)
+#define SQ_KeyReleaseMask      (1L << 1)
+#define SQ_ButtonPressMask     (1L << 2)
+#define SQ_ButtonReleaseMask   (1L << 3)
+#define SQ_PointerMotionMask   (1L << 6)
+#define SQ_KeyPress        2
+#define SQ_KeyRelease      3
+#define SQ_ButtonPress     4
+#define SQ_ButtonRelease   5
+#define SQ_MotionNotify    6
 #define SQ_ConfigureNotify 22
 #define SQ_ClientMessage   33
+/* X11 has no dedicated wheel-event type -- a scroll click arrives as an
+ * ordinary ButtonPress with button 4 (up) or 5 (down), the decades-old
+ * X11 convention every toolkit (including real SDL3's own X11 backend)
+ * follows. Buttons 1-3 are the real left/middle/right buttons. */
+#define SQ_BUTTON_WHEEL_UP   4
+#define SQ_BUTTON_WHEEL_DOWN 5
+
+/* Real X11/keysymdef.h values (stable, public ABI constants -- these are
+ * literal numbers baked into every X server/keyboard driver, not something
+ * that needs a real header to obtain). Only the handful this project's own
+ * page-scrolling keys need -- see PRIVATE_PumpEvents' own comment. */
+#define SQ_XK_Home      0xff50
+#define SQ_XK_Up        0xff52
+#define SQ_XK_Page_Up   0xff55
+#define SQ_XK_Down      0xff54
+#define SQ_XK_Page_Down 0xff56
+#define SQ_XK_End       0xff57
 
 struct SDL_WindowData {
     Window win;
@@ -1769,7 +1859,17 @@ static bool PRIVATE_CreateSDLWindow(SDL_VideoDevice *_this, SDL_Window *window, 
 
     XStoreName(g_x11_display, win, window->title ? window->title : "");
     XSetWMProtocols(g_x11_display, win, &g_x11_wm_delete, 1);
-    XSelectInput(g_x11_display, win, SQ_StructureNotifyMask);
+    /* StructureNotifyMask alone (the original value here) means the X
+     * server never sends this window ANY pointer events at all -- not
+     * real physical clicks, not XTest-synthesized ones either, regardless
+     * of anything SDL_PollEvent()'s caller does with them. This was the
+     * actual root cause of SQW's anchors/buttons/scrollbars never
+     * responding to real mouse input (confirmed by the fact that
+     * SDL_PushEvent()-injected synthetic events, which skip X11 entirely,
+     * always worked correctly -- see sqw_main.c's own SQW_TEST_CLICK_X/Y
+     * comment). Button press/release + motion must be explicitly
+     * requested per window, same as StructureNotifyMask already was. */
+    XSelectInput(g_x11_display, win, SQ_StructureNotifyMask | SQ_ButtonPressMask | SQ_ButtonReleaseMask | SQ_PointerMotionMask | SQ_KeyPressMask | SQ_KeyReleaseMask);
 
     data->win = win;
     data->gc = XCreateGC(g_x11_display, win, 0, ((void*)0));
@@ -1877,6 +1977,59 @@ static void PRIVATE_PumpEvents(SDL_VideoDevice *_this)
                     break;
                 }
                 window = window->next;
+            }
+        } else if (ev.type == SQ_MotionNotify) {
+            SDL_Window *window = _this->windows;
+            while (window) {
+                if (window->internal && window->internal->win == ev.xmotion.window) {
+                    SDL_SendMouseMotion(0, window, 0, false, (float)ev.xmotion.x, (float)ev.xmotion.y);
+                    break;
+                }
+                window = window->next;
+            }
+        } else if (ev.type == SQ_ButtonPress || ev.type == SQ_ButtonRelease) {
+            SDL_Window *window = _this->windows;
+            while (window) {
+                if (window->internal && window->internal->win == ev.xbutton.window) {
+                    unsigned int xb = ev.xbutton.button;
+                    if (xb == SQ_BUTTON_WHEEL_UP || xb == SQ_BUTTON_WHEEL_DOWN) {
+                        /* X11 reports the wheel as a press+release pair on
+                         * a synthetic button (see SQ_BUTTON_WHEEL_UP/DOWN's
+                         * own comment) -- only fire once per physical
+                         * notch, on the press half, same as real SDL3's
+                         * own X11 backend. */
+                        if (ev.type == SQ_ButtonPress) {
+                            float wy = (xb == SQ_BUTTON_WHEEL_UP) ? 1.0f : -1.0f;
+                            SDL_SendMouseWheel(0, window, 0, 0.0f, wy, SDL_MOUSEWHEEL_NORMAL);
+                        }
+                    } else {
+                        SDL_SendMouseButton(0, window, 0, (Uint8)xb, ev.type == SQ_ButtonPress);
+                    }
+                    break;
+                }
+                window = window->next;
+            }
+        } else if (ev.type == SQ_KeyPress || ev.type == SQ_KeyRelease) {
+            /* Only the handful of navigation keys SQW's own scrolling
+             * needs (Page Up/Down, Home/End, arrow Up/Down) get translated
+             * -- a full X11 keycode->keysym->SDL_Scancode table for every
+             * key is real SDL3 X11 backend territory (XkbKeycodeToKeysym +
+             * a ~256-entry table), well beyond what this minimal driver
+             * needs. XLookupKeysym (not XkbKeycodeToKeysym) is used
+             * deliberately: it needs no XkbDescPtr/XOpenDisplay Xkb setup,
+             * just the raw XKeyEvent already in hand, and index 0 (no
+             * Shift/group modifiers) is exactly right for these keys --
+             * none of them have a distinct shifted form worth handling. */
+            unsigned long ks = XLookupKeysym(&ev.xkey, 0);
+            int scancode = -1;
+            if      (ks == SQ_XK_Page_Up)   scancode = SDL_SCANCODE_PAGEUP;
+            else if (ks == SQ_XK_Page_Down) scancode = SDL_SCANCODE_PAGEDOWN;
+            else if (ks == SQ_XK_Home)      scancode = SDL_SCANCODE_HOME;
+            else if (ks == SQ_XK_End)       scancode = SDL_SCANCODE_END;
+            else if (ks == SQ_XK_Up)        scancode = SDL_SCANCODE_UP;
+            else if (ks == SQ_XK_Down)      scancode = SDL_SCANCODE_DOWN;
+            if (scancode >= 0) {
+                SDL_SendKeyboardKey(0, 0, 0, (SDL_Scancode)scancode, ev.type == SQ_KeyPress);
             }
         }
     }

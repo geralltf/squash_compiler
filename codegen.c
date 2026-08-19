@@ -5040,6 +5040,54 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             codegen_expr(cg,n->binary.right);
             break;
         }
+        /* Float-operand comparisons materialized as a VALUE (not directly
+         * an if/while condition -- that case is handled separately, and
+         * correctly, by codegen_branch's own near-identical fix) fell
+         * through to the plain-integer path below: codegen_expr() on each
+         * operand followed by an integer CMP, which reads the raw register
+         * bits and compares them as if they were integers instead of using
+         * UCOMISD. Confirmed via a minimal repro matching this project's
+         * own point_in_rect(): "return py < r->y + r->h;" (used inside a
+         * boolean chain returned from a function, and equally inside a
+         * plain "int x = a < b;") came out true for py=650, r->y+r->h=403
+         * -- the exact bug behind SQW's own scrollbar-track clicks and
+         * hit-testing intermittently landing in the wrong region. Note this
+         * is genuinely a SEPARATE code path from codegen_branch's own fix
+         * (a stale comment nearby claimed value-comparisons were "already"
+         * covered here -- they were not: codegen_branch compiles straight
+         * to CMP+Jcc and never reaches this switch at all, so its fix never
+         * touched this one). Mirrors codegen_branch's own UCOMISD sequence
+         * exactly, just finishing with SETcc (a 0/1 value) instead of Jcc
+         * (a jump). */
+        {
+            int is_cmp_op = (!strcmp(op,"==")||!strcmp(op,"!=")||!strcmp(op,"<")||
+                              !strcmp(op,"<=")||!strcmp(op,">")||!strcmp(op,">="));
+            if (is_cmp_op && cg->is_64bit) {
+                int lhs_is_float = codegen_is_float_expr(cg, n->binary.left);
+                int rhs_is_float = codegen_is_float_expr(cg, n->binary.right);
+                if (lhs_is_float || rhs_is_float) {
+                    if (lhs_is_float) codegen_float_expr(cg, n->binary.left);
+                    else { codegen_expr(cg, n->binary.left); asm_cvtsi2sd(a, 0, REG_RAX); }
+                    asm_sub_rsp(a,16);
+                    asm_emit4(a,0xF2,0x0F,0x11,0x04); asm_emit1(a,0x24); /* movsd [rsp],xmm0 */
+                    if (rhs_is_float) codegen_float_expr(cg, n->binary.right);
+                    else { codegen_expr(cg, n->binary.right); asm_cvtsi2sd(a, 0, REG_RAX); }
+                    asm_movsd_xmm(a,1,0);                                /* xmm1 = rhs */
+                    asm_emit4(a,0xF2,0x0F,0x10,0x04); asm_emit1(a,0x24); /* movsd xmm0,[rsp] = lhs */
+                    asm_add_rsp(a,16);
+                    asm_ucomisd(a,0,1);
+                    CondCode fcc;
+                    if      (!strcmp(op,"==")) fcc = CC_E;
+                    else if (!strcmp(op,"!=")) fcc = CC_NE;
+                    else if (!strcmp(op,"<"))  fcc = CC_B;
+                    else if (!strcmp(op,"<=")) fcc = CC_BE;
+                    else if (!strcmp(op,">"))  fcc = CC_A;
+                    else                        fcc = CC_AE;
+                    asm_setcc_al(a,fcc); asm_movzx_rax_al(a);
+                    break;
+                }
+            }
+        }
         /* Pointer arithmetic scaling: "ptr + i" / "ptr - i" / "ptr - ptr"
          * (checked before evaluating either side — these are just symbol
          * lookups, no codegen emitted yet). See pointer_pointee_size()'s

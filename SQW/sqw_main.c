@@ -259,6 +259,28 @@ static LayoutBox *find_box_for_node(LayoutList *list, DomNode *node) {
     return NULL;
 }
 
+/* layout_hit_test() returns the LAST (innermost, in paint order) box whose
+ * rect contains the point -- for an <a>/<button>'s own label text, that is
+ * the individual word's SQW_BOX_TEXT run pushed by place_text_node()
+ * (child, painted after its parent), NOT the enclosing SQW_BOX_A/
+ * SQW_BOX_BUTTON box, and a SQW_BOX_TEXT box's ->node is the TEXT node
+ * itself, which has no "href" attribute and isn't a recognized interactive
+ * kind. Since real anchor/button labels are made almost entirely of their
+ * own word-boxes, most real clicks landed squarely on a word (silently
+ * ignored) and only the narrow gaps between words / around the label
+ * (still inside the <a>/<button>'s own box, but outside any word's box)
+ * actually hit the interactive box directly -- confirmed as the root cause
+ * of anchors/buttons feeling almost entirely unresponsive to real clicks.
+ * Walks the DOM parent chain (DomNode::parent) to find the actual
+ * clickable element a clicked word/run belongs to. */
+static DomNode *interactive_ancestor(DomNode *node) {
+    while (node) {
+        if (strcmp(node->tag, "a") == 0 || strcmp(node->tag, "button") == 0) return node;
+        node = node->parent;
+    }
+    return NULL;
+}
+
 /* Clamps a scroll offset to [0, max(0, content_extent - viewport_extent)]. */
 static float clamp_scroll(float value, float content_extent, float viewport_extent) {
     float max_scroll = content_extent - viewport_extent;
@@ -405,6 +427,22 @@ int main(void) {
         const char *ey = getenv("SQW_TEST_CLICK_Y");
         if (ex && ey) { test_click_x = atoi(ex); test_click_y = atoi(ey); }
     }
+    /* SQW_TEST_KEY: same rationale as SQW_TEST_CLICK_X/Y above -- names one
+     * of "pagedown"/"pageup"/"home"/"end"/"up"/"down", pushed as a real
+     * SDL_EVENT_KEY_DOWN so it exercises the exact same code path a real
+     * keypress does. */
+    SDL_Scancode test_key = SDL_SCANCODE_UNKNOWN;
+    {
+        const char *tk = getenv("SQW_TEST_KEY");
+        if (tk) {
+            if (!strcmp(tk,"pagedown")) test_key = SDL_SCANCODE_PAGEDOWN;
+            else if (!strcmp(tk,"pageup")) test_key = SDL_SCANCODE_PAGEUP;
+            else if (!strcmp(tk,"home")) test_key = SDL_SCANCODE_HOME;
+            else if (!strcmp(tk,"end")) test_key = SDL_SCANCODE_END;
+            else if (!strcmp(tk,"up")) test_key = SDL_SCANCODE_UP;
+            else if (!strcmp(tk,"down")) test_key = SDL_SCANCODE_DOWN;
+        }
+    }
     if (getenv("SQW_DUMP_BOXES")) {
         int bi;
         for (bi = 0; bi < boxes.count; bi++) {
@@ -436,6 +474,12 @@ int main(void) {
             bu.button.button = 1; bu.button.down = 0;
             bu.button.x = (float)test_click_x; bu.button.y = (float)test_click_y;
             SDL_PushEvent(&bu);
+        }
+        if (test_key != SDL_SCANCODE_UNKNOWN && frame_count == 30) {
+            SDL_Event kd; memset(&kd, 0, sizeof kd);
+            kd.type = SDL_EVENT_KEY_DOWN;
+            kd.key.scancode = test_key; kd.key.down = true;
+            SDL_PushEvent(&kd);
         }
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -477,6 +521,7 @@ int main(void) {
                     if (hit >= 0) {
                         SqwBoxKind k = boxes.boxes[hit].kind;
                         if (k == SQW_BOX_A || k == SQW_BOX_BUTTON) new_hover = boxes.boxes[hit].node;
+                        else if (k == SQW_BOX_TEXT) new_hover = interactive_ancestor(boxes.boxes[hit].node);
                     }
                     if (new_hover != hover_node) {
                         if (hover_node) hover_node->hover = 0;
@@ -485,6 +530,7 @@ int main(void) {
                     }
                 }
             } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == 1) {
+                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[button-down] x=%d y=%d\n", (int)ev.button.x, (int)ev.button.y); fflush(stderr); }
                 LayoutBox vthumb, hthumb;
                 vthumb.w = 0; hthumb.h = 0;
                 if (boxes.content_h > viewport_h) {
@@ -505,25 +551,57 @@ int main(void) {
                     hthumb.x = thumb_x; hthumb.y = viewport_h - SQW_SCROLLBAR_THICKNESS;
                     hthumb.w = thumb_w; hthumb.h = SQW_SCROLLBAR_THICKNESS;
                 }
+                LayoutBox vtrack, htrack;
+                vtrack.x = viewport_w - SQW_SCROLLBAR_THICKNESS; vtrack.y = 0.0f;
+                vtrack.w = SQW_SCROLLBAR_THICKNESS; vtrack.h = viewport_h;
+                htrack.x = 0.0f; htrack.y = viewport_h - SQW_SCROLLBAR_THICKNESS;
+                htrack.w = viewport_w; htrack.h = SQW_SCROLLBAR_THICKNESS;
                 if (vthumb.w > 0 && point_in_rect(ev.button.x, ev.button.y, &vthumb)) {
                     dragging_v = 1; drag_anchor_mouse = ev.button.y; drag_anchor_scroll = scroll_y;
                 } else if (hthumb.h > 0 && point_in_rect(ev.button.x, ev.button.y, &hthumb)) {
                     dragging_h = 1; drag_anchor_mouse = ev.button.x; drag_anchor_scroll = scroll_x;
+                } else if (vthumb.w > 0 && point_in_rect(ev.button.x, ev.button.y, &vtrack)) {
+                    /* Clicked the empty ("white") vertical track above/below
+                     * the thumb -- classic scrollbar UX (matches every
+                     * desktop toolkit's own track-click behavior) is to page
+                     * up/down by one viewport-height toward the click, NOT
+                     * to jump the thumb straight to the click position (that
+                     * jump-to-click behavior is scrollbar THUMB-drag/click
+                     * behavior, a different, more abrupt interaction some
+                     * platforms use only as an opt-in setting) and NOT to
+                     * start a drag -- a single track click is one discrete
+                     * page step, not a drag gesture. */
+                    if (ev.button.y < vthumb.y) scroll_y = clamp_scroll(scroll_y - viewport_h, boxes.content_h, viewport_h);
+                    else scroll_y = clamp_scroll(scroll_y + viewport_h, boxes.content_h, viewport_h);
+                } else if (hthumb.h > 0 && point_in_rect(ev.button.x, ev.button.y, &htrack)) {
+                    if (ev.button.x < hthumb.x) scroll_x = clamp_scroll(scroll_x - viewport_w, boxes.content_w, viewport_w);
+                    else scroll_x = clamp_scroll(scroll_x + viewport_w, boxes.content_w, viewport_w);
                 } else {
                     float cx = ev.button.x + scroll_x, cy = ev.button.y + scroll_y;
                     int hit = layout_hit_test(&boxes, cx, cy);
+                    if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[hit-test] cx=%d cy=%d hit=%d kind=%d\n", (int)cx, (int)cy, hit, hit>=0?(int)boxes.boxes[hit].kind:-1); fflush(stderr); }
                     if (hit >= 0) {
                         LayoutBox *hb = &boxes.boxes[hit];
-                        if (hb->kind == SQW_BOX_A) {
-                            hb->node->visited = 1;
-                            hb->node->active = 1;
-                            active_node = hb->node;
+                        /* See interactive_ancestor()'s own comment: a hit on
+                         * an <a>/<button>'s own label text lands on the word's
+                         * SQW_BOX_TEXT run, not the enclosing interactive box,
+                         * so resolve to the real clickable element first. */
+                        DomNode *target_node = hb->node;
+                        SqwBoxKind eff_kind = hb->kind;
+                        if (eff_kind == SQW_BOX_TEXT) {
+                            DomNode *anc = interactive_ancestor(hb->node);
+                            if (anc) { target_node = anc; eff_kind = (strcmp(anc->tag, "a") == 0) ? SQW_BOX_A : SQW_BOX_BUTTON; }
+                        }
+                        if (eff_kind == SQW_BOX_A) {
+                            target_node->visited = 1;
+                            target_node->active = 1;
+                            active_node = target_node;
                             /* dom_get_attr's returned pointer lives inside the
                              * CURRENT DomNode -- copy it before any possible
                              * sqw_navigate_to() below, which frees the whole
-                             * current DOM tree (including hb->node itself,
-                             * making hb/active_node dangling). */
-                            const char *href_raw = dom_get_attr(hb->node, "href");
+                             * current DOM tree (including target_node itself,
+                             * making it/active_node dangling). */
+                            const char *href_raw = dom_get_attr(target_node, "href");
                             char href[SQW_PATH_MAX];
                             href[0] = 0;
                             if (href_raw) { strncpy(href, href_raw, sizeof href - 1); href[sizeof href - 1] = 0; }
@@ -547,20 +625,44 @@ int main(void) {
                                 snprintf(full_path, sizeof full_path, "%s%s", current_dir, href);
                                 sqw_navigate_to(full_path, &root, &boxes, current_dir, viewport_w, viewport_h);
                                 scroll_x = 0.0f; scroll_y = 0.0f;
-                                hover_node = NULL; active_node = NULL; /* old DOM (and hb) is gone */
+                                hover_node = NULL; active_node = NULL; /* old DOM (and target_node) is gone */
                             }
-                        } else if (hb->kind == SQW_BOX_BUTTON) {
-                            hb->node->active = 1;
-                            active_node = hb->node;
+                        } else if (eff_kind == SQW_BOX_BUTTON) {
+                            target_node->active = 1;
+                            active_node = target_node;
                         }
                     }
                 }
             } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP && ev.button.button == 1) {
+                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[button-up] x=%d y=%d\n", (int)ev.button.x, (int)ev.button.y); fflush(stderr); }
                 dragging_v = 0; dragging_h = 0;
                 if (active_node) { active_node->active = 0; active_node = NULL; }
             } else if (ev.type == SDL_EVENT_MOUSE_WHEEL) {
                 scroll_y = clamp_scroll(scroll_y - ev.wheel.y * ((SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f)), boxes.content_h, viewport_h);
                 if (ev.wheel.x != 0.0f) scroll_x = clamp_scroll(scroll_x - ev.wheel.x * ((SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f)), boxes.content_w, viewport_w);
+            } else if (ev.type == SDL_EVENT_KEY_DOWN) {
+                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[key-down] scancode=%d\n", (int)ev.key.scancode); fflush(stderr); }
+                /* Page Up/Down page by one viewport (matches the scrollbar
+                 * track-click behavior -- see its own comment), Home/End
+                 * jump to the very top/bottom, Up/Down nudge by one text
+                 * line -- the standard keyboard scrolling set every desktop
+                 * browser/reader supports, translated from real X11 key
+                 * events by SDL3_Build/sdl_core.inc's own PRIVATE_PumpEvents
+                 * (only this small fixed set of navigation keys, not a full
+                 * keymap -- see that function's own comment). */
+                if (ev.key.scancode == SDL_SCANCODE_PAGEDOWN) {
+                    scroll_y = clamp_scroll(scroll_y + viewport_h, boxes.content_h, viewport_h);
+                } else if (ev.key.scancode == SDL_SCANCODE_PAGEUP) {
+                    scroll_y = clamp_scroll(scroll_y - viewport_h, boxes.content_h, viewport_h);
+                } else if (ev.key.scancode == SDL_SCANCODE_HOME) {
+                    scroll_y = 0.0f;
+                } else if (ev.key.scancode == SDL_SCANCODE_END) {
+                    scroll_y = clamp_scroll(boxes.content_h, boxes.content_h, viewport_h);
+                } else if (ev.key.scancode == SDL_SCANCODE_DOWN) {
+                    scroll_y = clamp_scroll(scroll_y + (SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f), boxes.content_h, viewport_h);
+                } else if (ev.key.scancode == SDL_SCANCODE_UP) {
+                    scroll_y = clamp_scroll(scroll_y - (SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f), boxes.content_h, viewport_h);
+                }
             }
         }
         if (!running) break;
