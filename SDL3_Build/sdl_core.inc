@@ -2041,15 +2041,32 @@ static void PRIVATE_PumpEvents(SDL_VideoDevice *_this)
                 window = window->next;
             }
         } else if (ev.type == SQ_MotionNotify) {
+            if (getenv("SQW_INPUT_DEBUG")) {
+                fprintf(stderr, "[x11-raw] MotionNotify win=%lu x=%d y=%d\n",
+                    ev.xmotion.window, ev.xmotion.x, ev.xmotion.y);
+                fflush(stderr);
+            }
             SDL_Window *window = _this->windows;
             while (window) {
                 if (window->internal && window->internal->win == ev.xmotion.window) {
                     SDL_SendMouseMotion(0, window, 0, false, (float)ev.xmotion.x, (float)ev.xmotion.y);
+                    if (getenv("SQW_INPUT_DEBUG")) {
+                        SDL_Mouse *dbg_mouse = SDL_GetMouse();
+                        fprintf(stderr, "[x11-raw] SDL_SendMouseMotion(win_match) sent x=%d y=%d -> mouse->x=%d mouse->y=%d has_position=%d\n",
+                            ev.xmotion.x, ev.xmotion.y, (int)dbg_mouse->x, (int)dbg_mouse->y, (int)dbg_mouse->has_position);
+                        fflush(stderr);
+                    }
                     break;
                 }
                 window = window->next;
             }
         } else if (ev.type == SQ_ButtonPress || ev.type == SQ_ButtonRelease) {
+            if (getenv("SQW_INPUT_DEBUG")) {
+                fprintf(stderr, "[x11-raw] %s win=%lu button=%u x=%d y=%d\n",
+                    ev.type == SQ_ButtonPress ? "ButtonPress" : "ButtonRelease",
+                    ev.xbutton.window, ev.xbutton.button, ev.xbutton.x, ev.xbutton.y);
+                fflush(stderr);
+            }
             SDL_Window *window = _this->windows;
             while (window) {
                 if (window->internal && window->internal->win == ev.xbutton.window) {
@@ -2066,6 +2083,13 @@ static void PRIVATE_PumpEvents(SDL_VideoDevice *_this)
                         }
                     } else {
                         SDL_SendMouseButton(0, window, 0, (Uint8)xb, ev.type == SQ_ButtonPress);
+                        if (getenv("SQW_INPUT_DEBUG")) {
+                            SDL_Mouse *dbg_mouse = SDL_GetMouse();
+                            fprintf(stderr, "[x11-raw] SDL_SendMouseButton mouse->x=%d mouse->y=%d mouse->focus_match=%d win->w=%d win->h=%d\n",
+                                (int)dbg_mouse->x, (int)dbg_mouse->y,
+                                dbg_mouse->focus == window, window->w, window->h);
+                            fflush(stderr);
+                        }
                     }
                     break;
                 }

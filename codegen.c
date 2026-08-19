@@ -8703,6 +8703,45 @@ int codegen_is_float_expr(CodeGen *cg, ASTNode *n) {
     case AST_TERNARY:
         return codegen_is_float_expr(cg, n->ternary.then_) ||
                codegen_is_float_expr(cg, n->ternary.else_);
+    case AST_DEREF: {
+        /* "*ptr" reading a float/double through a pointer -- no case here
+         * at all previously (fell to the `default: return 0` below), so
+         * ANY dereferenced-pointer float READ (as opposed to a write,
+         * which lvalue_target_is_float's own near-identical AST_DEREF
+         * case already covered) was silently treated as an integer
+         * expression everywhere it appeared: as a comparison operand
+         * (codegen_branch's own float detection calls this same function),
+         * as a plain value, inside arithmetic, as a call argument. Same
+         * lookup shape as lvalue_target_is_float's AST_DEREF case (only a
+         * bare "*ptrVar" — the common case -- not "*(p+1)"/"*p++"-style
+         * pointer expressions). Confirmed via a minimal repro matching
+         * real SDL3's own ConstrainMousePosition(SDL_Mouse*, SDL_Window*,
+         * float *x, float *y) -- unmodified real SDL3 source, never
+         * hand-patched -- whose "if (*x >= (float)(x_max+1))" style
+         * comparisons silently misfired (comparing the float's raw bit
+         * pattern as if it were a huge integer), and whose "*x = ..."
+         * writes downstream then read back stale/wrong values in the
+         * caller: the actual root cause of SDL_SendMouseMotion() never
+         * updating SDL_Mouse's tracked cursor position for a REAL X11
+         * MotionNotify event (confirmed reaching this exact function with
+         * correct coordinates), which in turn made every subsequent real
+         * mouse click report a stale/wrong position (SDL_SendMouseButton
+         * reads its own event x/y from that same tracked position) --
+         * genuine real clicks/hover silently landing on the wrong element
+         * or nothing at all, while synthetic SDL_PushEvent-injected
+         * testing (which never goes through ConstrainMousePosition at
+         * all) never exercised this path. */
+        ASTNode *op = n->deref.operand;
+        TypeInfo *t = NULL;
+        if (op && op->kind == AST_VAR) {
+            Symbol *s = symtable_lookup(cg->sym, op->var.name);
+            if (s) t = s->type;
+        }
+        if (!t || !t->base || t->pointer_depth != 1) return 0;
+        Symbol *td = symtable_lookup(cg->sym, t->base);
+        if (td && td->kind==SYM_TYPEDEF && td->type) t = td->type;
+        return t->base && (strcmp(t->base,"float")==0 || strcmp(t->base,"double")==0);
+    }
     default: return 0;
     }
 }
@@ -8987,6 +9026,43 @@ void codegen_float_expr(CodeGen *cg, ASTNode *n) {
         int esz = elem_size_of(cg, n->index.array);
         if (cg->is_64bit) {
             if (esz==4) { asm_movss_load(a,0,REG_RAX,0); asm_cvtss2sd(a,0,0); }
+            else asm_movsd_load(a, 0, REG_RAX, 0);
+        } else asm_fld_mem64(a, REG_EAX, 0);
+        break;
+    }
+
+    case AST_DEREF: {
+        /* "*ptr" reading a float/double through a pointer -- see
+         * codegen_is_float_expr()'s own AST_DEREF case (its own long
+         * comment has the full story) for why this case's ABSENCE was the
+         * real bug: without it, this whole switch never even ran for a
+         * float-pointee dereference (codegen_is_float_expr said "not
+         * float" so codegen_expr's own top-level float-dispatch check
+         * never routed here in the first place) -- and even on the rare
+         * caller that invokes codegen_float_expr() directly regardless
+         * (e.g. an explicit float-context load), this fell to the
+         * `default:` case just below, which loads the pointee's raw bytes
+         * as an INTEGER and numerically CONVERTS that integer to a double
+         * (cvtsi2sd) instead of reinterpreting the same bytes as an
+         * IEEE-754 float/double bit pattern (movss+cvtss2sd / movsd) --
+         * e.g. dereferencing a float holding exactly 5.0f (bit pattern
+         * 0x40A00000, decimal 1084227584) came back as 1084227584.0
+         * instead of 5.0. Same pointee-type resolution (bare "*ptrVar"
+         * only) as codegen_is_float_expr's own case, and the same
+         * single/double width selection AST_INDEX just above already
+         * uses. */
+        ASTNode *op = n->deref.operand;
+        TypeInfo *t = NULL;
+        if (op && op->kind == AST_VAR) {
+            Symbol *s = symtable_lookup(cg->sym, op->var.name);
+            if (s) t = s->type;
+        }
+        Symbol *td = (t && t->base) ? symtable_lookup(cg->sym, t->base) : NULL;
+        TypeInfo *pt = (td && td->kind==SYM_TYPEDEF && td->type) ? td->type : t;
+        int is_single = pt && pt->base && strcmp(pt->base,"float")==0;
+        codegen_expr(cg, op); /* pointer value -> RAX */
+        if (cg->is_64bit) {
+            if (is_single) { asm_movss_load(a,0,REG_RAX,0); asm_cvtss2sd(a,0,0); }
             else asm_movsd_load(a, 0, REG_RAX, 0);
         } else asm_fld_mem64(a, REG_EAX, 0);
         break;
