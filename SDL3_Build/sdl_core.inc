@@ -1762,6 +1762,7 @@ int XPutImage(Display *dpy, Window d, GC gc, XImage *image, int src_x, int src_y
  * type, so the raw unsigned long is used directly rather than introducing
  * a KeySym typedef purely for its own sake. */
 unsigned long XLookupKeysym(XKeyEvent *key_event, int index);
+int XSetInputFocus(Display *dpy, Window focus, int revert_to, unsigned long time);
 
 #define SQ_ZPixmap        2
 #define SQ_StructureNotifyMask (1L << 17)
@@ -1795,6 +1796,11 @@ unsigned long XLookupKeysym(XKeyEvent *key_event, int index);
 #define SQ_XK_Page_Down 0xff56
 #define SQ_XK_End       0xff57
 
+/* Real X.h values -- used only by the XSetInputFocus call in
+ * PRIVATE_ShowWindow (see its own comment for why that call exists). */
+#define SQ_RevertToParent 2
+#define SQ_CurrentTime     0L
+
 struct SDL_WindowData {
     Window win;
     GC     gc;
@@ -1803,6 +1809,10 @@ struct SDL_WindowData {
 
 static Display *g_x11_display = ((void*)0);
 static XAtom    g_x11_wm_delete;
+/* Set once by the first real ConfigureNotify -- see PRIVATE_PumpEvents'
+ * own comment on why XSetInputFocus is requested there, not eagerly in
+ * PRIVATE_ShowWindow. */
+static int g_input_focus_requested;
 
 static void PRIVATE_PumpEvents(SDL_VideoDevice *_this);
 
@@ -1909,6 +1919,43 @@ static void PRIVATE_ShowWindow(SDL_VideoDevice *_this, SDL_Window *window)
 {
     (void)_this;
     XMapWindow(g_x11_display, window->internal->win);
+    /* XSetInputFocus is deliberately NOT called here -- XMapWindow only
+     * queues an asynchronous map REQUEST; the window isn't actually
+     * viewable (mapped, with every ancestor also mapped -- XSetInputFocus's
+     * own documented precondition) until the server (and, for a
+     * reparenting WM, the WM itself) has actually processed it, which can
+     * easily still be pending at this exact point. Calling XSetInputFocus
+     * immediately after XMapWindow hits exactly that race and raises a
+     * real, fatal-by-default X11 protocol error (confirmed directly:
+     * "X Error ... BadMatch (invalid parameter attributes) ... Major
+     * opcode ... X_SetInputFocus", killing the whole process before a
+     * single frame ever rendered). See PRIVATE_PumpEvents' own comment
+     * (SQ_ConfigureNotify handling) for where this call actually happens
+     * instead, once the window is confirmed real and placed. */
+    /* Real SDL_SendMouseMotion()/SDL_SendMouseButton() (src/events/
+     * SDL_mouse.c, unmodified real SDL3 source -- never hand-patched, see
+     * SDL3/SDL/CLAUDE.md's own "AI must not be used to generate code for
+     * contributions to this project" notice) both gate on SDL_Mouse's own
+     * internal "focus window" via SDL_UpdateMouseFocus(): a MotionNotify
+     * or ButtonPress delivered before mouse->focus is ever established
+     * needs SDL_MousePositionInWindow() to independently confirm the
+     * pointer is inside the window before SetMouseFocus ever runs, and if
+     * that first real event's coordinates don't satisfy it for any reason,
+     * mouse->focus permanently stays NULL and every subsequent real
+     * MotionNotify/ButtonPress silently no-ops forever (SDL_SendMouseButton
+     * in particular reads its OWN event.button.x/y from mouse->x/y, which
+     * only SDL_SendMouseMotion ever updates -- so a motion event that never
+     * gets through means every later click event reports a stale/zero
+     * position too, independent of whatever real position was clicked).
+     * SDL_SendMouseWheel(), by contrast, calls SDL_SetMouseFocus()
+     * unconditionally with no position check at all -- exactly why real
+     * mouse-wheel scrolling kept working the whole time this bug existed
+     * while real clicks and motion silently didn't. Establishing focus
+     * here, once, unconditionally, the moment the window becomes visible
+     * (matching what a real WM's own click-to-focus/focus-follows-mouse
+     * would eventually do anyway) removes the dependency on that first
+     * real event's coordinates ever satisfying SDL_MousePositionInWindow. */
+    SDL_SetMouseFocus(window);
     XFlush(g_x11_display);
 }
 
@@ -1973,6 +2020,21 @@ static void PRIVATE_PumpEvents(SDL_VideoDevice *_this)
                         window->internal->h = h;
                         SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED, w, h);
                         SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_RESIZED, w, h);
+                    }
+                    /* Real X11 keyboard input (KeyPress/KeyRelease) needs this
+                     * window to actually hold the server's input focus -- see
+                     * PRIVATE_ShowWindow's own comment for why that call was
+                     * moved here instead of firing immediately after
+                     * XMapWindow (a real, fatal BadMatch protocol error from
+                     * calling XSetInputFocus before the window was actually
+                     * viewable). A ConfigureNotify for this window is a
+                     * reliable "it's real and placed now" signal (the window
+                     * manager only reparents/positions/sizes a window it has
+                     * actually mapped), so request focus once, the first
+                     * time one arrives. */
+                    if (!g_input_focus_requested) {
+                        g_input_focus_requested = 1;
+                        XSetInputFocus(g_x11_display, window->internal->win, SQ_RevertToParent, SQ_CurrentTime);
                     }
                     break;
                 }
