@@ -38,6 +38,23 @@ extern void SSL_free(SSL *ssl);
 extern int SSL_set_fd(SSL *ssl, int fd);
 extern int SSL_accept(SSL *ssl);
 extern int SSL_connect(SSL *ssl);
+/* Real, exported OpenSSL 1.1+/3.x function for a real DNS hostname target
+ * (not used by this project yet -- see net_client.c's own comment on why
+ * X509_VERIFY_PARAM_set1_ip_asc below is what its current IP-literal-only
+ * URL parsing actually needs). */
+extern int SSL_set1_host(SSL *ssl, const char *hostname);
+/* Unlike SSL_set1_host, there is no SSL_set1_ip_asc() convenience wrapper
+ * exported by real libssl (confirmed directly: linking against it fails
+ * with "undefined symbol") -- IP-literal verification only exists one
+ * layer down, on the SSL's own X509_VERIFY_PARAM object (SSL_get0_param),
+ * via X509_VERIFY_PARAM_set1_ip_asc. OpenSSL treats DNS-name and IP-literal
+ * matching as genuinely different rules (an IP literal must match a SAN
+ * "IP Address" entry, never a "DNS Name" entry, even when the two look
+ * similar as strings), so this is the real, correct call for the dotted-
+ * quad hosts this project's URL parsing always produces. */
+typedef struct x509_verify_param_st X509_VERIFY_PARAM;
+extern X509_VERIFY_PARAM *SSL_get0_param(SSL *ssl);
+extern int X509_VERIFY_PARAM_set1_ip_asc(X509_VERIFY_PARAM *param, const char *ipasc);
 extern int SSL_read(SSL *ssl, void *buf, int num);
 extern int SSL_write(SSL *ssl, const void *buf, int num);
 extern int SSL_shutdown(SSL *ssl);

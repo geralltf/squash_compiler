@@ -19,6 +19,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <openssl/ssl.h>
+#include "php_mini.c"
+#include "sqs_dns.c"
 
 #define SQS_HTTP_PORT 8080
 #define SQS_HTTPS_PORT 8443
@@ -110,71 +112,159 @@ static int sqs_find_header(const char *req, const char *name, char *out, int out
     return 0;
 }
 
-static void sqs_handle_request(SqsConn *c) {
-    char req[SQS_REQ_BUF];
-    long n = sqs_conn_read(c, req, sizeof req - 1);
-    if (n <= 0) return;
-    req[n] = 0;
+/* Reads a full request off the connection -- request line + headers +
+ * (for POST/PUT) a body sized by its own "Content-Length" header. Unlike
+ * the old GET-only version, a single SQS_REQ_BUF recv() is no longer
+ * guaranteed to contain the whole thing, so this grows a heap buffer and
+ * keeps reading until either the peer closes or the declared
+ * Content-Length has actually been received. Returns a malloc'd buffer
+ * (caller frees) and sets *out_len; returns NULL on a connection that
+ * sends nothing at all. */
+static char *sqs_read_full_request(SqsConn *c, long *out_len) {
+    long cap = SQS_REQ_BUF, len = 0;
+    char *req = (char *)malloc((size_t)cap);
+    for (;;) {
+        if (cap - len < 4097) { cap *= 2; req = (char *)realloc(req, (size_t)cap); }
+        long n = sqs_conn_read(c, req + len, 4096);
+        if (n <= 0) break;
+        len += n;
+        req[len] = 0;
+        char *hdr_end = strstr(req, "\r\n\r\n");
+        if (hdr_end) {
+            char cl_str[32];
+            sqs_find_header(req, "Content-Length", cl_str, sizeof cl_str);
+            long content_length = atol(cl_str);
+            long body_have = len - (long)((hdr_end + 4) - req);
+            if (body_have >= content_length) break;
+        }
+    }
+    if (len == 0) { free(req); return NULL; }
+    req[len] = 0;
+    *out_len = len;
+    return req;
+}
 
-    /* Parse only the request line ("GET /path HTTP/1.1") plus the
-     * User-Agent header for console logging -- every other header, and
-     * the request body, are read but otherwise ignored (irrelevant for a
-     * GET-only static file server). */
-    char method[16]; char path[SQS_REQ_BUF];
-    method[0] = 0; path[0] = 0;
+static void sqs_handle_request(SqsConn *c) {
+    long len = 0;
+    char *req = sqs_read_full_request(c, &len);
+    if (!req) return;
+
+    /* Parse the request line ("METHOD /path?query HTTP/1.1") plus the
+     * User-Agent header for console logging -- every other header (besides
+     * Content-Length, read above to size the body) is read but otherwise
+     * ignored. */
+    char method[16]; char path_full[SQS_REQ_BUF];
+    method[0] = 0; path_full[0] = 0;
     {
         int i = 0, j = 0;
         while (req[i] && req[i] != ' ' && j < (int)sizeof method - 1) method[j++] = req[i++];
         method[j] = 0;
         while (req[i] == ' ') i++;
         j = 0;
-        while (req[i] && req[i] != ' ' && req[i] != '\r' && req[i] != '\n' && j < SQS_REQ_BUF - 1) path[j++] = req[i++];
-        path[j] = 0;
+        while (req[i] && req[i] != ' ' && req[i] != '\r' && req[i] != '\n' && j < SQS_REQ_BUF - 1) path_full[j++] = req[i++];
+        path_full[j] = 0;
     }
+    /* Split "/path?query" into the two parts -- the path resolves to a
+     * file on disk (or routes to the PHP interpreter below), the query
+     * string becomes $_GET for a .php page (see php_mini.c). */
+    char path[SQS_REQ_BUF]; char query[SQS_REQ_BUF];
+    {
+        const char *q = strchr(path_full, '?');
+        if (q) {
+            int plen = (int)(q - path_full);
+            if (plen >= SQS_REQ_BUF) plen = SQS_REQ_BUF - 1;
+            memcpy(path, path_full, (size_t)plen); path[plen] = 0;
+            strncpy(query, q + 1, SQS_REQ_BUF - 1); query[SQS_REQ_BUF - 1] = 0;
+        } else {
+            strncpy(path, path_full, SQS_REQ_BUF - 1); path[SQS_REQ_BUF - 1] = 0;
+            query[0] = 0;
+        }
+    }
+    char *hdr_end = strstr(req, "\r\n\r\n");
+    char *body = hdr_end ? hdr_end + 4 : req + len;
+    long body_len = hdr_end ? len - (long)(body - req) : 0;
+
     char user_agent[256];
     sqs_find_header(req, "User-Agent", user_agent, sizeof user_agent);
-    /* Console output is deliberately request-only -- method, path, User-
-     * Agent, and (right below) the path-resolution outcome -- never the
-     * response status/body/headers this server sends back, per the "just
-     * show incoming requests" brief. */
+    /* Console output is deliberately request-only -- method, path (with
+     * query string), User-Agent, and (right below) the path-resolution
+     * outcome -- never the response status/body/headers this server sends
+     * back, per the "just show incoming requests" brief. */
     fprintf(stderr, "SQS: %s %s [%s] from %s:%d  User-Agent: %s\n",
-        method, path, c->is_https ? "https" : "http", c->peer_ip, c->peer_port, user_agent);
+        method, path_full, c->is_https ? "https" : "http", c->peer_ip, c->peer_port, user_agent);
     fflush(stderr);
 
-    if (strcmp(method, "GET") != 0) {
+    int method_ok = strcmp(method, "GET") == 0 || strcmp(method, "POST") == 0 ||
+                     strcmp(method, "PUT") == 0 || strcmp(method, "DELETE") == 0;
+    if (!method_ok) {
         sqs_send_response(c, 405, "Method Not Allowed", "text/plain", "method not allowed", 19);
+        free(req);
         return;
     }
 
     char fs_path[SQS_REQ_BUF];
     if (!sqs_resolve_path(path, fs_path)) {
         sqs_send_response(c, 400, "Bad Request", "text/plain", "bad request", 11);
+        free(req);
         return;
     }
     /* "/" resolving to "index.html" is the one implicit path rewrite this
-     * server does -- the closest thing to a "redirect" a GET-only static
-     * file server has (there's no real 3xx Location-header redirect
-     * anywhere in this minimal server; see this file's own top comment on
-     * scope). Logged separately, clearly labeled, so it's not confused
-     * with a genuine distinct request. */
+     * server does -- the closest thing to a "redirect" this minimal server
+     * has (there's no real 3xx Location-header redirect anywhere in it;
+     * see this file's own top comment on scope). Logged separately,
+     * clearly labeled, so it's not confused with a genuine distinct
+     * request. */
     if (strcmp(path, "/") == 0) {
         fprintf(stderr, "SQS: redirect: / -> /index.html\n"); fflush(stderr);
     }
 
     FILE *fp = fopen(fs_path, "rb");
     if (!fp) {
-        const char *body = "404 not found";
-        sqs_send_response(c, 404, "Not Found", "text/plain", body, (long)strlen(body));
+        const char *body404 = "404 not found";
+        sqs_send_response(c, 404, "Not Found", "text/plain", body404, (long)strlen(body404));
+        free(req);
         return;
     }
     fseek(fp, 0, SEEK_END);
     long sz = ftell(fp);
     rewind(fp);
-    char *content = (char *)malloc((size_t)sz);
+    char *content = (char *)malloc((size_t)sz + 1);
     long got = (long)fread(content, 1, (size_t)sz, fp);
+    content[got] = 0;
     fclose(fp);
-    sqs_send_response(c, 200, "OK", "text/html; charset=utf-8", content, got);
+
+    int is_php = 0;
+    {
+        int plen = (int)strlen(fs_path);
+        if (plen > 4 && strcmp(fs_path + plen - 4, ".php") == 0) is_php = 1;
+    }
+    if (is_php) {
+        /* Dynamic page: $_GET from this request's own query string,
+         * $_POST from the request body (parsed the same
+         * application/x-www-form-urlencoded way real PHP does, regardless
+         * of the actual Content-Type -- a deliberate simplification for
+         * this test/dev subset, see php_mini.c's own top comment on
+         * scope), $_SERVER['REQUEST_METHOD'] from the real HTTP method. */
+        PhpKVArray get_arr, post_arr;
+        memset(&get_arr, 0, sizeof get_arr);
+        memset(&post_arr, 0, sizeof post_arr);
+        php_parse_kv_string(query, &get_arr);
+        if (body_len > 0) {
+            char *body_cstr = (char *)malloc((size_t)body_len + 1);
+            memcpy(body_cstr, body, (size_t)body_len);
+            body_cstr[body_len] = 0;
+            php_parse_kv_string(body_cstr, &post_arr);
+            free(body_cstr);
+        }
+        char *php_out = (char *)malloc(PHP_OUT_MAX);
+        php_run(content, &get_arr, &post_arr, method, php_out, PHP_OUT_MAX);
+        sqs_send_response(c, 200, "OK", "text/html; charset=utf-8", php_out, (long)strlen(php_out));
+        free(php_out);
+    } else {
+        sqs_send_response(c, 200, "OK", "text/html; charset=utf-8", content, got);
+    }
     free(content);
+    free(req);
 }
 
 static void *sqs_conn_thread(void *arg) {
@@ -292,12 +382,18 @@ int main(void) {
     SqsAcceptorArgs http_args; http_args.listen_fd = http_fd; http_args.ssl_ctx = NULL;
     SqsAcceptorArgs https_args; https_args.listen_fd = https_fd; https_args.ssl_ctx = ssl_ctx;
 
-    pthread_t http_thread, https_thread;
+    pthread_t http_thread, https_thread, dns_thread;
     pthread_create(&http_thread, NULL, sqs_accept_loop, &http_args);
     pthread_create(&https_thread, NULL, sqs_accept_loop, &https_args);
+    /* Local-only DNS responder (SQS/sqs_dns.c) -- answers the reserved
+     * test domain "sqs.test" with 127.0.0.1, purely so SQW's own DNS
+     * resolver (SQW/dns_resolver.c) can be exercised end to end without
+     * ever making a real DNS query; see that file's own top comment. */
+    pthread_create(&dns_thread, NULL, sqs_dns_serve, NULL);
 
     fprintf(stderr, "SQS: ready\n"); fflush(stdout);
     pthread_join(http_thread, NULL);
     pthread_join(https_thread, NULL);
+    pthread_join(dns_thread, NULL);
     return 0;
 }

@@ -4,6 +4,19 @@
 #include "layout.h"
 
 #define SQW_RENDERER_MAX_BOXES 512
+/* Ad-hoc rects (sqw_renderer_draw_rect -- toolbar chrome, scrollbar
+ * track/thumb, anchor underlines) get their OWN reserved region of the
+ * vertex buffer, entirely separate from the SQW_RENDERER_MAX_BOXES region
+ * sqw_renderer_draw() uses for the page's own layout boxes -- see that
+ * function's own comment on why: writing every ad-hoc rect to the same 6
+ * vertex slots and issuing vkCmdDraw per call, with no fence/barrier
+ * between calls, meant only the LAST such rect drawn in the whole frame
+ * ever actually appeared once the GPU caught up (every earlier draw call
+ * in the same command buffer ended up reading the same, since-overwritten
+ * memory) -- a real bug that predates the Back button, just never
+ * surfaced clearly before because the one rect that "won" (whichever was
+ * drawn last) happened to be plausible-looking toolbar chrome. */
+#define SQW_RENDERER_MAX_IMM_RECTS 128
 
 typedef struct {
     VkPipelineLayout pipelineLayout;
@@ -12,6 +25,11 @@ typedef struct {
     VkDeviceMemory vertexMemory;
     void *mapped;
     int max_vertices;
+    /* Write cursor into the ad-hoc-rect region (see SQW_RENDERER_MAX_IMM_RECTS
+     * above), 0..SQW_RENDERER_MAX_IMM_RECTS -- reset to 0 once per frame by
+     * sqw_renderer_draw(), which every frame calls before any
+     * sqw_renderer_draw_rect() calls (see main()'s own draw-call order). */
+    int imm_cursor;
 } SqwRenderer;
 
 /* Colored-quad renderer: reuses the exact vertex-color triangle shader

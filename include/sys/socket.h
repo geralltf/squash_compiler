@@ -21,9 +21,20 @@ struct sockaddr {
 
 #define AF_INET     2
 #define SOCK_STREAM 1
+#define SOCK_DGRAM  2
 #define SOL_SOCKET  1
 #define SO_REUSEADDR 2
+#define SO_RCVTIMEO  20
 #define SHUT_RDWR   2
+
+/* Real struct timeval layout (two longs, matches glibc's <sys/time.h>) --
+ * only needed for SO_RCVTIMEO on the DNS resolver's UDP socket (see
+ * SQW/dns_resolver.c), so it's declared here rather than pulling in a
+ * whole separate sys/time.h for one struct. */
+struct timeval {
+    long tv_sec;
+    long tv_usec;
+};
 
 extern int socket(int domain, int type, int protocol);
 extern int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
@@ -32,6 +43,10 @@ extern int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 extern int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
 extern long send(int sockfd, const void *buf, unsigned long len, int flags);
 extern long recv(int sockfd, void *buf, unsigned long len, int flags);
+extern long sendto(int sockfd, const void *buf, unsigned long len, int flags,
+                    const struct sockaddr *dest_addr, socklen_t addrlen);
+extern long recvfrom(int sockfd, void *buf, unsigned long len, int flags,
+                      struct sockaddr *src_addr, socklen_t *addrlen);
 extern int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
 extern int shutdown(int sockfd, int how);
 

@@ -22,5 +22,6 @@ int   abs(int x);
 long  labs(long x);
 int   rand(void);
 void  srand(unsigned int seed);
+char *getenv(const char *name);
 
 #endif

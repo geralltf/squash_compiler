@@ -157,7 +157,7 @@ int sqw_renderer_init(SqwVkContext *vk, SqwRenderer *r) {
      * frame (2 triangles = 6 vertices per box) -- same technique as
      * triangle_vulkan.c's own vertex buffer, just persistently mapped
      * instead of map/write/unmap per upload. */
-    r->max_vertices = SQW_RENDERER_MAX_BOXES * 6;
+    r->max_vertices = (SQW_RENDERER_MAX_BOXES + SQW_RENDERER_MAX_IMM_RECTS) * 6;
     VkBufferCreateInfo bufInfo;
     memset(&bufInfo, 0, sizeof(bufInfo));
     bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -192,6 +192,15 @@ int sqw_renderer_init(SqwVkContext *vk, SqwRenderer *r) {
 void sqw_renderer_draw(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cmd,
                         LayoutList *boxes, float viewport_w, float viewport_h,
                         float scroll_x, float scroll_y) {
+    /* Reset the ad-hoc-rect write cursor for the new frame -- this is
+     * always the first draw call issued each frame (see main()'s own
+     * draw-call order), so this is the one correct place to do it; every
+     * sqw_renderer_draw_rect() call this frame (toolbar, scrollbars,
+     * anchor underlines) then gets its own fresh vertex slot instead of
+     * fighting over slot 0 -- see SQW_RENDERER_MAX_IMM_RECTS's own
+     * comment in renderer_vk.h for the bug this fixes. */
+    r->imm_cursor = 0;
+
     int n = boxes->count;
     if (n > SQW_RENDERER_MAX_BOXES) n = SQW_RENDERER_MAX_BOXES;
 
@@ -251,6 +260,18 @@ void sqw_renderer_draw_rect(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cm
                              float red, float green, float blue,
                              float viewport_w, float viewport_h) {
     (void)vk;
+    /* Own reserved slot in the ad-hoc-rect region (see
+     * SQW_RENDERER_MAX_IMM_RECTS's own comment in renderer_vk.h) -- NOT
+     * vertex 0 every time. Silently drops the rect (matching
+     * sqw_renderer_draw()'s own clamp-not-crash convention for too many
+     * layout boxes) if a single frame somehow issues more than
+     * SQW_RENDERER_MAX_IMM_RECTS of these; every real caller in this
+     * project draws well under a dozen per frame, so this is a generous,
+     * not a tight, cap. */
+    if (r->imm_cursor >= SQW_RENDERER_MAX_IMM_RECTS) return;
+    int base_vertex = (SQW_RENDERER_MAX_BOXES + r->imm_cursor) * 6;
+    r->imm_cursor++;
+
     float x0 = (x / viewport_w) * 2.0f - 1.0f;
     float y0 = (y / viewport_h) * 2.0f - 1.0f;
     float x1 = ((x + w) / viewport_w) * 2.0f - 1.0f;
@@ -262,8 +283,8 @@ void sqw_renderer_draw_rect(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cm
     trv.x = x1; trv.y = y0; trv.r = red; trv.g = green; trv.b = blue;
     bl.x = x0; bl.y = y1; bl.r = red; bl.g = green; bl.b = blue;
     br.x = x1; br.y = y1; br.r = red; br.g = green; br.b = blue;
-    verts[0] = tl; verts[1] = trv; verts[2] = bl;
-    verts[3] = trv; verts[4] = br; verts[5] = bl;
+    verts[base_vertex + 0] = tl; verts[base_vertex + 1] = trv; verts[base_vertex + 2] = bl;
+    verts[base_vertex + 3] = trv; verts[base_vertex + 4] = br; verts[base_vertex + 5] = bl;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipeline);
     VkDeviceSize offset0 = 0;
@@ -271,5 +292,5 @@ void sqw_renderer_draw_rect(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cm
     SqwPushConstants pc;
     pc.angle = 0.0f;
     vkCmdPushConstants(cmd, r->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
-    vkCmdDraw(cmd, 6, 1, 0, 0);
+    vkCmdDraw(cmd, 6, 1, (uint32_t)base_vertex, 0);
 }

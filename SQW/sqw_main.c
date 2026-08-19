@@ -115,6 +115,49 @@ static void sqw_dirname(const char *path, char *out) {
     out[cut] = '\0';
 }
 
+/* Back-button history: a fixed-capacity LIFO of previously-requested
+ * URLs/paths, heap-allocated (not a C-stack local -- see main()'s own
+ * comment on keeping KB-sized structs off the stack) so it lives for the
+ * whole process and is never subject to C-stack-overflow risk itself.
+ * Every push/pop below is bounds-checked -- push never writes past
+ * SQW_HISTORY_MAX (a long or adversarial browsing session cannot grow
+ * this past a fixed, known size: once full, the OLDEST entry is dropped
+ * to make room for the newest, same as any bounded ring/stack), and pop
+ * never reads before index 0 (an empty stack just reports "nothing to go
+ * back to" rather than under-reading). A popped slot is wiped immediately
+ * so a stale URL never lingers in memory once it's no longer reachable
+ * through `count`. */
+#define SQW_HISTORY_MAX 64
+
+typedef struct {
+    char urls[SQW_HISTORY_MAX][SQW_PATH_MAX];
+    int count; /* number of live entries, always 0..SQW_HISTORY_MAX */
+} SqwHistoryStack;
+
+static void sqw_history_push(SqwHistoryStack *h, const char *url) {
+    if (!url || !url[0]) return;
+    if (h->count >= SQW_HISTORY_MAX) {
+        memmove(h->urls[0], h->urls[1], (size_t)(SQW_HISTORY_MAX - 1) * SQW_PATH_MAX);
+        h->count = SQW_HISTORY_MAX - 1;
+    }
+    strncpy(h->urls[h->count], url, SQW_PATH_MAX - 1);
+    h->urls[h->count][SQW_PATH_MAX - 1] = 0;
+    h->count++;
+}
+
+/* Returns 1 and fills `out` (capacity outcap) with the most recently
+ * pushed URL on success; returns 0 (out left untouched) if the stack is
+ * empty -- the caller (the Back button's click handler) uses this to
+ * decide whether there's anywhere to go back to at all. */
+static int sqw_history_pop(SqwHistoryStack *h, char *out, int outcap) {
+    if (h->count <= 0) return 0;
+    h->count--;
+    strncpy(out, h->urls[h->count], outcap - 1);
+    out[outcap - 1] = 0;
+    memset(h->urls[h->count], 0, sizeof h->urls[h->count]);
+    return 1;
+}
+
 /* Loads and parses `path` as the new current page, replacing *root_ptr
  * and recomputing layout in place. On failure (file not found/unreadable)
  * leaves the current page entirely untouched and just logs a warning --
@@ -170,20 +213,29 @@ static void sqw_navigate_to_html(const char *html, const char *url, DomNode **ro
     fprintf(stderr, "SQW: navigated to fetched page %s (%d boxes)\n", url, boxes_ptr->count); fflush(stdout);
 }
 
-/* Shared by the Go button and pressing Enter in the URL bar: navigates to
- * whatever's currently typed, the same way an anchor click would --
+/* Shared by the Go button, pressing Enter in the URL bar, AND the Back
+ * button: navigates to `url_text` the same way an anchor click would --
  * http(s):// URLs go through the async background-thread fetch (see
- * net_client.h's own comment on the async model), anything else is
- * treated as a local path relative to wherever SQW itself was launched
- * from (typing a full path, not a relative one, is the address-bar
- * convention here -- there is no "current page" to resolve a bare
- * filename against the way an in-page anchor's href can). Does nothing on
- * an empty bar. */
-static void sqw_go_navigate(const char *url_text, SqwNetResult **pending_fetch, char *pending_fetch_url,
+ * net_client.h's own comment on the async model; current_url is updated
+ * once that fetch actually completes, at this file's own fetch-poll site
+ * in main()), anything else is treated as a local path relative to
+ * wherever SQW itself was launched from (typing a full path, not a
+ * relative one, is the address-bar convention here). Does nothing on an
+ * empty url_text.
+ *
+ * `push_history` controls whether the page being LEFT (current_url, as
+ * of the moment this call starts) gets pushed onto `hist` first: 1 for
+ * every FORWARD navigation (Go/Enter, anchor clicks), 0 for the Back
+ * button itself -- Back only ever pops, never pushes, or clicking Back
+ * repeatedly would just bounce between two pages forever instead of
+ * actually retreating through history. */
+static void sqw_go_navigate(const char *url_text, int push_history, SqwHistoryStack *hist, char *current_url,
+                             SqwNetResult **pending_fetch, char *pending_fetch_url,
                              DomNode **root_ptr, LayoutList *boxes_ptr, char *current_dir, char *current_base_url,
                              float viewport_w, float viewport_h, float *scroll_x, float *scroll_y,
                              DomNode **hover_node, DomNode **active_node) {
     if (!url_text[0]) return;
+    if (push_history) sqw_history_push(hist, current_url);
     if (strncmp(url_text, "http://", 7) == 0 || strncmp(url_text, "https://", 8) == 0) {
         if (*pending_fetch) sqw_net_result_free(*pending_fetch);
         fprintf(stderr, "SQW: fetching %s ...\n", url_text); fflush(stdout);
@@ -192,6 +244,7 @@ static void sqw_go_navigate(const char *url_text, SqwNetResult **pending_fetch, 
         *pending_fetch = sqw_net_fetch_async(url_text);
     } else {
         sqw_navigate_to(url_text, root_ptr, boxes_ptr, current_dir, current_base_url, viewport_w, viewport_h);
+        strncpy(current_url, url_text, SQW_PATH_MAX - 1); current_url[SQW_PATH_MAX - 1] = 0;
         *scroll_x = 0.0f; *scroll_y = 0.0f;
         *hover_node = NULL; *active_node = NULL;
     }
@@ -279,6 +332,7 @@ static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer 
 #define SQW_TOOLBAR_H 40.0f
 #define SQW_URLBAR_PAD 8.0f
 #define SQW_URLBAR_GO_W 56.0f
+#define SQW_BACK_BTN_W 40.0f
 
 typedef struct {
     const char *target_id;
@@ -386,33 +440,46 @@ static int point_in_rect(float px, float py, const LayoutBox *r) {
     return px >= r->x && px < r->x + r->w && py >= r->y && py < r->y + r->h;
 }
 
-/* Geometry of the URL bar and Go button, shared by draw_toolbar() (so
- * rendering matches) and main()'s own toolbar click-hit-testing (so a
- * click lands exactly where it visually looks like it should) -- computing
- * this in two places from scratch would eventually drift out of sync. */
-static void toolbar_geometry(float viewport_w, LayoutBox *out_bar, LayoutBox *out_go) {
+/* Geometry of the Back button, URL bar, and Go button, shared by
+ * draw_toolbar() (so rendering matches) and main()'s own toolbar
+ * click-hit-testing (so a click lands exactly where it visually looks
+ * like it should) -- computing this in two places from scratch would
+ * eventually drift out of sync. Back sits leftmost (standard browser
+ * layout), URL bar shrinks to make room for it. */
+static void toolbar_geometry(float viewport_w, LayoutBox *out_back, LayoutBox *out_bar, LayoutBox *out_go) {
     float bar_h = SQW_TOOLBAR_H - 2.0f * SQW_URLBAR_PAD;
-    out_bar->x = SQW_URLBAR_PAD; out_bar->y = SQW_URLBAR_PAD;
-    out_bar->w = viewport_w - 3.0f * SQW_URLBAR_PAD - SQW_URLBAR_GO_W;
+    out_back->x = SQW_URLBAR_PAD; out_back->y = SQW_URLBAR_PAD;
+    out_back->w = SQW_BACK_BTN_W; out_back->h = bar_h;
+    out_bar->x = out_back->x + out_back->w + SQW_URLBAR_PAD; out_bar->y = SQW_URLBAR_PAD;
+    out_bar->w = viewport_w - 4.0f * SQW_URLBAR_PAD - SQW_BACK_BTN_W - SQW_URLBAR_GO_W;
     if (out_bar->w < 10.0f) out_bar->w = 10.0f;
     out_bar->h = bar_h;
     out_go->x = out_bar->x + out_bar->w + SQW_URLBAR_PAD; out_go->y = SQW_URLBAR_PAD;
     out_go->w = SQW_URLBAR_GO_W; out_go->h = bar_h;
 }
 
-/* Draws the toolbar strip: background, URL text box (border tints blue
- * while focused, matching real browsers' own focus-ring convention), the
- * typed text with a simple end-of-text caret when focused (editing is
- * append/backspace-at-the-end only -- see main()'s SDL_EVENT_TEXT_INPUT/
- * BACKSPACE handling -- so the caret is always exactly at the text's own
- * end, no separate cursor-position tracking needed), and the Go button. */
+/* Draws the toolbar strip: background, the green Back button (dimmed when
+ * `can_go_back` is false -- i.e. the history stack is empty, nothing to
+ * go back to), URL text box (border tints blue while focused, matching
+ * real browsers' own focus-ring convention), the typed text with a simple
+ * end-of-text caret when focused (editing is append/backspace-at-the-end
+ * only -- see main()'s SDL_EVENT_TEXT_INPUT/BACKSPACE handling -- so the
+ * caret is always exactly at the text's own end, no separate
+ * cursor-position tracking needed), and the Go button. */
 static void draw_toolbar(SqwVkContext *vk, SqwRenderer *renderer, SqwTextRenderer *tr, VkCommandBuffer cmd,
-                          const char *url_text, int url_focused, float viewport_w, float viewport_h) {
+                          const char *url_text, int url_focused, int can_go_back, float viewport_w, float viewport_h) {
     sqw_renderer_draw_rect(vk, renderer, cmd, 0.0f, 0.0f, viewport_w, SQW_TOOLBAR_H,
         0.90f, 0.90f, 0.90f, viewport_w, viewport_h);
 
-    LayoutBox bar, go;
-    toolbar_geometry(viewport_w, &bar, &go);
+    LayoutBox back, bar, go;
+    toolbar_geometry(viewport_w, &back, &bar, &go);
+
+    /* Green when there's history to go back to, a dulled/greyed green
+     * when the stack is empty -- still visible, but reads as disabled. */
+    float bkr = can_go_back ? 0.13f : 0.55f, bkg = can_go_back ? 0.55f : 0.60f, bkb = can_go_back ? 0.20f : 0.55f;
+    sqw_renderer_draw_rect(vk, renderer, cmd, back.x, back.y, back.w, back.h, bkr, bkg, bkb, viewport_w, viewport_h);
+    sqw_text_draw_string(tr, back.x + 11.0f, back.y + 3.0f, "<", 1,
+        SQW_TEXT_SCALE, 1.0f, 1.0f, 1.0f, 1.0f, viewport_w, viewport_h);
 
     float br = url_focused ? 0.20f : 0.65f, bg = url_focused ? 0.45f : 0.65f, bb = url_focused ? 0.85f : 0.65f;
     sqw_renderer_draw_rect(vk, renderer, cmd, bar.x - 1.5f, bar.y - 1.5f, bar.w + 3.0f, bar.h + 3.0f,
@@ -504,6 +571,22 @@ int main(void) {
      * relative hrefs should resolve against next. */
     char pending_fetch_url[SQW_PATH_MAX];
     pending_fetch_url[0] = '\0';
+    /* Tracks the actual currently-loaded page, independent of the
+     * editable url_bar_text (which holds whatever the user is mid-typing
+     * and gets clobbered character-by-character -- see url_bar_text's own
+     * comment below) -- this is what actually gets pushed onto the Back
+     * button's history stack, and what a page navigated AWAY from is
+     * identified by. */
+    char current_url[SQW_PATH_MAX];
+    strncpy(current_url, SQW_INITIAL_PAGE, sizeof current_url - 1);
+    current_url[sizeof current_url - 1] = 0;
+    /* Heap-allocated, not a stack local (same rationale as vk/renderer/
+     * text_renderer above -- see that comment): SQW_HISTORY_MAX *
+     * SQW_PATH_MAX is tens of KB, exactly the size class this project
+     * already keeps off the C stack. Zeroed so every slot/count starts
+     * empty/0, never garbage. */
+    SqwHistoryStack *hist = (SqwHistoryStack *)malloc(sizeof(SqwHistoryStack));
+    memset(hist, 0, sizeof(*hist));
     char *initial_html = sqw_read_file(SQW_INITIAL_PAGE);
     if (!initial_html) {
         fprintf(stderr, "SQW: cannot open initial page %s\n", SQW_INITIAL_PAGE); fflush(stdout);
@@ -576,6 +659,19 @@ int main(void) {
         const char *ex = getenv("SQW_TEST_CLICK2_X");
         const char *ey = getenv("SQW_TEST_CLICK2_Y");
         if (ex && ey) { test_click2_x = atoi(ex); test_click2_y = atoi(ey); }
+    }
+    /* SQW_TEST_CLICK3_X/Y (frame 500, well after CLICK2's own frame 290 --
+     * plenty of margin for that navigation, local or network, to have
+     * settled): a THIRD synthetic click, added specifically to exercise
+     * the Back button end-to-end in headless/automated runs (click
+     * somewhere that navigates, click again, then click Back and confirm
+     * it actually lands back on the first page). Same real-event-loop
+     * rationale as SQW_TEST_CLICK_X/Y above. */
+    int test_click3_x = -1, test_click3_y = -1;
+    {
+        const char *ex = getenv("SQW_TEST_CLICK3_X");
+        const char *ey = getenv("SQW_TEST_CLICK3_Y");
+        if (ex && ey) { test_click3_x = atoi(ex); test_click3_y = atoi(ey); }
     }
     /* SQW_TEST_KEY: same rationale as SQW_TEST_CLICK_X/Y above -- names one
      * of "pagedown"/"pageup"/"home"/"end"/"up"/"down", pushed as a real
@@ -672,6 +768,24 @@ int main(void) {
             bu.button.x = (float)test_click2_x; bu.button.y = (float)test_click2_y;
             SDL_PushEvent(&bu);
         }
+        if (test_click3_x >= 0 && frame_count == 480) {
+            SDL_Event mv; memset(&mv, 0, sizeof mv);
+            mv.type = SDL_EVENT_MOUSE_MOTION;
+            mv.motion.x = (float)test_click3_x; mv.motion.y = (float)test_click3_y;
+            SDL_PushEvent(&mv);
+        }
+        if (test_click3_x >= 0 && frame_count == 500) {
+            SDL_Event bd; memset(&bd, 0, sizeof bd);
+            bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            bd.button.button = 1; bd.button.down = 1;
+            bd.button.x = (float)test_click3_x; bd.button.y = (float)test_click3_y;
+            SDL_PushEvent(&bd);
+            SDL_Event bu; memset(&bu, 0, sizeof bu);
+            bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            bu.button.button = 1; bu.button.down = 0;
+            bu.button.x = (float)test_click3_x; bu.button.y = (float)test_click3_y;
+            SDL_PushEvent(&bu);
+        }
         if (test_key != SDL_SCANCODE_UNKNOWN && frame_count == 30) {
             SDL_Event kd; memset(&kd, 0, sizeof kd);
             kd.type = SDL_EVENT_KEY_DOWN;
@@ -735,14 +849,24 @@ int main(void) {
             } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == 1) {
                 if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[button-down] x=%d y=%d\n", (int)ev.button.x, (int)ev.button.y); fflush(stderr); }
                 if (ev.button.y < SQW_TOOLBAR_H) {
-                    LayoutBox bar, go;
-                    toolbar_geometry(viewport_w, &bar, &go);
-                    if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[toolbar-click] bar=(%d,%d,%d,%d) go=(%d,%d,%d,%d)\n", (int)bar.x,(int)bar.y,(int)bar.w,(int)bar.h,(int)go.x,(int)go.y,(int)go.w,(int)go.h); fflush(stderr); }
-                    if (point_in_rect(ev.button.x, ev.button.y, &bar)) {
+                    LayoutBox back, bar, go;
+                    toolbar_geometry(viewport_w, &back, &bar, &go);
+                    if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[toolbar-click] back=(%d,%d,%d,%d) bar=(%d,%d,%d,%d) go=(%d,%d,%d,%d)\n", (int)back.x,(int)back.y,(int)back.w,(int)back.h,(int)bar.x,(int)bar.y,(int)bar.w,(int)bar.h,(int)go.x,(int)go.y,(int)go.w,(int)go.h); fflush(stderr); }
+                    if (point_in_rect(ev.button.x, ev.button.y, &back)) {
+                        url_bar_focused = 0;
+                        char popped_url[SQW_PATH_MAX];
+                        if (sqw_history_pop(hist, popped_url, sizeof popped_url)) {
+                            sqw_go_navigate(popped_url, 0, hist, current_url, &pending_fetch, pending_fetch_url,
+                                            &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h,
+                                            &scroll_x, &scroll_y, &hover_node, &active_node);
+                            strncpy(url_bar_text, popped_url, sizeof url_bar_text - 1);
+                            url_bar_text[sizeof url_bar_text - 1] = 0;
+                        }
+                    } else if (point_in_rect(ev.button.x, ev.button.y, &bar)) {
                         url_bar_focused = 1;
                     } else if (point_in_rect(ev.button.x, ev.button.y, &go)) {
                         url_bar_focused = 0;
-                        sqw_go_navigate(url_bar_text, &pending_fetch, pending_fetch_url,
+                        sqw_go_navigate(url_bar_text, 1, hist, current_url, &pending_fetch, pending_fetch_url,
                                         &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h,
                                         &scroll_x, &scroll_y, &hover_node, &active_node);
                     } else {
@@ -835,6 +959,7 @@ int main(void) {
                                      * leak it or race two responses against one DOM swap */
                                     sqw_net_result_free(pending_fetch);
                                 }
+                                sqw_history_push(hist, current_url);
                                 fprintf(stderr, "SQW: fetching %s ...\n", href); fflush(stdout);
                                 strncpy(pending_fetch_url, href, sizeof pending_fetch_url - 1);
                                 pending_fetch_url[sizeof pending_fetch_url - 1] = 0;
@@ -856,6 +981,7 @@ int main(void) {
                                 char full_url[SQW_PATH_MAX];
                                 snprintf(full_url, sizeof full_url, "%s%s", current_base_url, href);
                                 if (pending_fetch) sqw_net_result_free(pending_fetch);
+                                sqw_history_push(hist, current_url);
                                 fprintf(stderr, "SQW: fetching %s ...\n", full_url); fflush(stdout);
                                 strncpy(pending_fetch_url, full_url, sizeof pending_fetch_url - 1);
                                 pending_fetch_url[sizeof pending_fetch_url - 1] = 0;
@@ -866,8 +992,10 @@ int main(void) {
                                  * base -- see sqw_dirname()'s comment. */
                                 char full_path[SQW_PATH_MAX];
                                 snprintf(full_path, sizeof full_path, "%s%s", current_dir, href);
+                                sqw_history_push(hist, current_url);
                                 sqw_navigate_to(full_path, &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h);
                                 strncpy(url_bar_text, full_path, sizeof url_bar_text - 1); url_bar_text[sizeof url_bar_text - 1] = 0;
+                                strncpy(current_url, full_path, sizeof current_url - 1); current_url[sizeof current_url - 1] = 0;
                                 scroll_x = 0.0f; scroll_y = 0.0f;
                                 hover_node = NULL; active_node = NULL; /* old DOM (and target_node) is gone */
                             }
@@ -900,7 +1028,7 @@ int main(void) {
                     if (ulen > 0) url_bar_text[ulen - 1] = 0;
                 } else if (ev.key.scancode == SDL_SCANCODE_RETURN) {
                     url_bar_focused = 0;
-                    sqw_go_navigate(url_bar_text, &pending_fetch, pending_fetch_url,
+                    sqw_go_navigate(url_bar_text, 1, hist, current_url, &pending_fetch, pending_fetch_url,
                                     &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h,
                                     &scroll_x, &scroll_y, &hover_node, &active_node);
                 } else if (ev.key.scancode == SDL_SCANCODE_ESCAPE) {
@@ -960,6 +1088,15 @@ int main(void) {
                 if (fetch_success) {
                     sqw_navigate_to_html(fetch_body, pending_fetch_url, &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h);
                     strncpy(url_bar_text, pending_fetch_url, sizeof url_bar_text - 1); url_bar_text[sizeof url_bar_text - 1] = 0;
+                    /* current_url tracks whatever page is ACTUALLY loaded,
+                     * so it's only updated here on a successful fetch, not
+                     * when the fetch was merely requested (that's where
+                     * the Back-button history push already happened, see
+                     * the anchor-click/sqw_go_navigate call sites) -- a
+                     * failed fetch leaves current_url (and the Back stack)
+                     * exactly as they were, so Back still correctly
+                     * retreats to wherever the user actually was. */
+                    strncpy(current_url, pending_fetch_url, sizeof current_url - 1); current_url[sizeof current_url - 1] = 0;
                     scroll_x = 0.0f; scroll_y = 0.0f;
                     hover_node = NULL; active_node = NULL; /* old DOM is gone */
                 } else {
@@ -986,7 +1123,7 @@ int main(void) {
         draw_layout_text(text_renderer, vk, renderer, cmd, &boxes, viewport_w, viewport_h, scroll_x, draw_scroll_y);
         LayoutBox vthumb_dummy, hthumb_dummy;
         draw_scrollbars(vk, renderer, cmd, boxes.content_w, boxes.content_h, viewport_w, viewport_h, scroll_x, scroll_y, &vthumb_dummy, &hthumb_dummy);
-        draw_toolbar(vk, renderer, text_renderer, cmd, url_bar_text, url_bar_focused, viewport_w, viewport_h);
+        draw_toolbar(vk, renderer, text_renderer, cmd, url_bar_text, url_bar_focused, hist->count > 0, viewport_w, viewport_h);
         sqw_text_renderer_flush(vk, text_renderer, cmd, viewport_w, viewport_h);
         sqw_vk_end_frame(vk, cmd, imageIndex);
 
