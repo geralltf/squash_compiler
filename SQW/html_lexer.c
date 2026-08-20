@@ -2,7 +2,11 @@
 #include <string.h>
 #include <ctype.h>
 
-static const char *RAW_TEXT_TAGS[] = { "script", "style", 0 };
+/* "textarea" belongs here too, real HTML5 spec: its content is raw
+ * replaceable text (its OWN initial value), never nested markup -- a
+ * literal "<b>" typed inside a real <textarea> must show up as the four
+ * characters "<b>" in the box, not get parsed as a bold tag. */
+static const char *RAW_TEXT_TAGS[] = { "script", "style", "textarea", 0 };
 static const char *VOID_TAGS[] = {
     "area", "base", "br", "col", "embed", "hr", "img", "input",
     "link", "meta", "param", "source", "track", "wbr", 0

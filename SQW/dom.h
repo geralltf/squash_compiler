@@ -51,14 +51,41 @@ typedef struct DomNode {
     int css_has_color; float css_color[3];
     int css_has_bg;    float css_bg[3];
     int css_flex_direction;   /* CssFlexDirection */
+    int css_flex_wrap;         /* 0 = nowrap (CSS default), 1 = wrap */
     int css_justify;          /* CssJustify */
     int css_align;             /* CssAlign */
     float css_gap;
+    /* Heuristic detection of the extremely common real-world "visually
+     * hidden, screen-reader-only" CSS pattern (position:absolute +
+     * clip:rect(...) or a ~1x1px box) -- see css.c's own comment on why
+     * this exists and exactly what it triggers on. Real position:
+     * absolute/fixed (taking an element OUT of normal flow and placing
+     * it via top/left/right/bottom) is NOT implemented in general; this
+     * is only ever used to detect-and-hide that one specific pattern. */
+    int css_position_absolute;
+    int css_has_clip;
     /* Raw, unparsed "grid-template-columns" value (e.g. "repeat(4, 1fr)"
      * or "200px 1fr 200px") -- layout.c's own grid code parses this at
      * layout time, not here, since it's the one place track sizes get
      * resolved against a real available width. Empty string if unset. */
     char css_grid_template_columns[128];
+
+    /* Live form-control state -- meaningful only on <input>/<textarea>
+     * (and read by their enclosing <form> at submit time, see
+     * sqw_main.c's own form-submission code). Lives directly on the node
+     * for the same reason the interactive-state fields above do: the DOM
+     * already lives for the whole page's lifetime, so there's no need for
+     * a side-table keyed by node pointer. form_value is the field's
+     * CURRENT text (seeded from the "value" attribute for <input>, or
+     * from <textarea>'s own initial text-node content, then mutated
+     * live by typing -- see sqw_main.c's own text-input handling);
+     * form_checked is a checkbox/radio's current checked state (seeded
+     * from a real "checked" attribute); form_focused marks the ONE
+     * input/textarea (if any) currently receiving typed keyboard input,
+     * mutually exclusive with the URL bar's own focus. */
+    char form_value[512];
+    int form_checked;
+    int form_focused;
 } DomNode;
 
 DomNode *dom_parse(const char *html);

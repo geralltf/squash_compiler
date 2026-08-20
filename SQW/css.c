@@ -466,10 +466,13 @@ static void css_set_default_style(DomNode *el) {
     el->css_padding[0]=el->css_padding[1]=el->css_padding[2]=el->css_padding[3]=0.0f;
     el->css_has_color = 0; el->css_has_bg = 0;
     el->css_flex_direction = CSS_FLEX_ROW;
+    el->css_flex_wrap = 0;
     el->css_justify = CSS_JUSTIFY_START;
     el->css_align = CSS_ALIGN_START;
     el->css_gap = 0.0f;
     el->css_grid_template_columns[0] = 0;
+    el->css_position_absolute = 0;
+    el->css_has_clip = 0;
 }
 
 static void css_apply_decl(DomNode *el, const char *name, const char *value) {
@@ -517,6 +520,20 @@ static void css_apply_decl(DomNode *el, const char *name, const char *value) {
         if (css_parse_color(value, rgb)) { el->css_bg[0]=rgb[0]; el->css_bg[1]=rgb[1]; el->css_bg[2]=rgb[2]; el->css_has_bg = 1; }
     } else if (strcmp(name, "flex-direction") == 0) {
         el->css_flex_direction = strstr(value, "column") ? CSS_FLEX_COLUMN : CSS_FLEX_ROW;
+    } else if (strcmp(name, "flex-wrap") == 0) {
+        el->css_flex_wrap = (strstr(value, "nowrap") == 0 && strstr(value, "wrap") != 0) ? 1 : 0;
+    } else if (strcmp(name, "flex-flow") == 0) {
+        /* Shorthand for flex-direction + flex-wrap in one value, e.g.
+         * "row wrap" -- real CSS lets either order/either-alone too;
+         * this covers the common "<direction> <wrap>" and
+         * "<wrap> <direction>" forms via independent substring checks
+         * rather than requiring a specific order. */
+        el->css_flex_direction = strstr(value, "column") ? CSS_FLEX_COLUMN : CSS_FLEX_ROW;
+        el->css_flex_wrap = (strstr(value, "nowrap") == 0 && strstr(value, "wrap") != 0) ? 1 : 0;
+    } else if (strcmp(name, "position") == 0) {
+        el->css_position_absolute = (strstr(value, "absolute") || strstr(value, "fixed")) ? 1 : 0;
+    } else if (strcmp(name, "clip") == 0) {
+        el->css_has_clip = (strstr(value, "auto") == 0) ? 1 : 0;
     } else if (strcmp(name, "justify-content") == 0) {
         if (strstr(value, "center")) el->css_justify = CSS_JUSTIFY_CENTER;
         else if (strstr(value, "space-between")) el->css_justify = CSS_JUSTIFY_BETWEEN;
@@ -590,6 +607,27 @@ static void css_apply_element(DomNode *el, CssStylesheet *sheet) {
         for (di = 0; di < tmp.decl_count; di++) {
             css_apply_decl(el, tmp.decls[di].name, tmp.decls[di].value);
         }
+    }
+
+    /* Heuristic: the extremely common real-world "visually hidden,
+     * screen-reader-only" CSS pattern -- position:absolute combined with
+     * either a real clip rect or a ~1x1px box (the two most common ways
+     * real sites accessibly hide duplicate/decorative text without
+     * display:none, which screen readers themselves treat as "not
+     * present" and therefore don't use). This project doesn't implement
+     * real position:absolute (out-of-flow placement via top/left/right/
+     * bottom) at all, so left alone such an element would render, wrong,
+     * as normal in-flow content, typically overlapping whatever it was
+     * meant to sit invisibly on top of -- confirmed as the real cause of
+     * a genuine visual bug (a page's own logo heading text overlapping
+     * its own tagline) hit while testing this engine against real
+     * Wikipedia markup. Checked once, after every declaration (matched
+     * rules + inline style) has been applied, so it sees the final
+     * computed position/clip/width/height regardless of which
+     * declaration set which property. */
+    if (el->css_position_absolute &&
+        (el->css_has_clip || (el->css_has_width && el->css_width <= 2.0f && el->css_has_height && el->css_height <= 2.0f))) {
+        el->css_display = CSS_DISPLAY_NONE;
     }
 }
 

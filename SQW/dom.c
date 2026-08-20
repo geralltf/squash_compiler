@@ -63,6 +63,29 @@ DomNode *dom_parse(const char *html) {
                 strncpy(el->attrs[i].value, tok->attrs[i].value, HTML_MAX_ATTR_LEN - 1);
                 el->attrs[i].value[HTML_MAX_ATTR_LEN - 1] = 0;
             }
+            /* Seed live form-control state right at parse time for
+             * <input> (its "value"/"checked" attributes are already fully
+             * known here) -- see dom.h's own comment on these fields.
+             * <textarea>'s own form_value is seeded slightly later, once
+             * its raw-text content (a child text node, parsed AFTER this
+             * TAG_OPEN token) actually exists -- see sqw_main.c's
+             * sqw_apply_css(), which already walks the whole tree once
+             * right after dom_parse() returns and is the natural place
+             * for that one extra step. */
+            if (strcmp(el->tag, "input") == 0) {
+                const char *v = dom_get_attr(el, "value");
+                if (v) { strncpy(el->form_value, v, sizeof el->form_value - 1); el->form_value[sizeof el->form_value - 1] = 0; }
+                else {
+                    /* Real HTML5 default: a checkbox/radio with no
+                     * explicit "value" attribute still submits "on"
+                     * when checked, not an empty string. */
+                    const char *ty = dom_get_attr(el, "type");
+                    if (ty && (strcmp(ty, "checkbox") == 0 || strcmp(ty, "radio") == 0)) {
+                        strncpy(el->form_value, "on", sizeof el->form_value - 1);
+                    }
+                }
+                if (dom_get_attr(el, "checked")) el->form_checked = 1;
+            }
             dom_node_add_child(top, el);
             if (!tok->self_closing && depth < DOM_MAX_STACK) {
                 stack[depth++] = el;

@@ -22,6 +22,18 @@ typedef enum {
     SQW_BOX_BUTTON,
     SQW_BOX_PRE,
     SQW_BOX_TEXT,    /* one word (normal flow) or one source line (inside <pre>) */
+    /* <input type="text"/"password"/"email"/"search"/"number"/... (any
+     * type not specifically listed below falls back to this -- a plain
+     * single-line editable text box), and <textarea> (a multi-line one,
+     * distinguished from SQW_BOX_INPUT_TEXT purely by node->tag at draw
+     * time, both editable the same way). */
+    SQW_BOX_INPUT_TEXT,
+    SQW_BOX_TEXTAREA,
+    /* <input type="checkbox"> / type="radio"> -- distinguished by
+     * node's own "type" attribute at draw time (a checkbox draws a
+     * square check mark, a radio a filled dot), both toggle
+     * node->form_checked the same way. */
+    SQW_BOX_INPUT_CHECK,
     SQW_BOX_OTHER
 } SqwBoxKind;
 

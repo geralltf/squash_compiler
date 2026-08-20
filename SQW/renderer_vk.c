@@ -17,6 +17,14 @@ static void box_color(SqwBoxKind kind, float *r, float *g, float *b) {
         case SQW_BOX_IMG:    *r = 0.85f; *g = 0.80f; *b = 0.20f; break; /* yellow */
         case SQW_BOX_BUTTON: *r = 0.75f; *g = 0.75f; *b = 0.78f; break; /* light gray button face */
         case SQW_BOX_PRE:    *r = 0.93f; *g = 0.93f; *b = 0.90f; break; /* pale code-block background */
+        /* Real form widgets: white editable field face (text input,
+         * textarea) and a plain white checkbox/radio face -- both get a
+         * darker border drawn separately (see sqw_renderer_draw()'s own
+         * comment) so they read as "boxes to interact with" against the
+         * page background, matching default browser widget chrome. */
+        case SQW_BOX_INPUT_TEXT:  *r = 1.00f; *g = 1.00f; *b = 1.00f; break;
+        case SQW_BOX_TEXTAREA:    *r = 1.00f; *g = 1.00f; *b = 1.00f; break;
+        case SQW_BOX_INPUT_CHECK: *r = 1.00f; *g = 1.00f; *b = 1.00f; break;
         default:             *r = 0.45f; *g = 0.45f; *b = 0.45f; break; /* gray (other) */
     }
 }

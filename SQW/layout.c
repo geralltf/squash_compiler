@@ -15,6 +15,15 @@
 #define SQW_IMG_SIZE 64.0f
 #define SQW_PAD 6.0f
 #define SQW_INLINE_GAP 6.0f
+/* Form-control default sizing -- real browsers size these from the
+ * platform widget toolkit; we don't have one, so these are fixed,
+ * reasonable-looking defaults, overridden by explicit CSS width/height
+ * where the element's computed style has one. */
+#define SQW_CHECK_SIZE 16.0f
+#define SQW_INPUT_MIN_W 40.0f
+#define SQW_INPUT_DEFAULT_W 150.0f
+#define SQW_TEXTAREA_DEFAULT_W 300.0f
+#define SQW_TEXTAREA_DEFAULT_H 80.0f
 
 /* Real CSS box-model + display support (block/inline/inline-block/none/
  * flex/grid), driven entirely by each DomNode's own computed style (see
@@ -57,6 +66,12 @@ typedef struct {
     float cursor_x, cursor_y;
     float line_h;
     int box_index;   /* index into out->boxes for this frame's own box, -1 for the synthetic doc root */
+    /* This frame's own node's index within its PARENT's children[]
+     * array -- needed at pop time so a flex-row parent can look up
+     * which row (parent->flex_row[child_index_in_parent]) this child
+     * belonged to (see layout_compute()'s own pop-time comment); -1 for
+     * the synthetic doc root, which has no parent frame to report to. */
+    int child_index_in_parent;
     int is_center;
     int is_pre;
     int *line_boxes;
@@ -71,12 +86,25 @@ typedef struct {
 
     /* flex-direction:row support -- precomputed once when the frame is
      * pushed (see compute_flex_row_positions()), indexed by the child's
-     * own position in node->children[] (parallel array, only entries for
+     * own position in node->children[] (parallel arrays, only entries for
      * participating element children are meaningful). NULL/0 unless this
      * frame's own node has css_display == CSS_DISPLAY_FLEX and
-     * css_flex_direction == CSS_FLEX_ROW. */
+     * css_flex_direction == CSS_FLEX_ROW.
+     *
+     * flex_row[] is which wrapped row each item belongs to (always all
+     * 0 when css_flex_wrap is off, i.e. a single row -- real CSS
+     * flex-wrap:nowrap, the default) -- X per item is fully known
+     * up-front (real widths + real per-row justify-content, computed by
+     * compute_flex_row_positions() before any item is laid out), but Y
+     * is NOT: same problem as display:grid's own rows (an item's real
+     * height isn't known until its own subtree finishes laying out), so
+     * it's tracked live the same way, via flex_row_y/flex_row_max_h/
+     * flex_row_at below as each item is popped. */
     int is_flex_row;
     float *flex_x, *flex_w;
+    int *flex_row;
+    int flex_row_at;
+    float flex_row_y, flex_row_max_h;
 
     /* display:grid support -- column tracks resolved once at push time
      * (real px), row height/position tracked live as items are placed
@@ -110,6 +138,12 @@ static SqwBoxKind kind_for_tag(const char *tag) {
     if (strcmp(tag, "img") == 0) return SQW_BOX_IMG;
     if (strcmp(tag, "button") == 0) return SQW_BOX_BUTTON;
     if (strcmp(tag, "pre") == 0) return SQW_BOX_PRE;
+    if (strcmp(tag, "textarea") == 0) return SQW_BOX_TEXTAREA;
+    /* Only reached if some CSS rule forces display:block/etc on an
+     * <input> -- the normal (display:inline, the real HTML5 default)
+     * path never calls kind_for_tag() for <input>, see the dedicated
+     * branch in layout_compute() which reads its "type" attribute too. */
+    if (strcmp(tag, "input") == 0) return SQW_BOX_INPUT_TEXT;
     /* Every other atomic-inline HTML5 tag (span, strong, em, b, i, small,
      * label, u, mark, code -- see is_atomic_inline_tag()) is rendered as
      * a generic SQW_BOX_SPAN: one indivisible inline text run, no
@@ -182,8 +216,9 @@ static void layout_list_push(LayoutList *out, DomNode *node, SqwBoxKind kind, fl
  * AddressSanitizer). Moving the store sequence into its own small
  * function, called with a POINTER through the whole frame rather than
  * inlined field-by-field in the crashing context, avoids it. */
-static void init_block_frame(LayoutFrame *nf, DomNode *child, float bx, float by, float bw, int idx) {
+static void init_block_frame(LayoutFrame *nf, DomNode *child, float bx, float by, float bw, int idx, int child_index_in_parent) {
     nf->node = child; nf->next_child = 0;
+    nf->child_index_in_parent = child_index_in_parent;
     nf->x = bx; nf->y = by; nf->avail_w = bw;
     nf->cursor_x = 0; nf->cursor_y = 0; nf->line_h = 0;
     nf->box_index = idx;
@@ -191,7 +226,8 @@ static void init_block_frame(LayoutFrame *nf, DomNode *child, float bx, float by
     nf->is_pre = (strcmp(child->tag, "pre") == 0);
     nf->line_boxes = 0; nf->line_box_count = 0; nf->line_box_cap = 0;
     nf->margin_top = 0; nf->margin_bottom = 0; nf->pad_top = 0; nf->pad_bottom = 0;
-    nf->is_flex_row = 0; nf->flex_x = 0; nf->flex_w = 0;
+    nf->is_flex_row = 0; nf->flex_x = 0; nf->flex_w = 0; nf->flex_row = 0;
+    nf->flex_row_at = 0; nf->flex_row_y = 0; nf->flex_row_max_h = 0;
     nf->is_grid = 0; nf->grid_col_x = 0; nf->grid_col_w = 0;
     nf->grid_ncols = 0; nf->grid_col_index = 0; nf->grid_row_y = 0; nf->grid_row_max_h = 0;
 }
@@ -395,12 +431,22 @@ static int parse_grid_tracks(const char *value, float avail_w, float *out_widths
 
 /* ---- flex row up-front pass ---- */
 
-/* Fills flex_x[]/flex_w[] (parallel to node->children[], only meaningful
- * for participating element children) with each item's real x/width
- * along the row, per css_justify -- see this file's own top comment for
- * exactly what's real here (explicit widths + even split of the rest)
- * and what's not (align-items). */
-static void compute_flex_row_positions(DomNode *node, float avail_w, float *flex_x, float *flex_w) {
+/* Fills flex_x[]/flex_w[]/flex_row[] (parallel to node->children[], only
+ * meaningful for participating element children) with each item's real
+ * x/width/row-index along the row, per css_justify (applied PER ROW when
+ * wrapping) -- see this file's own top comment for exactly what's real
+ * here and what's not (align-items on either axis). Two passes: first
+ * assign each item a natural width (explicit css_width, else a
+ * shrink-to-fit heuristic -- real CSS's own default flex-basis is
+ * content-based, not an even split of the container, which only makes
+ * sense for a single guaranteed-one-row case) and a row via simple greedy
+ * wrapping (only when css_flex_wrap is on -- off, the CSS default, always
+ * produces exactly one row, matching flex-wrap:nowrap's real behavior of
+ * never breaking, items simply overflowing instead); second, apply
+ * justify-content within each row independently, using that row's own
+ * real total width. Returns the number of rows produced (always >= 1 for
+ * a non-empty container). */
+static int compute_flex_row_positions(DomNode *node, float avail_w, float *flex_x, float *flex_w, int *flex_row) {
     int n = node->child_count;
     int *idx = (int *)malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
     int cnt = 0, i;
@@ -410,36 +456,66 @@ static void compute_flex_row_positions(DomNode *node, float avail_w, float *flex
         if (c->css_display == CSS_DISPLAY_NONE) continue;
         idx[cnt++] = i;
     }
-    if (cnt == 0) { free(idx); return; }
+    if (cnt == 0) { free(idx); return 0; }
 
     float gap = node->css_gap;
-    float total_explicit = 0.0f; int n_auto = 0;
+    float *w = (float *)malloc((size_t)cnt * sizeof(float));
+    int *row = (int *)malloc((size_t)cnt * sizeof(int));
+
     for (i = 0; i < cnt; i++) {
         DomNode *c = node->children[idx[i]];
-        if (c->css_has_width) total_explicit += c->css_width; else n_auto++;
+        if (c->css_has_width) w[i] = c->css_width;
+        else {
+            /* Shrink-to-fit heuristic: content width + a fixed allowance
+             * for whatever padding/border a real item like this would
+             * have, falling back to a fixed reasonable default (a
+             * "chip"-sized box) for an item with no direct text of its
+             * own (e.g. one whose own text lives in a further-nested
+             * child, which direct_text_width() deliberately doesn't
+             * descend into -- see that function's own comment). Not real
+             * intrinsic sizing, but far better than either a fixed
+             * constant for everything or an even split that breaks down
+             * the moment wrapping is possible. */
+            float tw = direct_text_width(c);
+            w[i] = tw > 0.0f ? tw + 24.0f : 120.0f;
+        }
+        if (w[i] > avail_w) w[i] = avail_w;
     }
-    float remaining = avail_w - gap * (float)(cnt - 1) - total_explicit;
-    if (remaining < 0) remaining = 0;
-    float auto_w = n_auto > 0 ? remaining / (float)n_auto : 0.0f;
 
-    float used = total_explicit + auto_w * (float)n_auto + gap * (float)(cnt - 1);
-    float extra = avail_w - used;
-    if (extra < 0) extra = 0;
-    float start_x = 0.0f, spacing_extra = 0.0f;
-    if (node->css_justify == CSS_JUSTIFY_CENTER) start_x = extra / 2.0f;
-    else if (node->css_justify == CSS_JUSTIFY_END) start_x = extra;
-    else if (node->css_justify == CSS_JUSTIFY_BETWEEN && cnt > 1) spacing_extra = extra / (float)(cnt - 1);
-    else if (node->css_justify == CSS_JUSTIFY_AROUND && cnt > 0) { start_x = extra / (float)(cnt * 2); spacing_extra = extra / (float)cnt; }
-
-    float cur = start_x;
+    int cur_row = 0;
+    float cur_x = 0.0f;
     for (i = 0; i < cnt; i++) {
-        DomNode *c = node->children[idx[i]];
-        float w = c->css_has_width ? c->css_width : auto_w;
-        flex_x[idx[i]] = cur;
-        flex_w[idx[i]] = w;
-        cur = cur + w + gap + spacing_extra;
+        if (node->css_flex_wrap && cur_x > 0.0f && cur_x + w[i] > avail_w) { cur_row++; cur_x = 0.0f; }
+        row[i] = cur_row;
+        cur_x = cur_x + w[i] + gap;
     }
-    free(idx);
+    int num_rows = cur_row + 1;
+
+    int r;
+    for (r = 0; r < num_rows; r++) {
+        float total_w = 0.0f; int row_cnt = 0;
+        for (i = 0; i < cnt; i++) if (row[i] == r) { total_w += w[i]; row_cnt++; }
+        float used = total_w + gap * (float)(row_cnt > 1 ? row_cnt - 1 : 0);
+        float extra = avail_w - used;
+        if (extra < 0.0f) extra = 0.0f;
+        float start_x = 0.0f, spacing_extra = 0.0f;
+        if (node->css_justify == CSS_JUSTIFY_CENTER) start_x = extra / 2.0f;
+        else if (node->css_justify == CSS_JUSTIFY_END) start_x = extra;
+        else if (node->css_justify == CSS_JUSTIFY_BETWEEN && row_cnt > 1) spacing_extra = extra / (float)(row_cnt - 1);
+        else if (node->css_justify == CSS_JUSTIFY_AROUND && row_cnt > 0) { start_x = extra / (float)(row_cnt * 2); spacing_extra = extra / (float)row_cnt; }
+
+        float cur = start_x;
+        for (i = 0; i < cnt; i++) {
+            if (row[i] != r) continue;
+            flex_x[idx[i]] = cur;
+            flex_w[idx[i]] = w[i];
+            flex_row[idx[i]] = r;
+            cur = cur + w[i] + gap + spacing_extra;
+        }
+    }
+
+    free(w); free(row); free(idx);
+    return num_rows;
 }
 
 void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutList *out) {
@@ -456,12 +532,14 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
     stack[stack_top].x = 0; stack[stack_top].y = 0; stack[stack_top].avail_w = viewport_w;
     stack[stack_top].cursor_x = 0; stack[stack_top].cursor_y = 0; stack[stack_top].line_h = 0;
     stack[stack_top].box_index = -1;
+    stack[stack_top].child_index_in_parent = -1;
     stack[stack_top].is_center = 0;
     stack[stack_top].is_pre = 0;
     stack[stack_top].line_boxes = 0; stack[stack_top].line_box_count = 0; stack[stack_top].line_box_cap = 0;
     stack[stack_top].margin_top = 0; stack[stack_top].margin_bottom = 0;
     stack[stack_top].pad_top = 0; stack[stack_top].pad_bottom = 0;
-    stack[stack_top].is_flex_row = 0; stack[stack_top].flex_x = 0; stack[stack_top].flex_w = 0;
+    stack[stack_top].is_flex_row = 0; stack[stack_top].flex_x = 0; stack[stack_top].flex_w = 0; stack[stack_top].flex_row = 0;
+    stack[stack_top].flex_row_at = 0; stack[stack_top].flex_row_y = 0; stack[stack_top].flex_row_max_h = 0;
     stack[stack_top].is_grid = 0; stack[stack_top].grid_col_x = 0; stack[stack_top].grid_col_w = 0;
     stack[stack_top].grid_ncols = 0; stack[stack_top].grid_col_index = 0;
     stack[stack_top].grid_row_y = 0; stack[stack_top].grid_row_max_h = 0;
@@ -473,9 +551,10 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
 
         if (f->next_child >= node->child_count) {
             finalize_line(f, out);
-            /* If this was a grid container with an unfinished (partial)
-             * last row, its height still needs folding in. */
+            /* If this was a grid/flex-row container with an unfinished
+             * (partial) last row, its height still needs folding in. */
             if (f->is_grid && f->grid_row_max_h > 0) f->cursor_y = f->grid_row_y + f->grid_row_max_h;
+            if (f->is_flex_row && f->flex_row_max_h > 0) f->cursor_y = f->flex_row_y + f->flex_row_max_h;
             float content_h = f->cursor_y + f->line_h;
             float box_h = content_h + f->pad_top + f->pad_bottom;
             if (f->box_index >= 0) {
@@ -486,6 +565,7 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
             if (f->line_boxes) free(f->line_boxes);
             if (f->flex_x) free(f->flex_x);
             if (f->flex_w) free(f->flex_w);
+            if (f->flex_row) free(f->flex_row);
             if (f->grid_col_x) free(f->grid_col_x);
             if (f->grid_col_w) free(f->grid_col_w);
             stack_top--;
@@ -501,6 +581,28 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
                         parent->grid_row_max_h = 0;
                         parent->grid_col_index = 0;
                     }
+                } else if (parent->is_flex_row && parent->flex_row && f->child_index_in_parent >= 0) {
+                    int this_row = parent->flex_row[f->child_index_in_parent];
+                    /* Advance to the next row's Y the moment we pop the
+                     * FIRST item belonging to a NEW row (found by checking
+                     * whether the row this item belongs to differs from
+                     * the row the frame is currently tracking) -- items
+                     * are always popped in the same left-to-right,
+                     * row-by-row order they were assigned in (see
+                     * compute_flex_row_positions()), so this is exactly
+                     * the row boundary, without needing to know row item
+                     * COUNTS up front the way display:grid's fixed column
+                     * count lets it. Checked BEFORE folding this item's
+                     * own height in, so a new row's first item's height
+                     * starts that row's own tracking, not the OLD row's. */
+                    if (this_row != parent->flex_row_at) {
+                        parent->flex_row_y = parent->flex_row_y + parent->flex_row_max_h + parent->node->css_gap;
+                        parent->flex_row_max_h = total;
+                        parent->flex_row_at = this_row;
+                    } else if (total > parent->flex_row_max_h) {
+                        parent->flex_row_max_h = total;
+                    }
+                    parent->cursor_y = parent->flex_row_y + parent->flex_row_max_h;
                 } else {
                     parent->cursor_y = parent->cursor_y + total;
                 }
@@ -531,6 +633,34 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
             spec.kind = SQW_BOX_IMG; spec.w = SQW_IMG_SIZE; spec.h = SQW_IMG_SIZE;
             spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP;
             place_inline_run(f, out, child, &spec);
+        } else if (child->css_display == CSS_DISPLAY_INLINE && strcmp(child->tag, "input") == 0) {
+            const char *type = dom_get_attr(child, "type");
+            PlaceSpec spec;
+            spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP;
+            if (type && (strcmp(type, "checkbox") == 0 || strcmp(type, "radio") == 0)) {
+                spec.kind = SQW_BOX_INPUT_CHECK; spec.w = SQW_CHECK_SIZE; spec.h = SQW_CHECK_SIZE;
+            } else if (type && (strcmp(type, "submit") == 0 || strcmp(type, "button") == 0 || strcmp(type, "reset") == 0)) {
+                float w = sqw_text_measure(child->form_value, (int)strlen(child->form_value), SQW_TEXT_SCALE) + 16.0f;
+                if (w < SQW_INPUT_MIN_W) w = SQW_INPUT_MIN_W;
+                spec.kind = SQW_BOX_BUTTON; spec.w = w; spec.h = SQW_LINE_H + 4.0f;
+            } else if (type && strcmp(type, "hidden") == 0) {
+                continue; /* never rendered/laid out -- real HTML5 behavior */
+            } else {
+                /* text/password/email/search/number/tel/url/date/... and
+                 * any other/unrecognized type: real HTML5 falls back to a
+                 * plain single-line text box for anything it doesn't
+                 * specifically special-case too. */
+                float w = child->css_has_width ? child->css_width : SQW_INPUT_DEFAULT_W;
+                spec.kind = SQW_BOX_INPUT_TEXT; spec.w = w; spec.h = SQW_LINE_H + 4.0f;
+            }
+            place_inline_run(f, out, child, &spec);
+        } else if (child->css_display == CSS_DISPLAY_INLINE && strcmp(child->tag, "textarea") == 0) {
+            float w = child->css_has_width ? child->css_width : SQW_TEXTAREA_DEFAULT_W;
+            float h = child->css_has_height ? child->css_height : SQW_TEXTAREA_DEFAULT_H;
+            PlaceSpec spec;
+            spec.kind = SQW_BOX_TEXTAREA; spec.w = w; spec.h = h;
+            spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP;
+            place_inline_run(f, out, child, &spec);
         } else if (child->css_display == CSS_DISPLAY_INLINE && is_atomic_inline_tag(child->tag)) {
             float w = direct_text_width(child);
             if (w < 4.0f) w = 4.0f;
@@ -554,7 +684,7 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
             if (f->is_flex_row && f->flex_x && f->flex_w) {
                 bx = f->x + f->flex_x[child_index_in_parent];
                 bw = f->flex_w[child_index_in_parent];
-                by = f->y + margin_top;
+                by = f->y + f->flex_row_y + margin_top;
             } else if (f->is_grid && f->grid_col_x && f->grid_col_w) {
                 bx = f->x + f->grid_col_x[f->grid_col_index];
                 bw = f->grid_col_w[f->grid_col_index];
@@ -578,7 +708,7 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
             float content_x = bx + pad_left;
             float content_w = bw - pad_left - pad_right;
             if (content_w < 0) content_w = 0;
-            init_block_frame(&stack[stack_top], child, content_x, by, content_w, idx);
+            init_block_frame(&stack[stack_top], child, content_x, by, content_w, idx, child_index_in_parent);
             stack[stack_top].margin_top = margin_top;
             stack[stack_top].margin_bottom = margin_bottom;
             stack[stack_top].pad_top = pad_top;
@@ -589,7 +719,8 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
                 int n = child->child_count > 0 ? child->child_count : 1;
                 stack[stack_top].flex_x = (float *)calloc((size_t)n, sizeof(float));
                 stack[stack_top].flex_w = (float *)calloc((size_t)n, sizeof(float));
-                compute_flex_row_positions(child, content_w, stack[stack_top].flex_x, stack[stack_top].flex_w);
+                stack[stack_top].flex_row = (int *)calloc((size_t)n, sizeof(int));
+                compute_flex_row_positions(child, content_w, stack[stack_top].flex_x, stack[stack_top].flex_w, stack[stack_top].flex_row);
             } else if (child->css_display == CSS_DISPLAY_GRID && child->css_grid_template_columns[0]) {
                 float widths[16];
                 int ncols = parse_grid_tracks(child->css_grid_template_columns, content_w, widths, 16);

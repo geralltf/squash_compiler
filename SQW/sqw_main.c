@@ -190,6 +190,24 @@ static void sqw_apply_css(DomNode *root) {
                     DomNode *tc = child->children[i];
                     if (dom_is_text(tc)) css_parse_into(&sheet, tc->text);
                 }
+            } else if (strcmp(child->tag, "textarea") == 0) {
+                /* <textarea>'s initial value is its own raw-text content
+                 * (a real HTML5 rule -- see html_lexer.c's own RAW_TEXT_TAGS
+                 * comment) -- <input>'s equivalent ("value" attribute) is
+                 * already seeded at parse time (dom.c), this is the one
+                 * remaining place a form control's initial value comes
+                 * from, done here since it's the first point after
+                 * dom_parse() where a tree walk like this one already
+                 * exists to piggyback on. */
+                int i;
+                for (i = 0; i < child->child_count; i++) {
+                    DomNode *tc = child->children[i];
+                    if (dom_is_text(tc)) {
+                        strncpy(child->form_value, tc->text, sizeof child->form_value - 1);
+                        child->form_value[sizeof child->form_value - 1] = 0;
+                        break;
+                    }
+                }
             }
             if (top >= cap) {
                 cap *= 2;
@@ -378,10 +396,77 @@ static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer 
             sqw_text_draw_string(tr, bx, by, label, (int)strlen(label),
                 SQW_TEXT_SCALE, tr_, tg_, tb_, 1.0f, viewport_w, viewport_h);
         } else if (b->kind == SQW_BOX_BUTTON) {
-            concat_direct_text(b->node, label, sizeof label);
+            /* Covers both a real <button> AND <input type="submit"/"button">
+             * (see layout.c's own dispatch) -- the latter's label comes
+             * from its "value" attribute (already mirrored into
+             * form_value at parse time, see dom.c), not a text child, so
+             * concat_direct_text (which only reads DIRECT text-node
+             * children) would find nothing for it. */
+            const char *btn_label; int btn_label_len;
+            if (strcmp(b->node->tag, "input") == 0) {
+                btn_label = b->node->form_value; btn_label_len = (int)strlen(b->node->form_value);
+            } else {
+                btn_label_len = concat_direct_text(b->node, label, sizeof label);
+                btn_label = label;
+            }
             float tr_col = b->node->active ? 0.9f : 0.1f;
-            sqw_text_draw_string(tr, bx + 4.0f, by + 2.0f, label, (int)strlen(label),
+            sqw_text_draw_string(tr, bx + 4.0f, by + 2.0f, btn_label, btn_label_len,
                 SQW_TEXT_SCALE, tr_col, tr_col, tr_col, 1.0f, viewport_w, viewport_h);
+        } else if (b->kind == SQW_BOX_INPUT_TEXT || b->kind == SQW_BOX_TEXTAREA) {
+            /* Thin border so the white field face (see renderer_vk.c's
+             * box_color()) reads as an editable widget against the page
+             * background -- four 1px-thick strips instead of pulling in a
+             * hollow-rect primitive that doesn't otherwise exist here. A
+             * brighter blue border marks the one field currently focused,
+             * matching the classic browser focus-ring convention. */
+            float br = b->node->form_focused ? 0.20f : 0.55f;
+            float bg2 = b->node->form_focused ? 0.45f : 0.55f;
+            float bb = b->node->form_focused ? 0.85f : 0.55f;
+            sqw_renderer_draw_rect(vk, renderer, cmd, bx, by, b->w, 1.0f, br, bg2, bb, viewport_w, viewport_h);
+            sqw_renderer_draw_rect(vk, renderer, cmd, bx, by + b->h - 1.0f, b->w, 1.0f, br, bg2, bb, viewport_w, viewport_h);
+            sqw_renderer_draw_rect(vk, renderer, cmd, bx, by, 1.0f, b->h, br, bg2, bb, viewport_w, viewport_h);
+            sqw_renderer_draw_rect(vk, renderer, cmd, bx + b->w - 1.0f, by, 1.0f, b->h, br, bg2, bb, viewport_w, viewport_h);
+            if (b->kind == SQW_BOX_TEXTAREA) {
+                /* Real multi-line rendering: form_value's own embedded
+                 * newlines (typed Enter presses, see the keyboard-input
+                 * handling in main()'s event loop) split it into lines,
+                 * each drawn on its own row -- no word-wrap (matches
+                 * <pre>'s own non-wrapping convention, layout.c), a
+                 * textarea only breaks where the user actually pressed
+                 * Enter. */
+                const char *s = b->node->form_value;
+                float ty = by + 3.0f;
+                int start = 0, i2 = 0, slen = (int)strlen(s);
+                while (start <= slen) {
+                    i2 = start;
+                    while (i2 < slen && s[i2] != '\n') i2++;
+                    sqw_text_draw_string(tr, bx + 3.0f, ty, s + start, i2 - start,
+                        SQW_TEXT_SCALE, 0.0f, 0.0f, 0.0f, 1.0f, viewport_w, viewport_h);
+                    ty = ty + SQW_LINE_H;
+                    start = i2 + 1;
+                    if (i2 >= slen) break;
+                }
+            } else {
+                sqw_text_draw_string(tr, bx + 3.0f, by + 3.0f, b->node->form_value, (int)strlen(b->node->form_value),
+                    SQW_TEXT_SCALE, 0.0f, 0.0f, 0.0f, 1.0f, viewport_w, viewport_h);
+            }
+        } else if (b->kind == SQW_BOX_INPUT_CHECK) {
+            const char *type = dom_get_attr(b->node, "type");
+            int is_radio = type && strcmp(type, "radio") == 0;
+            float br = b->node->form_focused ? 0.20f : 0.55f;
+            sqw_renderer_draw_rect(vk, renderer, cmd, bx, by, b->w, 1.0f, br, br, br, viewport_w, viewport_h);
+            sqw_renderer_draw_rect(vk, renderer, cmd, bx, by + b->h - 1.0f, b->w, 1.0f, br, br, br, viewport_w, viewport_h);
+            sqw_renderer_draw_rect(vk, renderer, cmd, bx, by, 1.0f, b->h, br, br, br, viewport_w, viewport_h);
+            sqw_renderer_draw_rect(vk, renderer, cmd, bx + b->w - 1.0f, by, 1.0f, b->h, br, br, br, viewport_w, viewport_h);
+            if (b->node->form_checked) {
+                /* A checkbox's check mark and a radio's filled dot are
+                 * both approximated the same simple way here: an inset
+                 * solid rect. Genuinely different SVG-style mark shapes
+                 * aren't worth a dedicated glyph/path for two states. */
+                float inset = is_radio ? 4.0f : 3.0f;
+                sqw_renderer_draw_rect(vk, renderer, cmd, bx + inset, by + inset,
+                    b->w - inset * 2.0f, b->h - inset * 2.0f, 0.15f, 0.45f, 0.85f, viewport_w, viewport_h);
+            }
         }
     }
 }
@@ -456,10 +541,176 @@ static LayoutBox *find_box_for_node(LayoutList *list, DomNode *node) {
  * clickable element a clicked word/run belongs to. */
 static DomNode *interactive_ancestor(DomNode *node) {
     while (node) {
-        if (strcmp(node->tag, "a") == 0 || strcmp(node->tag, "button") == 0) return node;
+        if (strcmp(node->tag, "a") == 0 || strcmp(node->tag, "button") == 0 ||
+            strcmp(node->tag, "input") == 0 || strcmp(node->tag, "textarea") == 0) return node;
         node = node->parent;
     }
     return NULL;
+}
+
+/* Walks up node's own parent chain to the nearest enclosing <form> -- used
+ * both to resolve a submit click's target form and (per the user's own
+ * explicit, non-standard request) an anchor click's target form, and to
+ * find a checkbox/radio's own form for radio-group scoping. NULL if node
+ * isn't inside a <form> at all (a bare <input> with no enclosing form is
+ * valid HTML5 too -- it just has nothing to submit). */
+static DomNode *find_enclosing_form(DomNode *node) {
+    while (node) {
+        if (strcmp(node->tag, "form") == 0) return node;
+        node = node->parent;
+    }
+    return NULL;
+}
+
+/* Percent-encodes src (application/x-www-form-urlencoded, the standard
+ * real HTML5 form encoding: space -> '+', unreserved chars pass through,
+ * everything else -> "%XX") and appends it to dst, respecting dst's
+ * capacity. */
+static void url_encode_append(char *dst, int dstcap, int *dstlen, const char *src) {
+    static const char hex[] = "0123456789ABCDEF";
+    int i;
+    for (i = 0; src[i]; i++) {
+        unsigned char c = (unsigned char)src[i];
+        int is_unreserved = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                             (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~';
+        if (is_unreserved) {
+            if (*dstlen < dstcap - 1) dst[(*dstlen)++] = (char)c;
+        } else if (c == ' ') {
+            if (*dstlen < dstcap - 1) dst[(*dstlen)++] = '+';
+        } else {
+            if (*dstlen < dstcap - 3) {
+                dst[(*dstlen)++] = '%';
+                dst[(*dstlen)++] = hex[(c >> 4) & 0xF];
+                dst[(*dstlen)++] = hex[c & 0xF];
+            }
+        }
+    }
+    dst[*dstlen] = 0;
+}
+
+typedef struct {
+    const char *name;
+    DomNode *skip;
+} RadioGroupCtx;
+
+/* dom_walk() visitor: unchecks every OTHER <input type="radio"> in the
+ * form sharing `name` -- see the radio-click handler's own comment for
+ * why (real HTML5 radio-group mutual exclusivity). */
+static void radio_group_clear_visit(DomNode *node, int depth, void *ctx) {
+    (void)depth;
+    RadioGroupCtx *c = (RadioGroupCtx *)ctx;
+    if (node == c->skip) return;
+    if (strcmp(node->tag, "input") != 0) return;
+    const char *type = dom_get_attr(node, "type");
+    if (!type || strcmp(type, "radio") != 0) return;
+    const char *name = dom_get_attr(node, "name");
+    if (name && strcmp(name, c->name) == 0) node->form_checked = 0;
+}
+
+typedef struct {
+    char *buf;
+    int cap;
+    int len;
+} FormCollectCtx;
+
+/* dom_walk() visitor: appends one "name=value&" pair (URL-encoded) per
+ * successfully-submittable descendant of the <form> being walked --
+ * real HTML5 submittable-element rules, simplified to this project's own
+ * supported control set: <input> (any type except "submit"/"button"/
+ * "reset"/"hidden"-is-still-submittable-just-not-user-editable, and a
+ * checkbox/radio only when checked) and <textarea>, each skipped
+ * entirely if it has no "name" attribute (an unnamed control contributes
+ * nothing to a real form submission either). */
+static void form_collect_visit(DomNode *node, int depth, void *ctx) {
+    (void)depth;
+    FormCollectCtx *c = (FormCollectCtx *)ctx;
+    int is_input = strcmp(node->tag, "input") == 0;
+    int is_textarea = strcmp(node->tag, "textarea") == 0;
+    if (!is_input && !is_textarea) return;
+    const char *name = dom_get_attr(node, "name");
+    if (!name || !name[0]) return;
+    if (is_input) {
+        const char *type = dom_get_attr(node, "type");
+        if (type && (strcmp(type, "submit") == 0 || strcmp(type, "button") == 0 || strcmp(type, "reset") == 0)) return;
+        if (type && (strcmp(type, "checkbox") == 0 || strcmp(type, "radio") == 0) && !node->form_checked) return;
+    }
+    if (c->len > 0 && c->len < c->cap - 1) c->buf[c->len++] = '&';
+    url_encode_append(c->buf, c->cap, &c->len, name);
+    if (c->len < c->cap - 1) c->buf[c->len++] = '=';
+    url_encode_append(c->buf, c->cap, &c->len, node->form_value);
+}
+
+/* Submits `form`: collects its own descendant inputs/textareas
+ * (form_collect_visit) into a "name=value&..." encoded body, resolves
+ * its "action" attribute the SAME way an <a href> is resolved elsewhere
+ * in this file (http(s):// absolute / relative-against-current_base_url
+ * for a networked page / relative-against-current_dir for a local page /
+ * empty meaning "the current page itself"), and dispatches by "method"
+ * ("GET", the real HTML5 default, or "POST"; anything else falls back to
+ * GET). GET appends the encoded pairs as the URL's own query string and
+ * reuses sqw_go_navigate() unchanged (it already knows how to route a
+ * scheme'd vs. local URL). POST against an http(s) action uses
+ * sqw_net_fetch_async_ex() directly with the pairs as the request body,
+ * plugged into the SAME pending_fetch polling the main loop already uses
+ * for anchor-clicked network fetches, which doesn't care which call
+ * started the fetch. A local (non-http) action has no server behind it
+ * to POST to in this project, so it's treated the same as GET there
+ * (a documented, deliberate limitation, not a bug). */
+static void submit_form(DomNode *form, SqwHistoryStack *hist, char *current_url,
+                         SqwNetResult **pending_fetch, char *pending_fetch_url,
+                         DomNode **root_ptr, LayoutList *boxes_ptr, char *current_dir, char *current_base_url,
+                         float viewport_w, float viewport_h, float *scroll_x, float *scroll_y,
+                         DomNode **hover_node, DomNode **active_node) {
+    char pairs[2048];
+    FormCollectCtx ctx; ctx.buf = pairs; ctx.cap = (int)sizeof pairs; ctx.len = 0;
+    pairs[0] = 0;
+    dom_walk(form, form_collect_visit, &ctx);
+
+    const char *action = dom_get_attr(form, "action");
+    const char *method_attr = dom_get_attr(form, "method");
+    /* Manual case-insensitive compare, not strcasecmp -- this project's
+     * squash header shims (include/string.h) don't declare it (no
+     * strings.h at all here), and real HTML markup is seen with
+     * method="POST", "post", or mixed case just as often. */
+    int is_post = 0;
+    if (method_attr && strlen(method_attr) == 4) {
+        char m0 = (char)tolower((unsigned char)method_attr[0]);
+        char m1 = (char)tolower((unsigned char)method_attr[1]);
+        char m2 = (char)tolower((unsigned char)method_attr[2]);
+        char m3 = (char)tolower((unsigned char)method_attr[3]);
+        is_post = (m0=='p' && m1=='o' && m2=='s' && m3=='t');
+    }
+
+    char full_url[SQW_PATH_MAX];
+    full_url[0] = 0;
+    if (action && (strncmp(action, "http://", 7) == 0 || strncmp(action, "https://", 8) == 0)) {
+        strncpy(full_url, action, sizeof full_url - 1); full_url[sizeof full_url - 1] = 0;
+    } else if (action && action[0] && current_base_url[0]) {
+        snprintf(full_url, sizeof full_url, "%s%s", current_base_url, action);
+    } else if (action && action[0]) {
+        snprintf(full_url, sizeof full_url, "%s%s", current_dir, action);
+    } else {
+        strncpy(full_url, current_url, sizeof full_url - 1); full_url[sizeof full_url - 1] = 0;
+    }
+
+    int is_network = strncmp(full_url, "http://", 7) == 0 || strncmp(full_url, "https://", 8) == 0;
+
+    if (is_post && is_network) {
+        if (*pending_fetch) sqw_net_result_abandon(*pending_fetch);
+        sqw_history_push(hist, current_url);
+        fprintf(stderr, "SQW: submitting form POST %s ...\n", full_url); fflush(stdout);
+        strncpy(pending_fetch_url, full_url, SQW_PATH_MAX - 1); pending_fetch_url[SQW_PATH_MAX - 1] = 0;
+        *pending_fetch = sqw_net_fetch_async_ex(full_url, "POST", pairs, (long)ctx.len);
+    } else {
+        /* GET (or a local action, which has nowhere to POST to): append
+         * the pairs as a real "?name=value&..." query string. */
+        char get_url[SQW_PATH_MAX];
+        if (ctx.len > 0) snprintf(get_url, sizeof get_url, "%s?%s", full_url, pairs);
+        else { strncpy(get_url, full_url, sizeof get_url - 1); get_url[sizeof get_url - 1] = 0; }
+        sqw_go_navigate(get_url, 1, hist, current_url, pending_fetch, pending_fetch_url,
+                         root_ptr, boxes_ptr, current_dir, current_base_url, viewport_w, viewport_h,
+                         scroll_x, scroll_y, hover_node, active_node);
+    }
 }
 
 /* Clamps a scroll offset to [0, max(0, content_extent - viewport_extent)]. */
@@ -689,6 +940,13 @@ int main(void) {
     float scroll_x = 0.0f, scroll_y = 0.0f;
     DomNode *hover_node = NULL;
     DomNode *active_node = NULL;
+    /* The ONE <input>/<textarea> (if any) currently receiving typed
+     * keyboard input -- mutually exclusive with url_bar_focused (see
+     * DomNode::form_focused's own comment in dom.h). Mirrors form_focused
+     * on the node itself (rather than being the only source of truth) so
+     * draw_layout_text() can render the focus ring/caret purely from the
+     * LayoutBox's own ->node, with no extra parameter threading. */
+    DomNode *focused_input = NULL;
     int dragging_v = 0, dragging_h = 0;
     float drag_anchor_mouse = 0.0f, drag_anchor_scroll = 0.0f;
     float mouse_x = 0.0f, mouse_y = 0.0f;
@@ -935,6 +1193,13 @@ int main(void) {
             } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == 1) {
                 if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[button-down] x=%d y=%d\n", (int)ev.button.x, (int)ev.button.y); fflush(stderr); }
                 if (ev.button.y < SQW_TOOLBAR_H) {
+                    /* Toolbar interactions (Back/bar/Go) can all trigger a
+                     * fresh navigation that frees the current DOM tree --
+                     * drop keyboard focus from any page input first so
+                     * focused_input never ends up pointing at a freed
+                     * node (mirrors url_bar_focused's own unconditional
+                     * reset a few lines below in each branch). */
+                    if (focused_input) { focused_input->form_focused = 0; focused_input = NULL; }
                     LayoutBox back, bar, go;
                     toolbar_geometry(viewport_w, &back, &bar, &go);
                     if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[toolbar-click] back=(%d,%d,%d,%d) bar=(%d,%d,%d,%d) go=(%d,%d,%d,%d)\n", (int)back.x,(int)back.y,(int)back.w,(int)back.h,(int)bar.x,(int)bar.y,(int)bar.w,(int)bar.h,(int)go.x,(int)go.y,(int)go.w,(int)go.h); fflush(stderr); }
@@ -1022,7 +1287,24 @@ int main(void) {
                             DomNode *anc = interactive_ancestor(hb->node);
                             if (anc) { target_node = anc; eff_kind = (strcmp(anc->tag, "a") == 0) ? SQW_BOX_A : SQW_BOX_BUTTON; }
                         }
-                        if (eff_kind == SQW_BOX_A) {
+                        /* Clicking outside any input/textarea drops keyboard
+                         * focus from whichever one had it -- reassigned
+                         * below if this exact click lands on one instead. */
+                        if (focused_input) { focused_input->form_focused = 0; focused_input = NULL; }
+                        if (eff_kind == SQW_BOX_A && find_enclosing_form(target_node)) {
+                            /* Per this project's own explicit spec (an
+                             * anchor inside a <form> submits it, same as a
+                             * real submit button -- non-standard real HTML5
+                             * behavior, deliberately added here on request
+                             * rather than following the href normally). */
+                            target_node->visited = 1;
+                            target_node->active = 1;
+                            active_node = target_node;
+                            submit_form(find_enclosing_form(target_node), hist, current_url,
+                                        &pending_fetch, pending_fetch_url, &root, &boxes,
+                                        current_dir, current_base_url, viewport_w, viewport_h,
+                                        &scroll_x, &scroll_y, &hover_node, &active_node);
+                        } else if (eff_kind == SQW_BOX_A) {
                             target_node->visited = 1;
                             target_node->active = 1;
                             active_node = target_node;
@@ -1088,11 +1370,53 @@ int main(void) {
                                 strncpy(url_bar_text, full_path, sizeof url_bar_text - 1); url_bar_text[sizeof url_bar_text - 1] = 0;
                                 strncpy(current_url, full_path, sizeof current_url - 1); current_url[sizeof current_url - 1] = 0;
                                 scroll_x = 0.0f; scroll_y = 0.0f;
-                                hover_node = NULL; active_node = NULL; /* old DOM (and target_node) is gone */
+                                hover_node = NULL; active_node = NULL; focused_input = NULL; /* old DOM (and target_node) is gone */
                             }
                         } else if (eff_kind == SQW_BOX_BUTTON) {
                             target_node->active = 1;
                             active_node = target_node;
+                            /* A real <button> with no explicit "type" is
+                             * itself submit-by-default inside a form (the
+                             * actual HTML5 rule, not this project's own
+                             * relaxation); <input type="submit"> obviously
+                             * always is. type="button"/"reset" (an
+                             * explicit non-submit <button>, or an
+                             * <input type="button">) never submits. */
+                            const char *type = dom_get_attr(target_node, "type");
+                            int is_submit;
+                            if (strcmp(target_node->tag, "input") == 0) is_submit = type && strcmp(type, "submit") == 0;
+                            else is_submit = !type || strcmp(type, "submit") == 0;
+                            if (is_submit) {
+                                DomNode *form = find_enclosing_form(target_node);
+                                if (form) submit_form(form, hist, current_url, &pending_fetch, pending_fetch_url,
+                                                       &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h,
+                                                       &scroll_x, &scroll_y, &hover_node, &active_node);
+                            }
+                        } else if (hb->kind == SQW_BOX_INPUT_TEXT || hb->kind == SQW_BOX_TEXTAREA) {
+                            target_node->form_focused = 1;
+                            focused_input = target_node;
+                        } else if (hb->kind == SQW_BOX_INPUT_CHECK) {
+                            const char *type = dom_get_attr(target_node, "type");
+                            if (type && strcmp(type, "radio") == 0) {
+                                /* Real radio-group exclusivity: only one
+                                 * same-"name" radio within the same
+                                 * enclosing <form> may be checked at once
+                                 * -- clear every sibling radio in that
+                                 * group first, then check this one (a
+                                 * click on an already-checked radio stays
+                                 * checked, it just can't be unchecked by
+                                 * clicking it again -- real browser
+                                 * behavior). */
+                                const char *name = dom_get_attr(target_node, "name");
+                                DomNode *form = find_enclosing_form(target_node);
+                                if (name && form) {
+                                    RadioGroupCtx rgctx; rgctx.name = name; rgctx.skip = target_node;
+                                    dom_walk(form, radio_group_clear_visit, &rgctx);
+                                }
+                                target_node->form_checked = 1;
+                            } else {
+                                target_node->form_checked = !target_node->form_checked;
+                            }
                         }
                     }
                 }
@@ -1128,6 +1452,42 @@ int main(void) {
                     else { snprintf(url_bar_text, sizeof url_bar_text, "%sindex.html", current_dir); }
                     url_bar_text[sizeof url_bar_text - 1] = 0;
                 }
+            } else if (ev.type == SDL_EVENT_KEY_DOWN && focused_input) {
+                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[key-down-input-focused] scancode=%d\n", (int)ev.key.scancode); fflush(stderr); }
+                int flen = (int)strlen(focused_input->form_value);
+                if (ev.key.scancode == SDL_SCANCODE_BACKSPACE) {
+                    if (flen > 0) focused_input->form_value[flen - 1] = 0;
+                } else if (ev.key.scancode == SDL_SCANCODE_RETURN) {
+                    if (strcmp(focused_input->tag, "textarea") == 0) {
+                        /* Real <textarea> behavior: Enter inserts a literal
+                         * newline into the field's own value instead of
+                         * doing anything form-wide -- draw_layout_text()
+                         * already splits form_value on '\n' into separate
+                         * rendered lines. */
+                        if (flen < (int)sizeof focused_input->form_value - 1) {
+                            focused_input->form_value[flen] = '\n';
+                            focused_input->form_value[flen + 1] = 0;
+                        }
+                    } else {
+                        /* Real HTML5 behavior: Enter in a single-line text
+                         * field submits its enclosing form, same as
+                         * clicking that form's own submit control. */
+                        DomNode *form = find_enclosing_form(focused_input);
+                        if (form) {
+                            focused_input->form_focused = 0; focused_input = NULL;
+                            submit_form(form, hist, current_url, &pending_fetch, pending_fetch_url,
+                                        &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h,
+                                        &scroll_x, &scroll_y, &hover_node, &active_node);
+                        }
+                    }
+                }
+            } else if (ev.type == SDL_EVENT_TEXT_INPUT && focused_input) {
+                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[text-input-focused] text=\"%s\"\n", ev.text.text ? ev.text.text : "(null)"); fflush(stderr); }
+                int flen = (int)strlen(focused_input->form_value);
+                int tlen = (int)strlen(ev.text.text);
+                int room = (int)sizeof(focused_input->form_value) - 1 - flen;
+                if (tlen > room) tlen = room;
+                if (tlen > 0) { memcpy(focused_input->form_value + flen, ev.text.text, (size_t)tlen); focused_input->form_value[flen + tlen] = 0; }
             } else if (ev.type == SDL_EVENT_TEXT_INPUT && url_bar_focused) {
                 /* Real, keyboard-layout-aware printable text (see
                  * PRIVATE_PumpEvents' own XLookupString comment) --
@@ -1189,7 +1549,7 @@ int main(void) {
                      * retreats to wherever the user actually was. */
                     strncpy(current_url, pending_fetch_url, sizeof current_url - 1); current_url[sizeof current_url - 1] = 0;
                     scroll_x = 0.0f; scroll_y = 0.0f;
-                    hover_node = NULL; active_node = NULL; /* old DOM is gone */
+                    hover_node = NULL; active_node = NULL; focused_input = NULL; /* old DOM is gone */
                 } else {
                     fprintf(stderr, "SQW: fetch failed\n"); fflush(stdout);
                 }
