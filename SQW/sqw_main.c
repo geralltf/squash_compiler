@@ -48,6 +48,7 @@
  * comment. dom_walk.c pulls in dom.c and html_lexer.c the same way. */
 #include "vk_context.c"
 #include "dom_walk.c"
+#include "css.c"
 #include "layout.c"
 #include "renderer_vk.c"
 #include "text_renderer_vk.c"
@@ -158,6 +159,52 @@ static int sqw_history_pop(SqwHistoryStack *h, char *out, int outcap) {
     return 1;
 }
 
+/* Finds every <style> element anywhere in the tree, feeds its text
+ * content into a fresh CssStylesheet (in document order, across however
+ * many separate <style> tags the page has -- real cascade order), then
+ * resolves every element's final computed style from it plus that
+ * element's own inline style="" (see css.h/css.c's own top comments for
+ * exactly what CSS this covers). <link rel="stylesheet" href="..."> --
+ * an EXTERNAL stylesheet -- is deliberately NOT fetched: that would need
+ * its own network round trip layered into page navigation, out of scope
+ * for this pass. A real site's externally-linked CSS (as opposed to its
+ * own inline <style> blocks) currently has no effect here -- a real,
+ * known limitation, not a silent gap. */
+static void sqw_apply_css(DomNode *root) {
+    CssStylesheet sheet;
+    css_stylesheet_init(&sheet);
+
+    int cap = 64, top = 0;
+    DomNode **stack = (DomNode **)malloc((size_t)cap * sizeof(DomNode *));
+    int *next_child = (int *)malloc((size_t)cap * sizeof(int));
+    stack[top] = root; next_child[top] = 0; top++;
+    while (top > 0) {
+        DomNode *n = stack[top - 1];
+        if (next_child[top - 1] >= n->child_count) { top--; continue; }
+        DomNode *child = n->children[next_child[top - 1]];
+        next_child[top - 1]++;
+        if (!dom_is_text(child)) {
+            if (strcmp(child->tag, "style") == 0) {
+                int i;
+                for (i = 0; i < child->child_count; i++) {
+                    DomNode *tc = child->children[i];
+                    if (dom_is_text(tc)) css_parse_into(&sheet, tc->text);
+                }
+            }
+            if (top >= cap) {
+                cap *= 2;
+                stack = (DomNode **)realloc(stack, (size_t)cap * sizeof(DomNode *));
+                next_child = (int *)realloc(next_child, (size_t)cap * sizeof(int));
+            }
+            stack[top] = child; next_child[top] = 0; top++;
+        }
+    }
+    free(stack); free(next_child);
+
+    css_apply(root, &sheet);
+    css_stylesheet_free(&sheet);
+}
+
 /* Loads and parses `path` as the new current page, replacing *root_ptr
  * and recomputing layout in place. On failure (file not found/unreadable)
  * leaves the current page entirely untouched and just logs a warning --
@@ -179,6 +226,7 @@ static void sqw_navigate_to(const char *path, DomNode **root_ptr, LayoutList *bo
     free(html);
     dom_free(*root_ptr);
     *root_ptr = new_root;
+    sqw_apply_css(*root_ptr);
     layout_list_free(boxes_ptr);
     layout_compute(*root_ptr, viewport_w, viewport_h, boxes_ptr);
     sqw_dirname(path, current_dir);
@@ -206,6 +254,7 @@ static void sqw_navigate_to_html(const char *html, const char *url, DomNode **ro
     DomNode *new_root = dom_parse(html);
     dom_free(*root_ptr);
     *root_ptr = new_root;
+    sqw_apply_css(*root_ptr);
     layout_list_free(boxes_ptr);
     layout_compute(*root_ptr, viewport_w, viewport_h, boxes_ptr);
     current_dir[0] = '\0';
@@ -237,7 +286,7 @@ static void sqw_go_navigate(const char *url_text, int push_history, SqwHistorySt
     if (!url_text[0]) return;
     if (push_history) sqw_history_push(hist, current_url);
     if (strncmp(url_text, "http://", 7) == 0 || strncmp(url_text, "https://", 8) == 0) {
-        if (*pending_fetch) sqw_net_result_free(*pending_fetch);
+        if (*pending_fetch) sqw_net_result_abandon(*pending_fetch);
         fprintf(stderr, "SQW: fetching %s ...\n", url_text); fflush(stdout);
         strncpy(pending_fetch_url, url_text, SQW_PATH_MAX - 1);
         pending_fetch_url[SQW_PATH_MAX - 1] = 0;
@@ -294,11 +343,26 @@ static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer 
         float bx = b->x - scroll_x;
         float by = b->y - scroll_y;
         if (b->kind == SQW_BOX_TEXT) {
+            /* A plain text run's own color comes from its PARENT element's
+             * computed style (see css.h/css.c) -- text nodes themselves
+             * never carry CSS (only real elements can be a selector's
+             * target), so this is exactly how a real browser resolves
+             * "color" for a text run too (the property real CSS calls
+             * inherited: an ancestor's declared value applies to its
+             * descendant text with no rule of its own). Falls back to
+             * black, this project's original fixed color, when no
+             * ancestor declared one. */
+            float tr_, tg_, tb_ = 0.0f;
+            tr_ = tg_ = 0.0f;
+            DomNode *anc = b->node->parent;
+            while (anc && !anc->css_has_color) anc = anc->parent;
+            if (anc) { tr_ = anc->css_color[0]; tg_ = anc->css_color[1]; tb_ = anc->css_color[2]; }
             sqw_text_draw_string(tr, bx, by, b->node->text + b->text_start, b->text_len,
-                SQW_TEXT_SCALE, 0.0f, 0.0f, 0.0f, 1.0f, viewport_w, viewport_h);
+                SQW_TEXT_SCALE, tr_, tg_, tb_, 1.0f, viewport_w, viewport_h);
         } else if (b->kind == SQW_BOX_A) {
             float r, g, bl;
             anchor_color(b->node, &r, &g, &bl);
+            if (b->node->css_has_color) { r = b->node->css_color[0]; g = b->node->css_color[1]; bl = b->node->css_color[2]; }
             /* Subtle hover feedback: a translucent-looking lighter tint by
              * blending toward white, cheap and doesn't need real alpha
              * blending on the (opaque) box pipeline. */
@@ -308,9 +372,11 @@ static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer 
             sqw_text_draw_string(tr, bx, by, label, (int)strlen(label),
                 SQW_TEXT_SCALE, r, g, bl, 1.0f, viewport_w, viewport_h);
         } else if (b->kind == SQW_BOX_SPAN) {
+            float tr_ = 0.0f, tg_ = 0.0f, tb_ = 0.0f;
+            if (b->node->css_has_color) { tr_ = b->node->css_color[0]; tg_ = b->node->css_color[1]; tb_ = b->node->css_color[2]; }
             concat_direct_text(b->node, label, sizeof label);
             sqw_text_draw_string(tr, bx, by, label, (int)strlen(label),
-                SQW_TEXT_SCALE, 0.0f, 0.0f, 0.0f, 1.0f, viewport_w, viewport_h);
+                SQW_TEXT_SCALE, tr_, tg_, tb_, 1.0f, viewport_w, viewport_h);
         } else if (b->kind == SQW_BOX_BUTTON) {
             concat_direct_text(b->node, label, sizeof label);
             float tr_col = b->node->active ? 0.9f : 0.1f;
@@ -329,10 +395,18 @@ static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer 
  * covered by it; every content DRAW call adds it back as a Y offset so
  * content actually paints below it instead of underneath. See main()'s
  * event loop for both halves of that split. */
-#define SQW_TOOLBAR_H 40.0f
+#define SQW_TOOLBAR_H 48.0f /* +8px over the original 40 (4 for top margin, 4 more for bottom -- URL bar text was clipping vertically both ways) */
 #define SQW_URLBAR_PAD 8.0f
 #define SQW_URLBAR_GO_W 56.0f
 #define SQW_BACK_BTN_W 40.0f
+/* Extra top/bottom margin for the toolbar's own text/caret (see
+ * draw_toolbar's own comment) -- the taller bar above made room, but the
+ * text itself still needs to actually use it on BOTH edges, or it just
+ * clips the same as before with blank space left over on one side
+ * instead. Symmetric (both 4px) so the glyph line sits centered in the
+ * bar rather than hugging one edge. */
+#define SQW_TOOLBAR_TEXT_MARGIN_TOP 4.0f
+#define SQW_TOOLBAR_TEXT_MARGIN_BOTTOM 4.0f
 
 typedef struct {
     const char *target_id;
@@ -478,7 +552,18 @@ static void draw_toolbar(SqwVkContext *vk, SqwRenderer *renderer, SqwTextRendere
      * when the stack is empty -- still visible, but reads as disabled. */
     float bkr = can_go_back ? 0.13f : 0.55f, bkg = can_go_back ? 0.55f : 0.60f, bkb = can_go_back ? 0.20f : 0.55f;
     sqw_renderer_draw_rect(vk, renderer, cmd, back.x, back.y, back.w, back.h, bkr, bkg, bkb, viewport_w, viewport_h);
-    sqw_text_draw_string(tr, back.x + 11.0f, back.y + 3.0f, "<", 1,
+    /* SQW_TOOLBAR_TEXT_MARGIN_TOP/BOTTOM: the taller (48px, was 40px)
+     * toolbar gave the bar itself 8 extra px, but the text inside it
+     * still needs to actually use that room on BOTH edges -- without
+     * this the extra space just became unused margin on one side while
+     * the glyphs kept clipping on the other, since text was drawn at a
+     * fixed 3px offset from the bar's own top with no matching reserve
+     * at the bottom. Applied to every piece of toolbar text/the caret so
+     * they all stay vertically aligned with each other inside the bar. */
+    float text_y = 3.0f + SQW_TOOLBAR_TEXT_MARGIN_TOP;
+    float text_bottom_margin = 3.0f + SQW_TOOLBAR_TEXT_MARGIN_BOTTOM;
+
+    sqw_text_draw_string(tr, back.x + 11.0f, back.y + text_y, "<", 1,
         SQW_TEXT_SCALE, 1.0f, 1.0f, 1.0f, 1.0f, viewport_w, viewport_h);
 
     float br = url_focused ? 0.20f : 0.65f, bg = url_focused ? 0.45f : 0.65f, bb = url_focused ? 0.85f : 0.65f;
@@ -487,16 +572,16 @@ static void draw_toolbar(SqwVkContext *vk, SqwRenderer *renderer, SqwTextRendere
     sqw_renderer_draw_rect(vk, renderer, cmd, bar.x, bar.y, bar.w, bar.h, 1.0f, 1.0f, 1.0f, viewport_w, viewport_h);
 
     int url_len = (int)strlen(url_text);
-    sqw_text_draw_string(tr, bar.x + 6.0f, bar.y + 3.0f, url_text, url_len,
+    sqw_text_draw_string(tr, bar.x + 6.0f, bar.y + text_y, url_text, url_len,
         SQW_TEXT_SCALE, 0.05f, 0.05f, 0.05f, 1.0f, viewport_w, viewport_h);
     if (url_focused) {
         float caret_x = bar.x + 6.0f + sqw_text_measure(url_text, url_len, SQW_TEXT_SCALE);
-        sqw_renderer_draw_rect(vk, renderer, cmd, caret_x, bar.y + 3.0f, 2.0f, bar.h - 6.0f,
+        sqw_renderer_draw_rect(vk, renderer, cmd, caret_x, bar.y + text_y, 2.0f, bar.h - text_y - text_bottom_margin,
             0.1f, 0.1f, 0.1f, viewport_w, viewport_h);
     }
 
     sqw_renderer_draw_rect(vk, renderer, cmd, go.x, go.y, go.w, go.h, 0.20f, 0.45f, 0.85f, viewport_w, viewport_h);
-    sqw_text_draw_string(tr, go.x + 16.0f, go.y + 3.0f, "Go", 2,
+    sqw_text_draw_string(tr, go.x + 16.0f, go.y + text_y, "Go", 2,
         SQW_TEXT_SCALE, 1.0f, 1.0f, 1.0f, 1.0f, viewport_w, viewport_h);
 }
 
@@ -594,6 +679,7 @@ int main(void) {
     }
     DomNode *root = dom_parse(initial_html);
     free(initial_html);
+    sqw_apply_css(root);
     LayoutList boxes;
     float viewport_w = SQW_VIEWPORT_W, viewport_h = SQW_VIEWPORT_H;
     layout_compute(root, viewport_w, viewport_h, &boxes);
@@ -955,9 +1041,14 @@ int main(void) {
                                 if (tb) scroll_y = clamp_scroll(tb->y, boxes.content_h, content_view_h);
                             } else if (strncmp(href, "http://", 7) == 0 || strncmp(href, "https://", 8) == 0) {
                                 if (pending_fetch) {
-                                    /* a previous fetch is still outstanding -- drop it rather than
-                                     * leak it or race two responses against one DOM swap */
-                                    sqw_net_result_free(pending_fetch);
+                                    /* A previous fetch is still outstanding -- abandon it
+                                     * (NOT sqw_net_result_free() -- see that function's own
+                                     * comment: freeing it here while its background worker
+                                     * thread might still be running is a real use-after-free,
+                                     * confirmed as an actual "free(): invalid pointer" crash
+                                     * during this project's own live testing) rather than
+                                     * leak it or race two responses against one DOM swap. */
+                                    sqw_net_result_abandon(pending_fetch);
                                 }
                                 sqw_history_push(hist, current_url);
                                 fprintf(stderr, "SQW: fetching %s ...\n", href); fflush(stdout);
@@ -980,7 +1071,7 @@ int main(void) {
                                  * branch below instead). */
                                 char full_url[SQW_PATH_MAX];
                                 snprintf(full_url, sizeof full_url, "%s%s", current_base_url, href);
-                                if (pending_fetch) sqw_net_result_free(pending_fetch);
+                                if (pending_fetch) sqw_net_result_abandon(pending_fetch);
                                 sqw_history_push(hist, current_url);
                                 fprintf(stderr, "SQW: fetching %s ...\n", full_url); fflush(stdout);
                                 strncpy(pending_fetch_url, full_url, sizeof pending_fetch_url - 1);

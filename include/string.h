@@ -14,6 +14,7 @@ char *strncat(char *d, const char *s, unsigned int n);
 char *strchr(const char *s, int c);
 char *strstr(const char *h, const char *n);
 char *strdup(const char *s);
+char *strtok(char *s, const char *delim);
 #ifdef _WIN32
 #define strdup _strdup
 #endif

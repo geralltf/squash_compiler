@@ -23,5 +23,8 @@ long  labs(long x);
 int   rand(void);
 void  srand(unsigned int seed);
 char *getenv(const char *name);
+long  strtol(const char *s, char **endptr, int base);
+double strtod(const char *s, char **endptr);
+void  qsort(void *base, unsigned long nmemb, unsigned long size, int (*compar)(const void *, const void *));
 
 #endif

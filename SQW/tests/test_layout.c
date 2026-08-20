@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "dom_walk.c"
+#include "css.c"
 #include "layout.c"
 
 static const char *TEST_HTML =
@@ -26,6 +27,18 @@ static const char *kind_name(SqwBoxKind k) {
 
 int main(void) {
     DomNode *root = dom_parse(TEST_HTML);
+    /* layout_compute() now reads each node's computed CSS display/box
+     * model (see css.h/css.c) -- css_apply() must run first, exactly as
+     * sqw_main.c's own sqw_apply_css() does before every real navigation,
+     * or every node's css_display stays at its zero-initialized value
+     * (which aliases CSS_DISPLAY_BLOCK), making inline elements like <a>/
+     * <img> wrongly block-level. An empty stylesheet still resolves each
+     * tag's real default display (css_set_default_style()'s own per-tag
+     * table), just with no author CSS rules on top of it. */
+    CssStylesheet sheet;
+    css_stylesheet_init(&sheet);
+    css_apply(root, &sheet);
+    css_stylesheet_free(&sheet);
 
     LayoutList list;
     layout_compute(root, 1024.0f, 768.0f, &list);

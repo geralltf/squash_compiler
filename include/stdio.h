@@ -49,6 +49,7 @@ int     ungetc (int c, FILE *f);
 int     printf (const char *fmt, ...);
 int     sprintf(char *buf, const char *fmt, ...);
 int     snprintf(char *buf, size_t n, const char *fmt, ...);
+int     sscanf(const char *s, const char *fmt, ...);
 int     puts   (const char *s);
 int     putchar(int c);
 

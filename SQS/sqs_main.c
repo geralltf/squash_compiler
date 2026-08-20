@@ -21,6 +21,7 @@
 #include <openssl/ssl.h>
 #include "php_mini.c"
 #include "sqs_dns.c"
+#include "include/spoof_identity.h"
 
 #define SQS_HTTP_PORT 8080
 #define SQS_HTTPS_PORT 8443
@@ -72,11 +73,27 @@ static int sqs_resolve_path(const char *req_path, char *out) {
     return 1;
 }
 
+/* Every response header this server ever sends -- Content-Type/Length and
+ * Connection are protocol-required/needed for the client to parse the
+ * response at all, and Server is the SAME compile-time-selected spoofed
+ * OS+browser identity SQW sends as its own User-Agent (see
+ * include/spoof_identity.h's own comment on why one shared value, not two
+ * independently "fake" ones). Nothing else -- no X-Powered-By, no real
+ * hostname/version banner, no directory-listing/error-page detail beyond
+ * a plain status line -- so this is the only place SQS says anything
+ * about what it is, and what it says is deliberately not true. A
+ * Server header carrying a browser-shaped string is unusual for a real
+ * server (a real one would say "Apache/..."/"nginx/..." instead) but is
+ * still a syntactically ordinary HTTP header value (RFC 9110 §10.2.4:
+ * product tokens with the same freeform structure a real browser's own
+ * User-Agent uses) -- correct and standards-compliant, just not what a
+ * real off-the-shelf server would put there, which is exactly the point:
+ * nothing here should look like what it actually is. */
 static void sqs_send_response(SqsConn *c, int status, const char *status_text,
                                const char *content_type, const char *body, long body_len) {
     char header[512];
     int hlen = snprintf(header, sizeof header,
-        "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 %d %s\r\nServer: " SQ_SPOOF_IDENTITY "\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n",
         status, status_text, content_type, body_len);
     sqs_conn_write(c, header, hlen);
     if (body_len > 0) sqs_conn_write(c, body, body_len);

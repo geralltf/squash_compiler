@@ -33,6 +33,32 @@ typedef struct DomNode {
     int visited;
     int hover;
     int active;
+
+    /* Computed CSS style -- resolved ONCE per element by css_apply()
+     * (SQW/css.c), right after dom_parse() and after every <style> tag's
+     * text has been folded into a CssStylesheet, before layout_compute()
+     * ever runs. Every element gets real values here (css_apply() fills
+     * in each tag's normal browser-default display even with zero
+     * matching CSS rules), so layout.c never needs to guess. Lives
+     * directly on the node for the same reason the interactive-state
+     * fields above do. Meaningless (left at whatever css_apply() didn't
+     * touch) on text nodes and the synthetic #document root. */
+    int css_display;          /* CssDisplay, see css.h */
+    int css_has_width;  float css_width;
+    int css_has_height; float css_height;
+    float css_margin[4];       /* top, right, bottom, left -- px */
+    float css_padding[4];      /* top, right, bottom, left -- px */
+    int css_has_color; float css_color[3];
+    int css_has_bg;    float css_bg[3];
+    int css_flex_direction;   /* CssFlexDirection */
+    int css_justify;          /* CssJustify */
+    int css_align;             /* CssAlign */
+    float css_gap;
+    /* Raw, unparsed "grid-template-columns" value (e.g. "repeat(4, 1fr)"
+     * or "200px 1fr 200px") -- layout.c's own grid code parses this at
+     * layout time, not here, since it's the one place track sizes get
+     * resolved against a real available width. Empty string if unset. */
+    char css_grid_template_columns[128];
 } DomNode;
 
 DomNode *dom_parse(const char *html);

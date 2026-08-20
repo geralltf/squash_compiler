@@ -4,6 +4,7 @@
  * bug (see sqw_main.c's own comment on vk_context.c et al). */
 #include "net_client.h"
 #include "dns_resolver.c"
+#include "include/spoof_identity.h"
 
 typedef struct {
     SqwNetResult *result;
@@ -31,14 +32,15 @@ static int sqw_net_looks_like_ip_literal(const char *host) {
     return saw_digit;
 }
 
-/* A plausible, current-looking Microsoft Edge (Chromium-based) UA string --
- * matches real Edge's own format exactly (Mozilla/Chrome/Safari/Edg
- * tokens, in that order, is what a genuine Chromium Edge build sends).
- * Sent on every request and NEVER varies with anything about this actual
- * process (window size, OS, real hostname, SQW's own name/version, etc.)
- * -- see sqw_net_worker()'s own comment on why the request is otherwise
- * held completely static across a live window resize, too. */
-#define SQW_USER_AGENT "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
+/* The User-Agent sent on every request -- picked at COMPILE time by
+ * include/spoof_identity.h from the platform SQW was actually built for,
+ * always claiming a DIFFERENT OS+browser than the real one (see that
+ * header's own comment for the exact mapping and why). NEVER varies with
+ * anything about this actual running process either (window size, real
+ * hostname, SQW's own name/version, etc.) -- see sqw_net_worker()'s own
+ * comment on why the request is otherwise held completely static across
+ * a live window resize, too. */
+#define SQW_USER_AGENT SQ_SPOOF_IDENTITY
 
 /* Parses "http(s)://HOST[:PORT][/PATH][?QUERY][#FRAGMENT]" into its parts.
  * HOST may be an IPv4 dotted-quad literal (e.g. "127.0.0.1") OR a real
@@ -88,19 +90,28 @@ static void *sqw_net_worker(void *arg) {
     char *body = NULL;
     long body_len = 0;
 
-    /* `host` may be a real hostname rather than an IPv4 dotted-quad
-     * literal -- resolve it via SQW/dns_resolver.c first, replacing
-     * `host` with the resolved literal, so everything below (inet_addr(),
-     * the TLS IP-SAN check) keeps working exactly as it already did for
-     * literal hosts. Every URL this project's own testing ever fetches
-     * uses "127.0.0.1" (a literal), so this branch is never actually
-     * taken by anything run in this session -- see dns_resolver.h/c's own
-     * top comments. */
-    if (parsed && !sqw_net_looks_like_ip_literal(host)) {
-        char resolved[SQW_NET_HOST_MAX];
-        if (sqw_dns_resolve(host, resolved, sizeof resolved)) {
-            strncpy(host, resolved, sizeof host - 1);
-            host[sizeof host - 1] = 0;
+    /* `host` is kept as the URL's OWN host string for the rest of this
+     * function -- the real hostname (e.g. "www.wikipedia.org") if the URL
+     * named one, an IP literal otherwise -- since it's needed verbatim
+     * for the HTTP Host header and, for a real hostname, TLS SNI and
+     * hostname-based certificate verification (see the HTTPS setup
+     * below). `connect_ip` is what the TCP connect() actually targets:
+     * `host` itself when it's already an IP literal, or the address
+     * SQW/dns_resolver.c resolves `host` to otherwise. Conflating the two
+     * (overwriting `host` with the resolved IP, an earlier version of
+     * this function's own approach) breaks virtual hosting -- a request
+     * with "Host: 91.198.174.192" instead of "Host: www.wikipedia.org"
+     * either hits the wrong site behind a shared IP or, same as an
+     * incorrect/absent SNI, fails certificate verification outright,
+     * since the leaf cert a real host like this serves is issued for its
+     * DNS name, not for whatever IP it happens to resolve to. */
+    char connect_ip[SQW_NET_HOST_MAX];
+    if (parsed) {
+        if (sqw_net_looks_like_ip_literal(host)) {
+            strncpy(connect_ip, host, sizeof connect_ip - 1);
+            connect_ip[sizeof connect_ip - 1] = 0;
+        } else if (sqw_dns_resolve(host, connect_ip, sizeof connect_ip)) {
+            /* resolved -- host itself is left untouched */
         } else {
             parsed = 0; /* couldn't resolve -- fail the fetch cleanly */
         }
@@ -113,56 +124,62 @@ static void *sqw_net_worker(void *arg) {
             memset(&addr, 0, sizeof addr);
             addr.sin_family = AF_INET;
             addr.sin_port = htons((unsigned short)port);
-            addr.sin_addr.s_addr = inet_addr(host);
+            addr.sin_addr.s_addr = inet_addr(connect_ip);
             if (connect(fd, (struct sockaddr *)&addr, sizeof addr) == 0) {
                 SSL_CTX *ctx = NULL;
                 SSL *ssl = NULL;
                 int conn_ok = 1;
                 if (is_https) {
                     ctx = SSL_CTX_new(TLS_client_method());
-                    /* Real, proper certificate verification -- prepared
-                     * now so this client is ready for real external HTTPS
-                     * sites LATER, but per the project brief NOT exercised
-                     * against anything but localhost SQS yet (see this
-                     * file's own top comment on the IP-literal-only URL
-                     * parsing that currently makes a real external host
-                     * unreachable through this client regardless).
-                     * SQW/ca_certificates.pem is a real copy of this
-                     * machine's own system CA bundle (/etc/ssl/certs/
-                     * ca-certificates.crt) -- the same Mozilla root
-                     * program Firefox itself draws from, just already in
-                     * the portable PEM format OpenSSL consumes directly,
-                     * rather than Firefox's own cert9.db: that's an NSS
-                     * SQLite database holding only USER-imported/
-                     * overridden certs, not Firefox's actual builtin root
-                     * list (which lives compiled into libnssckbi.so, not
-                     * in any file cert9.db-adjacent tooling can export) --
-                     * extracting "Firefox's store" from cert9.db would
-                     * have silently produced an empty-or-near-empty trust
-                     * store, not a working substitute. SQS/dev_cert.pem
-                     * (the local dev server's own self-signed cert -- see
-                     * SQS/gen_dev_cert.sh) is loaded as a SECOND, additional
-                     * trust anchor purely so today's local-only SQS testing
-                     * keeps passing full real verification too, without
-                     * weakening it back to SSL_VERIFY_NONE. */
+                    /* Real, proper certificate verification -- SQW/ca_
+                     * certificates.pem is a real copy of this machine's
+                     * own system CA bundle (/etc/ssl/certs/ca-certificates
+                     * .crt) -- the same Mozilla root program Firefox
+                     * itself draws from, just already in the portable PEM
+                     * format OpenSSL consumes directly, rather than
+                     * Firefox's own cert9.db: that's an NSS SQLite
+                     * database holding only USER-imported/overridden
+                     * certs, not Firefox's actual builtin root list (which
+                     * lives compiled into libnssckbi.so, not in any file
+                     * cert9.db-adjacent tooling can export) -- extracting
+                     * "Firefox's store" from cert9.db would have silently
+                     * produced an empty-or-near-empty trust store, not a
+                     * working substitute. SQS/dev_cert.pem (the local dev
+                     * server's own self-signed cert -- see SQS/gen_dev_
+                     * cert.sh) is loaded as a SECOND, additional trust
+                     * anchor purely so local SQS testing keeps passing
+                     * full real verification too, without weakening it
+                     * back to SSL_VERIFY_NONE -- it plays no part in
+                     * verifying a real site's own, real-CA-issued cert. */
+                    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
                     SSL_CTX_load_verify_locations(ctx, "SQW/ca_certificates.pem", (void *)0);
                     SSL_CTX_load_verify_locations(ctx, "SQS/dev_cert.pem", (void *)0);
                     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, (void *)0);
                     ssl = SSL_new(ctx);
                     SSL_set_fd(ssl, fd);
-                    /* IP-literal hostname check (X509_VERIFY_PARAM_set1_ip_asc
-                     * via SSL_get0_param, not SSL_set1_host -- see
-                     * include/openssl/ssl.h's own comment on why those are
-                     * genuinely different verification rules and why the
-                     * SSL-level convenience wrapper doesn't exist for IP
-                     * literals): `host` is always a dotted-quad per
-                     * sqw_net_parse_url()'s own documented limitation,
-                     * matched here against the cert's SAN "IP Address"
-                     * entries (SQS/gen_dev_cert.sh bakes in
-                     * "IP:127.0.0.1" for exactly this). A real DNS
-                     * hostname target would need SSL_set1_host() instead,
-                     * once this client grows real DNS resolution. */
-                    X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), host);
+                    /* Two genuinely different verification rules depending
+                     * on what kind of `host` this URL actually named (see
+                     * include/openssl/ssl.h's own comment on why an IP
+                     * literal can't use SSL_set1_host): a dotted-quad
+                     * literal (SQS, always -- SQS/gen_dev_cert.sh bakes in
+                     * "IP:127.0.0.1" as a SAN "IP Address" entry
+                     * specifically for this) is matched via
+                     * X509_VERIFY_PARAM_set1_ip_asc; a real hostname
+                     * (any actual internet site) is matched via
+                     * SSL_set1_host against the cert's SAN "DNS Name"
+                     * entries instead -- and ALSO needs SNI
+                     * (SSL_set_tlsext_host_name) so a server hosting
+                     * multiple sites on one IP (true of essentially every
+                     * real HTTPS site today, behind a CDN or otherwise)
+                     * serves the right certificate in the first place; SNI
+                     * is meaningless for an IP-literal target (there's no
+                     * name to indicate) so it's only sent in this branch. */
+                    if (sqw_net_looks_like_ip_literal(host)) {
+                        X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), host);
+                    } else {
+                        SSL_set1_host(ssl, host);
+                        SSL_set_tlsext_host_name(ssl, host);
+                    }
                     if (SSL_connect(ssl) <= 0) conn_ok = 0;
                 }
                 if (conn_ok) {
@@ -236,7 +253,25 @@ static void *sqw_net_worker(void *arg) {
     r->body = body;
     r->body_len = body_len;
     r->ready = 1;
+    /* If the main thread abandoned this fetch while it was still in
+     * flight (see SqwNetResult's own "abandoned" field comment and
+     * sqw_net_result_abandon()'s), nobody else holds a pointer to `r`
+     * any more -- this worker is the only thing that still does, so it's
+     * the one that must free it, right here, still under the lock (no
+     * other thread can be touching `r` at this point: the main thread
+     * gave up its own reference before setting `abandoned`, and no third
+     * thread ever gets one). This is the actual fix for a real,
+     * reproducible "free(): invalid pointer" crash hit during this
+     * project's own live testing -- the OLD code had the main thread
+     * free `r` immediately on cancellation, which this exact worker
+     * would then still write through after it was already freed. */
+    int was_abandoned = r->abandoned;
     pthread_mutex_unlock(&r->mutex);
+    if (was_abandoned) {
+        pthread_mutex_destroy(&r->mutex);
+        if (r->body) free(r->body);
+        free(r);
+    }
     if (fa->body) free(fa->body);
     free(fa);
     return NULL;
@@ -249,6 +284,7 @@ SqwNetResult *sqw_net_fetch_async_ex(const char *url, const char *method, const 
     r->success = 0;
     r->body = NULL;
     r->body_len = 0;
+    r->abandoned = 0;
 
     SqwNetFetchArgs *fa = (SqwNetFetchArgs *)malloc(sizeof(SqwNetFetchArgs));
     fa->result = r;
@@ -279,4 +315,22 @@ void sqw_net_result_free(SqwNetResult *r) {
     pthread_mutex_destroy(&r->mutex);
     if (r->body) free(r->body);
     free(r);
+}
+
+void sqw_net_result_abandon(SqwNetResult *r) {
+    pthread_mutex_lock(&r->mutex);
+    int already_ready = r->ready;
+    if (!already_ready) r->abandoned = 1;
+    pthread_mutex_unlock(&r->mutex);
+    /* Already finished (its worker thread is done and will never touch
+     * `r` again) -- safe to free right here, right now, exactly like
+     * sqw_net_result_free() itself. Otherwise leave `r` alone entirely:
+     * its still-running worker thread now owns it (via the "abandoned"
+     * flag just set) and will free it itself once it finishes -- see
+     * that worker's own comment. */
+    if (already_ready) {
+        pthread_mutex_destroy(&r->mutex);
+        if (r->body) free(r->body);
+        free(r);
+    }
 }

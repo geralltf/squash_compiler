@@ -232,7 +232,14 @@ void sqw_renderer_draw(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cmd,
         float y1 = ((by + b->h) / viewport_h) * 2.0f - 1.0f;
 
         float cr, cg, cb;
-        box_color(b->kind, &cr, &cg, &cb);
+        /* A real CSS background-color (see css.h/css.c) always wins over
+         * the built-in per-tag placeholder palette -- that palette exists
+         * purely as a fallback for elements/pages with no matching CSS at
+         * all (including every one of this project's own local test
+         * pages, none of which carry a <style> block), not as a real
+         * browser's default appearance. */
+        if (b->node->css_has_bg) { cr = b->node->css_bg[0]; cg = b->node->css_bg[1]; cb = b->node->css_bg[2]; }
+        else box_color(b->kind, &cr, &cg, &cb);
 
         SqwVertex tl, tr, bl, br;
         tl.x = x0; tl.y = y0; tl.r = cr; tl.g = cg; tl.b = cb;

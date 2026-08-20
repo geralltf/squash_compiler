@@ -24,6 +24,17 @@ typedef struct {
     int success;
     char *body;     /* heap, NUL-terminated response body; owned by this struct */
     long body_len;
+    /* Set by sqw_net_result_abandon() when the main thread starts a NEW
+     * fetch while this one is still in flight (a fast Go-button/anchor
+     * click, or -- confirmed as a REAL, reproducible crash during this
+     * project's own live testing -- another window-event handler firing
+     * a second fetch before the first completed) -- see that function's
+     * own comment for why this exists at all: freeing `r` immediately on
+     * the main thread the moment it's superseded is a real
+     * use-after-free once the background worker thread (still running,
+     * with no way to know it's been cancelled) later locks `mutex` and
+     * writes through this same, by-then-freed pointer. */
+    int abandoned;
 } SqwNetResult;
 
 /* Starts a fetch of `url` via `method` ("GET"/"POST"/"PUT"/"DELETE") on a
@@ -37,5 +48,17 @@ SqwNetResult *sqw_net_fetch_async_ex(const char *url, const char *method, const 
 /* GET-only convenience wrapper: sqw_net_fetch_async_ex(url, "GET", NULL, 0). */
 SqwNetResult *sqw_net_fetch_async(const char *url);
 void sqw_net_result_free(SqwNetResult *r);
+/* Call this instead of sqw_net_result_free() when giving up on a fetch
+ * that might still be in flight (starting a replacement fetch before the
+ * old one's `ready` was ever observed true) -- see SqwNetResult's own
+ * "abandoned" field comment for exactly why sqw_net_result_free() itself
+ * isn't safe here. Ownership of `r` transfers to its own background
+ * worker thread: if the worker is already done (ready), this frees `r`
+ * immediately, same as sqw_net_result_free(); otherwise it just marks
+ * `r` abandoned and returns without touching its memory again -- the
+ * worker thread frees it itself once it finishes, instead of the usual
+ * "caller reads ready/success/body then frees" hand-off. Either way, the
+ * caller must not touch `r` again after calling this. */
+void sqw_net_result_abandon(SqwNetResult *r);
 
 #endif

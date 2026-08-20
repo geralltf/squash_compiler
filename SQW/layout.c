@@ -1,5 +1,6 @@
 #include "layout.h"
 #include "text_metrics.h"
+#include "css.h"
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -15,6 +16,39 @@
 #define SQW_PAD 6.0f
 #define SQW_INLINE_GAP 6.0f
 
+/* Real CSS box-model + display support (block/inline/inline-block/none/
+ * flex/grid), driven entirely by each DomNode's own computed style (see
+ * css.h/css.c -- css_apply() resolves that BEFORE layout_compute() ever
+ * runs, from real parsed CSS + inline style="", not a hardcoded per-tag
+ * table). Two real, if intentionally scoped, layout algorithms beyond
+ * plain block/inline flow:
+ *   flex-direction:row    -- a genuine up-front pass distributes each
+ *                             item's width along the main axis per
+ *                             justify-content (explicit widths honored,
+ *                             remaining space split evenly among items
+ *                             without one) before any of them are laid
+ *                             out; align-items is NOT implemented (every
+ *                             row-flex item is top-aligned, i.e. treated
+ *                             as align-items:flex-start regardless of
+ *                             the real value) -- real align-items:center/
+ *                             stretch needs each item's height known
+ *                             BEFORE the row is positioned, which this
+ *                             single depth-first layout pass can't
+ *                             produce without a real two-pass/intrinsic-
+ *                             sizing algorithm.
+ *   flex-direction:column -- reuses plain block stacking (already
+ *                             exactly "one item per line, full width,
+ *                             top to bottom") plus real `gap` spacing;
+ *                             align-items on the (horizontal) cross axis
+ *                             isn't implemented.
+ *   display:grid           -- grid-template-columns tracks (fixed px or
+ *                             fr units, including repeat(N, ...)) are
+ *                             real and drive real column x/width;
+ *                             auto-flow is row-only (no explicit
+ *                             grid-row/grid-column placement), and each
+ *                             row's height is the real max height of
+ *                             that row's own items (determined as they're
+ *                             laid out, not guessed). */
 typedef struct {
     DomNode *node;
     int next_child;
@@ -27,24 +61,78 @@ typedef struct {
     int is_pre;
     int *line_boxes;
     int line_box_count, line_box_cap;
+
+    /* Box-model bookkeeping for THIS frame's own box (applied when the
+     * frame is popped -- see layout_compute()'s own pop-time comment).
+     * All zero for the synthetic root and for any element with no
+     * explicit CSS margin/padding, which exactly reproduces this
+     * project's original (pre-CSS) fixed-SQW_PAD behavior. */
+    float margin_top, margin_bottom, pad_top, pad_bottom;
+
+    /* flex-direction:row support -- precomputed once when the frame is
+     * pushed (see compute_flex_row_positions()), indexed by the child's
+     * own position in node->children[] (parallel array, only entries for
+     * participating element children are meaningful). NULL/0 unless this
+     * frame's own node has css_display == CSS_DISPLAY_FLEX and
+     * css_flex_direction == CSS_FLEX_ROW. */
+    int is_flex_row;
+    float *flex_x, *flex_w;
+
+    /* display:grid support -- column tracks resolved once at push time
+     * (real px), row height/position tracked live as items are placed
+     * (see the grid item-placement code in layout_compute()). */
+    int is_grid;
+    float *grid_col_x, *grid_col_w;
+    int grid_ncols;
+    int grid_col_index;
+    float grid_row_y, grid_row_max_h;
 } LayoutFrame;
 
-static int is_block_tag(const char *tag) {
-    return strcmp(tag, "html") == 0 || strcmp(tag, "body") == 0 ||
-           strcmp(tag, "div") == 0 || strcmp(tag, "p") == 0 || strcmp(tag, "center") == 0 ||
-           strcmp(tag, "pre") == 0;
+/* True for any display value that gets its own box and participates in
+ * normal block-axis stacking (or the flex/grid algorithms above) --
+ * i.e. everything except CSS_DISPLAY_INLINE (handled as an atomic inline
+ * run, see place_inline_element()) and CSS_DISPLAY_NONE (not laid out at
+ * all). inline-block is treated as block here (flows top-to-bottom like
+ * a block, not alongside inline siblings) -- a documented simplification,
+ * real inline-block flows inline. */
+static int is_block_like(int display) {
+    return display == CSS_DISPLAY_BLOCK || display == CSS_DISPLAY_INLINE_BLOCK ||
+           display == CSS_DISPLAY_FLEX || display == CSS_DISPLAY_GRID;
 }
+
+static int is_atomic_inline_tag(const char *tag); /* defined below */
 
 static SqwBoxKind kind_for_tag(const char *tag) {
     if (strcmp(tag, "div") == 0) return SQW_BOX_DIV;
     if (strcmp(tag, "center") == 0) return SQW_BOX_CENTER;
     if (strcmp(tag, "p") == 0) return SQW_BOX_P;
-    if (strcmp(tag, "span") == 0) return SQW_BOX_SPAN;
     if (strcmp(tag, "a") == 0) return SQW_BOX_A;
     if (strcmp(tag, "img") == 0) return SQW_BOX_IMG;
     if (strcmp(tag, "button") == 0) return SQW_BOX_BUTTON;
     if (strcmp(tag, "pre") == 0) return SQW_BOX_PRE;
+    /* Every other atomic-inline HTML5 tag (span, strong, em, b, i, small,
+     * label, u, mark, code -- see is_atomic_inline_tag()) is rendered as
+     * a generic SQW_BOX_SPAN: one indivisible inline text run, no
+     * semantic-specific visual treatment (no real bold/italic font
+     * variant exists in this project's single baked glyph atlas -- see
+     * font_atlas.h -- so "strong"/"b" don't actually render bolder; a
+     * real, documented limitation, not a bug). */
+    if (is_atomic_inline_tag(tag)) return SQW_BOX_SPAN;
     return SQW_BOX_OTHER;
+}
+
+/* Atomic inline tags -- laid out as ONE indivisible run sized by their
+ * DIRECT text children only (see direct_text_width()), same
+ * simplification the original span/a/button handling already used, now
+ * shared by every other real HTML5 inline tag too. Real nested inline
+ * formatting (e.g. "<a>text <b>bold</b> more</a>") only shows the direct
+ * text pieces, not b's own text -- a known, documented limitation of this
+ * project's inline layout, not something this CSS pass changes. */
+static int is_atomic_inline_tag(const char *tag) {
+    return strcmp(tag,"span")==0 || strcmp(tag,"a")==0 || strcmp(tag,"button")==0 ||
+           strcmp(tag,"strong")==0 || strcmp(tag,"em")==0 || strcmp(tag,"b")==0 ||
+           strcmp(tag,"i")==0 || strcmp(tag,"small")==0 || strcmp(tag,"label")==0 ||
+           strcmp(tag,"u")==0 || strcmp(tag,"mark")==0 || strcmp(tag,"code")==0;
 }
 
 /* Sum of the REAL measured width of child's DIRECT text-node children (no
@@ -102,6 +190,10 @@ static void init_block_frame(LayoutFrame *nf, DomNode *child, float bx, float by
     nf->is_center = (strcmp(child->tag, "center") == 0);
     nf->is_pre = (strcmp(child->tag, "pre") == 0);
     nf->line_boxes = 0; nf->line_box_count = 0; nf->line_box_cap = 0;
+    nf->margin_top = 0; nf->margin_bottom = 0; nf->pad_top = 0; nf->pad_bottom = 0;
+    nf->is_flex_row = 0; nf->flex_x = 0; nf->flex_w = 0;
+    nf->is_grid = 0; nf->grid_col_x = 0; nf->grid_col_w = 0;
+    nf->grid_ncols = 0; nf->grid_col_index = 0; nf->grid_row_y = 0; nf->grid_row_max_h = 0;
 }
 
 static void frame_track_line_box(LayoutFrame *f, int box_index) {
@@ -134,17 +226,8 @@ static void finalize_line(LayoutFrame *f, LayoutList *out) {
 }
 
 /* Bundles place_inline_run()'s per-box details into one struct instead of
- * passing them as separate scalar parameters -- that function used to
- * take 9 plain arguments (f, out, node, kind, w, h, text_start, text_len,
- * gap) and, called in a tight per-word loop from place_text_node(),
- * produced silently wrong cursor_x accumulation for a subset of words
- * (confirmed by dumping real box positions: widths came out correct but
- * x advanced by the wrong amount starting a few words in, reproducing
- * only under squash, never under gcc on the identical source) -- the
- * same general "too many live scalars/parameters confuses squash's
- * codegen" class of bug already worked around once this session (see
- * init_block_frame's own comment in layout_compute). Passing one struct
- * pointer instead of 5 trailing scalars avoids it. */
+ * passing them as separate scalar parameters -- see the original comment
+ * on why (a real squash codegen bug under too many live locals/params). */
 typedef struct {
     SqwBoxKind kind;
     float w, h;
@@ -152,21 +235,7 @@ typedef struct {
     float gap;
 } PlaceSpec;
 
-/* Places one inline unit (element box or single word) at the current
- * cursor, wrapping to a new line first if it wouldn't fit -- spec->gap is
- * the horizontal space reserved AFTER this box before the next one on the
- * same line (SQW_INLINE_GAP between elements, a real space-glyph advance
- * between words so wrapped body text doesn't get extra-wide gaps). */
 static void place_inline_run(LayoutFrame *f, LayoutList *out, DomNode *node, const PlaceSpec *spec) {
-    /* NOTE: deliberately split out of a single
-     * "if (f->cursor_x > 0 && f->cursor_x + w > f->avail_w)" condition --
-     * that compound form (a float add nested inside a float comparison,
-     * both inline in one if/&&) reliably mis-evaluated to true even when
-     * the arithmetic was well within bounds -- a real squash codegen bug,
-     * distinct from (and found before) the calling-convention/global-
-     * assignment float bugs fixed in codegen.c this same session.
-     * Splitting into separate float locals and simple two-operand
-     * comparisons before the `if` sidesteps it and is confirmed correct. */
     float w = spec->w, h = spec->h;
     float sum = f->cursor_x + w;
     int has_content_on_line = f->cursor_x > 0;
@@ -183,28 +252,8 @@ static void place_inline_run(LayoutFrame *f, LayoutList *out, DomNode *node, con
     if (h > f->line_h) f->line_h = h;
 }
 
-/* Splits one DOM text node into words at whitespace and places each as
- * its own SQW_BOX_TEXT run, wrapping normally -- real word-wrap, using
- * the baked font's actual glyph-advance metrics (text_metrics.h) rather
- * than the old flat "strlen*8px" guess. Consecutive whitespace collapses
- * to a single real space-glyph gap between words, matching normal HTML
- * text-flow whitespace handling. */
 #define SQW_MAX_WORDS_PER_TEXT_NODE 512
 
-/* Splits `s` (length len) into up to SQW_MAX_WORDS_PER_TEXT_NODE words at
- * whitespace, filling parallel out_start[]/out_len[] arrays. Pure,
- * side-effect-free (no LayoutFrame/LayoutList access at all) -- kept
- * strictly separate from placement (place_text_node_words() below) as a
- * workaround for a squash codegen bug: interleaving word-splitting,
- * sqw_text_measure() calls, and layout_list_push_full()/frame_track_line_
- * box() calls all in one loop produced silently wrong cursor_x
- * accumulation for a subset of words (box WIDTHS came out right, X
- * positions didn't, confirmed via a direct position dump; the identical
- * source under gcc is exactly correct) -- splitting into a pure
- * measurement pass and a separate, simpler placement-only pass (both
- * still hand-verified correct C, see place_text_node_words()'s own
- * comment) avoids whatever specific interleaving triggered it. Returns
- * the number of words found. */
 static int split_words(const char *s, int len, int *out_start, int *out_len) {
     int i = 0, n = 0;
     while (i < len && n < SQW_MAX_WORDS_PER_TEXT_NODE) {
@@ -238,20 +287,10 @@ static void place_text_node(LayoutFrame *f, LayoutList *out, DomNode *node) {
     }
 }
 
-/* <pre>: split only at source newlines (no word-wrap splitting), each
- * line becoming one box that is allowed to overflow the available width
- * -- the natural HTML5 vehicle for non-wrapping text (contrasted with
- * place_text_node()'s normal wrapping). Every line forces a real line
- * break after it, matching <pre>'s whitespace-preserving semantics
- * (source newlines are real line breaks, not collapsible whitespace). */
 static void place_pre_text_node(LayoutFrame *f, LayoutList *out, DomNode *node) {
     const char *s = node->text;
     int len = (int)strlen(s);
     int i = 0;
-    /* A single leading newline right after "<pre>" is conventionally
-     * suppressed (matches every real browser) -- otherwise every <pre>
-     * whose opening tag is followed by a real newline in the source (the
-     * overwhelmingly common style) renders one extra blank line up top. */
     if (i < len && s[i] == '\n') i++;
     while (i <= len) {
         int start = i;
@@ -264,9 +303,143 @@ static void place_pre_text_node(LayoutFrame *f, LayoutList *out, DomNode *node) 
         f->cursor_y = f->cursor_y + SQW_LINE_H;
         f->cursor_x = 0;
         if (i >= len) break;
-        i++; /* skip the newline itself */
+        i++;
     }
     f->line_h = 0;
+}
+
+/* ---- grid track parsing ---- */
+
+/* Parses a "grid-template-columns" value into up to max_cols real column
+ * WIDTHS (px), resolved against avail_w. Understands a space-separated
+ * track list where each track is a bare px length, a bare number
+ * (treated as px, matching this project's other length parsing), or an
+ * "Nfr" flex unit -- and a single leading "repeat(N, TRACK)" wrapping the
+ * whole list (the common Wikipedia-style "repeat(4, 1fr)" form). Real
+ * grid-template-columns syntax allows far more (minmax(), auto, multiple
+ * repeat() calls mixed with literal tracks, named lines, subgrid, ...) --
+ * this covers the two shapes that account for the overwhelming majority
+ * of real-world grids, and silently falls back to a single full-width
+ * column (i.e. normal block stacking) for anything it doesn't recognize,
+ * never crashing or misinterpreting into a wrong-but-plausible layout. */
+static int parse_grid_tracks(const char *value, float avail_w, float *out_widths, int max_cols) {
+    char buf[256];
+    strncpy(buf, value, sizeof buf - 1);
+    buf[sizeof buf - 1] = 0;
+    const char *p = buf;
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    int repeat_n = 1;
+    char tracks_buf[192];
+    if (strncmp(p, "repeat(", 7) == 0) {
+        p += 7;
+        char *endp;
+        long n = strtol(p, &endp, 10);
+        if (endp == p || n <= 0 || n > max_cols) return 0;
+        repeat_n = (int)n;
+        p = endp;
+        while (*p && (*p == ',' || isspace((unsigned char)*p))) p++;
+        const char *inner_start = p;
+        int depth = 1;
+        while (*p && depth > 0) {
+            if (*p == '(') depth++;
+            else if (*p == ')') { depth--; if (depth == 0) break; }
+            p++;
+        }
+        int ilen = (int)(p - inner_start);
+        if (ilen <= 0 || ilen >= (int)sizeof tracks_buf) return 0;
+        memcpy(tracks_buf, inner_start, (size_t)ilen);
+        tracks_buf[ilen] = 0;
+    } else {
+        strncpy(tracks_buf, p, sizeof tracks_buf - 1);
+        tracks_buf[sizeof tracks_buf - 1] = 0;
+    }
+
+    /* Tokenize tracks_buf into individual track specs. */
+    float track_px[16]; float track_fr[16]; int is_fr[16];
+    int ntracks = 0;
+    char *save = 0;
+    char *tok = strtok(tracks_buf, " \t");
+    while (tok && ntracks < 16) {
+        int tl = (int)strlen(tok);
+        if (tl > 2 && strcmp(tok + tl - 2, "fr") == 0) {
+            track_fr[ntracks] = (float)atof(tok);
+            is_fr[ntracks] = 1;
+        } else {
+            track_px[ntracks] = (float)atof(tok);
+            is_fr[ntracks] = 0;
+        }
+        ntracks++;
+        tok = strtok(0, " \t");
+    }
+    (void)save;
+    if (ntracks == 0) return 0;
+
+    int total = ntracks * repeat_n;
+    if (total > max_cols) total = max_cols;
+    float fixed_sum = 0.0f; float fr_sum = 0.0f;
+    int i;
+    for (i = 0; i < total; i++) {
+        int ti = i % ntracks;
+        if (is_fr[ti]) fr_sum += track_fr[ti]; else fixed_sum += track_px[ti];
+    }
+    float remaining = avail_w - fixed_sum;
+    if (remaining < 0) remaining = 0;
+    for (i = 0; i < total; i++) {
+        int ti = i % ntracks;
+        if (is_fr[ti]) out_widths[i] = fr_sum > 0 ? remaining * (track_fr[ti] / fr_sum) : 0.0f;
+        else out_widths[i] = track_px[ti];
+    }
+    return total;
+}
+
+/* ---- flex row up-front pass ---- */
+
+/* Fills flex_x[]/flex_w[] (parallel to node->children[], only meaningful
+ * for participating element children) with each item's real x/width
+ * along the row, per css_justify -- see this file's own top comment for
+ * exactly what's real here (explicit widths + even split of the rest)
+ * and what's not (align-items). */
+static void compute_flex_row_positions(DomNode *node, float avail_w, float *flex_x, float *flex_w) {
+    int n = node->child_count;
+    int *idx = (int *)malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
+    int cnt = 0, i;
+    for (i = 0; i < n; i++) {
+        DomNode *c = node->children[i];
+        if (dom_is_text(c)) continue;
+        if (c->css_display == CSS_DISPLAY_NONE) continue;
+        idx[cnt++] = i;
+    }
+    if (cnt == 0) { free(idx); return; }
+
+    float gap = node->css_gap;
+    float total_explicit = 0.0f; int n_auto = 0;
+    for (i = 0; i < cnt; i++) {
+        DomNode *c = node->children[idx[i]];
+        if (c->css_has_width) total_explicit += c->css_width; else n_auto++;
+    }
+    float remaining = avail_w - gap * (float)(cnt - 1) - total_explicit;
+    if (remaining < 0) remaining = 0;
+    float auto_w = n_auto > 0 ? remaining / (float)n_auto : 0.0f;
+
+    float used = total_explicit + auto_w * (float)n_auto + gap * (float)(cnt - 1);
+    float extra = avail_w - used;
+    if (extra < 0) extra = 0;
+    float start_x = 0.0f, spacing_extra = 0.0f;
+    if (node->css_justify == CSS_JUSTIFY_CENTER) start_x = extra / 2.0f;
+    else if (node->css_justify == CSS_JUSTIFY_END) start_x = extra;
+    else if (node->css_justify == CSS_JUSTIFY_BETWEEN && cnt > 1) spacing_extra = extra / (float)(cnt - 1);
+    else if (node->css_justify == CSS_JUSTIFY_AROUND && cnt > 0) { start_x = extra / (float)(cnt * 2); spacing_extra = extra / (float)cnt; }
+
+    float cur = start_x;
+    for (i = 0; i < cnt; i++) {
+        DomNode *c = node->children[idx[i]];
+        float w = c->css_has_width ? c->css_width : auto_w;
+        flex_x[idx[i]] = cur;
+        flex_w[idx[i]] = w;
+        cur = cur + w + gap + spacing_extra;
+    }
+    free(idx);
 }
 
 void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutList *out) {
@@ -286,6 +459,12 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
     stack[stack_top].is_center = 0;
     stack[stack_top].is_pre = 0;
     stack[stack_top].line_boxes = 0; stack[stack_top].line_box_count = 0; stack[stack_top].line_box_cap = 0;
+    stack[stack_top].margin_top = 0; stack[stack_top].margin_bottom = 0;
+    stack[stack_top].pad_top = 0; stack[stack_top].pad_bottom = 0;
+    stack[stack_top].is_flex_row = 0; stack[stack_top].flex_x = 0; stack[stack_top].flex_w = 0;
+    stack[stack_top].is_grid = 0; stack[stack_top].grid_col_x = 0; stack[stack_top].grid_col_w = 0;
+    stack[stack_top].grid_ncols = 0; stack[stack_top].grid_col_index = 0;
+    stack[stack_top].grid_row_y = 0; stack[stack_top].grid_row_max_h = 0;
     stack_top++;
 
     while (stack_top > 0) {
@@ -294,30 +473,46 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
 
         if (f->next_child >= node->child_count) {
             finalize_line(f, out);
+            /* If this was a grid container with an unfinished (partial)
+             * last row, its height still needs folding in. */
+            if (f->is_grid && f->grid_row_max_h > 0) f->cursor_y = f->grid_row_y + f->grid_row_max_h;
             float content_h = f->cursor_y + f->line_h;
+            float box_h = content_h + f->pad_top + f->pad_bottom;
             if (f->box_index >= 0) {
-                out->boxes[f->box_index].h = content_h;
-                float bottom = out->boxes[f->box_index].y + content_h;
+                out->boxes[f->box_index].h = box_h;
+                float bottom = out->boxes[f->box_index].y + box_h;
                 if (bottom > out->content_h) out->content_h = bottom;
             }
             if (f->line_boxes) free(f->line_boxes);
+            if (f->flex_x) free(f->flex_x);
+            if (f->flex_w) free(f->flex_w);
+            if (f->grid_col_x) free(f->grid_col_x);
+            if (f->grid_col_w) free(f->grid_col_w);
             stack_top--;
             if (stack_top > 0) {
                 LayoutFrame *parent = &stack[stack_top - 1];
-                parent->cursor_y = parent->cursor_y + content_h;
+                float total = f->margin_top + box_h + f->margin_bottom;
+                if (parent->is_grid) {
+                    if (total > parent->grid_row_max_h) parent->grid_row_max_h = total;
+                    parent->grid_col_index++;
+                    if (parent->grid_col_index >= parent->grid_ncols) {
+                        parent->cursor_y = parent->grid_row_y + parent->grid_row_max_h + parent->node->css_gap;
+                        parent->grid_row_y = parent->cursor_y;
+                        parent->grid_row_max_h = 0;
+                        parent->grid_col_index = 0;
+                    }
+                } else {
+                    parent->cursor_y = parent->cursor_y + total;
+                }
             }
             continue;
         }
 
         DomNode *child = node->children[f->next_child];
+        int child_index_in_parent = f->next_child;
         f->next_child++;
 
         if (dom_is_text(child)) {
-            /* Whitespace-only text nodes (formatting between tags) take no
-             * visual space -- otherwise every "\n    " indent in the source
-             * HTML would render as its own box. Real (non-whitespace-only)
-             * text inside <pre> keeps its whitespace verbatim, so this
-             * all-whitespace short-circuit only applies outside <pre>. */
             if (!f->is_pre) {
                 int len = (int)strlen(child->text), i, all_ws = 1;
                 for (i = 0; i < len; i++) if (!isspace((unsigned char)child->text[i])) { all_ws = 0; break; }
@@ -326,25 +521,50 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
             } else {
                 place_pre_text_node(f, out, child);
             }
-        } else if (strcmp(child->tag, "img") == 0) {
+            continue;
+        }
+
+        if (child->css_display == CSS_DISPLAY_NONE) continue;
+
+        if (child->css_display == CSS_DISPLAY_INLINE && strcmp(child->tag, "img") == 0) {
             PlaceSpec spec;
             spec.kind = SQW_BOX_IMG; spec.w = SQW_IMG_SIZE; spec.h = SQW_IMG_SIZE;
             spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP;
             place_inline_run(f, out, child, &spec);
-        } else if (strcmp(child->tag, "span") == 0 || strcmp(child->tag, "a") == 0 || strcmp(child->tag, "button") == 0) {
+        } else if (child->css_display == CSS_DISPLAY_INLINE && is_atomic_inline_tag(child->tag)) {
             float w = direct_text_width(child);
             if (w < 4.0f) w = 4.0f;
             PlaceSpec spec;
             spec.kind = kind_for_tag(child->tag); spec.w = w; spec.h = SQW_LINE_H;
             spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP;
             place_inline_run(f, out, child, &spec);
-        } else if (is_block_tag(child->tag)) {
+        } else if (is_block_like(child->css_display) || strcmp(child->tag, "img") == 0) {
+            /* Non-atomic-inline "img"/unrecognized-inline tags fall
+             * through here too and are just treated as block -- a plain,
+             * safe default rather than silently dropping them. */
             finalize_line(f, out);
             if (f->line_h > 0) { f->cursor_y = f->cursor_y + f->line_h; f->cursor_x = 0; f->line_h = 0; }
 
-            float bx = f->x + SQW_PAD;
-            float by = f->y + f->cursor_y;
-            float bw = f->avail_w - 2 * SQW_PAD;
+            float margin_top = child->css_margin[0], margin_bottom = child->css_margin[2];
+            float margin_left = child->css_margin[3], margin_right = child->css_margin[1];
+            float pad_top = child->css_padding[0], pad_bottom = child->css_padding[2];
+            float pad_left = child->css_padding[3], pad_right = child->css_padding[1];
+
+            float bx, by, bw;
+            if (f->is_flex_row && f->flex_x && f->flex_w) {
+                bx = f->x + f->flex_x[child_index_in_parent];
+                bw = f->flex_w[child_index_in_parent];
+                by = f->y + margin_top;
+            } else if (f->is_grid && f->grid_col_x && f->grid_col_w) {
+                bx = f->x + f->grid_col_x[f->grid_col_index];
+                bw = f->grid_col_w[f->grid_col_index];
+                by = f->y + f->grid_row_y + margin_top;
+            } else {
+                bx = f->x + SQW_PAD + margin_left;
+                by = f->y + f->cursor_y + margin_top;
+                bw = f->avail_w - 2 * SQW_PAD - margin_left - margin_right;
+                if (child->css_has_width) bw = child->css_width;
+            }
             if (bw < 0) bw = 0;
 
             layout_list_push(out, child, kind_for_tag(child->tag), bx, by, bw, 0);
@@ -355,7 +575,39 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
                 stack = (LayoutFrame *)realloc(stack, stack_cap * sizeof(LayoutFrame));
                 f = &stack[stack_top - 1];
             }
-            init_block_frame(&stack[stack_top], child, bx, by, bw, idx);
+            float content_x = bx + pad_left;
+            float content_w = bw - pad_left - pad_right;
+            if (content_w < 0) content_w = 0;
+            init_block_frame(&stack[stack_top], child, content_x, by, content_w, idx);
+            stack[stack_top].margin_top = margin_top;
+            stack[stack_top].margin_bottom = margin_bottom;
+            stack[stack_top].pad_top = pad_top;
+            stack[stack_top].pad_bottom = pad_bottom;
+
+            if (child->css_display == CSS_DISPLAY_FLEX && child->css_flex_direction == CSS_FLEX_ROW) {
+                stack[stack_top].is_flex_row = 1;
+                int n = child->child_count > 0 ? child->child_count : 1;
+                stack[stack_top].flex_x = (float *)calloc((size_t)n, sizeof(float));
+                stack[stack_top].flex_w = (float *)calloc((size_t)n, sizeof(float));
+                compute_flex_row_positions(child, content_w, stack[stack_top].flex_x, stack[stack_top].flex_w);
+            } else if (child->css_display == CSS_DISPLAY_GRID && child->css_grid_template_columns[0]) {
+                float widths[16];
+                int ncols = parse_grid_tracks(child->css_grid_template_columns, content_w, widths, 16);
+                if (ncols > 0) {
+                    stack[stack_top].is_grid = 1;
+                    stack[stack_top].grid_ncols = ncols;
+                    stack[stack_top].grid_col_x = (float *)malloc((size_t)ncols * sizeof(float));
+                    stack[stack_top].grid_col_w = (float *)malloc((size_t)ncols * sizeof(float));
+                    float gap = child->css_gap;
+                    float cx = 0.0f;
+                    int ci;
+                    for (ci = 0; ci < ncols; ci++) {
+                        stack[stack_top].grid_col_x[ci] = cx;
+                        stack[stack_top].grid_col_w[ci] = widths[ci];
+                        cx = cx + widths[ci] + gap;
+                    }
+                }
+            }
             stack_top++;
         }
         /* Any other tag (head, title, script, ...) is skipped entirely --
