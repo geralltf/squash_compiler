@@ -249,14 +249,23 @@ void sqw_renderer_draw(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cmd,
         if (b->node->css_has_bg) { cr = b->node->css_bg[0]; cg = b->node->css_bg[1]; cb = b->node->css_bg[2]; }
         else box_color(b->kind, &cr, &cg, &cb);
 
-        SqwVertex tl, tr, bl, br;
-        tl.x = x0; tl.y = y0; tl.r = cr; tl.g = cg; tl.b = cb;
-        tr.x = x1; tr.y = y0; tr.r = cr; tr.g = cg; tr.b = cb;
-        bl.x = x0; bl.y = y1; bl.r = cr; bl.g = cg; bl.b = cb;
-        br.x = x1; br.y = y1; br.r = cr; br.g = cg; br.b = cb;
-
-        verts[vcount++] = tl; verts[vcount++] = tr; verts[vcount++] = bl;
-        verts[vcount++] = tr; verts[vcount++] = br; verts[vcount++] = bl;
+        /* Field-by-field writes into verts[vcount], NOT a whole-SqwVertex-
+         * struct assignment through a post-incremented index (the
+         * previous "verts[vcount++] = tl;" form) -- that pattern is a
+         * real, confirmed squash codegen bug: it silently drops/corrupts
+         * the write instead of erroring, so every draw call downstream
+         * still reports VK_SUCCESS but nothing ever reaches the
+         * swapchain image (confirmed via a direct VRAM readback,
+         * bypassing X11/the compositor entirely, and by bisecting this
+         * exact loop in an isolated repro until this one change fixed
+         * it). Six field-assignment groups instead of six struct-copies,
+         * same six vertices per box. */
+        verts[vcount].x = x0; verts[vcount].y = y0; verts[vcount].r = cr; verts[vcount].g = cg; verts[vcount].b = cb; vcount++;
+        verts[vcount].x = x1; verts[vcount].y = y0; verts[vcount].r = cr; verts[vcount].g = cg; verts[vcount].b = cb; vcount++;
+        verts[vcount].x = x0; verts[vcount].y = y1; verts[vcount].r = cr; verts[vcount].g = cg; verts[vcount].b = cb; vcount++;
+        verts[vcount].x = x1; verts[vcount].y = y0; verts[vcount].r = cr; verts[vcount].g = cg; verts[vcount].b = cb; vcount++;
+        verts[vcount].x = x1; verts[vcount].y = y1; verts[vcount].r = cr; verts[vcount].g = cg; verts[vcount].b = cb; vcount++;
+        verts[vcount].x = x0; verts[vcount].y = y1; verts[vcount].r = cr; verts[vcount].g = cg; verts[vcount].b = cb; vcount++;
     }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipeline);
@@ -292,14 +301,16 @@ void sqw_renderer_draw_rect(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cm
     float x1 = ((x + w) / viewport_w) * 2.0f - 1.0f;
     float y1 = ((y + h) / viewport_h) * 2.0f - 1.0f;
 
+    /* Field-by-field writes, not a whole-SqwVertex-struct assignment into
+     * verts[base_vertex + N] -- see sqw_renderer_draw()'s own comment on
+     * this exact pattern being a real, confirmed squash codegen bug. */
     SqwVertex *verts = (SqwVertex *)r->mapped;
-    SqwVertex tl, trv, bl, br;
-    tl.x = x0; tl.y = y0; tl.r = red; tl.g = green; tl.b = blue;
-    trv.x = x1; trv.y = y0; trv.r = red; trv.g = green; trv.b = blue;
-    bl.x = x0; bl.y = y1; bl.r = red; bl.g = green; bl.b = blue;
-    br.x = x1; br.y = y1; br.r = red; br.g = green; br.b = blue;
-    verts[base_vertex + 0] = tl; verts[base_vertex + 1] = trv; verts[base_vertex + 2] = bl;
-    verts[base_vertex + 3] = trv; verts[base_vertex + 4] = br; verts[base_vertex + 5] = bl;
+    verts[base_vertex + 0].x = x0; verts[base_vertex + 0].y = y0; verts[base_vertex + 0].r = red; verts[base_vertex + 0].g = green; verts[base_vertex + 0].b = blue;
+    verts[base_vertex + 1].x = x1; verts[base_vertex + 1].y = y0; verts[base_vertex + 1].r = red; verts[base_vertex + 1].g = green; verts[base_vertex + 1].b = blue;
+    verts[base_vertex + 2].x = x0; verts[base_vertex + 2].y = y1; verts[base_vertex + 2].r = red; verts[base_vertex + 2].g = green; verts[base_vertex + 2].b = blue;
+    verts[base_vertex + 3].x = x1; verts[base_vertex + 3].y = y0; verts[base_vertex + 3].r = red; verts[base_vertex + 3].g = green; verts[base_vertex + 3].b = blue;
+    verts[base_vertex + 4].x = x1; verts[base_vertex + 4].y = y1; verts[base_vertex + 4].r = red; verts[base_vertex + 4].g = green; verts[base_vertex + 4].b = blue;
+    verts[base_vertex + 5].x = x0; verts[base_vertex + 5].y = y1; verts[base_vertex + 5].r = red; verts[base_vertex + 5].g = green; verts[base_vertex + 5].b = blue;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, r->pipeline);
     VkDeviceSize offset0 = 0;

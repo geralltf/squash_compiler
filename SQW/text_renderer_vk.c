@@ -265,15 +265,19 @@ void sqw_text_draw_char(SqwTextRenderer *tr, float x, float y, char ch, float sc
     float x1 = (px1 / viewport_w) * 2.0f - 1.0f;
     float y1 = (py1 / viewport_h) * 2.0f - 1.0f;
 
+    /* Field-by-field writes into verts[tr->vcount], not a whole-
+     * SqwGlyphVertex-struct assignment through a post-incremented index
+     * -- see renderer_vk.c's sqw_renderer_draw() for the full story: that
+     * pattern is a real, confirmed squash codegen bug (silently drops/
+     * corrupts the write instead of erroring), and this is the same
+     * pattern in the glyph renderer. */
     SqwGlyphVertex *verts = (SqwGlyphVertex *)tr->mapped;
-    SqwGlyphVertex tl, trv, bl, br;
-    tl.x = x0; tl.y = y0; tl.u = u0; tl.v = v0; tl.r = r; tl.g = g; tl.b = b; tl.a = a;
-    trv.x = x1; trv.y = y0; trv.u = u1; trv.v = v0; trv.r = r; trv.g = g; trv.b = b; trv.a = a;
-    bl.x = x0; bl.y = y1; bl.u = u0; bl.v = v1; bl.r = r; bl.g = g; bl.b = b; bl.a = a;
-    br.x = x1; br.y = y1; br.u = u1; br.v = v1; br.r = r; br.g = g; br.b = b; br.a = a;
-
-    verts[tr->vcount++] = tl; verts[tr->vcount++] = trv; verts[tr->vcount++] = bl;
-    verts[tr->vcount++] = trv; verts[tr->vcount++] = br; verts[tr->vcount++] = bl;
+    verts[tr->vcount].x = x0; verts[tr->vcount].y = y0; verts[tr->vcount].u = u0; verts[tr->vcount].v = v0; verts[tr->vcount].r = r; verts[tr->vcount].g = g; verts[tr->vcount].b = b; verts[tr->vcount].a = a; tr->vcount++;
+    verts[tr->vcount].x = x1; verts[tr->vcount].y = y0; verts[tr->vcount].u = u1; verts[tr->vcount].v = v0; verts[tr->vcount].r = r; verts[tr->vcount].g = g; verts[tr->vcount].b = b; verts[tr->vcount].a = a; tr->vcount++;
+    verts[tr->vcount].x = x0; verts[tr->vcount].y = y1; verts[tr->vcount].u = u0; verts[tr->vcount].v = v1; verts[tr->vcount].r = r; verts[tr->vcount].g = g; verts[tr->vcount].b = b; verts[tr->vcount].a = a; tr->vcount++;
+    verts[tr->vcount].x = x1; verts[tr->vcount].y = y0; verts[tr->vcount].u = u1; verts[tr->vcount].v = v0; verts[tr->vcount].r = r; verts[tr->vcount].g = g; verts[tr->vcount].b = b; verts[tr->vcount].a = a; tr->vcount++;
+    verts[tr->vcount].x = x1; verts[tr->vcount].y = y1; verts[tr->vcount].u = u1; verts[tr->vcount].v = v1; verts[tr->vcount].r = r; verts[tr->vcount].g = g; verts[tr->vcount].b = b; verts[tr->vcount].a = a; tr->vcount++;
+    verts[tr->vcount].x = x0; verts[tr->vcount].y = y1; verts[tr->vcount].u = u0; verts[tr->vcount].v = v1; verts[tr->vcount].r = r; verts[tr->vcount].g = g; verts[tr->vcount].b = b; verts[tr->vcount].a = a; tr->vcount++;
 }
 
 void sqw_text_draw_string(SqwTextRenderer *tr, float x, float y, const char *s, int len, float scale,

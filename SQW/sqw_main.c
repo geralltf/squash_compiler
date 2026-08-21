@@ -429,7 +429,7 @@ static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer 
             if (b->kind == SQW_BOX_TEXTAREA) {
                 /* Real multi-line rendering: form_value's own embedded
                  * newlines (typed Enter presses, see the keyboard-input
-                 * handling in main()'s event loop) split it into lines,
+                 * handling in sqw_handle_event()) split it into lines,
                  * each drawn on its own row -- no word-wrap (matches
                  * <pre>'s own non-wrapping convention, layout.c), a
                  * textarea only breaks where the user actually pressed
@@ -478,8 +478,8 @@ static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer 
  * wheel/keyboard paging, hover/click hit-test) subtracts this from the
  * window's real height so page content never renders under or gets
  * covered by it; every content DRAW call adds it back as a Y offset so
- * content actually paints below it instead of underneath. See main()'s
- * event loop for both halves of that split. */
+ * content actually paints below it instead of underneath. See
+ * sqw_handle_event()/sqw_draw_frame() for both halves of that split. */
 #define SQW_TOOLBAR_H 48.0f /* +8px over the original 40 (4 for top margin, 4 more for bottom -- URL bar text was clipping vertically both ways) */
 #define SQW_URLBAR_PAD 8.0f
 #define SQW_URLBAR_GO_W 56.0f
@@ -651,11 +651,11 @@ static void form_collect_visit(DomNode *node, int depth, void *ctx) {
  * reuses sqw_go_navigate() unchanged (it already knows how to route a
  * scheme'd vs. local URL). POST against an http(s) action uses
  * sqw_net_fetch_async_ex() directly with the pairs as the request body,
- * plugged into the SAME pending_fetch polling the main loop already uses
- * for anchor-clicked network fetches, which doesn't care which call
- * started the fetch. A local (non-http) action has no server behind it
- * to POST to in this project, so it's treated the same as GET there
- * (a documented, deliberate limitation, not a bug). */
+ * plugged into the SAME pending_fetch polling sqw_check_pending_fetch()
+ * already uses for anchor-clicked network fetches, which doesn't care
+ * which call started the fetch. A local (non-http) action has no server
+ * behind it to POST to in this project, so it's treated the same as GET
+ * there (a documented, deliberate limitation, not a bug). */
 static void submit_form(DomNode *form, SqwHistoryStack *hist, char *current_url,
                          SqwNetResult **pending_fetch, char *pending_fetch_url,
                          DomNode **root_ptr, LayoutList *boxes_ptr, char *current_dir, char *current_base_url,
@@ -766,11 +766,11 @@ static int point_in_rect(float px, float py, const LayoutBox *r) {
 }
 
 /* Geometry of the Back button, URL bar, and Go button, shared by
- * draw_toolbar() (so rendering matches) and main()'s own toolbar
- * click-hit-testing (so a click lands exactly where it visually looks
- * like it should) -- computing this in two places from scratch would
- * eventually drift out of sync. Back sits leftmost (standard browser
- * layout), URL bar shrinks to make room for it. */
+ * draw_toolbar() (so rendering matches) and sqw_handle_event()'s own
+ * toolbar click-hit-testing (so a click lands exactly where it visually
+ * looks like it should) -- computing this in two places from scratch
+ * would eventually drift out of sync. Back sits leftmost (standard
+ * browser layout), URL bar shrinks to make room for it. */
 static void toolbar_geometry(float viewport_w, LayoutBox *out_back, LayoutBox *out_bar, LayoutBox *out_go) {
     float bar_h = SQW_TOOLBAR_H - 2.0f * SQW_URLBAR_PAD;
     out_back->x = SQW_URLBAR_PAD; out_back->y = SQW_URLBAR_PAD;
@@ -788,8 +788,8 @@ static void toolbar_geometry(float viewport_w, LayoutBox *out_back, LayoutBox *o
  * go back to), URL text box (border tints blue while focused, matching
  * real browsers' own focus-ring convention), the typed text with a simple
  * end-of-text caret when focused (editing is append/backspace-at-the-end
- * only -- see main()'s SDL_EVENT_TEXT_INPUT/BACKSPACE handling -- so the
- * caret is always exactly at the text's own end, no separate
+ * only -- see sqw_handle_event()'s SDL_EVENT_TEXT_INPUT/BACKSPACE handling
+ * -- so the caret is always exactly at the text's own end, no separate
  * cursor-position tracking needed), and the Go button. */
 static void draw_toolbar(SqwVkContext *vk, SqwRenderer *renderer, SqwTextRenderer *tr, VkCommandBuffer cmd,
                           const char *url_text, int url_focused, int can_go_back, float viewport_w, float viewport_h) {
@@ -836,6 +836,636 @@ static void draw_toolbar(SqwVkContext *vk, SqwRenderer *renderer, SqwTextRendere
         SQW_TEXT_SCALE, 1.0f, 1.0f, 1.0f, 1.0f, viewport_w, viewport_h);
 }
 
+/* Bundles every piece of state that used to live as one of main()'s own
+ * several-dozen local variables, spanning its entire ~700-line body, into
+ * one heap-allocated struct instead (malloc'd once in main(), same
+ * off-the-C-stack rationale as vk/renderer/text_renderer/hist below --
+ * see their own original comments). This is the actual fix for SQW's
+ * "empty window" bug: main() used to be a single huge function carrying
+ * every one of these as a live local for its whole body (window/vk state,
+ * scroll/drag/hover/focus tracking, URL-bar/history/fetch state, the
+ * SQW_TEST_* synthetic-input knobs, ...) -- a real, confirmed squash
+ * codegen bug where a function with too many simultaneously-live locals
+ * silently miscompiles instead of erroring (the same documented bug class
+ * layout.c's own PlaceSpec comment already worked around elsewhere in this
+ * project). Concretely, this build's Vulkan draw calls all reported
+ * VK_SUCCESS every frame but nothing ever actually reached the swapchain
+ * image -- confirmed via a direct VRAM readback (vkCmdCopyImageToBuffer),
+ * bypassing X11/the compositor entirely -- while a byte-identical
+ * renderer/pipeline in a much smaller standalone program rendered
+ * correctly. Splitting main()'s body into the several SqwAppState-taking
+ * functions below (each with a far smaller, non-overlapping live-local set
+ * of its own) fixes it. */
+typedef struct {
+    SDL_Window *window;
+    SqwVkContext *vk;
+    SqwRenderer *renderer;
+    SqwTextRenderer *text_renderer;
+
+    DomNode *root;
+    LayoutList boxes;
+    SqwHistoryStack *hist;
+
+    char current_dir[SQW_PATH_MAX];
+    char current_base_url[SQW_PATH_MAX];
+    char current_url[SQW_PATH_MAX];
+    char pending_fetch_url[SQW_PATH_MAX];
+    SqwNetResult *pending_fetch; /* non-NULL while an http(s):// fetch is outstanding */
+
+    float viewport_w, viewport_h;
+    float scroll_x, scroll_y;
+
+    DomNode *hover_node;
+    DomNode *active_node;
+    DomNode *focused_input; /* mirrors DomNode::form_focused, see its own comment */
+
+    int dragging_v, dragging_h;
+    float drag_anchor_mouse, drag_anchor_scroll;
+    float mouse_x, mouse_y;
+
+    char url_bar_text[SQW_PATH_MAX];
+    int url_bar_focused;
+
+    int running;
+    int frame_count;
+
+    /* SQW_TEST_* env-var-driven synthetic input -- see
+     * sqw_push_test_events()'s own comment. */
+    int test_click_x, test_click_y;
+    int test_click2_x, test_click2_y;
+    int test_click3_x, test_click3_y;
+    SDL_Scancode test_key;
+    const char *test_type_text;
+} SqwAppState;
+
+/* Test-only synthetic input hook (SQW_TEST_CLICK_X/Y and friends): pushes
+ * real SDL events through SDL_PushEvent() -- not a shortcut that bypasses
+ * the event loop, the exact same SDL_PollEvent() path a real XTest-injected
+ * or physical click takes -- at fixed frames so local automated testing
+ * doesn't depend on XTest actually reaching this window (confirmed
+ * unreliable under this environment's Xwayland setup:
+ * XTestFakeMotionEvent/ButtonEvent calls succeeded but SQW never received a
+ * single resulting SDL_EVENT_MOUSE_MOTION). Off by default; only active
+ * with the relevant env var(s) set. */
+static void sqw_push_test_events(SqwAppState *st) {
+    if (st->test_click_x >= 0 && st->frame_count == 30) {
+        SDL_Event mv; memset(&mv, 0, sizeof mv);
+        mv.type = SDL_EVENT_MOUSE_MOTION;
+        mv.motion.x = (float)st->test_click_x; mv.motion.y = (float)st->test_click_y;
+        SDL_PushEvent(&mv);
+    }
+    if (st->test_click_x >= 0 && st->frame_count == 60) {
+        SDL_Event bd; memset(&bd, 0, sizeof bd);
+        bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        bd.button.button = 1; bd.button.down = 1;
+        bd.button.x = (float)st->test_click_x; bd.button.y = (float)st->test_click_y;
+        SDL_PushEvent(&bd);
+        SDL_Event bu; memset(&bu, 0, sizeof bu);
+        bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        bu.button.button = 1; bu.button.down = 0;
+        bu.button.x = (float)st->test_click_x; bu.button.y = (float)st->test_click_y;
+        SDL_PushEvent(&bu);
+    }
+    /* SQW_TEST_TYPE_TEXT: clicks the URL bar to focus it (frame 10), then
+     * pushes one real SDL_EVENT_TEXT_INPUT carrying the whole string (frame
+     * 20) -- exercises the exact same append path a sequence of real
+     * per-character events would (sqw_handle_event()'s own handler just
+     * appends whatever ev->text.text contains, whether that's one
+     * character or many), without needing a separate synthetic event per
+     * character. */
+    if (st->test_type_text && st->frame_count == 10) {
+        SDL_Event mv; memset(&mv, 0, sizeof mv);
+        mv.type = SDL_EVENT_MOUSE_MOTION;
+        mv.motion.x = 100.0f; mv.motion.y = 20.0f;
+        SDL_PushEvent(&mv);
+        SDL_Event bd; memset(&bd, 0, sizeof bd);
+        bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        bd.button.button = 1; bd.button.down = 1;
+        bd.button.x = 100.0f; bd.button.y = 20.0f;
+        SDL_PushEvent(&bd);
+        SDL_Event bu; memset(&bu, 0, sizeof bu);
+        bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        bu.button.button = 1; bu.button.down = 0;
+        bu.button.x = 100.0f; bu.button.y = 20.0f;
+        SDL_PushEvent(&bu);
+    }
+    if (st->test_type_text && st->frame_count == 20) {
+        SDL_Event ti; memset(&ti, 0, sizeof ti);
+        ti.type = SDL_EVENT_TEXT_INPUT;
+        ti.text.text = st->test_type_text;
+        SDL_PushEvent(&ti);
+    }
+    /* SQW_TEST_CLICK2_X/Y (frame 300, well after the first click's own
+     * network fetch at frame 60 has had time to complete): a SECOND
+     * synthetic click, for testing multi-step navigation (e.g. "click a
+     * network anchor, then click a relative link on the page it fetched")
+     * that a single test click can't exercise. Same real-event-loop
+     * rationale as SQW_TEST_CLICK_X/Y above. */
+    if (st->test_click2_x >= 0 && st->frame_count == 270) {
+        SDL_Event mv; memset(&mv, 0, sizeof mv);
+        mv.type = SDL_EVENT_MOUSE_MOTION;
+        mv.motion.x = (float)st->test_click2_x; mv.motion.y = (float)st->test_click2_y;
+        SDL_PushEvent(&mv);
+    }
+    if (st->test_click2_x >= 0 && st->frame_count == 290) {
+        SDL_Event bd; memset(&bd, 0, sizeof bd);
+        bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        bd.button.button = 1; bd.button.down = 1;
+        bd.button.x = (float)st->test_click2_x; bd.button.y = (float)st->test_click2_y;
+        SDL_PushEvent(&bd);
+        SDL_Event bu; memset(&bu, 0, sizeof bu);
+        bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        bu.button.button = 1; bu.button.down = 0;
+        bu.button.x = (float)st->test_click2_x; bu.button.y = (float)st->test_click2_y;
+        SDL_PushEvent(&bu);
+    }
+    /* SQW_TEST_CLICK3_X/Y (frame 500, well after CLICK2's own frame 290 --
+     * plenty of margin for that navigation, local or network, to have
+     * settled): a THIRD synthetic click, added specifically to exercise
+     * the Back button end-to-end in headless/automated runs (click
+     * somewhere that navigates, click again, then click Back and confirm
+     * it actually lands back on the first page). Same real-event-loop
+     * rationale as SQW_TEST_CLICK_X/Y above. */
+    if (st->test_click3_x >= 0 && st->frame_count == 480) {
+        SDL_Event mv; memset(&mv, 0, sizeof mv);
+        mv.type = SDL_EVENT_MOUSE_MOTION;
+        mv.motion.x = (float)st->test_click3_x; mv.motion.y = (float)st->test_click3_y;
+        SDL_PushEvent(&mv);
+    }
+    if (st->test_click3_x >= 0 && st->frame_count == 500) {
+        SDL_Event bd; memset(&bd, 0, sizeof bd);
+        bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        bd.button.button = 1; bd.button.down = 1;
+        bd.button.x = (float)st->test_click3_x; bd.button.y = (float)st->test_click3_y;
+        SDL_PushEvent(&bd);
+        SDL_Event bu; memset(&bu, 0, sizeof bu);
+        bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        bu.button.button = 1; bu.button.down = 0;
+        bu.button.x = (float)st->test_click3_x; bu.button.y = (float)st->test_click3_y;
+        SDL_PushEvent(&bu);
+    }
+    if (st->test_key != SDL_SCANCODE_UNKNOWN && st->frame_count == 30) {
+        SDL_Event kd; memset(&kd, 0, sizeof kd);
+        kd.type = SDL_EVENT_KEY_DOWN;
+        kd.key.scancode = st->test_key; kd.key.down = true;
+        SDL_PushEvent(&kd);
+    }
+}
+
+/* Handles exactly one already-polled SDL event -- the entire body of what
+ * used to be main()'s own "while (SDL_PollEvent(&ev))" loop, unchanged
+ * logic-for-logic, just addressing every piece of persistent state through
+ * `st` instead of a same-named local. See SqwAppState's own comment for
+ * why this split exists. */
+static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
+    if (ev->type == SDL_EVENT_QUIT || ev->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+        st->running = 0;
+    } else if (ev->type == SDL_EVENT_WINDOW_RESIZED) {
+        int new_w = ev->window.data1, new_h = ev->window.data2;
+        if (new_w > 0 && new_h > 0) {
+            uint32_t packed = ((uint32_t)new_w << 16) | (uint32_t)new_h;
+            sqw_vk_recreate_swapchain(st->vk, packed);
+            st->viewport_w = (float)new_w; st->viewport_h = (float)new_h;
+            layout_list_free(&st->boxes);
+            layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes);
+            st->scroll_x = clamp_scroll(st->scroll_x, st->boxes.content_w, st->viewport_w);
+            st->scroll_y = clamp_scroll(st->scroll_y, st->boxes.content_h, st->viewport_h - SQW_TOOLBAR_H);
+        }
+    } else if (ev->type == SDL_EVENT_MOUSE_MOTION) {
+        st->mouse_x = ev->motion.x; st->mouse_y = ev->motion.y;
+        if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[motion] x=%d y=%d\n", (int)st->mouse_x, (int)st->mouse_y); fflush(stderr); }
+        if (st->dragging_v) {
+            float content_view_h = st->viewport_h - SQW_TOOLBAR_H;
+            float thumb_h = content_view_h * (content_view_h / st->boxes.content_h);
+            if (thumb_h < SQW_SCROLLBAR_MIN_THUMB) thumb_h = SQW_SCROLLBAR_MIN_THUMB;
+            float track_free = content_view_h - thumb_h;
+            float delta_mouse = st->mouse_y - st->drag_anchor_mouse;
+            float scale = (track_free > 0) ? (st->boxes.content_h - content_view_h) / track_free : 0.0f;
+            st->scroll_y = clamp_scroll(st->drag_anchor_scroll + delta_mouse * scale, st->boxes.content_h, content_view_h);
+        } else if (st->dragging_h) {
+            float thumb_w = st->viewport_w * (st->viewport_w / st->boxes.content_w);
+            if (thumb_w < SQW_SCROLLBAR_MIN_THUMB) thumb_w = SQW_SCROLLBAR_MIN_THUMB;
+            float track_free = st->viewport_w - thumb_w;
+            float delta_mouse = st->mouse_x - st->drag_anchor_mouse;
+            float scale = (track_free > 0) ? (st->boxes.content_w - st->viewport_w) / track_free : 0.0f;
+            st->scroll_x = clamp_scroll(st->drag_anchor_scroll + delta_mouse * scale, st->boxes.content_w, st->viewport_w);
+        } else if (st->mouse_y >= SQW_TOOLBAR_H) {
+            float cx = st->mouse_x + st->scroll_x, cy = (st->mouse_y - SQW_TOOLBAR_H) + st->scroll_y;
+            int hit = layout_hit_test(&st->boxes, cx, cy);
+            DomNode *new_hover = NULL;
+            if (hit >= 0) {
+                SqwBoxKind k = st->boxes.boxes[hit].kind;
+                if (k == SQW_BOX_A || k == SQW_BOX_BUTTON) new_hover = st->boxes.boxes[hit].node;
+                else if (k == SQW_BOX_TEXT) new_hover = interactive_ancestor(st->boxes.boxes[hit].node);
+            }
+            if (new_hover != st->hover_node) {
+                if (st->hover_node) st->hover_node->hover = 0;
+                if (new_hover) new_hover->hover = 1;
+                st->hover_node = new_hover;
+            }
+        } else if (st->hover_node) {
+            /* Cursor moved up into the toolbar -- clear any page hover
+             * state so a link doesn't stay highlighted while the mouse is
+             * nowhere near it. */
+            st->hover_node->hover = 0;
+            st->hover_node = NULL;
+        }
+    } else if (ev->type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev->button.button == 1) {
+        if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[button-down] x=%d y=%d\n", (int)ev->button.x, (int)ev->button.y); fflush(stderr); }
+        if (ev->button.y < SQW_TOOLBAR_H) {
+            /* Toolbar interactions (Back/bar/Go) can all trigger a fresh
+             * navigation that frees the current DOM tree -- drop keyboard
+             * focus from any page input first so focused_input never ends
+             * up pointing at a freed node (mirrors url_bar_focused's own
+             * unconditional reset a few lines below in each branch). */
+            if (st->focused_input) { st->focused_input->form_focused = 0; st->focused_input = NULL; }
+            LayoutBox back, bar, go;
+            toolbar_geometry(st->viewport_w, &back, &bar, &go);
+            if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[toolbar-click] back=(%d,%d,%d,%d) bar=(%d,%d,%d,%d) go=(%d,%d,%d,%d)\n", (int)back.x,(int)back.y,(int)back.w,(int)back.h,(int)bar.x,(int)bar.y,(int)bar.w,(int)bar.h,(int)go.x,(int)go.y,(int)go.w,(int)go.h); fflush(stderr); }
+            if (point_in_rect(ev->button.x, ev->button.y, &back)) {
+                st->url_bar_focused = 0;
+                char popped_url[SQW_PATH_MAX];
+                if (sqw_history_pop(st->hist, popped_url, sizeof popped_url)) {
+                    sqw_go_navigate(popped_url, 0, st->hist, st->current_url, &st->pending_fetch, st->pending_fetch_url,
+                                    &st->root, &st->boxes, st->current_dir, st->current_base_url, st->viewport_w, st->viewport_h,
+                                    &st->scroll_x, &st->scroll_y, &st->hover_node, &st->active_node);
+                    strncpy(st->url_bar_text, popped_url, sizeof st->url_bar_text - 1);
+                    st->url_bar_text[sizeof st->url_bar_text - 1] = 0;
+                }
+            } else if (point_in_rect(ev->button.x, ev->button.y, &bar)) {
+                st->url_bar_focused = 1;
+            } else if (point_in_rect(ev->button.x, ev->button.y, &go)) {
+                st->url_bar_focused = 0;
+                sqw_go_navigate(st->url_bar_text, 1, st->hist, st->current_url, &st->pending_fetch, st->pending_fetch_url,
+                                &st->root, &st->boxes, st->current_dir, st->current_base_url, st->viewport_w, st->viewport_h,
+                                &st->scroll_x, &st->scroll_y, &st->hover_node, &st->active_node);
+            } else {
+                st->url_bar_focused = 0;
+            }
+        } else {
+            st->url_bar_focused = 0; /* clicking the page always exits URL-bar editing, same as a real browser */
+            LayoutBox vthumb, hthumb;
+            float content_view_h = st->viewport_h - SQW_TOOLBAR_H;
+            vthumb.w = 0; hthumb.h = 0;
+            if (st->boxes.content_h > content_view_h) {
+                float thumb_h = content_view_h * (content_view_h / st->boxes.content_h);
+                if (thumb_h < SQW_SCROLLBAR_MIN_THUMB) thumb_h = SQW_SCROLLBAR_MIN_THUMB;
+                float track_free = content_view_h - thumb_h;
+                float max_scroll = st->boxes.content_h - content_view_h;
+                float thumb_y = SQW_TOOLBAR_H + ((max_scroll > 0) ? (st->scroll_y / max_scroll) * track_free : 0.0f);
+                vthumb.x = st->viewport_w - SQW_SCROLLBAR_THICKNESS; vthumb.y = thumb_y;
+                vthumb.w = SQW_SCROLLBAR_THICKNESS; vthumb.h = thumb_h;
+            }
+            if (st->boxes.content_w > st->viewport_w) {
+                float thumb_w = st->viewport_w * (st->viewport_w / st->boxes.content_w);
+                if (thumb_w < SQW_SCROLLBAR_MIN_THUMB) thumb_w = SQW_SCROLLBAR_MIN_THUMB;
+                float track_free = st->viewport_w - thumb_w;
+                float max_scroll = st->boxes.content_w - st->viewport_w;
+                float thumb_x = (max_scroll > 0) ? (st->scroll_x / max_scroll) * track_free : 0.0f;
+                hthumb.x = thumb_x; hthumb.y = st->viewport_h - SQW_SCROLLBAR_THICKNESS;
+                hthumb.w = thumb_w; hthumb.h = SQW_SCROLLBAR_THICKNESS;
+            }
+            LayoutBox vtrack, htrack;
+            vtrack.x = st->viewport_w - SQW_SCROLLBAR_THICKNESS; vtrack.y = SQW_TOOLBAR_H;
+            vtrack.w = SQW_SCROLLBAR_THICKNESS; vtrack.h = content_view_h;
+            htrack.x = 0.0f; htrack.y = st->viewport_h - SQW_SCROLLBAR_THICKNESS;
+            htrack.w = st->viewport_w; htrack.h = SQW_SCROLLBAR_THICKNESS;
+            if (vthumb.w > 0 && point_in_rect(ev->button.x, ev->button.y, &vthumb)) {
+                st->dragging_v = 1; st->drag_anchor_mouse = ev->button.y; st->drag_anchor_scroll = st->scroll_y;
+            } else if (hthumb.h > 0 && point_in_rect(ev->button.x, ev->button.y, &hthumb)) {
+                st->dragging_h = 1; st->drag_anchor_mouse = ev->button.x; st->drag_anchor_scroll = st->scroll_x;
+            } else if (vthumb.w > 0 && point_in_rect(ev->button.x, ev->button.y, &vtrack)) {
+                /* Clicked the empty ("white") vertical track above/below
+                 * the thumb -- classic scrollbar UX (matches every desktop
+                 * toolkit's own track-click behavior) is to page up/down
+                 * by one viewport-height toward the click, NOT to jump the
+                 * thumb straight to the click position (that jump-to-click
+                 * behavior is scrollbar THUMB-drag/click behavior, a
+                 * different, more abrupt interaction some platforms use
+                 * only as an opt-in setting) and NOT to start a drag -- a
+                 * single track click is one discrete page step, not a drag
+                 * gesture. */
+                if (ev->button.y < vthumb.y) st->scroll_y = clamp_scroll(st->scroll_y - content_view_h, st->boxes.content_h, content_view_h);
+                else st->scroll_y = clamp_scroll(st->scroll_y + content_view_h, st->boxes.content_h, content_view_h);
+            } else if (hthumb.h > 0 && point_in_rect(ev->button.x, ev->button.y, &htrack)) {
+                if (ev->button.x < hthumb.x) st->scroll_x = clamp_scroll(st->scroll_x - st->viewport_w, st->boxes.content_w, st->viewport_w);
+                else st->scroll_x = clamp_scroll(st->scroll_x + st->viewport_w, st->boxes.content_w, st->viewport_w);
+            } else {
+                float cx = ev->button.x + st->scroll_x, cy = (ev->button.y - SQW_TOOLBAR_H) + st->scroll_y;
+                int hit = layout_hit_test(&st->boxes, cx, cy);
+                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[hit-test] cx=%d cy=%d hit=%d kind=%d\n", (int)cx, (int)cy, hit, hit>=0?(int)st->boxes.boxes[hit].kind:-1); fflush(stderr); }
+                if (hit >= 0) {
+                    LayoutBox *hb = &st->boxes.boxes[hit];
+                    /* See interactive_ancestor()'s own comment: a hit on
+                     * an <a>/<button>'s own label text lands on the word's
+                     * SQW_BOX_TEXT run, not the enclosing interactive box,
+                     * so resolve to the real clickable element first. */
+                    DomNode *target_node = hb->node;
+                    SqwBoxKind eff_kind = hb->kind;
+                    if (eff_kind == SQW_BOX_TEXT) {
+                        DomNode *anc = interactive_ancestor(hb->node);
+                        if (anc) { target_node = anc; eff_kind = (strcmp(anc->tag, "a") == 0) ? SQW_BOX_A : SQW_BOX_BUTTON; }
+                    }
+                    /* Clicking outside any input/textarea drops keyboard
+                     * focus from whichever one had it -- reassigned below
+                     * if this exact click lands on one instead. */
+                    if (st->focused_input) { st->focused_input->form_focused = 0; st->focused_input = NULL; }
+                    if (eff_kind == SQW_BOX_A && find_enclosing_form(target_node)) {
+                        /* Per this project's own explicit spec (an anchor
+                         * inside a <form> submits it, same as a real
+                         * submit button -- non-standard real HTML5
+                         * behavior, deliberately added here on request
+                         * rather than following the href normally). */
+                        target_node->visited = 1;
+                        target_node->active = 1;
+                        st->active_node = target_node;
+                        submit_form(find_enclosing_form(target_node), st->hist, st->current_url,
+                                    &st->pending_fetch, st->pending_fetch_url, &st->root, &st->boxes,
+                                    st->current_dir, st->current_base_url, st->viewport_w, st->viewport_h,
+                                    &st->scroll_x, &st->scroll_y, &st->hover_node, &st->active_node);
+                    } else if (eff_kind == SQW_BOX_A) {
+                        target_node->visited = 1;
+                        target_node->active = 1;
+                        st->active_node = target_node;
+                        /* dom_get_attr's returned pointer lives inside the
+                         * CURRENT DomNode -- copy it before any possible
+                         * sqw_navigate_to() below, which frees the whole
+                         * current DOM tree (including target_node itself,
+                         * making it/active_node dangling). */
+                        const char *href_raw = dom_get_attr(target_node, "href");
+                        char href[SQW_PATH_MAX];
+                        href[0] = 0;
+                        if (href_raw) { strncpy(href, href_raw, sizeof href - 1); href[sizeof href - 1] = 0; }
+                        if (href[0] == '#') {
+                            DomNode *target = find_by_id(st->root, href + 1);
+                            LayoutBox *tb = target ? find_box_for_node(&st->boxes, target) : NULL;
+                            if (tb) st->scroll_y = clamp_scroll(tb->y, st->boxes.content_h, content_view_h);
+                        } else if (strncmp(href, "http://", 7) == 0 || strncmp(href, "https://", 8) == 0) {
+                            if (st->pending_fetch) {
+                                /* A previous fetch is still outstanding --
+                                 * abandon it (NOT sqw_net_result_free() --
+                                 * see that function's own comment: freeing
+                                 * it here while its background worker
+                                 * thread might still be running is a real
+                                 * use-after-free, confirmed as an actual
+                                 * "free(): invalid pointer" crash during
+                                 * this project's own live testing) rather
+                                 * than leak it or race two responses
+                                 * against one DOM swap. */
+                                sqw_net_result_abandon(st->pending_fetch);
+                            }
+                            sqw_history_push(st->hist, st->current_url);
+                            fprintf(stderr, "SQW: fetching %s ...\n", href); fflush(stdout);
+                            strncpy(st->pending_fetch_url, href, sizeof st->pending_fetch_url - 1);
+                            st->pending_fetch_url[sizeof st->pending_fetch_url - 1] = 0;
+                            st->pending_fetch = sqw_net_fetch_async(href);
+                        } else if (href[0] && st->current_base_url[0]) {
+                            /* A plain relative href on a page that was
+                             * itself reached over the network resolves
+                             * against THAT page's own URL and is fetched
+                             * over the network too -- real browser
+                             * behavior, and the actual fix for "page 3
+                             * (reached via the network anchor) links back
+                             * to page 1 by a plain href=\"index.html\";
+                             * clicking it did nothing" (see
+                             * sqw_navigate_to_html()'s own comment for the
+                             * full story: current_base_url is empty for a
+                             * LOCALLY loaded page, which is what routes
+                             * this same href through the local branch
+                             * below instead). */
+                            char full_url[SQW_PATH_MAX];
+                            snprintf(full_url, sizeof full_url, "%s%s", st->current_base_url, href);
+                            if (st->pending_fetch) sqw_net_result_abandon(st->pending_fetch);
+                            sqw_history_push(st->hist, st->current_url);
+                            fprintf(stderr, "SQW: fetching %s ...\n", full_url); fflush(stdout);
+                            strncpy(st->pending_fetch_url, full_url, sizeof st->pending_fetch_url - 1);
+                            st->pending_fetch_url[sizeof st->pending_fetch_url - 1] = 0;
+                            st->pending_fetch = sqw_net_fetch_async(full_url);
+                        } else if (href[0]) {
+                            /* Local relative path: resolve against the
+                             * CURRENT page's own directory, not a fixed
+                             * base -- see sqw_dirname()'s comment. */
+                            char full_path[SQW_PATH_MAX];
+                            snprintf(full_path, sizeof full_path, "%s%s", st->current_dir, href);
+                            sqw_history_push(st->hist, st->current_url);
+                            sqw_navigate_to(full_path, &st->root, &st->boxes, st->current_dir, st->current_base_url, st->viewport_w, st->viewport_h);
+                            strncpy(st->url_bar_text, full_path, sizeof st->url_bar_text - 1); st->url_bar_text[sizeof st->url_bar_text - 1] = 0;
+                            strncpy(st->current_url, full_path, sizeof st->current_url - 1); st->current_url[sizeof st->current_url - 1] = 0;
+                            st->scroll_x = 0.0f; st->scroll_y = 0.0f;
+                            st->hover_node = NULL; st->active_node = NULL; st->focused_input = NULL; /* old DOM (and target_node) is gone */
+                        }
+                    } else if (eff_kind == SQW_BOX_BUTTON) {
+                        target_node->active = 1;
+                        st->active_node = target_node;
+                        /* A real <button> with no explicit "type" is
+                         * itself submit-by-default inside a form (the
+                         * actual HTML5 rule, not this project's own
+                         * relaxation); <input type="submit"> obviously
+                         * always is. type="button"/"reset" (an explicit
+                         * non-submit <button>, or an <input
+                         * type="button">) never submits. */
+                        const char *type = dom_get_attr(target_node, "type");
+                        int is_submit;
+                        if (strcmp(target_node->tag, "input") == 0) is_submit = type && strcmp(type, "submit") == 0;
+                        else is_submit = !type || strcmp(type, "submit") == 0;
+                        if (is_submit) {
+                            DomNode *form = find_enclosing_form(target_node);
+                            if (form) submit_form(form, st->hist, st->current_url, &st->pending_fetch, st->pending_fetch_url,
+                                                   &st->root, &st->boxes, st->current_dir, st->current_base_url, st->viewport_w, st->viewport_h,
+                                                   &st->scroll_x, &st->scroll_y, &st->hover_node, &st->active_node);
+                        }
+                    } else if (hb->kind == SQW_BOX_INPUT_TEXT || hb->kind == SQW_BOX_TEXTAREA) {
+                        target_node->form_focused = 1;
+                        st->focused_input = target_node;
+                    } else if (hb->kind == SQW_BOX_INPUT_CHECK) {
+                        const char *type = dom_get_attr(target_node, "type");
+                        if (type && strcmp(type, "radio") == 0) {
+                            /* Real radio-group exclusivity: only one
+                             * same-"name" radio within the same enclosing
+                             * <form> may be checked at once -- clear every
+                             * sibling radio in that group first, then
+                             * check this one (a click on an
+                             * already-checked radio stays checked, it just
+                             * can't be unchecked by clicking it again --
+                             * real browser behavior). */
+                            const char *name = dom_get_attr(target_node, "name");
+                            DomNode *form = find_enclosing_form(target_node);
+                            if (name && form) {
+                                RadioGroupCtx rgctx; rgctx.name = name; rgctx.skip = target_node;
+                                dom_walk(form, radio_group_clear_visit, &rgctx);
+                            }
+                            target_node->form_checked = 1;
+                        } else {
+                            target_node->form_checked = !target_node->form_checked;
+                        }
+                    }
+                }
+            }
+        }
+    } else if (ev->type == SDL_EVENT_MOUSE_BUTTON_UP && ev->button.button == 1) {
+        if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[button-up] x=%d y=%d\n", (int)ev->button.x, (int)ev->button.y); fflush(stderr); }
+        st->dragging_v = 0; st->dragging_h = 0;
+        if (st->active_node) { st->active_node->active = 0; st->active_node = NULL; }
+    } else if (ev->type == SDL_EVENT_MOUSE_WHEEL) {
+        st->scroll_y = clamp_scroll(st->scroll_y - ev->wheel.y * ((SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f)), st->boxes.content_h, st->viewport_h - SQW_TOOLBAR_H);
+        if (ev->wheel.x != 0.0f) st->scroll_x = clamp_scroll(st->scroll_x - ev->wheel.x * ((SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f)), st->boxes.content_w, st->viewport_w);
+    } else if (ev->type == SDL_EVENT_KEY_DOWN && st->url_bar_focused) {
+        if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[key-down-focused] scancode=%d\n", (int)ev->key.scancode); fflush(stderr); }
+        /* URL bar editing: Backspace trims the last character, Enter/
+         * Return submits (same as clicking Go), Escape cancels editing and
+         * reverts the bar to the current page's own URL/path. Everything
+         * else (including the page-scroll keys handled in the other
+         * branch below) is deliberately ignored while editing -- real
+         * browsers don't scroll the page out from under you while you're
+         * typing in the address bar either. */
+        int ulen = (int)strlen(st->url_bar_text);
+        if (ev->key.scancode == SDL_SCANCODE_BACKSPACE) {
+            if (ulen > 0) st->url_bar_text[ulen - 1] = 0;
+        } else if (ev->key.scancode == SDL_SCANCODE_RETURN) {
+            st->url_bar_focused = 0;
+            sqw_go_navigate(st->url_bar_text, 1, st->hist, st->current_url, &st->pending_fetch, st->pending_fetch_url,
+                            &st->root, &st->boxes, st->current_dir, st->current_base_url, st->viewport_w, st->viewport_h,
+                            &st->scroll_x, &st->scroll_y, &st->hover_node, &st->active_node);
+        } else if (ev->key.scancode == SDL_SCANCODE_ESCAPE) {
+            st->url_bar_focused = 0;
+            if (st->current_base_url[0]) { strncpy(st->url_bar_text, st->pending_fetch_url, sizeof st->url_bar_text - 1); }
+            else { snprintf(st->url_bar_text, sizeof st->url_bar_text, "%sindex.html", st->current_dir); }
+            st->url_bar_text[sizeof st->url_bar_text - 1] = 0;
+        }
+    } else if (ev->type == SDL_EVENT_KEY_DOWN && st->focused_input) {
+        if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[key-down-input-focused] scancode=%d\n", (int)ev->key.scancode); fflush(stderr); }
+        int flen = (int)strlen(st->focused_input->form_value);
+        if (ev->key.scancode == SDL_SCANCODE_BACKSPACE) {
+            if (flen > 0) st->focused_input->form_value[flen - 1] = 0;
+        } else if (ev->key.scancode == SDL_SCANCODE_RETURN) {
+            if (strcmp(st->focused_input->tag, "textarea") == 0) {
+                /* Real <textarea> behavior: Enter inserts a literal
+                 * newline into the field's own value instead of doing
+                 * anything form-wide -- draw_layout_text() already splits
+                 * form_value on '\n' into separate rendered lines. */
+                if (flen < (int)sizeof st->focused_input->form_value - 1) {
+                    st->focused_input->form_value[flen] = '\n';
+                    st->focused_input->form_value[flen + 1] = 0;
+                }
+            } else {
+                /* Real HTML5 behavior: Enter in a single-line text field
+                 * submits its enclosing form, same as clicking that
+                 * form's own submit control. */
+                DomNode *form = find_enclosing_form(st->focused_input);
+                if (form) {
+                    st->focused_input->form_focused = 0; st->focused_input = NULL;
+                    submit_form(form, st->hist, st->current_url, &st->pending_fetch, st->pending_fetch_url,
+                                &st->root, &st->boxes, st->current_dir, st->current_base_url, st->viewport_w, st->viewport_h,
+                                &st->scroll_x, &st->scroll_y, &st->hover_node, &st->active_node);
+                }
+            }
+        }
+    } else if (ev->type == SDL_EVENT_TEXT_INPUT && st->focused_input) {
+        if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[text-input-focused] text=\"%s\"\n", ev->text.text ? ev->text.text : "(null)"); fflush(stderr); }
+        int flen = (int)strlen(st->focused_input->form_value);
+        int tlen = (int)strlen(ev->text.text);
+        int room = (int)sizeof(st->focused_input->form_value) - 1 - flen;
+        if (tlen > room) tlen = room;
+        if (tlen > 0) { memcpy(st->focused_input->form_value + flen, ev->text.text, (size_t)tlen); st->focused_input->form_value[flen + tlen] = 0; }
+    } else if (ev->type == SDL_EVENT_TEXT_INPUT && st->url_bar_focused) {
+        /* Real, keyboard-layout-aware printable text (see
+         * PRIVATE_PumpEvents' own XLookupString comment) -- append-only,
+         * capped so it always leaves room for the final NUL. */
+        if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[text-input] text=\"%s\"\n", ev->text.text ? ev->text.text : "(null)"); fflush(stderr); }
+        int ulen = (int)strlen(st->url_bar_text);
+        int tlen = (int)strlen(ev->text.text);
+        int room = (int)sizeof(st->url_bar_text) - 1 - ulen;
+        if (tlen > room) tlen = room;
+        if (tlen > 0) { memcpy(st->url_bar_text + ulen, ev->text.text, (size_t)tlen); st->url_bar_text[ulen + tlen] = 0; }
+    } else if (ev->type == SDL_EVENT_TEXT_INPUT) {
+        if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[text-input] IGNORED (url_bar_focused=%d) text=\"%s\"\n", st->url_bar_focused, ev->text.text ? ev->text.text : "(null)"); fflush(stderr); }
+    } else if (ev->type == SDL_EVENT_KEY_DOWN) {
+        if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[key-down] scancode=%d\n", (int)ev->key.scancode); fflush(stderr); }
+        /* Page Up/Down page by one viewport (matches the scrollbar
+         * track-click behavior -- see its own comment), Home/End jump to
+         * the very top/bottom, Up/Down nudge by one text line -- the
+         * standard keyboard scrolling set every desktop browser/reader
+         * supports, translated from real X11 key events by
+         * SDL3_Build/sdl_core.inc's own PRIVATE_PumpEvents (only this
+         * small fixed set of navigation keys, not a full keymap -- see
+         * that function's own comment). */
+        float content_view_h = st->viewport_h - SQW_TOOLBAR_H;
+        if (ev->key.scancode == SDL_SCANCODE_PAGEDOWN) {
+            st->scroll_y = clamp_scroll(st->scroll_y + content_view_h, st->boxes.content_h, content_view_h);
+        } else if (ev->key.scancode == SDL_SCANCODE_PAGEUP) {
+            st->scroll_y = clamp_scroll(st->scroll_y - content_view_h, st->boxes.content_h, content_view_h);
+        } else if (ev->key.scancode == SDL_SCANCODE_HOME) {
+            st->scroll_y = 0.0f;
+        } else if (ev->key.scancode == SDL_SCANCODE_END) {
+            st->scroll_y = clamp_scroll(st->boxes.content_h, st->boxes.content_h, content_view_h);
+        } else if (ev->key.scancode == SDL_SCANCODE_DOWN) {
+            st->scroll_y = clamp_scroll(st->scroll_y + (SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f), st->boxes.content_h, content_view_h);
+        } else if (ev->key.scancode == SDL_SCANCODE_UP) {
+            st->scroll_y = clamp_scroll(st->scroll_y - (SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f), st->boxes.content_h, content_view_h);
+        }
+    }
+}
+
+/* Polls the outstanding background fetch (if any) started by an anchor
+ * click/form submit/Go-Enter/Back, and swaps in the fetched page once it's
+ * ready -- see net_client.h's own comment on the async model. */
+static void sqw_check_pending_fetch(SqwAppState *st) {
+    if (!st->pending_fetch) return;
+    pthread_mutex_lock(&st->pending_fetch->mutex);
+    int fetch_ready = st->pending_fetch->ready;
+    int fetch_success = st->pending_fetch->success;
+    char *fetch_body = st->pending_fetch->body;
+    pthread_mutex_unlock(&st->pending_fetch->mutex);
+    if (!fetch_ready) return;
+    if (fetch_success) {
+        sqw_navigate_to_html(fetch_body, st->pending_fetch_url, &st->root, &st->boxes, st->current_dir, st->current_base_url, st->viewport_w, st->viewport_h);
+        strncpy(st->url_bar_text, st->pending_fetch_url, sizeof st->url_bar_text - 1); st->url_bar_text[sizeof st->url_bar_text - 1] = 0;
+        /* current_url tracks whatever page is ACTUALLY loaded, so it's
+         * only updated here on a successful fetch, not when the fetch was
+         * merely requested (that's where the Back-button history push
+         * already happened, see the anchor-click/sqw_go_navigate call
+         * sites) -- a failed fetch leaves current_url (and the Back stack)
+         * exactly as they were, so Back still correctly retreats to
+         * wherever the user actually was. */
+        strncpy(st->current_url, st->pending_fetch_url, sizeof st->current_url - 1); st->current_url[sizeof st->current_url - 1] = 0;
+        st->scroll_x = 0.0f; st->scroll_y = 0.0f;
+        st->hover_node = NULL; st->active_node = NULL; st->focused_input = NULL; /* old DOM is gone */
+    } else {
+        fprintf(stderr, "SQW: fetch failed\n"); fflush(stdout);
+    }
+    sqw_net_result_free(st->pending_fetch);
+    st->pending_fetch = NULL;
+}
+
+/* Renders and presents exactly one frame -- skips (returns without
+ * incrementing frame_count, matching the original "continue") on a 0x0
+ * minimized-window extent, the one case sqw_vk_begin_frame() itself
+ * signals by returning NULL. */
+static void sqw_draw_frame(SqwAppState *st) {
+    uint32_t imageIndex = 0;
+    VkCommandBuffer cmd = sqw_vk_begin_frame(st->vk, 0.95f, 0.95f, 0.95f, 1.0f, &imageIndex);
+    if (!cmd) return;
+    /* "scroll_y - SQW_TOOLBAR_H" (not raw scroll_y): both draw calls
+     * compute each box's screen Y as "box.y - scroll_y", so passing a
+     * SMALLER effective scroll value shifts every drawn box DOWN by
+     * exactly the difference -- i.e. by SQW_TOOLBAR_H -- without needing
+     * to touch renderer_vk.c or draw_layout_text() at all. The real
+     * scroll_y (unshifted) is still what every hit-test/scrollbar/paging
+     * computation in sqw_handle_event() uses -- only these two draw calls
+     * see the adjusted value. */
+    float draw_scroll_y = st->scroll_y - SQW_TOOLBAR_H;
+    sqw_renderer_draw(st->vk, st->renderer, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
+    draw_layout_text(st->text_renderer, st->vk, st->renderer, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
+    LayoutBox vthumb_dummy, hthumb_dummy;
+    draw_scrollbars(st->vk, st->renderer, cmd, st->boxes.content_w, st->boxes.content_h, st->viewport_w, st->viewport_h, st->scroll_x, st->scroll_y, &vthumb_dummy, &hthumb_dummy);
+    draw_toolbar(st->vk, st->renderer, st->text_renderer, cmd, st->url_bar_text, st->url_bar_focused, st->hist->count > 0, st->viewport_w, st->viewport_h);
+    sqw_text_renderer_flush(st->vk, st->text_renderer, cmd, st->viewport_w, st->viewport_h);
+    sqw_vk_end_frame(st->vk, cmd, imageIndex);
+
+    st->frame_count++;
+    if (st->frame_count % 300 == 0) { fprintf(stderr, "SQW: frame=%d\n", st->frame_count); fflush(stdout); }
+}
+
 int main(void) {
     squash_init_private_bootstrap();
 
@@ -868,102 +1498,83 @@ int main(void) {
     HINSTANCE hinstance = GetModuleHandleA(NULL);
 #endif
 
-    /* Heap-allocated, not a stack local: keeps these ~KB-sized structs off
-     * the stack (see project memory on squash's past issues with large
-     * stack-resident locals). */
-    SqwVkContext *vk = (SqwVkContext *)malloc(sizeof(SqwVkContext));
+    /* Heap-allocated, not a stack local (same rationale as vk/renderer/
+     * text_renderer/hist below): see SqwAppState's own comment -- this IS
+     * the fix for squash's too-many-live-locals codegen bug, applied to
+     * main() itself. */
+    SqwAppState *st = (SqwAppState *)malloc(sizeof(SqwAppState));
+    memset(st, 0, sizeof(*st));
+    st->window = window;
+
+    st->vk = (SqwVkContext *)malloc(sizeof(SqwVkContext));
 #ifdef __linux__
-    if (!sqw_vk_context_init(vk, dpy, win, ((uint32_t)SQW_VIEWPORT_W << 16) | (uint32_t)SQW_VIEWPORT_H)) {
+    if (!sqw_vk_context_init(st->vk, dpy, win, ((uint32_t)SQW_VIEWPORT_W << 16) | (uint32_t)SQW_VIEWPORT_H)) {
 #else
-    if (!sqw_vk_context_init(vk, hinstance, hwnd, ((uint32_t)SQW_VIEWPORT_W << 16) | (uint32_t)SQW_VIEWPORT_H)) {
+    if (!sqw_vk_context_init(st->vk, hinstance, hwnd, ((uint32_t)SQW_VIEWPORT_W << 16) | (uint32_t)SQW_VIEWPORT_H)) {
 #endif
         fprintf(stderr, "SQW: Vulkan init failed\n"); fflush(stdout);
         return 1;
     }
 
-    SqwRenderer *renderer = (SqwRenderer *)malloc(sizeof(SqwRenderer));
-    if (!sqw_renderer_init(vk, renderer)) {
+    st->renderer = (SqwRenderer *)malloc(sizeof(SqwRenderer));
+    if (!sqw_renderer_init(st->vk, st->renderer)) {
         fprintf(stderr, "SQW: renderer init failed\n"); fflush(stdout);
         return 1;
     }
 
-    SqwTextRenderer *text_renderer = (SqwTextRenderer *)malloc(sizeof(SqwTextRenderer));
-    if (!sqw_text_renderer_init(vk, text_renderer)) {
+    st->text_renderer = (SqwTextRenderer *)malloc(sizeof(SqwTextRenderer));
+    if (!sqw_text_renderer_init(st->vk, st->text_renderer)) {
         fprintf(stderr, "SQW: text renderer init failed\n"); fflush(stdout);
         return 1;
     }
 
-    char current_dir[SQW_PATH_MAX];
-    sqw_dirname(SQW_INITIAL_PAGE, current_dir);
+    sqw_dirname(SQW_INITIAL_PAGE, st->current_dir);
     /* Non-empty only when the CURRENT page was reached over the network
      * (e.g. "http://127.0.0.1:8080/") -- see sqw_navigate_to_html()'s own
      * comment for why a plain relative href needs this to resolve
      * correctly on such a page instead of being (wrongly) treated as a
      * local file path. */
-    char current_base_url[SQW_PATH_MAX];
-    current_base_url[0] = '\0';
+    st->current_base_url[0] = '\0';
     /* Set right before starting a fetch, read back once it completes, so
      * sqw_navigate_to_html() knows what URL the fetched page's own
      * relative hrefs should resolve against next. */
-    char pending_fetch_url[SQW_PATH_MAX];
-    pending_fetch_url[0] = '\0';
+    st->pending_fetch_url[0] = '\0';
     /* Tracks the actual currently-loaded page, independent of the
      * editable url_bar_text (which holds whatever the user is mid-typing
      * and gets clobbered character-by-character -- see url_bar_text's own
      * comment below) -- this is what actually gets pushed onto the Back
      * button's history stack, and what a page navigated AWAY from is
      * identified by. */
-    char current_url[SQW_PATH_MAX];
-    strncpy(current_url, SQW_INITIAL_PAGE, sizeof current_url - 1);
-    current_url[sizeof current_url - 1] = 0;
-    /* Heap-allocated, not a stack local (same rationale as vk/renderer/
-     * text_renderer above -- see that comment): SQW_HISTORY_MAX *
-     * SQW_PATH_MAX is tens of KB, exactly the size class this project
-     * already keeps off the C stack. Zeroed so every slot/count starts
-     * empty/0, never garbage. */
-    SqwHistoryStack *hist = (SqwHistoryStack *)malloc(sizeof(SqwHistoryStack));
-    memset(hist, 0, sizeof(*hist));
+    strncpy(st->current_url, SQW_INITIAL_PAGE, sizeof st->current_url - 1);
+    st->current_url[sizeof st->current_url - 1] = 0;
+
+    st->hist = (SqwHistoryStack *)malloc(sizeof(SqwHistoryStack));
+    memset(st->hist, 0, sizeof(*st->hist));
+
     char *initial_html = sqw_read_file(SQW_INITIAL_PAGE);
     if (!initial_html) {
         fprintf(stderr, "SQW: cannot open initial page %s\n", SQW_INITIAL_PAGE); fflush(stdout);
         return 1;
     }
-    DomNode *root = dom_parse(initial_html);
+    st->root = dom_parse(initial_html);
     free(initial_html);
-    sqw_apply_css(root);
-    LayoutList boxes;
-    float viewport_w = SQW_VIEWPORT_W, viewport_h = SQW_VIEWPORT_H;
-    layout_compute(root, viewport_w, viewport_h, &boxes);
+    sqw_apply_css(st->root);
+    st->viewport_w = SQW_VIEWPORT_W; st->viewport_h = SQW_VIEWPORT_H;
+    layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes);
     fprintf(stderr, "SQW: DOM parsed, layout computed (%d boxes, content %.0fx%.0f)\n",
-        boxes.count, boxes.content_w, boxes.content_h); fflush(stdout);
-
-    float scroll_x = 0.0f, scroll_y = 0.0f;
-    DomNode *hover_node = NULL;
-    DomNode *active_node = NULL;
-    /* The ONE <input>/<textarea> (if any) currently receiving typed
-     * keyboard input -- mutually exclusive with url_bar_focused (see
-     * DomNode::form_focused's own comment in dom.h). Mirrors form_focused
-     * on the node itself (rather than being the only source of truth) so
-     * draw_layout_text() can render the focus ring/caret purely from the
-     * LayoutBox's own ->node, with no extra parameter threading. */
-    DomNode *focused_input = NULL;
-    int dragging_v = 0, dragging_h = 0;
-    float drag_anchor_mouse = 0.0f, drag_anchor_scroll = 0.0f;
-    float mouse_x = 0.0f, mouse_y = 0.0f;
-    SqwNetResult *pending_fetch = NULL; /* non-NULL while an http(s):// anchor click's background fetch is outstanding */
+        st->boxes.count, st->boxes.content_w, st->boxes.content_h); fflush(stdout);
 
     /* URL/search bar state -- always shows the current page's own path/URL
      * (updated after every successful navigation, local or network, same
      * as a real browser's address bar) unless the user is actively
      * editing it (url_bar_focused). Editing is append/backspace-at-the-end
-     * only (see SDL_EVENT_TEXT_INPUT/BACKSPACE handling below) -- no
-     * mid-string cursor movement, arrow-key editing, or selection; a
-     * minimal but fully usable "type a URL, press Enter or click Go"
-     * bar, not a full text-field widget. */
-    char url_bar_text[SQW_PATH_MAX];
-    strncpy(url_bar_text, SQW_INITIAL_PAGE, sizeof url_bar_text - 1);
-    url_bar_text[sizeof url_bar_text - 1] = 0;
-    int url_bar_focused = 0;
+     * only (see sqw_handle_event()'s SDL_EVENT_TEXT_INPUT/BACKSPACE
+     * handling) -- no mid-string cursor movement, arrow-key editing, or
+     * selection; a minimal but fully usable "type a URL, press Enter or
+     * click Go" bar, not a full text-field widget. */
+    strncpy(st->url_bar_text, SQW_INITIAL_PAGE, sizeof st->url_bar_text - 1);
+    st->url_bar_text[sizeof st->url_bar_text - 1] = 0;
+
     /* SQW_TEST_GOTO_URL: pre-fills the URL bar as if the user had typed it
      * (bypassing per-character SDL_EVENT_TEXT_INPUT simulation, a separate
      * concern already covered by real SDL3's own SDL_SendKeyboardText
@@ -972,71 +1583,49 @@ int main(void) {
      * end-to-end for local-run testing. */
     {
         const char *tu = getenv("SQW_TEST_GOTO_URL");
-        if (tu) { strncpy(url_bar_text, tu, sizeof url_bar_text - 1); url_bar_text[sizeof url_bar_text - 1] = 0; }
+        if (tu) { strncpy(st->url_bar_text, tu, sizeof st->url_bar_text - 1); st->url_bar_text[sizeof st->url_bar_text - 1] = 0; }
     }
-    const char *test_type_text = getenv("SQW_TEST_TYPE_TEXT");
-    if (test_type_text) url_bar_text[0] = 0; /* clean slate so the appended text is clearly visible */
+    st->test_type_text = getenv("SQW_TEST_TYPE_TEXT");
+    if (st->test_type_text) st->url_bar_text[0] = 0; /* clean slate so the appended text is clearly visible */
 
-    /* Test-only synthetic input hook (SQW_TEST_CLICK_X/Y env vars): pushes
-     * real SDL events through SDL_PushEvent() -- not a shortcut that
-     * bypasses the event loop, the exact same SDL_PollEvent() path a real
-     * XTest-injected or physical click takes -- at a fixed frame so local
-     * automated testing doesn't depend on XTest actually reaching this
-     * window (confirmed unreliable under this environment's Xwayland
-     * setup: XTestFakeMotionEvent/ButtonEvent calls succeeded but SQW
-     * never received a single resulting SDL_EVENT_MOUSE_MOTION). Off by
-     * default; only active with the env var set. */
-    int test_click_x = -1, test_click_y = -1;
+    st->test_click_x = -1; st->test_click_y = -1;
     {
         const char *ex = getenv("SQW_TEST_CLICK_X");
         const char *ey = getenv("SQW_TEST_CLICK_Y");
-        if (ex && ey) { test_click_x = atoi(ex); test_click_y = atoi(ey); }
+        if (ex && ey) { st->test_click_x = atoi(ex); st->test_click_y = atoi(ey); }
     }
-    /* SQW_TEST_CLICK2_X/Y (frame 300, well after the first click's own
-     * network fetch at frame 60 has had time to complete): a SECOND
-     * synthetic click, for testing multi-step navigation (e.g. "click a
-     * network anchor, then click a relative link on the page it fetched")
-     * that a single test click can't exercise. Same real-event-loop
-     * rationale as SQW_TEST_CLICK_X/Y above. */
-    int test_click2_x = -1, test_click2_y = -1;
+    st->test_click2_x = -1; st->test_click2_y = -1;
     {
         const char *ex = getenv("SQW_TEST_CLICK2_X");
         const char *ey = getenv("SQW_TEST_CLICK2_Y");
-        if (ex && ey) { test_click2_x = atoi(ex); test_click2_y = atoi(ey); }
+        if (ex && ey) { st->test_click2_x = atoi(ex); st->test_click2_y = atoi(ey); }
     }
-    /* SQW_TEST_CLICK3_X/Y (frame 500, well after CLICK2's own frame 290 --
-     * plenty of margin for that navigation, local or network, to have
-     * settled): a THIRD synthetic click, added specifically to exercise
-     * the Back button end-to-end in headless/automated runs (click
-     * somewhere that navigates, click again, then click Back and confirm
-     * it actually lands back on the first page). Same real-event-loop
-     * rationale as SQW_TEST_CLICK_X/Y above. */
-    int test_click3_x = -1, test_click3_y = -1;
+    st->test_click3_x = -1; st->test_click3_y = -1;
     {
         const char *ex = getenv("SQW_TEST_CLICK3_X");
         const char *ey = getenv("SQW_TEST_CLICK3_Y");
-        if (ex && ey) { test_click3_x = atoi(ex); test_click3_y = atoi(ey); }
+        if (ex && ey) { st->test_click3_x = atoi(ex); st->test_click3_y = atoi(ey); }
     }
     /* SQW_TEST_KEY: same rationale as SQW_TEST_CLICK_X/Y above -- names one
      * of "pagedown"/"pageup"/"home"/"end"/"up"/"down", pushed as a real
      * SDL_EVENT_KEY_DOWN so it exercises the exact same code path a real
      * keypress does. */
-    SDL_Scancode test_key = SDL_SCANCODE_UNKNOWN;
+    st->test_key = SDL_SCANCODE_UNKNOWN;
     {
         const char *tk = getenv("SQW_TEST_KEY");
         if (tk) {
-            if (!strcmp(tk,"pagedown")) test_key = SDL_SCANCODE_PAGEDOWN;
-            else if (!strcmp(tk,"pageup")) test_key = SDL_SCANCODE_PAGEUP;
-            else if (!strcmp(tk,"home")) test_key = SDL_SCANCODE_HOME;
-            else if (!strcmp(tk,"end")) test_key = SDL_SCANCODE_END;
-            else if (!strcmp(tk,"up")) test_key = SDL_SCANCODE_UP;
-            else if (!strcmp(tk,"down")) test_key = SDL_SCANCODE_DOWN;
+            if (!strcmp(tk,"pagedown")) st->test_key = SDL_SCANCODE_PAGEDOWN;
+            else if (!strcmp(tk,"pageup")) st->test_key = SDL_SCANCODE_PAGEUP;
+            else if (!strcmp(tk,"home")) st->test_key = SDL_SCANCODE_HOME;
+            else if (!strcmp(tk,"end")) st->test_key = SDL_SCANCODE_END;
+            else if (!strcmp(tk,"up")) st->test_key = SDL_SCANCODE_UP;
+            else if (!strcmp(tk,"down")) st->test_key = SDL_SCANCODE_DOWN;
         }
     }
     if (getenv("SQW_DUMP_BOXES")) {
         int bi;
-        for (bi = 0; bi < boxes.count; bi++) {
-            LayoutBox *db = &boxes.boxes[bi];
+        for (bi = 0; bi < st->boxes.count; bi++) {
+            LayoutBox *db = &st->boxes.boxes[bi];
             fprintf(stderr, "[box] i=%d kind=%d x=%d y=%d w=%d h=%d\n",
                 bi, db->kind, (int)db->x, (int)db->y, (int)db->w, (int)db->h);
         }
@@ -1044,545 +1633,20 @@ int main(void) {
     }
 
     fprintf(stderr, "SQW: entering render loop\n"); fflush(stdout);
-    int running = 1;
-    int frame_count = 0;
-    while (running) {
-        if (test_click_x >= 0 && frame_count == 30) {
-            SDL_Event mv; memset(&mv, 0, sizeof mv);
-            mv.type = SDL_EVENT_MOUSE_MOTION;
-            mv.motion.x = (float)test_click_x; mv.motion.y = (float)test_click_y;
-            SDL_PushEvent(&mv);
-        }
-        if (test_click_x >= 0 && frame_count == 60) {
-            SDL_Event bd; memset(&bd, 0, sizeof bd);
-            bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
-            bd.button.button = 1; bd.button.down = 1;
-            bd.button.x = (float)test_click_x; bd.button.y = (float)test_click_y;
-            SDL_PushEvent(&bd);
-            SDL_Event bu; memset(&bu, 0, sizeof bu);
-            bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
-            bu.button.button = 1; bu.button.down = 0;
-            bu.button.x = (float)test_click_x; bu.button.y = (float)test_click_y;
-            SDL_PushEvent(&bu);
-        }
-        /* SQW_TEST_TYPE_TEXT: clicks the URL bar to focus it (frame 10),
-         * then pushes one real SDL_EVENT_TEXT_INPUT carrying the whole
-         * string (frame 20) -- exercises the exact same append path a
-         * sequence of real per-character events would (main()'s own
-         * handler just appends whatever ev.text.text contains, whether
-         * that's one character or many), without needing a separate
-         * synthetic event per character. */
-        if (test_type_text && frame_count == 10) {
-            SDL_Event mv; memset(&mv, 0, sizeof mv);
-            mv.type = SDL_EVENT_MOUSE_MOTION;
-            mv.motion.x = 100.0f; mv.motion.y = 20.0f;
-            SDL_PushEvent(&mv);
-            SDL_Event bd; memset(&bd, 0, sizeof bd);
-            bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
-            bd.button.button = 1; bd.button.down = 1;
-            bd.button.x = 100.0f; bd.button.y = 20.0f;
-            SDL_PushEvent(&bd);
-            SDL_Event bu; memset(&bu, 0, sizeof bu);
-            bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
-            bu.button.button = 1; bu.button.down = 0;
-            bu.button.x = 100.0f; bu.button.y = 20.0f;
-            SDL_PushEvent(&bu);
-        }
-        if (test_type_text && frame_count == 20) {
-            SDL_Event ti; memset(&ti, 0, sizeof ti);
-            ti.type = SDL_EVENT_TEXT_INPUT;
-            ti.text.text = test_type_text;
-            SDL_PushEvent(&ti);
-        }
-        if (test_click2_x >= 0 && frame_count == 270) {
-            SDL_Event mv; memset(&mv, 0, sizeof mv);
-            mv.type = SDL_EVENT_MOUSE_MOTION;
-            mv.motion.x = (float)test_click2_x; mv.motion.y = (float)test_click2_y;
-            SDL_PushEvent(&mv);
-        }
-        if (test_click2_x >= 0 && frame_count == 290) {
-            SDL_Event bd; memset(&bd, 0, sizeof bd);
-            bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
-            bd.button.button = 1; bd.button.down = 1;
-            bd.button.x = (float)test_click2_x; bd.button.y = (float)test_click2_y;
-            SDL_PushEvent(&bd);
-            SDL_Event bu; memset(&bu, 0, sizeof bu);
-            bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
-            bu.button.button = 1; bu.button.down = 0;
-            bu.button.x = (float)test_click2_x; bu.button.y = (float)test_click2_y;
-            SDL_PushEvent(&bu);
-        }
-        if (test_click3_x >= 0 && frame_count == 480) {
-            SDL_Event mv; memset(&mv, 0, sizeof mv);
-            mv.type = SDL_EVENT_MOUSE_MOTION;
-            mv.motion.x = (float)test_click3_x; mv.motion.y = (float)test_click3_y;
-            SDL_PushEvent(&mv);
-        }
-        if (test_click3_x >= 0 && frame_count == 500) {
-            SDL_Event bd; memset(&bd, 0, sizeof bd);
-            bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
-            bd.button.button = 1; bd.button.down = 1;
-            bd.button.x = (float)test_click3_x; bd.button.y = (float)test_click3_y;
-            SDL_PushEvent(&bd);
-            SDL_Event bu; memset(&bu, 0, sizeof bu);
-            bu.type = SDL_EVENT_MOUSE_BUTTON_UP;
-            bu.button.button = 1; bu.button.down = 0;
-            bu.button.x = (float)test_click3_x; bu.button.y = (float)test_click3_y;
-            SDL_PushEvent(&bu);
-        }
-        if (test_key != SDL_SCANCODE_UNKNOWN && frame_count == 30) {
-            SDL_Event kd; memset(&kd, 0, sizeof kd);
-            kd.type = SDL_EVENT_KEY_DOWN;
-            kd.key.scancode = test_key; kd.key.down = true;
-            SDL_PushEvent(&kd);
-        }
+    st->running = 1;
+    st->frame_count = 0;
+    while (st->running) {
+        sqw_push_test_events(st);
+
         SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_EVENT_QUIT || ev.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
-                running = 0;
-            } else if (ev.type == SDL_EVENT_WINDOW_RESIZED) {
-                int new_w = ev.window.data1, new_h = ev.window.data2;
-                if (new_w > 0 && new_h > 0) {
-                    uint32_t packed = ((uint32_t)new_w << 16) | (uint32_t)new_h;
-                    sqw_vk_recreate_swapchain(vk, packed);
-                    viewport_w = (float)new_w; viewport_h = (float)new_h;
-                    layout_list_free(&boxes);
-                    layout_compute(root, viewport_w, viewport_h, &boxes);
-                    scroll_x = clamp_scroll(scroll_x, boxes.content_w, viewport_w);
-                    scroll_y = clamp_scroll(scroll_y, boxes.content_h, viewport_h - SQW_TOOLBAR_H);
-                }
-            } else if (ev.type == SDL_EVENT_MOUSE_MOTION) {
-                mouse_x = ev.motion.x; mouse_y = ev.motion.y;
-                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[motion] x=%d y=%d\n", (int)mouse_x, (int)mouse_y); fflush(stderr); }
-                if (dragging_v) {
-                    float content_view_h = viewport_h - SQW_TOOLBAR_H;
-                    float thumb_h = content_view_h * (content_view_h / boxes.content_h);
-                    if (thumb_h < SQW_SCROLLBAR_MIN_THUMB) thumb_h = SQW_SCROLLBAR_MIN_THUMB;
-                    float track_free = content_view_h - thumb_h;
-                    float delta_mouse = mouse_y - drag_anchor_mouse;
-                    float scale = (track_free > 0) ? (boxes.content_h - content_view_h) / track_free : 0.0f;
-                    scroll_y = clamp_scroll(drag_anchor_scroll + delta_mouse * scale, boxes.content_h, content_view_h);
-                } else if (dragging_h) {
-                    float thumb_w = viewport_w * (viewport_w / boxes.content_w);
-                    if (thumb_w < SQW_SCROLLBAR_MIN_THUMB) thumb_w = SQW_SCROLLBAR_MIN_THUMB;
-                    float track_free = viewport_w - thumb_w;
-                    float delta_mouse = mouse_x - drag_anchor_mouse;
-                    float scale = (track_free > 0) ? (boxes.content_w - viewport_w) / track_free : 0.0f;
-                    scroll_x = clamp_scroll(drag_anchor_scroll + delta_mouse * scale, boxes.content_w, viewport_w);
-                } else if (mouse_y >= SQW_TOOLBAR_H) {
-                    float cx = mouse_x + scroll_x, cy = (mouse_y - SQW_TOOLBAR_H) + scroll_y;
-                    int hit = layout_hit_test(&boxes, cx, cy);
-                    DomNode *new_hover = NULL;
-                    if (hit >= 0) {
-                        SqwBoxKind k = boxes.boxes[hit].kind;
-                        if (k == SQW_BOX_A || k == SQW_BOX_BUTTON) new_hover = boxes.boxes[hit].node;
-                        else if (k == SQW_BOX_TEXT) new_hover = interactive_ancestor(boxes.boxes[hit].node);
-                    }
-                    if (new_hover != hover_node) {
-                        if (hover_node) hover_node->hover = 0;
-                        if (new_hover) new_hover->hover = 1;
-                        hover_node = new_hover;
-                    }
-                } else if (hover_node) {
-                    /* Cursor moved up into the toolbar -- clear any page
-                     * hover state so a link doesn't stay highlighted while
-                     * the mouse is nowhere near it. */
-                    hover_node->hover = 0;
-                    hover_node = NULL;
-                }
-            } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev.button.button == 1) {
-                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[button-down] x=%d y=%d\n", (int)ev.button.x, (int)ev.button.y); fflush(stderr); }
-                if (ev.button.y < SQW_TOOLBAR_H) {
-                    /* Toolbar interactions (Back/bar/Go) can all trigger a
-                     * fresh navigation that frees the current DOM tree --
-                     * drop keyboard focus from any page input first so
-                     * focused_input never ends up pointing at a freed
-                     * node (mirrors url_bar_focused's own unconditional
-                     * reset a few lines below in each branch). */
-                    if (focused_input) { focused_input->form_focused = 0; focused_input = NULL; }
-                    LayoutBox back, bar, go;
-                    toolbar_geometry(viewport_w, &back, &bar, &go);
-                    if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[toolbar-click] back=(%d,%d,%d,%d) bar=(%d,%d,%d,%d) go=(%d,%d,%d,%d)\n", (int)back.x,(int)back.y,(int)back.w,(int)back.h,(int)bar.x,(int)bar.y,(int)bar.w,(int)bar.h,(int)go.x,(int)go.y,(int)go.w,(int)go.h); fflush(stderr); }
-                    if (point_in_rect(ev.button.x, ev.button.y, &back)) {
-                        url_bar_focused = 0;
-                        char popped_url[SQW_PATH_MAX];
-                        if (sqw_history_pop(hist, popped_url, sizeof popped_url)) {
-                            sqw_go_navigate(popped_url, 0, hist, current_url, &pending_fetch, pending_fetch_url,
-                                            &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h,
-                                            &scroll_x, &scroll_y, &hover_node, &active_node);
-                            strncpy(url_bar_text, popped_url, sizeof url_bar_text - 1);
-                            url_bar_text[sizeof url_bar_text - 1] = 0;
-                        }
-                    } else if (point_in_rect(ev.button.x, ev.button.y, &bar)) {
-                        url_bar_focused = 1;
-                    } else if (point_in_rect(ev.button.x, ev.button.y, &go)) {
-                        url_bar_focused = 0;
-                        sqw_go_navigate(url_bar_text, 1, hist, current_url, &pending_fetch, pending_fetch_url,
-                                        &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h,
-                                        &scroll_x, &scroll_y, &hover_node, &active_node);
-                    } else {
-                        url_bar_focused = 0;
-                    }
-                } else {
-                url_bar_focused = 0; /* clicking the page always exits URL-bar editing, same as a real browser */
-                LayoutBox vthumb, hthumb;
-                float content_view_h = viewport_h - SQW_TOOLBAR_H;
-                vthumb.w = 0; hthumb.h = 0;
-                if (boxes.content_h > content_view_h) {
-                    float thumb_h = content_view_h * (content_view_h / boxes.content_h);
-                    if (thumb_h < SQW_SCROLLBAR_MIN_THUMB) thumb_h = SQW_SCROLLBAR_MIN_THUMB;
-                    float track_free = content_view_h - thumb_h;
-                    float max_scroll = boxes.content_h - content_view_h;
-                    float thumb_y = SQW_TOOLBAR_H + ((max_scroll > 0) ? (scroll_y / max_scroll) * track_free : 0.0f);
-                    vthumb.x = viewport_w - SQW_SCROLLBAR_THICKNESS; vthumb.y = thumb_y;
-                    vthumb.w = SQW_SCROLLBAR_THICKNESS; vthumb.h = thumb_h;
-                }
-                if (boxes.content_w > viewport_w) {
-                    float thumb_w = viewport_w * (viewport_w / boxes.content_w);
-                    if (thumb_w < SQW_SCROLLBAR_MIN_THUMB) thumb_w = SQW_SCROLLBAR_MIN_THUMB;
-                    float track_free = viewport_w - thumb_w;
-                    float max_scroll = boxes.content_w - viewport_w;
-                    float thumb_x = (max_scroll > 0) ? (scroll_x / max_scroll) * track_free : 0.0f;
-                    hthumb.x = thumb_x; hthumb.y = viewport_h - SQW_SCROLLBAR_THICKNESS;
-                    hthumb.w = thumb_w; hthumb.h = SQW_SCROLLBAR_THICKNESS;
-                }
-                LayoutBox vtrack, htrack;
-                vtrack.x = viewport_w - SQW_SCROLLBAR_THICKNESS; vtrack.y = SQW_TOOLBAR_H;
-                vtrack.w = SQW_SCROLLBAR_THICKNESS; vtrack.h = content_view_h;
-                htrack.x = 0.0f; htrack.y = viewport_h - SQW_SCROLLBAR_THICKNESS;
-                htrack.w = viewport_w; htrack.h = SQW_SCROLLBAR_THICKNESS;
-                if (vthumb.w > 0 && point_in_rect(ev.button.x, ev.button.y, &vthumb)) {
-                    dragging_v = 1; drag_anchor_mouse = ev.button.y; drag_anchor_scroll = scroll_y;
-                } else if (hthumb.h > 0 && point_in_rect(ev.button.x, ev.button.y, &hthumb)) {
-                    dragging_h = 1; drag_anchor_mouse = ev.button.x; drag_anchor_scroll = scroll_x;
-                } else if (vthumb.w > 0 && point_in_rect(ev.button.x, ev.button.y, &vtrack)) {
-                    /* Clicked the empty ("white") vertical track above/below
-                     * the thumb -- classic scrollbar UX (matches every
-                     * desktop toolkit's own track-click behavior) is to page
-                     * up/down by one viewport-height toward the click, NOT
-                     * to jump the thumb straight to the click position (that
-                     * jump-to-click behavior is scrollbar THUMB-drag/click
-                     * behavior, a different, more abrupt interaction some
-                     * platforms use only as an opt-in setting) and NOT to
-                     * start a drag -- a single track click is one discrete
-                     * page step, not a drag gesture. */
-                    if (ev.button.y < vthumb.y) scroll_y = clamp_scroll(scroll_y - content_view_h, boxes.content_h, content_view_h);
-                    else scroll_y = clamp_scroll(scroll_y + content_view_h, boxes.content_h, content_view_h);
-                } else if (hthumb.h > 0 && point_in_rect(ev.button.x, ev.button.y, &htrack)) {
-                    if (ev.button.x < hthumb.x) scroll_x = clamp_scroll(scroll_x - viewport_w, boxes.content_w, viewport_w);
-                    else scroll_x = clamp_scroll(scroll_x + viewport_w, boxes.content_w, viewport_w);
-                } else {
-                    float cx = ev.button.x + scroll_x, cy = (ev.button.y - SQW_TOOLBAR_H) + scroll_y;
-                    int hit = layout_hit_test(&boxes, cx, cy);
-                    if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[hit-test] cx=%d cy=%d hit=%d kind=%d\n", (int)cx, (int)cy, hit, hit>=0?(int)boxes.boxes[hit].kind:-1); fflush(stderr); }
-                    if (hit >= 0) {
-                        LayoutBox *hb = &boxes.boxes[hit];
-                        /* See interactive_ancestor()'s own comment: a hit on
-                         * an <a>/<button>'s own label text lands on the word's
-                         * SQW_BOX_TEXT run, not the enclosing interactive box,
-                         * so resolve to the real clickable element first. */
-                        DomNode *target_node = hb->node;
-                        SqwBoxKind eff_kind = hb->kind;
-                        if (eff_kind == SQW_BOX_TEXT) {
-                            DomNode *anc = interactive_ancestor(hb->node);
-                            if (anc) { target_node = anc; eff_kind = (strcmp(anc->tag, "a") == 0) ? SQW_BOX_A : SQW_BOX_BUTTON; }
-                        }
-                        /* Clicking outside any input/textarea drops keyboard
-                         * focus from whichever one had it -- reassigned
-                         * below if this exact click lands on one instead. */
-                        if (focused_input) { focused_input->form_focused = 0; focused_input = NULL; }
-                        if (eff_kind == SQW_BOX_A && find_enclosing_form(target_node)) {
-                            /* Per this project's own explicit spec (an
-                             * anchor inside a <form> submits it, same as a
-                             * real submit button -- non-standard real HTML5
-                             * behavior, deliberately added here on request
-                             * rather than following the href normally). */
-                            target_node->visited = 1;
-                            target_node->active = 1;
-                            active_node = target_node;
-                            submit_form(find_enclosing_form(target_node), hist, current_url,
-                                        &pending_fetch, pending_fetch_url, &root, &boxes,
-                                        current_dir, current_base_url, viewport_w, viewport_h,
-                                        &scroll_x, &scroll_y, &hover_node, &active_node);
-                        } else if (eff_kind == SQW_BOX_A) {
-                            target_node->visited = 1;
-                            target_node->active = 1;
-                            active_node = target_node;
-                            /* dom_get_attr's returned pointer lives inside the
-                             * CURRENT DomNode -- copy it before any possible
-                             * sqw_navigate_to() below, which frees the whole
-                             * current DOM tree (including target_node itself,
-                             * making it/active_node dangling). */
-                            const char *href_raw = dom_get_attr(target_node, "href");
-                            char href[SQW_PATH_MAX];
-                            href[0] = 0;
-                            if (href_raw) { strncpy(href, href_raw, sizeof href - 1); href[sizeof href - 1] = 0; }
-                            if (href[0] == '#') {
-                                DomNode *target = find_by_id(root, href + 1);
-                                LayoutBox *tb = target ? find_box_for_node(&boxes, target) : NULL;
-                                if (tb) scroll_y = clamp_scroll(tb->y, boxes.content_h, content_view_h);
-                            } else if (strncmp(href, "http://", 7) == 0 || strncmp(href, "https://", 8) == 0) {
-                                if (pending_fetch) {
-                                    /* A previous fetch is still outstanding -- abandon it
-                                     * (NOT sqw_net_result_free() -- see that function's own
-                                     * comment: freeing it here while its background worker
-                                     * thread might still be running is a real use-after-free,
-                                     * confirmed as an actual "free(): invalid pointer" crash
-                                     * during this project's own live testing) rather than
-                                     * leak it or race two responses against one DOM swap. */
-                                    sqw_net_result_abandon(pending_fetch);
-                                }
-                                sqw_history_push(hist, current_url);
-                                fprintf(stderr, "SQW: fetching %s ...\n", href); fflush(stdout);
-                                strncpy(pending_fetch_url, href, sizeof pending_fetch_url - 1);
-                                pending_fetch_url[sizeof pending_fetch_url - 1] = 0;
-                                pending_fetch = sqw_net_fetch_async(href);
-                            } else if (href[0] && current_base_url[0]) {
-                                /* A plain relative href on a page that was
-                                 * itself reached over the network resolves
-                                 * against THAT page's own URL and is fetched
-                                 * over the network too -- real browser
-                                 * behavior, and the actual fix for "page 3
-                                 * (reached via the network anchor) links back
-                                 * to page 1 by a plain href=\"index.html\";
-                                 * clicking it did nothing" (see
-                                 * sqw_navigate_to_html()'s own comment for
-                                 * the full story: current_base_url is empty
-                                 * for a LOCALLY loaded page, which is what
-                                 * routes this same href through the local
-                                 * branch below instead). */
-                                char full_url[SQW_PATH_MAX];
-                                snprintf(full_url, sizeof full_url, "%s%s", current_base_url, href);
-                                if (pending_fetch) sqw_net_result_abandon(pending_fetch);
-                                sqw_history_push(hist, current_url);
-                                fprintf(stderr, "SQW: fetching %s ...\n", full_url); fflush(stdout);
-                                strncpy(pending_fetch_url, full_url, sizeof pending_fetch_url - 1);
-                                pending_fetch_url[sizeof pending_fetch_url - 1] = 0;
-                                pending_fetch = sqw_net_fetch_async(full_url);
-                            } else if (href[0]) {
-                                /* Local relative path: resolve against the
-                                 * CURRENT page's own directory, not a fixed
-                                 * base -- see sqw_dirname()'s comment. */
-                                char full_path[SQW_PATH_MAX];
-                                snprintf(full_path, sizeof full_path, "%s%s", current_dir, href);
-                                sqw_history_push(hist, current_url);
-                                sqw_navigate_to(full_path, &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h);
-                                strncpy(url_bar_text, full_path, sizeof url_bar_text - 1); url_bar_text[sizeof url_bar_text - 1] = 0;
-                                strncpy(current_url, full_path, sizeof current_url - 1); current_url[sizeof current_url - 1] = 0;
-                                scroll_x = 0.0f; scroll_y = 0.0f;
-                                hover_node = NULL; active_node = NULL; focused_input = NULL; /* old DOM (and target_node) is gone */
-                            }
-                        } else if (eff_kind == SQW_BOX_BUTTON) {
-                            target_node->active = 1;
-                            active_node = target_node;
-                            /* A real <button> with no explicit "type" is
-                             * itself submit-by-default inside a form (the
-                             * actual HTML5 rule, not this project's own
-                             * relaxation); <input type="submit"> obviously
-                             * always is. type="button"/"reset" (an
-                             * explicit non-submit <button>, or an
-                             * <input type="button">) never submits. */
-                            const char *type = dom_get_attr(target_node, "type");
-                            int is_submit;
-                            if (strcmp(target_node->tag, "input") == 0) is_submit = type && strcmp(type, "submit") == 0;
-                            else is_submit = !type || strcmp(type, "submit") == 0;
-                            if (is_submit) {
-                                DomNode *form = find_enclosing_form(target_node);
-                                if (form) submit_form(form, hist, current_url, &pending_fetch, pending_fetch_url,
-                                                       &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h,
-                                                       &scroll_x, &scroll_y, &hover_node, &active_node);
-                            }
-                        } else if (hb->kind == SQW_BOX_INPUT_TEXT || hb->kind == SQW_BOX_TEXTAREA) {
-                            target_node->form_focused = 1;
-                            focused_input = target_node;
-                        } else if (hb->kind == SQW_BOX_INPUT_CHECK) {
-                            const char *type = dom_get_attr(target_node, "type");
-                            if (type && strcmp(type, "radio") == 0) {
-                                /* Real radio-group exclusivity: only one
-                                 * same-"name" radio within the same
-                                 * enclosing <form> may be checked at once
-                                 * -- clear every sibling radio in that
-                                 * group first, then check this one (a
-                                 * click on an already-checked radio stays
-                                 * checked, it just can't be unchecked by
-                                 * clicking it again -- real browser
-                                 * behavior). */
-                                const char *name = dom_get_attr(target_node, "name");
-                                DomNode *form = find_enclosing_form(target_node);
-                                if (name && form) {
-                                    RadioGroupCtx rgctx; rgctx.name = name; rgctx.skip = target_node;
-                                    dom_walk(form, radio_group_clear_visit, &rgctx);
-                                }
-                                target_node->form_checked = 1;
-                            } else {
-                                target_node->form_checked = !target_node->form_checked;
-                            }
-                        }
-                    }
-                }
-                }
-            } else if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP && ev.button.button == 1) {
-                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[button-up] x=%d y=%d\n", (int)ev.button.x, (int)ev.button.y); fflush(stderr); }
-                dragging_v = 0; dragging_h = 0;
-                if (active_node) { active_node->active = 0; active_node = NULL; }
-            } else if (ev.type == SDL_EVENT_MOUSE_WHEEL) {
-                scroll_y = clamp_scroll(scroll_y - ev.wheel.y * ((SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f)), boxes.content_h, viewport_h - SQW_TOOLBAR_H);
-                if (ev.wheel.x != 0.0f) scroll_x = clamp_scroll(scroll_x - ev.wheel.x * ((SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f)), boxes.content_w, viewport_w);
-            } else if (ev.type == SDL_EVENT_KEY_DOWN && url_bar_focused) {
-                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[key-down-focused] scancode=%d\n", (int)ev.key.scancode); fflush(stderr); }
-                /* URL bar editing: Backspace trims the last character,
-                 * Enter/Return submits (same as clicking Go), Escape
-                 * cancels editing and reverts the bar to the current
-                 * page's own URL/path. Everything else (including the
-                 * page-scroll keys handled in the other branch below) is
-                 * deliberately ignored while editing -- real browsers
-                 * don't scroll the page out from under you while you're
-                 * typing in the address bar either. */
-                int ulen = (int)strlen(url_bar_text);
-                if (ev.key.scancode == SDL_SCANCODE_BACKSPACE) {
-                    if (ulen > 0) url_bar_text[ulen - 1] = 0;
-                } else if (ev.key.scancode == SDL_SCANCODE_RETURN) {
-                    url_bar_focused = 0;
-                    sqw_go_navigate(url_bar_text, 1, hist, current_url, &pending_fetch, pending_fetch_url,
-                                    &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h,
-                                    &scroll_x, &scroll_y, &hover_node, &active_node);
-                } else if (ev.key.scancode == SDL_SCANCODE_ESCAPE) {
-                    url_bar_focused = 0;
-                    if (current_base_url[0]) { strncpy(url_bar_text, pending_fetch_url, sizeof url_bar_text - 1); }
-                    else { snprintf(url_bar_text, sizeof url_bar_text, "%sindex.html", current_dir); }
-                    url_bar_text[sizeof url_bar_text - 1] = 0;
-                }
-            } else if (ev.type == SDL_EVENT_KEY_DOWN && focused_input) {
-                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[key-down-input-focused] scancode=%d\n", (int)ev.key.scancode); fflush(stderr); }
-                int flen = (int)strlen(focused_input->form_value);
-                if (ev.key.scancode == SDL_SCANCODE_BACKSPACE) {
-                    if (flen > 0) focused_input->form_value[flen - 1] = 0;
-                } else if (ev.key.scancode == SDL_SCANCODE_RETURN) {
-                    if (strcmp(focused_input->tag, "textarea") == 0) {
-                        /* Real <textarea> behavior: Enter inserts a literal
-                         * newline into the field's own value instead of
-                         * doing anything form-wide -- draw_layout_text()
-                         * already splits form_value on '\n' into separate
-                         * rendered lines. */
-                        if (flen < (int)sizeof focused_input->form_value - 1) {
-                            focused_input->form_value[flen] = '\n';
-                            focused_input->form_value[flen + 1] = 0;
-                        }
-                    } else {
-                        /* Real HTML5 behavior: Enter in a single-line text
-                         * field submits its enclosing form, same as
-                         * clicking that form's own submit control. */
-                        DomNode *form = find_enclosing_form(focused_input);
-                        if (form) {
-                            focused_input->form_focused = 0; focused_input = NULL;
-                            submit_form(form, hist, current_url, &pending_fetch, pending_fetch_url,
-                                        &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h,
-                                        &scroll_x, &scroll_y, &hover_node, &active_node);
-                        }
-                    }
-                }
-            } else if (ev.type == SDL_EVENT_TEXT_INPUT && focused_input) {
-                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[text-input-focused] text=\"%s\"\n", ev.text.text ? ev.text.text : "(null)"); fflush(stderr); }
-                int flen = (int)strlen(focused_input->form_value);
-                int tlen = (int)strlen(ev.text.text);
-                int room = (int)sizeof(focused_input->form_value) - 1 - flen;
-                if (tlen > room) tlen = room;
-                if (tlen > 0) { memcpy(focused_input->form_value + flen, ev.text.text, (size_t)tlen); focused_input->form_value[flen + tlen] = 0; }
-            } else if (ev.type == SDL_EVENT_TEXT_INPUT && url_bar_focused) {
-                /* Real, keyboard-layout-aware printable text (see
-                 * PRIVATE_PumpEvents' own XLookupString comment) --
-                 * append-only, capped so it always leaves room for the
-                 * final NUL. */
-                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[text-input] text=\"%s\"\n", ev.text.text ? ev.text.text : "(null)"); fflush(stderr); }
-                int ulen = (int)strlen(url_bar_text);
-                int tlen = (int)strlen(ev.text.text);
-                int room = (int)sizeof(url_bar_text) - 1 - ulen;
-                if (tlen > room) tlen = room;
-                if (tlen > 0) { memcpy(url_bar_text + ulen, ev.text.text, (size_t)tlen); url_bar_text[ulen + tlen] = 0; }
-            } else if (ev.type == SDL_EVENT_TEXT_INPUT) {
-                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[text-input] IGNORED (url_bar_focused=%d) text=\"%s\"\n", url_bar_focused, ev.text.text ? ev.text.text : "(null)"); fflush(stderr); }
-            } else if (ev.type == SDL_EVENT_KEY_DOWN) {
-                if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[key-down] scancode=%d\n", (int)ev.key.scancode); fflush(stderr); }
-                /* Page Up/Down page by one viewport (matches the scrollbar
-                 * track-click behavior -- see its own comment), Home/End
-                 * jump to the very top/bottom, Up/Down nudge by one text
-                 * line -- the standard keyboard scrolling set every desktop
-                 * browser/reader supports, translated from real X11 key
-                 * events by SDL3_Build/sdl_core.inc's own PRIVATE_PumpEvents
-                 * (only this small fixed set of navigation keys, not a full
-                 * keymap -- see that function's own comment). */
-                float content_view_h = viewport_h - SQW_TOOLBAR_H;
-                if (ev.key.scancode == SDL_SCANCODE_PAGEDOWN) {
-                    scroll_y = clamp_scroll(scroll_y + content_view_h, boxes.content_h, content_view_h);
-                } else if (ev.key.scancode == SDL_SCANCODE_PAGEUP) {
-                    scroll_y = clamp_scroll(scroll_y - content_view_h, boxes.content_h, content_view_h);
-                } else if (ev.key.scancode == SDL_SCANCODE_HOME) {
-                    scroll_y = 0.0f;
-                } else if (ev.key.scancode == SDL_SCANCODE_END) {
-                    scroll_y = clamp_scroll(boxes.content_h, boxes.content_h, content_view_h);
-                } else if (ev.key.scancode == SDL_SCANCODE_DOWN) {
-                    scroll_y = clamp_scroll(scroll_y + (SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f), boxes.content_h, content_view_h);
-                } else if (ev.key.scancode == SDL_SCANCODE_UP) {
-                    scroll_y = clamp_scroll(scroll_y - (SQW_FONT_CELL_H * SQW_TEXT_SCALE * 3.0f), boxes.content_h, content_view_h);
-                }
-            }
-        }
-        if (!running) break;
+        while (SDL_PollEvent(&ev)) sqw_handle_event(st, &ev);
+        if (!st->running) break;
 
-        if (pending_fetch) {
-            pthread_mutex_lock(&pending_fetch->mutex);
-            int fetch_ready = pending_fetch->ready;
-            int fetch_success = pending_fetch->success;
-            char *fetch_body = pending_fetch->body;
-            pthread_mutex_unlock(&pending_fetch->mutex);
-            if (fetch_ready) {
-                if (fetch_success) {
-                    sqw_navigate_to_html(fetch_body, pending_fetch_url, &root, &boxes, current_dir, current_base_url, viewport_w, viewport_h);
-                    strncpy(url_bar_text, pending_fetch_url, sizeof url_bar_text - 1); url_bar_text[sizeof url_bar_text - 1] = 0;
-                    /* current_url tracks whatever page is ACTUALLY loaded,
-                     * so it's only updated here on a successful fetch, not
-                     * when the fetch was merely requested (that's where
-                     * the Back-button history push already happened, see
-                     * the anchor-click/sqw_go_navigate call sites) -- a
-                     * failed fetch leaves current_url (and the Back stack)
-                     * exactly as they were, so Back still correctly
-                     * retreats to wherever the user actually was. */
-                    strncpy(current_url, pending_fetch_url, sizeof current_url - 1); current_url[sizeof current_url - 1] = 0;
-                    scroll_x = 0.0f; scroll_y = 0.0f;
-                    hover_node = NULL; active_node = NULL; focused_input = NULL; /* old DOM is gone */
-                } else {
-                    fprintf(stderr, "SQW: fetch failed\n"); fflush(stdout);
-                }
-                sqw_net_result_free(pending_fetch);
-                pending_fetch = NULL;
-            }
-        }
-
-        uint32_t imageIndex = 0;
-        VkCommandBuffer cmd = sqw_vk_begin_frame(vk, 0.95f, 0.95f, 0.95f, 1.0f, &imageIndex);
-        if (!cmd) continue; /* e.g. minimized (0x0 extent) -- just skip this frame, not fatal */
-        /* "scroll_y - SQW_TOOLBAR_H" (not raw scroll_y): both draw calls
-         * compute each box's screen Y as "box.y - scroll_y", so passing a
-         * SMALLER effective scroll value shifts every drawn box DOWN by
-         * exactly the difference -- i.e. by SQW_TOOLBAR_H -- without
-         * needing to touch renderer_vk.c or draw_layout_text() at all.
-         * The real scroll_y (unshifted) is still what every hit-test/
-         * scrollbar/paging computation above uses -- only these two
-         * draw calls see the adjusted value. */
-        float draw_scroll_y = scroll_y - SQW_TOOLBAR_H;
-        sqw_renderer_draw(vk, renderer, cmd, &boxes, viewport_w, viewport_h, scroll_x, draw_scroll_y);
-        draw_layout_text(text_renderer, vk, renderer, cmd, &boxes, viewport_w, viewport_h, scroll_x, draw_scroll_y);
-        LayoutBox vthumb_dummy, hthumb_dummy;
-        draw_scrollbars(vk, renderer, cmd, boxes.content_w, boxes.content_h, viewport_w, viewport_h, scroll_x, scroll_y, &vthumb_dummy, &hthumb_dummy);
-        draw_toolbar(vk, renderer, text_renderer, cmd, url_bar_text, url_bar_focused, hist->count > 0, viewport_w, viewport_h);
-        sqw_text_renderer_flush(vk, text_renderer, cmd, viewport_w, viewport_h);
-        sqw_vk_end_frame(vk, cmd, imageIndex);
-
-        frame_count++;
-        if (frame_count % 300 == 0) { fprintf(stderr, "SQW: frame=%d\n", frame_count); fflush(stdout); }
+        sqw_check_pending_fetch(st);
+        sqw_draw_frame(st);
     }
 
-    fprintf(stderr, "SQW: render loop finished, frame_count=%d\n", frame_count); fflush(stdout);
+    fprintf(stderr, "SQW: render loop finished, frame_count=%d\n", st->frame_count); fflush(stdout);
 
     /* Skip Vulkan/SDL teardown and exit directly (_exit on Linux,
      * TerminateProcess on Windows) -- see triangle_vulkan.c's own comment
