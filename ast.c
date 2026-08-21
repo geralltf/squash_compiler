@@ -407,6 +407,20 @@ void ast_print(const ASTNode *n, int depth) {
 
 void ast_free(ASTNode *n) {
     if (!n) return;
+    /* Every loop below copies each array element into a local `ASTNode
+     * *child` (or `char *s` for a string-array element) BEFORE passing
+     * it to ast_free()/free(), rather than writing e.g.
+     * "ast_free(n->call.args[i])" directly -- a real, already-documented
+     * squash codegen bug (see SQW/dom.c's own dom_free()/dom_walk.c's
+     * own identical comment: a struct-array-indexed expression evaluated
+     * directly AS a call argument corrupts the CALLER's own state, not
+     * just a theoretical concern here) is what a self-hosting test
+     * actually hit: a squash-compiled squash binary segfaulted in this
+     * exact function while freeing the AST of the most trivial possible
+     * program ("int main(){return 0;}"), well below any real recursion-
+     * depth concern -- confirming this is that same known bug, not a
+     * new one. The local-temp pattern is unaffected by it, matching
+     * every other place in this project that already uses it. */
     switch (n->kind) {
     case AST_STRING:    free(n->str.value); break;
     case AST_VAR:       free(n->var.name); break;
@@ -421,38 +435,94 @@ void ast_free(ASTNode *n) {
     case AST_MEMBER:    ast_free(n->member.obj); free(n->member.field); break;
     case AST_ADDR:      ast_free(n->addr.operand); break;
     case AST_DEREF:     ast_free(n->deref.operand); break;
-    case AST_FUNC_PTR_CALL: ast_free(n->fp_call.func_expr); for(int i=0;i<n->fp_call.argc;i++) ast_free(n->fp_call.args[i]); free(n->fp_call.args); break;
-    case AST_CALL:      free(n->call.name); for(int i=0;i<n->call.argc;i++) ast_free(n->call.args[i]); free(n->call.args); break;
+    case AST_FUNC_PTR_CALL: {
+        ast_free(n->fp_call.func_expr);
+        for (int i=0;i<n->fp_call.argc;i++) { ASTNode *child = n->fp_call.args[i]; ast_free(child); }
+        free(n->fp_call.args);
+        break;
+    }
+    case AST_CALL: {
+        free(n->call.name);
+        for (int i=0;i<n->call.argc;i++) { ASTNode *child = n->call.args[i]; ast_free(child); }
+        free(n->call.args);
+        break;
+    }
     case AST_IF:        ast_free(n->if_.cond); ast_free(n->if_.then_); ast_free(n->if_.else_); break;
     case AST_WHILE:     ast_free(n->while_.cond); ast_free(n->while_.body); break;
     case AST_DO_WHILE:  ast_free(n->do_while.body); ast_free(n->do_while.cond); break;
     case AST_FOR:       ast_free(n->for_.init); ast_free(n->for_.cond); ast_free(n->for_.step); ast_free(n->for_.body); break;
-    case AST_SWITCH:    ast_free(n->switch_.expr); for(int i=0;i<n->switch_.nc;i++) ast_free(n->switch_.cases[i]); free(n->switch_.cases); break;
-    case AST_CASE:      for(int i=0;i<n->case_.nb;i++) ast_free(n->case_.body[i]); free(n->case_.body); break;
-    case AST_DEFAULT:   for(int i=0;i<n->default_.nb;i++) ast_free(n->default_.body[i]); free(n->default_.body); break;
+    case AST_SWITCH: {
+        ast_free(n->switch_.expr);
+        for (int i=0;i<n->switch_.nc;i++) { ASTNode *child = n->switch_.cases[i]; ast_free(child); }
+        free(n->switch_.cases);
+        break;
+    }
+    case AST_CASE: {
+        for (int i=0;i<n->case_.nb;i++) { ASTNode *child = n->case_.body[i]; ast_free(child); }
+        free(n->case_.body);
+        break;
+    }
+    case AST_DEFAULT: {
+        for (int i=0;i<n->default_.nb;i++) { ASTNode *child = n->default_.body[i]; ast_free(child); }
+        free(n->default_.body);
+        break;
+    }
     case AST_RETURN:    ast_free(n->ret.expr); break;
     case AST_GOTO:      free(n->goto_.label); break;
     case AST_LABEL:     free(n->label.name); ast_free(n->label.stmt); break;
     case AST_EXPR_STMT: ast_free(n->expr_stmt.expr); break;
     case AST_VAR_DECL:  free(n->var_decl.storage); typeinfo_free(n->var_decl.type); free(n->var_decl.name); ast_free(n->var_decl.init); break;
-    case AST_BLOCK:     for(int i=0;i<n->block.count;i++) ast_free(n->block.stmts[i]); free(n->block.stmts); break;
-    case AST_FUNC_DECL: free(n->func.storage); typeinfo_free(n->func.ret_type); free(n->func.name); for(int i=0;i<n->func.paramc;i++) ast_free(n->func.params[i]); free(n->func.params); ast_free(n->func.body); break;
+    case AST_BLOCK: {
+        for (int i=0;i<n->block.count;i++) { ASTNode *child = n->block.stmts[i]; ast_free(child); }
+        free(n->block.stmts);
+        break;
+    }
+    case AST_FUNC_DECL: {
+        free(n->func.storage); typeinfo_free(n->func.ret_type); free(n->func.name);
+        for (int i=0;i<n->func.paramc;i++) { ASTNode *child = n->func.params[i]; ast_free(child); }
+        free(n->func.params);
+        ast_free(n->func.body);
+        break;
+    }
     case AST_PARAM:     typeinfo_free(n->param.type); free(n->param.name); break;
-    case AST_STRUCT_DECL: free(n->struct_decl.name); for(int i=0;i<n->struct_decl.nfields;i++) ast_free(n->struct_decl.fields[i]); free(n->struct_decl.fields); break;
+    case AST_STRUCT_DECL: {
+        free(n->struct_decl.name);
+        for (int i=0;i<n->struct_decl.nfields;i++) { ASTNode *child = n->struct_decl.fields[i]; ast_free(child); }
+        free(n->struct_decl.fields);
+        break;
+    }
     case AST_FIELD:     typeinfo_free(n->field.type); free(n->field.name); break;
-    case AST_ENUM_DECL: free(n->enum_decl.name); for(int i=0;i<n->enum_decl.nvals;i++) ast_free(n->enum_decl.vals[i]); free(n->enum_decl.vals); break;
+    case AST_ENUM_DECL: {
+        free(n->enum_decl.name);
+        for (int i=0;i<n->enum_decl.nvals;i++) { ASTNode *child = n->enum_decl.vals[i]; ast_free(child); }
+        free(n->enum_decl.vals);
+        break;
+    }
     case AST_ENUM_VAL:  free(n->enum_val.name); break;
     case AST_TYPEDEF_DECL: typeinfo_free(n->typedef_decl.type); free(n->typedef_decl.name); break;
-    case AST_ASM_STMT:
+    case AST_ASM_STMT: {
         free(n->asm_stmt.template_str);
-        for(int i=0;i<n->asm_stmt.n_outputs;i++) { free(n->asm_stmt.outputs[i].constraint); ast_free(n->asm_stmt.outputs[i].expr); }
+        for (int i=0;i<n->asm_stmt.n_outputs;i++) {
+            char *cons = n->asm_stmt.outputs[i].constraint;
+            ASTNode *expr = n->asm_stmt.outputs[i].expr;
+            free(cons); ast_free(expr);
+        }
         free(n->asm_stmt.outputs);
-        for(int i=0;i<n->asm_stmt.n_inputs;i++) { free(n->asm_stmt.inputs[i].constraint); ast_free(n->asm_stmt.inputs[i].expr); }
+        for (int i=0;i<n->asm_stmt.n_inputs;i++) {
+            char *cons = n->asm_stmt.inputs[i].constraint;
+            ASTNode *expr = n->asm_stmt.inputs[i].expr;
+            free(cons); ast_free(expr);
+        }
         free(n->asm_stmt.inputs);
-        for(int i=0;i<n->asm_stmt.n_clobbers;i++) free(n->asm_stmt.clobbers[i]);
+        for (int i=0;i<n->asm_stmt.n_clobbers;i++) { char *s = n->asm_stmt.clobbers[i]; free(s); }
         free(n->asm_stmt.clobbers);
         break;
-    case AST_PROGRAM:   for(int i=0;i<n->program.count;i++) ast_free(n->program.decls[i]); free(n->program.decls); break;
+    }
+    case AST_PROGRAM: {
+        for (int i=0;i<n->program.count;i++) { ASTNode *child = n->program.decls[i]; ast_free(child); }
+        free(n->program.decls);
+        break;
+    }
     default: break;
     }
     free(n);

@@ -100,9 +100,21 @@ static void e_patch64(uint8_t *b, int off, uint64_t v) {
  * comfortably above what any current demo needs (particles_physics.c's
  * Vulkan-compute rewrite alone pushed past 64 once it started calling
  * vkCreateComputePipelines/vkCmdDispatch/vkCmdBindDescriptorSets/etc. in
- * addition to its existing graphics + X11 + libc imports). */
+ * addition to its existing graphics + X11 + libc imports).
+ *
+ * Raised again, 256 -> 2048: self-hosting squash (compiling its own
+ * ~17-file, ~30K-line source as a single translation unit, see
+ * squash_unity.c/tools/self_verify.sh) silently exceeded 256 distinct
+ * imports and hit this EXACT documented failure mode -- the resulting
+ * binary compiled and linked with no error, then segfaulted on literally
+ * "int main(){return 0;}", the "corrupting execution... at some arbitrary
+ * *other* call site" symptom this comment already warned about. Also
+ * see elf_grp_add's own new fprintf below: silently dropping the
+ * (MAX_FUNCS+1)-th import produced a binary that LOOKED like it built
+ * successfully -- there is no safe way to hit this cap silently, so it
+ * no longer does. */
 #define MAX_LIBS  8
-#define MAX_FUNCS 256
+#define MAX_FUNCS 2048
 #define FUNC_NLEN 80
 #define LIB_NLEN  64
 
@@ -159,7 +171,18 @@ static void elf_grp_add(const char *spec) {
         if (elf_func_lib[fi] == lg && strcmp(elf_func_names + fi * 80, func) == 0) return;
         fi++;
     }
-    if (elf_total_funcs >= MAX_FUNCS) return;
+    if (elf_total_funcs >= MAX_FUNCS) {
+        /* A silently-dropped import here doesn't fail the build -- it
+         * produces a binary that looks fine and corrupts execution at
+         * some unrelated later call site instead (see this file's own
+         * top comment). A loud, unmissable warning at the actual moment
+         * of loss is the only safe behavior once the cap is ever hit. */
+        fprintf(stderr, "squash: WARNING: exceeded MAX_FUNCS (%d) distinct dynamic imports -- "
+                "'%s' from '%s' was NOT linked; the output binary WILL crash or behave "
+                "incorrectly wherever it's called. Raise MAX_FUNCS in elf_builder.c.\n",
+                MAX_FUNCS, func, lib);
+        return;
+    }
     int slot = elf_total_funcs;
     ii = 0;
     while (func[ii]) { elf_func_names[slot * 80 + ii] = func[ii]; ii++; }

@@ -22,6 +22,17 @@ typedef struct {
     int       n_pending;
     int       cap_pending;
     int       compound_lit_counter;
+    /* Nesting depth for the two recursive-descent recursion points that
+     * can blow the real C call stack on hostile/pathological input --
+     * "(((((...)))))" (ParsePrimary recursing into ParseExpression on
+     * each '(') and "{{{{{...}}}}}" (ParseBlock/ParseStatement recursing
+     * on each '{') both crash with a real stack-overflow segfault at
+     * ~tens of thousands of levels, found via fuzzing this compiler's
+     * own robustness against hostile input. Checked/incremented at just
+     * those two recursion points (see parser_new4.c) rather than
+     * threaded through the whole precedence-climbing call chain. */
+    int       expr_depth;
+    int       block_depth;
 } Parser;
 
 void     parser_init   (Parser *p, Lexer *l, SymTable *sym, const char *filename);

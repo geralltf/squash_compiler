@@ -393,6 +393,7 @@ static void parse_typedef_array_dims(Parser *p, TypeInfo *ti) {
 void parser_init(Parser *p, Lexer *l, SymTable *sym, const char *filename) {
     p->lex=l; p->sym=sym; p->filename=filename; p->error_count=0; p->anon_counter=0;
     p->cap_pending=16; p->n_pending=0; p->compound_lit_counter=0;
+    p->expr_depth=0; p->block_depth=0;
     p->pending_stmts=(ASTNode**)malloc((size_t)p->cap_pending*sizeof(ASTNode*));
 
     /* wchar_t is a real compiler-builtin type in MSVC (not typedef'd via
@@ -1017,7 +1018,19 @@ ASTNode *ParsePrimary(Parser *p) {
             /* This is a parse ambiguity we resolve by just continuing as expr */
             typeinfo_free(ti);
         }
+        if (p->expr_depth >= 40) {
+            parse_error(p, "expression too deeply nested (parenthesis nesting > 40)");
+            /* Don't recurse further -- consume tokens up to a matching
+             * close-paren-ish point and return a placeholder, same
+             * error-recovery shape as the "unexpected token" path below,
+             * rather than actually calling ParseExpression and recursing
+             * into the stack overflow this check exists to prevent. */
+            adv(p);
+            return ast_number(0, line);
+        }
+        p->expr_depth++;
         ASTNode *e = ParseExpression(p);
+        p->expr_depth--;
         eat(p,TOK_RPAREN);
         return e;
     }
@@ -1296,6 +1309,23 @@ ASTNode *ParseExpression(Parser *p) {
 ASTNode *ParseBlock(Parser *p) {
     int line=cur(p).line;
     eat(p,TOK_LBRACE);
+    /* "{{{{{...}}}}}" -- a block nested tens of thousands deep -- recurses
+     * through ParseBlock -> ParseStatement -> ParseBlock once per '{' with
+     * no other bound, blowing the real call stack (segfault, not a clean
+     * error) well before any of this function's own per-call work matters.
+     * Found via fuzzing this compiler's own robustness against hostile
+     * input; same fix shape as ParsePrimary's own expr_depth guard for
+     * "(((((...)))))" just above. */
+    if (p->block_depth >= 40) {
+        parse_error(p, "block nested too deeply (compound-statement nesting > 40)");
+        symtable_push_scope(p->sym);
+        ASTNode *empty = ast_block(NULL, 0, line);
+        while (!chk(p,TOK_RBRACE) && !chk(p,TOK_EOF)) adv(p);
+        if (chk(p,TOK_RBRACE)) adv(p);
+        symtable_pop_scope(p->sym);
+        return empty;
+    }
+    p->block_depth++;
     ASTNode *stmts[1024]; int count=0;
     symtable_push_scope(p->sym);
     while (!chk(p,TOK_RBRACE)&&!chk(p,TOK_EOF))
@@ -1303,6 +1333,7 @@ ASTNode *ParseBlock(Parser *p) {
         else { parse_error(p,"block too large"); break; }
     symtable_pop_scope(p->sym);
     eat(p,TOK_RBRACE);
+    p->block_depth--;
     return ast_block(stmts, count, line);
 }
 

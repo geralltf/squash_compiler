@@ -142,6 +142,24 @@ static char process_escape(Lexer *l) {
     }
 }
 
+/* A source float/hex-float literal whose value is way outside long long's
+ * range (e.g. "1e100", fully attacker-controlled source text -- found via
+ * coverage-guided fuzzing) makes the plain "(long long)d" cast this
+ * function used at both its own call sites real undefined behavior: C
+ * only defines float-to-integer conversion when the truncated value fits
+ * the target type. Clamps to LLONG_MIN/LLONG_MAX instead (this ->ival is
+ * only ever a secondary/fallback integer view of a float constant, never
+ * the literal's real value -- ->fval is -- so saturating instead of
+ * wrapping/crashing is a safe, harmless choice here). The two bounds
+ * below are exact double values (+-2^63), chosen so the actual cast only
+ * ever runs on a value strictly inside long long's representable range. */
+static long long lex_double_to_ll_safe(double d) {
+    if (d >= 9223372036854775808.0) return 0x7fffffffffffffffLL;
+    if (d < -9223372036854775808.0) return (-0x7fffffffffffffffLL - 1);
+    if (d != d) return 0; /* NaN */
+    return (long long)d;
+}
+
 /* =========================================================================
  * lex_parse_number — lex integer or float literal
  * ========================================================================= */
@@ -190,7 +208,7 @@ static void lex_parse_number(Lexer *l) {
             while (e > 0) { result *= 2.0; e--; }
             while (e < 0) { result /= 2.0; e++; }
             l->cur.fval = result;
-            l->cur.ival = (long long)result;
+            l->cur.ival = lex_double_to_ll_safe(result);
             is_float = 1;
         }
     /* binary literal: 0b... or 0B... (C23 / GCC extension) */
@@ -202,22 +220,40 @@ static void lex_parse_number(Lexer *l) {
         }
         l->cur.ival=(long long)v;
     } else {
-        long long v=0;
-        while (isdigit((unsigned char)l->src[l->pos])) v=v*10+(lex_adv(l)-'0');
+        /* unsigned accumulator, not signed -- a decimal literal too large
+         * for long long (e.g. "999999999999999999" * 10, found via
+         * fuzzing this compiler's own robustness against hostile input)
+         * hit real signed-integer-overflow UB here otherwise. Unsigned
+         * overflow wraps with well-defined semantics instead; the final
+         * cast to long long below matches the hex/binary literal paths
+         * just above, which already use this same safe pattern. */
+        unsigned long long v=0;
+        while (isdigit((unsigned char)l->src[l->pos])) v=v*10+(unsigned long long)(lex_adv(l)-'0');
         if (l->src[l->pos]=='.' || l->src[l->pos]=='e' || l->src[l->pos]=='E') {
             is_float=1;
             /* restart: back up and re-lex float */
             l->pos = (int)(l->cur.start - l->src);
             l->col = l->cur.col;
+            /* Real stack buffer overflow here (found via coverage-guided
+             * fuzzing, not one of the hand-written adversarial cases):
+             * none of these three digit-copying loops bounded `fi`
+             * against fbuf's own 64-byte size, so a float literal with
+             * more than 64 digits/exponent characters (fully attacker-
+             * controlled source text, e.g. "111...<70 nines>...111.5")
+             * wrote straight past the end of this stack array. Every
+             * loop below now stops one byte short of the buffer's end,
+             * leaving room for the final NUL; a literal longer than that
+             * is simply truncated (matches how real compilers cap
+             * absurdly long numeric literals rather than crash on them). */
             char fbuf[64]; int fi=0;
-            while (isdigit((unsigned char)l->src[l->pos])||l->src[l->pos]=='.') fbuf[fi++]=lex_adv(l);
+            while ((isdigit((unsigned char)l->src[l->pos])||l->src[l->pos]=='.') && fi < (int)sizeof(fbuf)-1) fbuf[fi++]=lex_adv(l);
             if (l->src[l->pos]=='e'||l->src[l->pos]=='E') {
-                fbuf[fi++]=lex_adv(l);
-                if (l->src[l->pos]=='+'||l->src[l->pos]=='-') fbuf[fi++]=lex_adv(l);
-                while (isdigit((unsigned char)l->src[l->pos])) fbuf[fi++]=lex_adv(l);
+                if (fi < (int)sizeof(fbuf)-1) fbuf[fi++]=lex_adv(l);
+                if ((l->src[l->pos]=='+'||l->src[l->pos]=='-') && fi < (int)sizeof(fbuf)-1) fbuf[fi++]=lex_adv(l);
+                while (isdigit((unsigned char)l->src[l->pos]) && fi < (int)sizeof(fbuf)-1) fbuf[fi++]=lex_adv(l);
             }
             fbuf[fi]=0;
-            l->cur.fval=atof(fbuf); l->cur.ival=(long long)l->cur.fval;
+            l->cur.fval=atof(fbuf); l->cur.ival=lex_double_to_ll_safe(l->cur.fval);
         } else {
             /* Octal literal: a leading '0' followed by more digits (and not
              * a float, ruled out above) means base 8 in C, not base 10 —
@@ -237,8 +273,10 @@ static void lex_parse_number(Lexer *l) {
                 int all_octal = 1;
                 for (int i=1;i<len;i++) if (l->cur.start[i] < '0' || l->cur.start[i] > '7') { all_octal = 0; break; }
                 if (all_octal) {
-                    long long ov = 0;
-                    for (int i=1;i<len;i++) ov = ov*8 + (l->cur.start[i]-'0');
+                    /* unsigned accumulator -- same signed-overflow UB risk
+                     * and same fix as the decimal path just above. */
+                    unsigned long long ov = 0;
+                    for (int i=1;i<len;i++) ov = ov*8 + (unsigned long long)(l->cur.start[i]-'0');
                     v = ov;
                 }
             }
@@ -563,6 +601,7 @@ void token_print(const Token *t) {
                                   * ~1024-2000 macros combined */
 #define PP_MAX_DEPTH    64      /* max nested #if depth            */
 #define PP_MAX_INCLUDED 256     /* max distinct files included     */
+#define PP_MAX_EXPAND_SIZE (64*1024*1024) /* macro-expansion output size ceiling (bytes) */
 
 typedef struct {
     char *name;
@@ -592,6 +631,17 @@ typedef struct {
     /* included-file deduplication (header guards via __FILE_ONCE__) */
     char   *included[PP_MAX_INCLUDED];
     int     n_included;
+
+    /* Current #include recursion depth -- process_file() calls itself
+     * once per #include with no other bound on nesting, so a file that
+     * (directly or via a longer cycle) includes itself recurses forever,
+     * exhausting the real call stack and crashing (segfault, not a clean
+     * error) rather than reporting the mistake. Found via fuzzing this
+     * compiler's own robustness against hostile/malformed input.
+     * Checked/incremented once per recursive process_file() call, matches
+     * the same kind of fixed ceiling real compilers use (GCC's own
+     * default #include depth limit is 200). */
+    int     include_depth;
 
     /* include search paths */
     const char **inc_dirs;
@@ -870,11 +920,30 @@ static int pp_line_paren_delta(const char *line, int start_state, int *state_out
     return depth;
 }
 
+/* Real ceiling on how many individual macro substitutions ONE pp_expand()
+ * call (i.e. one source line) may perform. Found via fuzzing this
+ * compiler's own robustness against hostile input: a real "macro bomb"
+ * (a chain of object-like macros each expanding to two copies of the
+ * previous one, e.g. "#define M1 M0 M0", "#define M2 M1 M1", ...) hangs
+ * for tens of seconds on just ~19 levels, and PP_MAX_EXPAND_SIZE (the
+ * final-output-size cap right below each substitution site) never
+ * catches it -- the FINAL text stays modest (~1MB for 2^19 leaf tokens),
+ * but each individual substitution's own trailing strcpy() (copying
+ * everything after the substitution point forward) costs O(however much
+ * unexpanded text is still queued up to its right), and there can be
+ * exponentially many such substitutions -- the real blowup is in
+ * substitution COUNT × average remaining-text size, not final size. A
+ * legitimate single line never remotely approaches this count (thousands
+ * of real macro invocations on one physical line isn't something real
+ * code does), so this is a pure hostile-input backstop. */
+#define PP_MAX_SUBSTITUTIONS 2000
+
 static char *pp_expand(PPState *st, const char *src) {
     char *out = my_strdup(src);
     int changed = 1;
     int max_iters = 100; /* prevent infinite expansion loops */
     int start_state = st->in_block_comment ? 3 : 0;
+    int subst_count = 0;
     while (changed && max_iters-- > 0) {
         changed = 0;
         /* Single pass over the text, tokenizing identifiers once and doing
@@ -1100,6 +1169,31 @@ static char *pp_expand(PPState *st, const char *src) {
                     free(out); out=tmp;
                     p=out+poff+vl;
                     changed=1;
+                    /* A chain of macros each expanding to two copies of the
+                     * previous one (a real, if contrived, "macro bomb" --
+                     * found via fuzzing this compiler's own robustness
+                     * against hostile input) doubles `out`'s size on every
+                     * substitution; the inner scan above keeps rescanning
+                     * the newly-substituted text within this SAME pass, so
+                     * this can already reach gigabytes before max_iters
+                     * even matters. Bail out with a clean diagnostic once
+                     * output size passes a sane ceiling, rather than
+                     * growing (and copying, on every single substitution)
+                     * an unbounded buffer until the process is OOM-killed
+                     * or simply never finishes. */
+                    if ((long)strlen(out) > PP_MAX_EXPAND_SIZE) {
+                        diag_emit(DIAG_ERROR, -1, NULL, NULL,
+                                  "macro expansion exceeded %d bytes -- likely runaway/recursive macro definitions",
+                                  PP_MAX_EXPAND_SIZE);
+                        return out;
+                    }
+                    if (++subst_count > PP_MAX_SUBSTITUTIONS) {
+                        diag_emit(DIAG_ERROR, -1, NULL, NULL,
+                                  "macro expansion performed over %d substitutions on one line -- "
+                                  "likely runaway/recursive macro definitions",
+                                  PP_MAX_SUBSTITUTIONS);
+                        return out;
+                    }
                 } else {
                     /* Object-like macro */
                     int poff2=(int)(p-out);
@@ -1112,6 +1206,19 @@ static char *pp_expand(PPState *st, const char *src) {
                     free(out); out=tmp;
                     p=out+poff2+vl;
                     changed=1;
+                    if ((long)strlen(out) > PP_MAX_EXPAND_SIZE) {
+                        diag_emit(DIAG_ERROR, -1, NULL, NULL,
+                                  "macro expansion exceeded %d bytes -- likely runaway/recursive macro definitions",
+                                  PP_MAX_EXPAND_SIZE);
+                        return out;
+                    }
+                    if (++subst_count > PP_MAX_SUBSTITUTIONS) {
+                        diag_emit(DIAG_ERROR, -1, NULL, NULL,
+                                  "macro expansion performed over %d substitutions on one line -- "
+                                  "likely runaway/recursive macro definitions",
+                                  PP_MAX_SUBSTITUTIONS);
+                        return out;
+                    }
                 }
             }
         }
@@ -1839,6 +1946,7 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
                 p++; /* skip '(' */
                 char pnames_buf[1024]; int np=0;  /* 16*64 */
                 while (*p && *p!=')' && np<16) {
+                    const char *loop_start = p; /* see forced-advance note below */
                     while (*p==' '||*p=='\t') p++;
                     if (*p==')') break;
                     if (strncmp(p,"...",3)==0) { p+=3; break; } /* variadic - skip */
@@ -1849,6 +1957,20 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
                     if (pl>0) np++;
                     while (*p==' '||*p=='\t') p++;
                     if (*p==',') p++;
+                    /* A "parameter" that isn't a bare identifier (e.g. a
+                     * real type before the name, like a malformed/hostile
+                     * "#define FOO(Type *ptr)" -- real macro params are
+                     * required to be plain identifiers, this one isn't)
+                     * hits none of the branches above: not whitespace,
+                     * not ')', not an identifier char, not ','. Every
+                     * branch left `p` exactly where it started, so the
+                     * loop condition never changes and this spun forever
+                     * -- a real infinite hang, found via coverage-guided
+                     * fuzzing. Force one character of progress whenever
+                     * nothing else did, guaranteeing this loop always
+                     * terminates (worst case: skips the whole malformed
+                     * parameter list one weird character at a time). */
+                    if (p == loop_start && *p && *p != ')') p++;
                 }
                 while (*p && *p!=')') p++;
                 if (*p==')') p++;
@@ -1922,6 +2044,17 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
             p += 7;
             while (*p==' '||*p=='\t') p++;
             int system_inc = (*p=='<');
+            /* A malformed #include with neither an angle-bracket nor a
+             * quote delimiter after it (e.g. followed straight by EOF or
+             * an embedded NUL -- fully attacker-controlled source text,
+             * found via coverage-guided fuzzing) used to unconditionally
+             * skip one character here regardless of what it actually
+             * was, then scan forward looking for a closing delimiter
+             * that was never going to appear -- reading straight past
+             * the end of the real buffer (a genuine heap-buffer-overflow,
+             * confirmed under AddressSanitizer). A real opening delimiter
+             * must actually be present before consuming it. */
+            if (*p != '<' && *p != '"') continue;
             p++;                       /* skip < or " */
             const char *ns = p;
             while (*p && *p!='>' && *p!='"') p++;
@@ -1956,7 +2089,16 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
                 snprintf(orig_incname, sizeof orig_incname, "%s", incname);
                 try_orig_after_flatten = (base != incname); /* had a subdir */
                 incname[0] = '\0'; /* signal to use sys_path */
-                strncat(incname, sys_path, sizeof(sys_path)-1);
+                /* Cap by incname's OWN remaining capacity, not sys_path's
+                 * size -- found via static analysis (cppcheck). incname is
+                 * 512 bytes, sys_path is 600; capping this strncat at
+                 * "sizeof(sys_path)-1" (599) let a long enough angle-include
+                 * filename ("#include <AAAA...600 chars.../foo.h>", fully
+                 * attacker-controlled source text) overflow incname's real
+                 * 512-byte buffer by up to ~87 bytes -- a real stack buffer
+                 * overflow, not an OOM-only edge case like most of this
+                 * file's other malloc/realloc-failure findings. */
+                strncat(incname, sys_path, sizeof(incname)-1);
             } else if (incname[0] != '/') {
                 /* Quote-form #include "...": per the C standard, resolve
                  * relative to the INCLUDING file's own directory before
@@ -2021,7 +2163,17 @@ static char *process_file(PPState *st, const char *src, const char *filename) {
                           system_inc ? "<" : "\"", requested_incname, system_inc ? ">" : "\"");
                 continue;
             }
+            if (st->include_depth >= 200) {
+                diag_emit(DIAG_ERROR, -1, NULL, NULL,
+                          "%s:%d: #include nested too deeply (>200 levels) -- "
+                          "likely a file including itself, directly or via a cycle",
+                          filename, pp_lineno);
+                free(inc_src);
+                continue;
+            }
+            st->include_depth++;
             char *inc_out = process_file(st, inc_src, incname);
+            st->include_depth--;
             do { size_t _emn=(strlen(inc_out)); while(len+_emn+2>cap){cap*=2;out=(char*)realloc(out,cap);} memcpy(out+len,(inc_out),_emn); len+=_emn; } while(0);
             free(inc_src); free(inc_out);
             continue;

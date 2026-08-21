@@ -1,0 +1,7 @@
+# Never commit private key material -- the real signing key lives
+# entirely outside this repo (~/.squash-signing-keys/gnupg), but this is
+# a hard backstop in case anything is ever pointed at a GNUPGHOME inside
+# the checkout by mistake.
+*.gpg
+*secring*
+*private-keys*

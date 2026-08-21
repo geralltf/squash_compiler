@@ -217,7 +217,9 @@ static void *sqw_net_worker(void *arg) {
 
                     long cap = 65536, len = 0;
                     char *buf = (char *)malloc((size_t)cap);
+                    int too_big = 0;
                     for (;;) {
+                        if (len >= SQW_NET_MAX_RESPONSE) { too_big = 1; break; }
                         if (cap - len < 4097) { cap *= 2; buf = (char *)realloc(buf, (size_t)cap); }
                         long n = is_https ? (long)SSL_read(ssl, buf + len, 4096)
                                           : recv(fd, buf + len, 4096, 0);
@@ -227,7 +229,17 @@ static void *sqw_net_worker(void *arg) {
                     if (cap - len < 1) { cap += 1; buf = (char *)realloc(buf, (size_t)cap); }
                     buf[len] = 0;
 
-                    char *hdr_end = strstr(buf, "\r\n\r\n");
+                    /* Require a real HTTP status line before trusting
+                     * anything after "\r\n\r\n" as a page body -- found
+                     * during this project's own pentest that ANY TCP
+                     * responder sending garbage followed by "\r\n\r\n" and
+                     * some HTML got silently rendered as if it were a
+                     * real HTTP response. Deliberately lenient beyond that
+                     * one check (doesn't parse/require a specific status
+                     * CODE) -- a real 404/500 page still has a real body
+                     * worth showing, same as any real browser). */
+                    int looks_like_http = (len >= 5) && strncmp(buf, "HTTP/", 5) == 0;
+                    char *hdr_end = (!too_big && looks_like_http) ? strstr(buf, "\r\n\r\n") : NULL;
                     if (hdr_end) {
                         char *b = hdr_end + 4;
                         long blen = len - (long)(b - buf);

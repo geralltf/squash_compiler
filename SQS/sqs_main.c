@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -60,14 +61,42 @@ static long sqs_conn_write(SqsConn *c, const void *buf, long len) {
     return send(c->fd, buf, (unsigned long)len, 0);
 }
 
-/* Rejects any path containing ".." (basic path-traversal protection --
- * "simple but secure" per the project brief) and maps "/" to "index.html".
- * Returns 1 and fills `out` (size SQS_REQ_BUF) with the real on-disk path
- * on success, 0 if the request path is malformed/unsafe. */
+/* Percent-decodes `in` into `out` (real RFC 3986 %XX decoding -- a bare
+ * '%' or a '%' not followed by two real hex digits is left as a literal
+ * '%', not treated as an error, matching how real servers tolerate
+ * malformed encoding in a path rather than 400ing on it). Never expands
+ * (each 3-byte "%XX" collapses to 1 byte), so `out` sized the same as
+ * `in`'s own buffer is always enough room. */
+static void sqs_url_decode(const char *in, char *out, int outcap) {
+    int i = 0, j = 0;
+    while (in[i] && j < outcap - 1) {
+        if (in[i] == '%' && isxdigit((unsigned char)in[i+1]) && isxdigit((unsigned char)in[i+2])) {
+            char hex[3]; hex[0] = in[i+1]; hex[1] = in[i+2]; hex[2] = 0;
+            out[j++] = (char)strtol(hex, NULL, 16);
+            i += 3;
+        } else {
+            out[j++] = in[i++];
+        }
+    }
+    out[j] = 0;
+}
+
+/* Percent-decodes the request path FIRST, then rejects any resulting ".."
+ * (basic path-traversal protection -- "simple but secure" per the project
+ * brief) and maps "/" to "index.html". Decoding before validating is the
+ * point: checking the raw (still-encoded) bytes for ".." would let
+ * "%2e%2e" sail through as a literal, harmless-looking "%2e%2e" path
+ * segment that 404s -- but only because this server happens not to decode
+ * it anywhere else either. Decode-then-validate is correct regardless of
+ * what happens downstream. Returns 1 and fills `out` (size SQS_REQ_BUF)
+ * with the real on-disk path on success, 0 if the request path is
+ * malformed/unsafe. */
 static int sqs_resolve_path(const char *req_path, char *out) {
     if (req_path[0] != '/') return 0;
-    const char *rel = req_path + 1;
-    if (rel[0] == '\0') rel = "index.html";
+    const char *rel_raw = req_path + 1;
+    if (rel_raw[0] == '\0') rel_raw = "index.html";
+    char rel[SQS_REQ_BUF];
+    sqs_url_decode(rel_raw, rel, sizeof rel);
     if (strstr(rel, "..") != NULL) return 0;
     snprintf(out, SQS_REQ_BUF, "%s%s", SQS_WWWROOT, rel);
     return 1;
@@ -233,6 +262,42 @@ static void sqs_handle_request(SqsConn *c) {
      * request. */
     if (strcmp(path, "/") == 0) {
         fprintf(stderr, "SQS: redirect: / -> /index.html\n"); fflush(stderr);
+    }
+
+    /* PUT/DELETE get REAL filesystem semantics -- both used to be silently
+     * accepted by the method whitelist above and then fall through to the
+     * exact same read-only GET path, meaning a PUT client got back a
+     * misleading "200 OK" with the file's EXISTING content and nothing
+     * was ever written, and a DELETE client got the same with nothing
+     * ever removed. Confined to SQS_WWWROOT the same way GET/POST already
+     * are (sqs_resolve_path's own traversal check applies here too, since
+     * fs_path was resolved through it above, before this branch). */
+    if (strcmp(method, "PUT") == 0) {
+        FILE *wfp = fopen(fs_path, "wb");
+        if (!wfp) {
+            const char *body500 = "could not write file";
+            sqs_send_response(c, 500, "Internal Server Error", "text/plain", body500, (long)strlen(body500));
+            free(req);
+            return;
+        }
+        fwrite(body, 1, (size_t)body_len, wfp);
+        fclose(wfp);
+        const char *bodyok = "created/updated";
+        sqs_send_response(c, 201, "Created", "text/plain", bodyok, (long)strlen(bodyok));
+        free(req);
+        return;
+    }
+    if (strcmp(method, "DELETE") == 0) {
+        if (remove(fs_path) != 0) {
+            const char *body404 = "404 not found";
+            sqs_send_response(c, 404, "Not Found", "text/plain", body404, (long)strlen(body404));
+            free(req);
+            return;
+        }
+        const char *bodyok = "deleted";
+        sqs_send_response(c, 200, "OK", "text/plain", bodyok, (long)strlen(bodyok));
+        free(req);
+        return;
     }
 
     FILE *fp = fopen(fs_path, "rb");

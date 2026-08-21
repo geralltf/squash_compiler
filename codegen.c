@@ -6247,6 +6247,20 @@ static int asm_x86_classify_token(const char *tok_in, AsmTokX86 *out) {
     memset(out,0,sizeof *out);
     char tok[80]; snprintf(tok,sizeof tok,"%s",tok_in);
     char *p = tok;
+    /* Declared at FUNCTION scope, not inside the "if (paren)" block below --
+     * `p` is repointed at this buffer inside that block (p = inner) but
+     * then read well past the block's own closing brace (every check
+     * from here down to the function's end). A block-scoped `inner`
+     * there was a real stack-use-after-scope bug (found via an
+     * AddressSanitizer build while fuzzing this compiler against real,
+     * legitimate large source files -- SDL3's own inline-asm-using code,
+     * pulled in through SQW's single-TU build, was what actually
+     * triggered it): `p` kept pointing at stack space whose lifetime had
+     * already ended, undefined behavior that happened to usually still
+     * "work" on this platform/stack-layout, exactly the kind of bug that
+     * silently reads garbage (or crashes) only on some other platform,
+     * optimization level, or stack layout. */
+    char inner[64];
     char *paren = strchr(p,'(');
     if (paren) {
         long long disp = 0;
@@ -6254,7 +6268,7 @@ static int asm_x86_classify_token(const char *tok_in, AsmTokX86 *out) {
         char *close = strchr(paren,')');
         int len = close ? (int)(close-paren-1) : (int)strlen(paren+1);
         if (len>63) len=63;
-        char inner[64]; memcpy(inner,paren+1,len); inner[len]=0;
+        memcpy(inner,paren+1,len); inner[len]=0;
         out->is_deref = 1; out->disp = disp;
         p = inner;
     }

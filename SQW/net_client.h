@@ -17,6 +17,16 @@
 #define SQW_NET_PATH_MAX 256
 #define SQW_NET_URL_MAX 384
 #define SQW_NET_METHOD_MAX 16
+/* Hard cap on a single response's total size (headers + body). Without
+ * this, a malicious or just-misbehaving server that never closes its
+ * connection and keeps streaming data can grow net_client.c's own read
+ * buffer without bound, exhausting memory on the fetching side -- found
+ * during this project's own pentest of SQS/SQW (a real server can lie
+ * about Content-Length freely; this client never trusted that header for
+ * sizing reads anyway, so the only real backstop is a cap on bytes
+ * actually received). 32MB is generous for this project's own local test
+ * pages while still being far short of "attacker can OOM the process". */
+#define SQW_NET_MAX_RESPONSE (32L * 1024 * 1024)
 
 typedef struct {
     pthread_mutex_t mutex;
