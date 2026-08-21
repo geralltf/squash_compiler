@@ -34,6 +34,42 @@ cd "$REPO_ROOT"
 # shellcheck source=lib_history_clear.sh
 . "$SCRIPT_DIR/lib_history_clear.sh"
 
+# --- Opt-in confirmation gate ---
+# This builds SDL3 (via squash) across up to three configurations, which
+# can take a while, and -- for anyone holding the squash build-signing
+# passphrase -- produces a signed provenance manifest. Most people don't
+# need any of that, so this asks first rather than forcing it. Setting
+# SQUASH_SIGNING_PASSPHRASE already implies deliberate intent and skips
+# the question; SQUASH_VERIFY_CONFIRMED=1 skips it too, for anyone who
+# wants the unsigned build check without a passphrase (e.g. CI).
+if [ -z "${SQUASH_SIGNING_PASSPHRASE:-}" ] && [ "${SQUASH_VERIFY_CONFIRMED:-0}" != "1" ]; then
+    if [ -t 0 ]; then
+        echo "This builds SDL3 via squash across up to three configurations"
+        echo "(can take a while) and, if you hold the squash build-signing"
+        echo "passphrase, produces a signed provenance manifest. Most people"
+        echo "don't need to run this -- it's mainly useful for whoever signs"
+        echo "releases."
+        echo ""
+        echo "  1) Run it without signing (no passphrase needed)"
+        echo "  2) Run it and sign the manifest (gpg will prompt you for your"
+        echo "     passphrase directly, later, when it actually signs)"
+        echo "  3) Skip -- don't run it"
+        read -r -p "Choose [1/2/3, default 3]: " _verify_choice
+        case "$_verify_choice" in
+            1) VERIFY_SIGN_REQUESTED=0 ;;
+            2) VERIFY_SIGN_REQUESTED=1 ;;
+            *) echo "Skipped -- nothing was built or verified."; exit 0 ;;
+        esac
+    else
+        echo "Skipping SDL3 build verification (not interactive, and neither"
+        echo "SQUASH_SIGNING_PASSPHRASE nor SQUASH_VERIFY_CONFIRMED=1 is set) --"
+        echo "this is meant to be opt-in, mainly for whoever holds the squash"
+        echo "build-signing passphrase. Set SQUASH_VERIFY_CONFIRMED=1 to run it"
+        echo "anyway without a passphrase."
+        exit 0
+    fi
+fi
+
 WORKDIR="$(mktemp -d /tmp/sdl3_verify.XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
@@ -152,7 +188,11 @@ SIGN_KEY_ARGS=()
 if [ -n "$SIGN_KEY_FPR" ]; then
     SIGN_KEY_ARGS=(--local-user "$SIGN_KEY_FPR")
 fi
-if [ -d "$KEY_HOME" ] && gpg --homedir "$KEY_HOME" --list-secret-keys >/dev/null 2>&1; then
+if [ -z "${SQUASH_SIGNING_PASSPHRASE:-}" ] && [ "${VERIFY_SIGN_REQUESTED:-0}" != "1" ]; then
+    echo ""
+    echo "(Signing skipped -- not requested. Choose option 2 at the prompt above,"
+    echo "or set SQUASH_SIGNING_PASSPHRASE, to sign the manifest.)"
+elif [ -d "$KEY_HOME" ] && gpg --homedir "$KEY_HOME" --list-secret-keys >/dev/null 2>&1; then
     SIGN_OK=0
     if [ -n "${SQUASH_SIGNING_PASSPHRASE:-}" ]; then
         if gpg --homedir "$KEY_HOME" --batch --yes --pinentry-mode loopback --passphrase "$SQUASH_SIGNING_PASSPHRASE" \
@@ -160,14 +200,18 @@ if [ -d "$KEY_HOME" ] && gpg --homedir "$KEY_HOME" --list-secret-keys >/dev/null
                --detach-sign --armor -o "$OUT_MANIFEST.asc" "$OUT_MANIFEST" 2>"$WORKDIR/sign.log"; then
             SIGN_OK=1
         fi
-    elif [ -t 0 ]; then
+    else
         # See self_verify.sh's own identical branch for the full story:
-        # --batch here (with no --passphrase supplied) makes gpg refuse
-        # to prompt at all, unconditionally -- a real, confirmed bug, not
-        # a tty-detection issue. Dropped here too, plus GPG_TTY exported
-        # as standing best practice.
+        # --batch unconditionally blocks all prompting (a real, confirmed
+        # bug, fixed by dropping it). --pinentry-mode loopback is ALSO
+        # dropped: it only works with "allow-loopback-pinentry" set, and
+        # otherwise fails silently. No pinentry-program override and no
+        # gpg-agent.conf writes here on purpose -- this uses whatever
+        # pinentry is already configured on the system (GUI or terminal,
+        # the user's own choice), unmodified. GPG_TTY is still exported
+        # for any pinentry that wants to know the calling terminal.
         export GPG_TTY="${GPG_TTY:-$(tty 2>/dev/null || true)}"
-        if gpg --homedir "$KEY_HOME" --yes --pinentry-mode loopback \
+        if gpg --homedir "$KEY_HOME" --yes \
                "${SIGN_KEY_ARGS[@]}" \
                --detach-sign --armor -o "$OUT_MANIFEST.asc" "$OUT_MANIFEST" 2>"$WORKDIR/sign.log"; then
             SIGN_OK=1

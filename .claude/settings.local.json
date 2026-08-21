@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python3 bake_font.py /tmp/claude-1000/-home-squash-projects-squash-compler-squash-compiler/cf70e515-945e-42d7-8812-edd7fb8e32cf/scratchpad/font_atlas_test.h)"
+      "Bash(python3 bake_font.py /tmp/claude-1000/-home-squash-projects-squash-compler-squash-compiler/cf70e515-945e-42d7-8812-edd7fb8e32cf/scratchpad/font_atlas_test.h)",
+      "Bash(gpgconf --homedir /tmp/claude-1000/-home-squash-projects-squash-compler-squash-compiler/cf70e515-945e-42d7-8812-edd7fb8e32cf/scratchpad/gatetest2/gnupg --kill gpg-agent)"
     ]
   }
 }

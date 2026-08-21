@@ -35,6 +35,44 @@ cd "$REPO_ROOT"
 
 ROUNDS="${1:-4}"
 
+# --- Opt-in confirmation gate ---
+# This self-compiles $ROUNDS generation(s) (can take a few minutes) and,
+# for anyone holding the squash build-signing passphrase, produces a
+# signed provenance manifest. Most people running "make verify" don't
+# need any of that -- it's mainly useful for whoever actually signs
+# releases -- so this asks first rather than forcing everyone through it.
+# Setting SQUASH_SIGNING_PASSPHRASE already implies deliberate intent
+# (you're here to sign something) and skips the question. Anyone who
+# wants the unsigned self-hosting check without a passphrase (e.g. CI)
+# can set SQUASH_VERIFY_CONFIRMED=1 to skip it too.
+if [ -z "${SQUASH_SIGNING_PASSPHRASE:-}" ] && [ "${SQUASH_VERIFY_CONFIRMED:-0}" != "1" ]; then
+    if [ -t 0 ]; then
+        echo "This runs squash's self-hosting verification: it self-compiles $ROUNDS"
+        echo "generation(s) (can take a few minutes) and, if you hold the squash"
+        echo "build-signing passphrase, produces a signed provenance manifest."
+        echo "Most people don't need to run this -- it's mainly useful for whoever"
+        echo "signs releases."
+        echo ""
+        echo "  1) Run it without signing (no passphrase needed)"
+        echo "  2) Run it and sign the manifest (gpg will prompt you for your"
+        echo "     passphrase directly, later, when it actually signs)"
+        echo "  3) Skip -- don't run it"
+        read -r -p "Choose [1/2/3, default 3]: " _verify_choice
+        case "$_verify_choice" in
+            1) VERIFY_SIGN_REQUESTED=0 ;;
+            2) VERIFY_SIGN_REQUESTED=1 ;;
+            *) echo "Skipped -- nothing was built or verified."; exit 0 ;;
+        esac
+    else
+        echo "Skipping self-hosting verification (not interactive, and neither"
+        echo "SQUASH_SIGNING_PASSPHRASE nor SQUASH_VERIFY_CONFIRMED=1 is set) --"
+        echo "this is meant to be opt-in, mainly for whoever holds the squash"
+        echo "build-signing passphrase. Set SQUASH_VERIFY_CONFIRMED=1 to run it"
+        echo "anyway without a passphrase."
+        exit 0
+    fi
+fi
+
 # --- Which platform is this verifying? ---
 # Auto-detected from the CURRENT host by default (SQUASH_VERIFY_PLATFORM
 # or a $2 argument can override it), because the self-hosting loop this
@@ -343,7 +381,11 @@ SIGN_KEY_ARGS=()
 if [ -n "$SIGN_KEY_FPR" ]; then
     SIGN_KEY_ARGS=(--local-user "$SIGN_KEY_FPR")
 fi
-if [ -d "$KEY_HOME" ] && gpg --homedir "$KEY_HOME" --list-secret-keys >/dev/null 2>&1; then
+if [ -z "${SQUASH_SIGNING_PASSPHRASE:-}" ] && [ "${VERIFY_SIGN_REQUESTED:-0}" != "1" ]; then
+    echo ""
+    echo "(Signing skipped -- not requested. Choose option 2 at the prompt above,"
+    echo "or set SQUASH_SIGNING_PASSPHRASE, to sign the manifest.)"
+elif [ -d "$KEY_HOME" ] && gpg --homedir "$KEY_HOME" --list-secret-keys >/dev/null 2>&1; then
     SIGN_OK=0
     if [ -n "${SQUASH_SIGNING_PASSPHRASE:-}" ]; then
         if gpg --homedir "$KEY_HOME" --batch --yes --pinentry-mode loopback --passphrase "$SQUASH_SIGNING_PASSPHRASE" \
@@ -351,26 +393,19 @@ if [ -d "$KEY_HOME" ] && gpg --homedir "$KEY_HOME" --list-secret-keys >/dev/null
                --detach-sign --armor -o "$OUT_MANIFEST.asc" "$OUT_MANIFEST" 2>"$WORKDIR/sign.log"; then
             SIGN_OK=1
         fi
-    elif [ -t 0 ]; then
-        # NOTE: deliberately NO --batch here (unlike the branch above,
-        # which always supplies --passphrase directly and so never needs
-        # gpg to prompt for anything). --batch means "never ask,
-        # unconditionally" -- with it, gpg refuses to prompt at all and
-        # fails immediately with "Sorry, we are in batchmode - can't get
-        # input", REGARDLESS of whether a real terminal is attached. That
-        # was a real, confirmed bug here (not a tty-detection problem):
-        # the `[ -t 0 ]` check correctly detected an interactive terminal,
-        # but --batch on the very next line stopped gpg from ever
-        # actually prompting on it, so no passphrase prompt ever
-        # appeared and the run silently fell through to "not signed" --
-        # reproduced and fixed via a PTY-driven test against a disposable
-        # throwaway key (never the real signing key). GPG_TTY is also
-        # exported here as standing best practice for any gpg invocation
-        # that might need to talk to a terminal -- some gpg-agent/pinentry
-        # configurations require it to know which tty to use even when
-        # `--pinentry-mode loopback` itself doesn't strictly need it.
+    else
+        # Deliberately NO --batch (it unconditionally blocks all
+        # prompting, a real bug confirmed here previously) and
+        # deliberately NO --pinentry-mode loopback either: loopback mode
+        # only works if gpg-agent.conf has "allow-loopback-pinentry" set,
+        # and silently fails otherwise. No pinentry-program override and
+        # no gpg-agent.conf writes here on purpose -- this uses whatever
+        # pinentry is already configured on the system (GUI or terminal,
+        # the user's own choice), unmodified. GPG_TTY is still exported
+        # as standing best practice for any gpg-agent/pinentry that does
+        # want to know the calling terminal.
         export GPG_TTY="${GPG_TTY:-$(tty 2>/dev/null || true)}"
-        if gpg --homedir "$KEY_HOME" --yes --pinentry-mode loopback \
+        if gpg --homedir "$KEY_HOME" --yes \
                "${SIGN_KEY_ARGS[@]}" \
                --detach-sign --armor -o "$OUT_MANIFEST.asc" "$OUT_MANIFEST" 2>"$WORKDIR/sign.log"; then
             SIGN_OK=1
