@@ -205,6 +205,28 @@ static int elf_grp_got_idx(const char *fname) {
 
 static int elf_align_up(int v, int a) { return (v + a - 1) & ~(a - 1); }
 
+/* Section-header name by index -- see the "shnames" comment at its call
+ * site (elf_link_and_write's own section-header-table build step) for why
+ * this is an explicit if-chain instead of a "static const char *arr[]"
+ * lookup table. Indices must match elf_link_and_write's WRITE_SHDR call
+ * order exactly (0=NULL, 1=.interp, ... 12=.shstrtab). */
+static const char *elf_shdr_name(int i) {
+    if (i==0) return "";
+    if (i==1) return ".interp";
+    if (i==2) return ".dynstr";
+    if (i==3) return ".dynsym";
+    if (i==4) return ".rela.dyn";
+    if (i==5) return ".text";
+    if (i==6) return ".rodata";
+    if (i==7) return ".got";
+    if (i==8) return ".dynamic";
+    if (i==9) return ".data";
+    if (i==10) return ".symtab";
+    if (i==11) return ".strtab";
+    if (i==12) return ".shstrtab";
+    return "";
+}
+
 /* =========================================================================
  * elf_link_and_write
  * ========================================================================= */
@@ -997,6 +1019,125 @@ int elf_link_and_write(ELFBuildInput *in) {
         }
     }
 
+    /* ---- Step 9.6: section headers (.symtab/.strtab/.shstrtab + a real
+     * SHT describing every section this file already contains) ----
+     * Historically this writer produced zero section headers at all
+     * (e_shoff/e_shnum/e_shstrndx all left as 0) -- valid per the ELF spec
+     * (section headers are optional at RUNTIME, the kernel loader and
+     * dynamic linker only ever look at program headers), but it meant
+     * readelf/objdump/nm/gdb couldn't make sense of these binaries at all
+     * (gdb outright refused to recognize the file format), and valgrind
+     * could only ever report raw, unsymbolized addresses. Every section
+     * added here describes a byte range that ALREADY exists in the file
+     * (nothing about the actual program image changes) except for three
+     * brand new, non-loaded (no SHF_ALLOC) sections appended past the end
+     * of the file's last real segment: .symtab, .strtab, .shstrtab. Being
+     * non-loaded, they add zero runtime cost (the kernel never maps them)
+     * and cannot affect program behavior -- purely descriptive metadata for
+     * tools. .symtab is built from every label the assembler ever defined
+     * (in->as_->labels[]) -- this includes real function names (via
+     * get_func_label(), which names the label after the C function) AND
+     * internal branch-target labels (loop/if labels etc, synthetically
+     * named) side by side, exactly like an unoptimized "-g -O0" compile's
+     * own symtab tends to be noisy with local labels -- harmless for tools:
+     * gdb/addr2line just resolve to "nearest preceding symbol" either way,
+     * so a stray internal label at worst gives a slightly-off-but-still-
+     * useful name instead of a bare hex address. */
+    int n_syms = 0;
+    if (in->as_) {
+        int li; for (li = 0; li < in->as_->label_count; li++)
+            if (in->as_->labels[li].name && in->as_->labels[li].offset >= 0) n_syms++;
+    }
+    int symtab_count = 1 + n_syms; /* +1 for the mandatory null entry at index 0 */
+    int symtab_sz = symtab_count * sym_entry_size;
+
+    uint8_t *symtab_buf = (uint8_t *)calloc((size_t)symtab_sz + 1, 1);
+    /* strtab: index 0 is always the empty string (required by the ELF spec) */
+    int strtab_cap = 1;
+    if (in->as_) {
+        int li; for (li = 0; li < in->as_->label_count; li++)
+            if (in->as_->labels[li].name && in->as_->labels[li].offset >= 0)
+                strtab_cap += (int)strlen(in->as_->labels[li].name) + 1;
+    }
+    uint8_t *strtab_buf = (uint8_t *)calloc((size_t)strtab_cap + 1, 1);
+    int strtab_len = 0;
+    strtab_buf[strtab_len++] = 0;
+    {
+        int soff = 0;
+        int zi = 0; while (zi < sym_entry_size) { symtab_buf[soff++] = 0; zi++; } /* index 0 = null symbol */
+        if (in->as_) {
+            int li;
+            for (li = 0; li < in->as_->label_count; li++) {
+                if (!in->as_->labels[li].name || in->as_->labels[li].offset < 0) continue;
+                int name_off = strtab_len;
+                const char *nm = in->as_->labels[li].name;
+                while (*nm) strtab_buf[strtab_len++] = (uint8_t)(*nm++);
+                strtab_buf[strtab_len++] = 0;
+                uint64_t sym_vma = vma_text + (uint64_t)stub_len + (uint64_t)in->as_->labels[li].offset;
+                if (is64) {
+                    e_pu32(symtab_buf, &soff, (uint32_t)name_off);
+                    e_pu8 (symtab_buf, &soff, 0x12); /* STB_GLOBAL<<4 | STT_FUNC */
+                    e_pu8 (symtab_buf, &soff, 0x00);
+                    e_pu16(symtab_buf, &soff, 5);    /* shndx: .text is section index 5 (see shnames[] below) */
+                    e_pu64(symtab_buf, &soff, sym_vma);
+                    e_pu64(symtab_buf, &soff, 0);    /* size unknown */
+                } else {
+                    e_pu32(symtab_buf, &soff, (uint32_t)name_off);
+                    e_pu32(symtab_buf, &soff, (uint32_t)sym_vma);
+                    e_pu32(symtab_buf, &soff, 0);
+                    e_pu8 (symtab_buf, &soff, 0x12);
+                    e_pu8 (symtab_buf, &soff, 0x00);
+                    e_pu16(symtab_buf, &soff, 5);
+                }
+            }
+        }
+    }
+
+    /* .shstrtab: names of the section headers themselves.
+     * Deliberately NOT a "static const char *shnames[] = {...}" array of
+     * string-literal pointers -- squash's own codegen cannot initialize a
+     * pointer-typed array with a brace initializer (a real, general, and
+     * already-documented limitation elsewhere in this same file, see
+     * elf_grp_add's own "Avoid global pointer arrays" comment above): the
+     * per-element initializers aren't compile-time-constant INTEGER
+     * expressions (const_expr_eval() only ever handles those), so the
+     * whole initializer silently falls back to a zero-filled block with
+     * no runtime init code emitted at all -- every element stays NULL.
+     * Confirmed via a real self-hosted (gen0-built) squash binary: it
+     * segfaulted calling strlen() on a NULL section name pulled from
+     * exactly this pattern, on literally "int main(){return 0;}" (a
+     * self-hosting regression introduced by an earlier version of this
+     * very section-header addition). An explicit index->string function
+     * has no array-of-pointers to initialize at all, sidestepping the
+     * bug entirely. */
+    #define N_SHDRS 13
+    int shname_off[N_SHDRS];
+    int shstrtab_cap = 1;
+    { int si; for (si = 0; si < N_SHDRS; si++) shstrtab_cap += (int)strlen(elf_shdr_name(si)) + 1; }
+    uint8_t *shstrtab_buf = (uint8_t *)calloc((size_t)shstrtab_cap + 1, 1);
+    int shstrtab_len = 0;
+    shstrtab_buf[shstrtab_len++] = 0; /* index 0 = empty string, used by the NULL section */
+    {
+        int si;
+        for (si = 0; si < N_SHDRS; si++) {
+            shname_off[si] = shstrtab_len;
+            const char *nm = elf_shdr_name(si);
+            while (*nm) shstrtab_buf[shstrtab_len++] = (uint8_t)(*nm++);
+            shstrtab_buf[shstrtab_len++] = 0;
+        }
+    }
+    shname_off[0] = 0; /* NULL section's name is always index 0 (empty string) */
+
+    int shdr_size = is64 ? 64 : 40;
+
+    /* These three sections live past the end of the program image (outside
+     * every PT_LOAD segment) -- pure file-only metadata, never mapped. */
+    int off_symtab   = elf_align_up(rw_seg_filesz, 8);
+    int off_strtab   = off_symtab + symtab_sz;
+    int off_shstrtab = off_strtab + strtab_len;
+    int off_shdrs    = elf_align_up(off_shstrtab + shstrtab_len, 8);
+    int shdrs_end    = off_shdrs + N_SHDRS * shdr_size;
+
     /* ---- Step 10: ELF header + program headers ---- */
     int hdr_buf_sz = ehdr_size + n_phdrs * phdr_size;
     uint8_t *hdr_buf = (uint8_t *)calloc(hdr_buf_sz + 1, 1);
@@ -1016,24 +1157,26 @@ int elf_link_and_write(ELFBuildInput *in) {
             e_pu32(hdr_buf,&hoff,1);
             e_pu64(hdr_buf,&hoff,entry_vma);
             e_pu64(hdr_buf,&hoff,(uint64_t)off_phdrs);
-            e_pu64(hdr_buf,&hoff,0);
+            e_pu64(hdr_buf,&hoff, in->strip_debug_sections ? 0 : (uint64_t)off_shdrs);
             e_pu32(hdr_buf,&hoff,0);
             e_pu16(hdr_buf,&hoff,(uint16_t)ehdr_size);
             e_pu16(hdr_buf,&hoff,(uint16_t)phdr_size);
             e_pu16(hdr_buf,&hoff,(uint16_t)n_phdrs);
-            e_pu16(hdr_buf,&hoff,64);
-            e_pu16(hdr_buf,&hoff,0);
-            e_pu16(hdr_buf,&hoff,0);
+            e_pu16(hdr_buf,&hoff, in->strip_debug_sections ? 0 : (uint16_t)shdr_size);
+            e_pu16(hdr_buf,&hoff, in->strip_debug_sections ? 0 : (uint16_t)N_SHDRS);
+            e_pu16(hdr_buf,&hoff, in->strip_debug_sections ? 0 : 12); /* e_shstrndx: .shstrtab is section index 12 */
         } else {
             e_pu16(hdr_buf,&hoff,2); e_pu16(hdr_buf,&hoff,3); /* EM_386 */
             e_pu32(hdr_buf,&hoff,1);
             e_pu32(hdr_buf,&hoff,(uint32_t)entry_vma);
             e_pu32(hdr_buf,&hoff,(uint32_t)off_phdrs);
-            e_pu32(hdr_buf,&hoff,0); e_pu32(hdr_buf,&hoff,0);
+            e_pu32(hdr_buf,&hoff, in->strip_debug_sections ? 0 : (uint32_t)off_shdrs); e_pu32(hdr_buf,&hoff,0);
             e_pu16(hdr_buf,&hoff,(uint16_t)ehdr_size);
             e_pu16(hdr_buf,&hoff,(uint16_t)phdr_size);
             e_pu16(hdr_buf,&hoff,(uint16_t)n_phdrs);
-            e_pu16(hdr_buf,&hoff,40); e_pu16(hdr_buf,&hoff,0); e_pu16(hdr_buf,&hoff,0);
+            e_pu16(hdr_buf,&hoff, in->strip_debug_sections ? 0 : (uint16_t)shdr_size);
+            e_pu16(hdr_buf,&hoff, in->strip_debug_sections ? 0 : (uint16_t)N_SHDRS);
+            e_pu16(hdr_buf,&hoff, in->strip_debug_sections ? 0 : 12);
         }
 
         /* Program headers */
@@ -1156,6 +1299,56 @@ int elf_link_and_write(ELFBuildInput *in) {
         }
     }
 
+    /* ---- Step 10.5: section header table bytes ----
+     * One Shdr per shnames[] entry, in the exact same order (their array
+     * index IS their section index, referenced above by the .symtab
+     * entries' shndx=5 and by e_shstrndx=12). */
+    uint8_t *shdr_buf = (uint8_t *)calloc((size_t)(N_SHDRS * shdr_size) + 1, 1);
+    {
+        int so = 0;
+        #define SH_NULL 0
+        #define SH_PROGBITS 1
+        #define SH_SYMTAB 2
+        #define SH_STRTAB 3
+        #define SH_RELA 4
+        #define SH_DYNAMIC 6
+        #define SH_DYNSYM 11
+        #define SHF_WRITE 1
+        #define SHF_ALLOC 2
+        #define SHF_EXECINSTR 4
+        /* WRITE_SHDR(name_idx, type, flags, addr, offset, size, link, info, align, entsize) */
+        #define WRITE_SHDR(NAMEI,TYPE,FLAGS,ADDR,OFFSET,SIZE,LINK,INFO,ALIGN,ENTSIZE) do { \
+            if (is64) { \
+                e_pu32(shdr_buf,&so,(uint32_t)(NAMEI)); e_pu32(shdr_buf,&so,(uint32_t)(TYPE)); \
+                e_pu64(shdr_buf,&so,(uint64_t)(FLAGS)); e_pu64(shdr_buf,&so,(uint64_t)(ADDR)); \
+                e_pu64(shdr_buf,&so,(uint64_t)(OFFSET)); e_pu64(shdr_buf,&so,(uint64_t)(SIZE)); \
+                e_pu32(shdr_buf,&so,(uint32_t)(LINK)); e_pu32(shdr_buf,&so,(uint32_t)(INFO)); \
+                e_pu64(shdr_buf,&so,(uint64_t)(ALIGN)); e_pu64(shdr_buf,&so,(uint64_t)(ENTSIZE)); \
+            } else { \
+                e_pu32(shdr_buf,&so,(uint32_t)(NAMEI)); e_pu32(shdr_buf,&so,(uint32_t)(TYPE)); \
+                e_pu32(shdr_buf,&so,(uint32_t)(FLAGS)); e_pu32(shdr_buf,&so,(uint32_t)(ADDR)); \
+                e_pu32(shdr_buf,&so,(uint32_t)(OFFSET)); e_pu32(shdr_buf,&so,(uint32_t)(SIZE)); \
+                e_pu32(shdr_buf,&so,(uint32_t)(LINK)); e_pu32(shdr_buf,&so,(uint32_t)(INFO)); \
+                e_pu32(shdr_buf,&so,(uint32_t)(ALIGN)); e_pu32(shdr_buf,&so,(uint32_t)(ENTSIZE)); \
+            } \
+        } while (0)
+
+        WRITE_SHDR(shname_off[0], SH_NULL, 0, 0, 0, 0, 0, 0, 0, 0); /* index 0: mandatory NULL */
+        WRITE_SHDR(shname_off[1], SH_PROGBITS, SHF_ALLOC, vma_interp, off_interp, interp_len, 0, 0, 1, 0); /* .interp */
+        WRITE_SHDR(shname_off[2], SH_STRTAB, SHF_ALLOC, vma_dynstr, off_dynstr, dynstr_sz, 0, 0, 1, 0); /* .dynstr */
+        WRITE_SHDR(shname_off[3], SH_DYNSYM, SHF_ALLOC, vma_dynsym, off_dynsym, dynsym_sz, 2, 1, 8, sym_entry_size); /* .dynsym */
+        WRITE_SHDR(shname_off[4], SH_RELA, SHF_ALLOC, vma_reloc, off_reloc, relasz, 3, 0, 8, rela_entry_size); /* .rela.dyn */
+        WRITE_SHDR(shname_off[5], SH_PROGBITS, SHF_ALLOC|SHF_EXECINSTR, vma_text, off_text, text_len, 0, 0, 16, 0); /* .text */
+        WRITE_SHDR(shname_off[6], SH_PROGBITS, SHF_ALLOC, vma_rodata, off_rodata, rodata_sz, 0, 0, 1, 0); /* .rodata */
+        WRITE_SHDR(shname_off[7], SH_PROGBITS, SHF_ALLOC|SHF_WRITE, vma_got, off_got, got_sz, 0, 0, got_slot_size, got_slot_size); /* .got */
+        WRITE_SHDR(shname_off[8], SH_DYNAMIC, SHF_ALLOC|SHF_WRITE, vma_dynamic, off_dynamic, dynamic_sz, 2, 0, 8, dyn_entry_size); /* .dynamic */
+        WRITE_SHDR(shname_off[9], SH_PROGBITS, SHF_ALLOC|SHF_WRITE, vma_data, off_data, data_sz, 0, 0, 1, 0); /* .data */
+        WRITE_SHDR(shname_off[10], SH_SYMTAB, 0, 0, off_symtab, symtab_sz, 11, 1, 8, sym_entry_size); /* .symtab */
+        WRITE_SHDR(shname_off[11], SH_STRTAB, 0, 0, off_strtab, strtab_len, 0, 0, 1, 0); /* .strtab */
+        WRITE_SHDR(shname_off[12], SH_STRTAB, 0, 0, off_shstrtab, shstrtab_len, 0, 0, 1, 0); /* .shstrtab */
+        #undef WRITE_SHDR
+    }
+
     /* ---- Step 11: write file ---- */
     FILE *fp = fopen(in->output_path, "wb");
     if (!fp) {
@@ -1213,12 +1406,33 @@ int elf_link_and_write(ELFBuildInput *in) {
     if (in->wdata_bytes && in->wdata_len > 0)
         fwrite(in->wdata_bytes, 1, in->wdata_len, fp);
 
+    if (!in->strip_debug_sections) {
+        /* pad to symtab (this is past the end of the last real PT_LOAD
+         * segment -- everything from here on is file-only metadata, never
+         * mapped at runtime, so program behavior is unaffected by anything
+         * below). */
+        { int cur = off_data + data_sz; int need = off_symtab - cur;
+          int _n = need; while(_n-->0) { uint8_t _z=0; fwrite(&_z,1,1,fp); } }
+
+        fwrite(symtab_buf, 1, (size_t)symtab_sz, fp);
+        fwrite(strtab_buf, 1, (size_t)strtab_len, fp);
+        fwrite(shstrtab_buf, 1, (size_t)shstrtab_len, fp);
+
+        /* pad to the section header table itself */
+        { int cur = off_shstrtab + shstrtab_len; int need = off_shdrs - cur;
+          int _n = need; while(_n-->0) { uint8_t _z=0; fwrite(&_z,1,1,fp); } }
+
+        fwrite(shdr_buf, 1, (size_t)(N_SHDRS * shdr_size), fp);
+    }
+
     fclose(fp);
     chmod(in->output_path, 0x1ED); /* 0755 octal = rwxr-xr-x */
 
-    printf("ELF written: %s (%d bytes)\n", in->output_path, rw_seg_filesz);
+    printf("ELF written: %s (%d bytes)\n", in->output_path,
+           in->strip_debug_sections ? rw_seg_filesz : shdrs_end);
 
     free(dynstr); free(dynsym_buf); free(reloc_buf);
     free(dynamic_buf); free(hdr_buf); free(text);
+    free(symtab_buf); free(strtab_buf); free(shstrtab_buf); free(shdr_buf);
     return 0;
 }

@@ -16,7 +16,21 @@ OBJ = compiler.o assembler.o ast.o codegen.o arm64_asm.o codegen_arm64.o lexer.o
 
 all: $(OBJ)
 	$(CC) -o squash $^ $(CFLAGS) $(LDFLAGS)
-	
+
+# Runs tools/self_verify.sh (real multi-generation self-hosting check --
+# see that script's own top comment) against the squash binary this
+# Makefile just built. Auto-detects "macos" as the target platform when
+# actually run on a real Mac (which this Makefile assumes you are, given
+# its own macOS-specific -stack_size linker flag above) -- if invoked
+# from anywhere else, self_verify.sh refuses with a clear explanation
+# rather than attempting something that can't work (every self-hosting
+# generation past the first has to actually RUN as the compiler for the
+# next round, which only a real macOS host can do for macOS output).
+# Pass ROUNDS=N to override the default round count.
+ROUNDS ?= 4
+verify: all
+	bash tools/self_verify.sh $(ROUNDS)
+
 clean:
 	rm -rf *.o
 	rm -rf squash.exe

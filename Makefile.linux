@@ -16,7 +16,18 @@ OBJ = compiler.o assembler.o ast.o codegen.o arm64_asm.o codegen_arm64.o lexer.o
 
 all: $(OBJ)
 	$(CC) -o squash $^ $(CFLAGS) $(LDFLAGS)
-	
+
+# Runs tools/self_verify.sh (real multi-generation self-hosting check --
+# see that script's own top comment) against the squash binary this
+# Makefile just built. Opt-in, not part of "all": a full verification run
+# self-compiles squash several times over and runs a real test battery
+# against each generation, meaningfully slower than a plain build. Pass
+# ROUNDS=N to override the default round count, e.g. "make -f
+# Makefile.linux verify ROUNDS=8".
+ROUNDS ?= 4
+verify: all
+	bash tools/self_verify.sh $(ROUNDS)
+
 clean:
 	rm -rf *.o
 	rm -rf squash

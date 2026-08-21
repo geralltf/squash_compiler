@@ -965,6 +965,66 @@ static int struct_copy_size_of(CodeGen *cg, ASTNode *node) {
          * fell through to the generic single-register assignment path and
          * silently copied only the first 4/8 bytes of the element,
          * leaving every field after the first zeroed/stale. */
+        /* BUT: resolve_node_type() only ever returns the element's BARE
+         * struct/typedef NAME — it strips "struct "/"union " prefixes and
+         * resolves one typedef hop, but never reports how many pointer
+         * levels the element actually has. For a real POINTER array
+         * ("SDL_DisabledEventBlock *arr[256];", e.g. SDL3's own
+         * SDL_disabled_events), each element is an 8-byte pointer, not a
+         * struct value — yet resolve_node_type() still returns
+         * "SDL_DisabledEventBlock" here (the pointee's name), and this
+         * function used to build a fake TypeInfo with pointer_depth
+         * hardcoded to 0 regardless, misclassifying "arr[i]" as a >16-byte
+         * struct-by-value argument. That sent a call like
+         * "SDL_free(arr[i])" down the MEMORY-class SysV struct-passing
+         * path instead of the ordinary single-register pointer path: it
+         * copied 32 bytes starting at &arr[i] (spilling into arr[i+1..3])
+         * onto the stack and called SDL_free() with a mis-marshaled
+         * argument — confirmed as the exact cause of a real "free():
+         * invalid size" abort in SDL3's SDL_StopEventLoop() (real,
+         * unmodified SDL3 source; SDL_free(SDL_disabled_events[i]) in its
+         * "Clear disabled event state" loop), where the passed "pointer"
+         * ended up pointing into the caller's own stack instead of a real
+         * heap allocation. Check the array variable's own declared
+         * pointer_depth first — if it's already >0 (the array holds
+         * pointers to this type, not the struct itself), this is an
+         * ordinary scalar argument, not a struct-by-value one. */
+        /* The check above only ever covered "arr[i]" where arr is a bare
+         * variable. The exact same misclassification happens just as
+         * easily one level deeper — "ptr->field[i]" / "x.y.field[i]" —
+         * whenever "field" is itself declared as a pointer-to-pointer
+         * (e.g. ast.h's own "ASTNode **stmts;" inside AST_BLOCK's node,
+         * indexed everywhere as "n->block.stmts[i]"). Confirmed as a
+         * REAL, currently-active squash self-hosting bug: compiling
+         * squash's own codegen.c (specifically THIS FILE's own
+         * "codegen_stmt(cg, n->block.stmts[i])" call in the AST_BLOCK
+         * case) sent stmts[i] — a single 8-byte ASTNode* — down this same
+         * MEMORY-class struct-by-value path, copying ~70+ bytes starting
+         * at &stmts[i] onto the stack as the call argument. Caught via a
+         * custom guard-page allocator (every heap allocation placed snug
+         * against an unmapped page): the resulting out-of-bounds read
+         * faulted immediately, at the exact "mov 0x8(%rax),%rcx" one
+         * instruction past the single legitimate 8-byte pointer value —
+         * previously this only ever corrupted whatever real allocation
+         * happened to sit right after stmts[i] in memory, silently and
+         * non-deterministically (a self-compiled squash would compile
+         * trivial one-statement programs fine but reliably mangle
+         * anything with more going on, exactly the "gen1 fails on
+         * ast.c but not on tiny test programs" self-hosting symptom).
+         * A pointer_depth >= 2 array/field can NEVER index down to a
+         * struct-by-value element (indexing removes exactly one pointer
+         * level, so the result is still a pointer, depth >= 1) — check
+         * that first, however the array expression is spelled. */
+        if (node->index.array) {
+            ASTNode *arr = node->index.array;
+            if (arr->kind == AST_VAR) {
+                Symbol *avs = symtable_lookup(cg->sym, arr->var.name);
+                if (avs && avs->type && avs->type->pointer_depth > 0) return 0;
+            } else if (arr->kind == AST_MEMBER) {
+                TypeInfo *ft = field_type_of(cg, arr->member.obj, arr->member.field);
+                if (ft && ft->pointer_depth > 0) return 0;
+            }
+        }
         const char *tn = resolve_node_type(cg->sym, node);
         if (!tn) return 0;
         TypeInfo tmp;

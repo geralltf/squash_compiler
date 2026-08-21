@@ -19,7 +19,16 @@ OBJ = compiler.sqo assembler.sqo ast.sqo codegen.sqo arm64_asm.sqo codegen_arm64
 # compiler.sqo, but cheap) and link the other 15 .sqo against it.
 all: $(OBJ)
 	$(CC) compiler.c $(filter-out compiler.sqo,$^) $(CFLAGS) $(LDFLAGS) -o squash2.exe
-	
+
+# See Makefile's own "verify" comment -- this builds a Windows-targeted
+# self-hosted squash2.exe, and running it as the compiler for a FURTHER
+# self-hosting generation (what real verification requires) needs an
+# actual Windows machine to execute it on, which tools/self_verify.sh
+# doesn't support yet. Wired up anyway so the target exists and reports
+# that honestly.
+verify: all
+	SQUASH_VERIFY_PLATFORM=windows bash tools/self_verify.sh
+
 clean:
 	rm -rf *.o
 	rm -rf *.sqo

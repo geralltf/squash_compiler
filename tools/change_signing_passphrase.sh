@@ -28,6 +28,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 KEY_HOME="${SQUASH_GNUPGHOME:-$HOME/.squash-signing-keys/gnupg}"
+# shellcheck source=lib_history_clear.sh
+. "$SCRIPT_DIR/lib_history_clear.sh"
 FPR_FILE="$REPO_ROOT/tools/keys/CURRENT_SIGNING_FINGERPRINT"
 
 if [ ! -t 0 ] || [ ! -t 1 ]; then
@@ -126,3 +128,5 @@ echo "=== Done. Verified working. ==="
 echo "New signing key:  $NEW_FPR"
 echo "Retired key:      $OLD_FPR (kept -- still verifies its own past signatures)"
 echo "Public key:       $REPO_ROOT/tools/keys/squash-release-signing-pubkey.asc (commit this)"
+
+offer_clear_history

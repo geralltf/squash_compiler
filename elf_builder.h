@@ -18,6 +18,18 @@ typedef struct {
      * the is_openbsd branches in elf_link_and_write(). */
     int is_openbsd;
 
+    /* 1 = omit the section-header table (.symtab/.strtab/.shstrtab and the
+     * SHT describing every section) that elf_link_and_write() writes by
+     * default. Those sections are pure post-program-image metadata (see
+     * elf_link_and_write's own "Step 9.6" comment) -- readelf/objdump/nm/
+     * gdb all need them to make sense of the binary, so they're INCLUDED
+     * by default; this only exists for callers that explicitly want the
+     * older, symbol-free output (a smaller file, and nothing for a
+     * would-be reverse-engineer to read function names off of) -- see
+     * compiler.c's "-nodebug" flag, which is the only thing that sets
+     * this to 1. */
+    int strip_debug_sections;
+
     /* .text section: raw machine code from assembler */
     uint8_t *text;
     int      text_len;

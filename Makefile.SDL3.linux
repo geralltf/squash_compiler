@@ -78,8 +78,17 @@ EXAMPLE_EXES := $(foreach f,$(EXAMPLES),SDL3_Build/examples_gen/$(notdir $(basen
 
 all: SDL3_Build/sdl_unity
 
+# -lX11: SDL3's own video-driver registration table references real X11
+# symbols (XOpenDisplay etc.) even when X11 isn't the ACTIVE driver at
+# runtime -- every configured driver's symbols still have to resolve at
+# link time, "dummy/portable backends only" (this file's own top
+# comment) governs which driver actually gets USED, not which symbols
+# the binary needs to link against. Missing here until a real run
+# (tools/verify_sdl3_builds.sh) surfaced it as "undefined symbol:
+# XOpenDisplay" -- same library Makefile.SQW.linux already links for the
+# identical reason.
 SDL3_Build/sdl_unity: SDL3_Build/sdl_unity.c SDL3_Build/sdl_core.inc
-	$(SQUASH) -linux -64 $(INCLUDES) $(SRC) -o $(OUT)
+	$(SQUASH) -linux -64 $(INCLUDES) $(SRC) -o $(OUT) -lX11
 
 # --- Cached shared-object build (used by every example target below) --------
 # SDL3_Build/sdl_common.sqo is SDL3_Build/sdl_core.inc (all of this

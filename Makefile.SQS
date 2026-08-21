@@ -1,0 +1,45 @@
+# Makefile for SQS, the local HTTP/HTTPS test server companion to SQW,
+# built with the squash compiler, on Windows. Invoke as `make -f
+# Makefile.SQS <target>` from the squash compiler repo root (same
+# convention as Makefile.SQW, which this file mirrors exactly).
+#
+# UNTESTED: built by direct analogy to Makefile.SQW's own established,
+# working pattern (see that file's own top comment for the full "why
+# squash_msvc.exe, not the self-hosted squash.exe" story -- the self-
+# hosted compiler has a real, documented divergence bug that crashes on
+# large real-world builds like this one, at least on Windows; the exact
+# same self-hosting divergence has independently been confirmed on Linux
+# too this session, in ast.c and elsewhere). There is no Windows/MSVC
+# environment available to actually build or run this and confirm it
+# works -- if this doesn't build cleanly for you, that's real,
+# unverified-by-me risk, not something to assume is fine because it
+# "looks right" on paper.
+SQUASH = ./squash_msvc.exe
+
+all: SQS/SQS.exe
+
+# -lpthread: one thread per accepted connection (see sqs_main.c's own
+# comment). -lssl -lcrypto: real system OpenSSL for the HTTPS listener --
+# same libraries Makefile.SQS.linux already links, just resolved via
+# squash's own Windows import-library handling (winlinker.c) instead of
+# the ELF .so-versioned-fallback path Linux uses. Single-TU (no #include
+# chain here -- sqs_main.c is self-contained), so no cross-object-link
+# workaround needed, matching Makefile.SQS.linux's own reasoning.
+SQS/SQS.exe: SQS/sqs_main.c SQS/dev_cert.pem SQS/dev_key.pem include/openssl/ssl.h include/sys/socket.h include/netinet/in.h include/arpa/inet.h
+	$(SQUASH) -windows -64 -Iinclude SQS/sqs_main.c -o SQS/SQS.exe -lpthread -lssl -lcrypto
+
+# Regenerates the local self-signed dev cert/key (see gen_dev_cert.sh's
+# own comment) -- not a build dependency of SQS/SQS.exe itself (an
+# existing cert is reused as-is), just a convenience target for
+# regenerating them. gen_dev_cert.sh itself is a bash script (uses the
+# real openssl CLI) -- on Windows this needs a bash environment (Git Bash
+# / WSL / MSYS2) to run at all, same requirement Makefile.SQW's own
+# build tooling already assumes for anything shell-script-based.
+SQS/dev_cert.pem SQS/dev_key.pem:
+	./SQS/gen_dev_cert.sh
+
+run: SQS/SQS.exe
+	./SQS/SQS.exe
+
+clean:
+	rm -f SQS/SQS.exe

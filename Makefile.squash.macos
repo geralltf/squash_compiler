@@ -19,7 +19,15 @@ OBJ = compiler.sqo assembler.sqo ast.sqo codegen.sqo arm64_asm.sqo codegen_arm64
 # compiler.sqo, but cheap) and link the other 15 .sqo against it.
 all: $(OBJ)
 	$(CC) compiler.c $(filter-out compiler.sqo,$^) $(CFLAGS) $(LDFLAGS) -o squash2
-	
+
+# See Makefile.macos's own "verify" comment -- runs tools/self_verify.sh
+# (its own independent gcc-bootstrap + self-hosting chain, not a check of
+# squash2 specifically) auto-detecting "macos" when actually run on a
+# real Mac, refusing with a clear explanation everywhere else.
+ROUNDS ?= 4
+verify: all
+	bash tools/self_verify.sh $(ROUNDS)
+
 clean:
 	rm -rf *.o
 	rm -rf *.sqo

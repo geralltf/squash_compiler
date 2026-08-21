@@ -28,17 +28,71 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib_history_clear.sh
+. "$SCRIPT_DIR/lib_history_clear.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 ROUNDS="${1:-4}"
+
+# --- Which platform is this verifying? ---
+# Auto-detected from the CURRENT host by default (SQUASH_VERIFY_PLATFORM
+# or a $2 argument can override it), because the self-hosting loop this
+# script runs isn't just a compile check -- every generation after gen0
+# has to actually EXECUTE the previous generation's own output to become
+# the next one's compiler. A macOS-targeted or Windows-targeted build can
+# absolutely be produced from a Linux host (squash cross-compiles just
+# fine), but the resulting binary can't then be RUN on that same Linux
+# host to continue the chain -- there's no way around needing a real
+# machine of the target OS for anything past generation 0. Rather than
+# fake a partial/misleading result, this refuses outright when the
+# requested platform doesn't match the host it's actually running on.
+HOST_OS="$(uname -s)"
+case "$HOST_OS" in
+    Linux)  HOST_PLATFORM=linux ;;
+    Darwin) HOST_PLATFORM=macos ;;
+    *)      HOST_PLATFORM=unknown ;;
+esac
+TARGET_PLATFORM="${SQUASH_VERIFY_PLATFORM:-${2:-$HOST_PLATFORM}}"
+
+case "$TARGET_PLATFORM" in
+    linux)  SQUASH_TARGET_FLAG="-linux" ;;
+    macos)  SQUASH_TARGET_FLAG="-macos" ;;
+    windows|*)
+        echo "=== squash self-hosting verification: platform '$TARGET_PLATFORM' not runnable from here ==="
+        echo ""
+        if [ "$TARGET_PLATFORM" = "windows" ]; then
+            echo "Windows-targeted self-hosting can't be verified from a $HOST_OS host: every"
+            echo "generation after the gcc bootstrap has to actually RUN the previous"
+            echo "generation's own output to become the next one's compiler, and a Windows"
+            echo "PE binary can't execute here. Run this script on a real Windows machine"
+            echo "(with bash available -- e.g. Git Bash or WSL) instead."
+        else
+            echo "'$TARGET_PLATFORM' isn't a platform this script knows how to target"
+            echo "(supported: linux, macos). If you meant Windows, see that message instead"
+            echo "by setting SQUASH_VERIFY_PLATFORM=windows."
+        fi
+        exit 4
+        ;;
+esac
+
+if [ "$TARGET_PLATFORM" != "$HOST_PLATFORM" ]; then
+    echo "=== squash self-hosting verification: platform mismatch ==="
+    echo ""
+    echo "Asked to verify '$TARGET_PLATFORM' but this host is '$HOST_PLATFORM' ($HOST_OS)."
+    echo "Same reason as the Windows case above -- generations after the first one have"
+    echo "to actually RUN as the compiler for the next round, and a $TARGET_PLATFORM"
+    echo "binary can't execute on $HOST_OS. Run this on a real $TARGET_PLATFORM machine."
+    exit 4
+fi
+
 WORKDIR="$(mktemp -d /tmp/squash_selfverify.XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 GEN0="$WORKDIR/gen0"       # the gcc-built bootstrap
 UNITY_SRC="squash_unity.c" # single-TU #include of every compiler source file
 
-echo "=== squash self-hosting verification (target: $ROUNDS rounds) ==="
+echo "=== squash self-hosting verification: platform=$TARGET_PLATFORM, target: $ROUNDS rounds ==="
 echo "Workdir: $WORKDIR"
 echo ""
 
@@ -97,7 +151,7 @@ run_battery() {
     mkdir -p "$outdir"
     for src in "$WORKDIR"/testsrc/*.c; do
         local name; name="$(basename "$src" .c)"
-        if ! timeout 15 "$compiler_bin" -linux -64 "$src" -o "$outdir/$name" > "$outdir/$name.compile.log" 2>&1; then
+        if ! timeout 15 "$compiler_bin" $SQUASH_TARGET_FLAG -64 "$src" -o "$outdir/$name" > "$outdir/$name.compile.log" 2>&1; then
             echo "    [FAIL] $name: compile failed (or crashed) -- see $outdir/$name.compile.log"
             ok=0
             continue
@@ -118,7 +172,7 @@ run_battery() {
     # meaningful stand-in: real size, real complexity, and its own exit
     # code confirms the compile step itself didn't just silently succeed
     # while producing nothing useful.
-    if ! timeout 30 "$compiler_bin" -c -linux -64 -I"$REPO_ROOT" "$REPO_ROOT/ast.c" -o "$outdir/ast_selftest.sqo" > "$outdir/large_program.compile.log" 2>&1; then
+    if ! timeout 30 "$compiler_bin" -c $SQUASH_TARGET_FLAG -64 -I"$REPO_ROOT" "$REPO_ROOT/ast.c" -o "$outdir/ast_selftest.sqo" > "$outdir/large_program.compile.log" 2>&1; then
         echo "    [FAIL] large_program (ast.c): compile failed (or crashed) -- see $outdir/large_program.compile.log"
         ok=0
     elif [ ! -s "$outdir/ast_selftest.sqo" ]; then
@@ -156,6 +210,7 @@ MANIFEST="$WORKDIR/manifest.txt"
     echo "bootstrap_cc=$BOOTSTRAP_CC"
     echo "timestamp=$BUILD_TIMESTAMP"
     echo "rounds_requested=$ROUNDS"
+    echo "target_platform=$TARGET_PLATFORM"
 } > "$MANIFEST"
 
 echo "--- Generation 0 (gcc bootstrap) ---"
@@ -188,7 +243,7 @@ for n in $(seq 1 "$ROUNDS"); do
     echo ""
     echo "--- Generation $n (built by generation $((n-1))) ---"
     GEN_N="$WORKDIR/gen$n"
-    if ! timeout 60 "$PREV_BIN" -linux -64 -I. "$UNITY_SRC" -o "$GEN_N" > "$WORKDIR/gen${n}_build.log" 2>&1; then
+    if ! timeout 60 "$PREV_BIN" $SQUASH_TARGET_FLAG -64 -I. "$UNITY_SRC" -o "$GEN_N" > "$WORKDIR/gen${n}_build.log" 2>&1; then
         echo "  [FAIL] generation $((n-1)) could not self-compile into generation $n."
         echo "         See $WORKDIR/gen${n}_build.log"
         FAILED_AT="gen$n build"
@@ -264,15 +319,59 @@ cp "$MANIFEST" "$OUT_MANIFEST"
 # signature", which is easy to mistake for a transient/tooling problem
 # instead of what it actually means (this manifest was never signed).
 rm -f "$OUT_MANIFEST.asc"
+# Which key to sign with -- NOT left to gpg's own default-key selection.
+# gpg lists (and defaults to) secret keys OLDEST-FIRST, so once a key has
+# ever been rotated (see setup_signing_keys.sh), the keyring holds both
+# the retired key and the current one, and a bare "gpg --detach-sign"
+# with no -u/--local-user silently signs with the OLDEST one -- confirmed
+# directly via --status-fd (KEY_CONSIDERED reported the OLD key's
+# fingerprint, not CURRENT_SIGNING_FINGERPRINT's). This is exactly the
+# same "first match vs correct match" bug class already hit and fixed
+# twice elsewhere in this project's own key-rotation code, just showing
+# up here too: a real run entered the CURRENT key's passphrase correctly,
+# but gpg was actually trying to unlock the OLD (retired) key underneath
+# it -- wrong passphrase for the key gpg picked, so it silently reported
+# "not signed" despite a genuinely correct passphrase being typed.
+# tools/keys/CURRENT_SIGNING_FINGERPRINT (the same source of truth
+# setup_signing_keys.sh itself uses) removes the ambiguity entirely.
+SIGN_KEY_FPR=""
+FPR_FILE="$REPO_ROOT/tools/keys/CURRENT_SIGNING_FINGERPRINT"
+if [ -f "$FPR_FILE" ]; then
+    SIGN_KEY_FPR="$(tr -d ' \t\n\r' < "$FPR_FILE")"
+fi
+SIGN_KEY_ARGS=()
+if [ -n "$SIGN_KEY_FPR" ]; then
+    SIGN_KEY_ARGS=(--local-user "$SIGN_KEY_FPR")
+fi
 if [ -d "$KEY_HOME" ] && gpg --homedir "$KEY_HOME" --list-secret-keys >/dev/null 2>&1; then
     SIGN_OK=0
     if [ -n "${SQUASH_SIGNING_PASSPHRASE:-}" ]; then
         if gpg --homedir "$KEY_HOME" --batch --yes --pinentry-mode loopback --passphrase "$SQUASH_SIGNING_PASSPHRASE" \
+               "${SIGN_KEY_ARGS[@]}" \
                --detach-sign --armor -o "$OUT_MANIFEST.asc" "$OUT_MANIFEST" 2>"$WORKDIR/sign.log"; then
             SIGN_OK=1
         fi
     elif [ -t 0 ]; then
-        if gpg --homedir "$KEY_HOME" --batch --yes --pinentry-mode loopback \
+        # NOTE: deliberately NO --batch here (unlike the branch above,
+        # which always supplies --passphrase directly and so never needs
+        # gpg to prompt for anything). --batch means "never ask,
+        # unconditionally" -- with it, gpg refuses to prompt at all and
+        # fails immediately with "Sorry, we are in batchmode - can't get
+        # input", REGARDLESS of whether a real terminal is attached. That
+        # was a real, confirmed bug here (not a tty-detection problem):
+        # the `[ -t 0 ]` check correctly detected an interactive terminal,
+        # but --batch on the very next line stopped gpg from ever
+        # actually prompting on it, so no passphrase prompt ever
+        # appeared and the run silently fell through to "not signed" --
+        # reproduced and fixed via a PTY-driven test against a disposable
+        # throwaway key (never the real signing key). GPG_TTY is also
+        # exported here as standing best practice for any gpg invocation
+        # that might need to talk to a terminal -- some gpg-agent/pinentry
+        # configurations require it to know which tty to use even when
+        # `--pinentry-mode loopback` itself doesn't strictly need it.
+        export GPG_TTY="${GPG_TTY:-$(tty 2>/dev/null || true)}"
+        if gpg --homedir "$KEY_HOME" --yes --pinentry-mode loopback \
+               "${SIGN_KEY_ARGS[@]}" \
                --detach-sign --armor -o "$OUT_MANIFEST.asc" "$OUT_MANIFEST" 2>"$WORKDIR/sign.log"; then
             SIGN_OK=1
         fi
@@ -282,6 +381,11 @@ if [ -d "$KEY_HOME" ] && gpg --homedir "$KEY_HOME" --list-secret-keys >/dev/null
         echo "Manifest signed: $OUT_MANIFEST.asc"
         echo "Verify with: gpg --verify $OUT_MANIFEST.asc $OUT_MANIFEST"
     else
+        # A failed attempt above can still leave a stray empty/partial
+        # .asc behind (gpg opens the -o target before it knows whether
+        # it'll actually get a passphrase) -- never leave that sitting
+        # next to the manifest looking like a real signature.
+        rm -f "$OUT_MANIFEST.asc"
         echo "(Manifest NOT signed -- set SQUASH_SIGNING_PASSPHRASE, or run this"
         echo "interactively, to sign it. See $WORKDIR/sign.log for details.)"
     fi
@@ -290,5 +394,7 @@ else
     echo "(No signing key set up -- run tools/setup_signing_keys.sh first to get a signed manifest.)"
 fi
 echo "Manifest saved: $OUT_MANIFEST"
+
+offer_clear_history
 
 exit $RESULT

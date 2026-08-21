@@ -141,6 +141,26 @@ int main(int argc, char **argv) {
     char  *src_path=NULL, *out_path=NULL;
     int    dump=0;
     int    compile_only=0; /* -c: emit a .sqo object file instead of a linked executable */
+    /* -nodebug: omit the ELF .symtab/.strtab/.shstrtab + section-header
+     * table that elf_link_and_write() writes by default (see
+     * elf_builder.h's strip_debug_sections comment) -- a smaller output
+     * file with nothing for readelf/objdump/nm/gdb to read function names
+     * off of. Off by default: section headers are real, useful debugging
+     * information (this is what made gdb/valgrind/objdump able to make
+     * sense of squash's own output at all — see elf_link_and_write's own
+     * "Step 9.6" comment for the history) and costs nothing at runtime
+     * (the extra bytes live past the end of the loaded program image), so
+     * there's no reason to strip them unless the caller explicitly wants
+     * to. Linux/ELF-only for now — Windows PE and macOS Mach-O output
+     * never grew the equivalent debug metadata in the first place, so
+     * this flag is simply a no-op for -windows/-macos builds. */
+    int    nodebug=0;
+    /* Tracks whether the user passed an explicit -linux/-windows/-macos/
+     * -openbsd flag, so the default (see below, once arg parsing is done)
+     * can fall back to whatever platform THIS squash binary itself was
+     * built for/on, instead of always defaulting to Windows regardless of
+     * host. */
+    int    target_explicit=0;
     const char *include_dirs[32]; int n_inc=0;
     /* Library flags: collect -l and -L for Linux linking */
     const char *lib_flags[64];  int n_lib=0;
@@ -156,10 +176,10 @@ int main(int argc, char **argv) {
         if      (strcmp(argv[i],"-32")==0)      is_64bit=0;
         else if (strcmp(argv[i],"-64")==0)      is_64bit=1;
         else if (strcmp(argv[i],"-arm64")==0)   { is_arm64=1; is_64bit=1; }
-        else if (strcmp(argv[i],"-linux")==0)   { is_linux=1; is_macos=0; is_openbsd=0; }
-        else if (strcmp(argv[i],"-windows")==0) { is_linux=0; is_macos=0; is_openbsd=0; }
-        else if (strcmp(argv[i],"-macos")==0)   { is_macos=1; is_linux=1; is_64bit=1; is_openbsd=0; }
-        else if (strcmp(argv[i],"-openbsd")==0) { is_openbsd=1; is_linux=1; is_macos=0; }
+        else if (strcmp(argv[i],"-linux")==0)   { is_linux=1; is_macos=0; is_openbsd=0; target_explicit=1; }
+        else if (strcmp(argv[i],"-windows")==0) { is_linux=0; is_macos=0; is_openbsd=0; target_explicit=1; }
+        else if (strcmp(argv[i],"-macos")==0)   { is_macos=1; is_linux=1; is_64bit=1; is_openbsd=0; target_explicit=1; }
+        else if (strcmp(argv[i],"-openbsd")==0) { is_openbsd=1; is_linux=1; is_macos=0; target_explicit=1; }
         else if (strncmp(argv[i],"-openbsd-libc",13)==0) {
             const char *v=argv[i]+13;
             if (v[0]=='=') v++;
@@ -167,6 +187,7 @@ int main(int argc, char **argv) {
             openbsd_libc_override=v;
         }
         else if (strcmp(argv[i],"-dump")==0)    dump=1;
+        else if (strcmp(argv[i],"-nodebug")==0) nodebug=1;
         else if (strcmp(argv[i],"-c")==0)       compile_only=1;
         else if (strcmp(argv[i],"-o")==0 && i+1<argc) out_path=argv[++i];
         else if (strncmp(argv[i],"-I",2)==0)  {
@@ -200,8 +221,32 @@ int main(int argc, char **argv) {
         else if (!src_path) src_path=argv[i];
         else diag_emit(DIAG_WARNING, -1, NULL, NULL, "unknown argument: %s", argv[i]);
     }
+    /* No explicit -linux/-windows/-macos/-openbsd: default to whatever
+     * platform THIS squash binary was itself built for, rather than
+     * always defaulting to Windows regardless of host. is_linux starts
+     * at 0 (Windows) above, so only the two non-Windows cases need to
+     * override it here. Deliberately checked via __linux__/__APPLE__
+     * (real, target-specific predefines) rather than _WIN32, since
+     * squash's own lexer always defines _WIN32 for any non-Linux/non-
+     * macOS BUILD TARGET (see lexer.c's target-macro block) — checking
+     * it here would make a self-hosted (squash-built-by-squash) compiler
+     * built with -windows wrongly look "not Windows" to itself, but
+     * checking it would ALSO be wrong the other way for a self-hosted
+     * Linux build, since a squash binary built with -linux never defines
+     * _WIN32 at all. __linux__/__APPLE__ are unambiguous either way:
+     * whichever target flag built THIS binary is exactly the platform it
+     * should now default to when invoked without one. */
+    if (!target_explicit) {
+#if defined(__linux__)
+        is_linux = 1; is_macos = 0; is_openbsd = 0;
+#elif defined(__APPLE__)
+        is_macos = 1; is_linux = 1; is_64bit = 1; is_openbsd = 0;
+#endif
+        /* else: leave is_linux=0 (Windows), matching the pre-existing default. */
+    }
     if (!src_path) {
-        printf("Usage: compiler [-32|-64|-arm64] [-linux|-windows|-macos|-openbsd] [-openbsd-libc soname] [-c] [-dump] [-I dir] [-l lib] [-L path] <source.c> [object.sqo ...] [-o output]\n");
+        printf("Usage: compiler [-32|-64|-arm64] [-linux|-windows|-macos|-openbsd] [-openbsd-libc soname] [-c] [-dump] [-nodebug] [-I dir] [-l lib] [-L path] <source.c> [object.sqo ...] [-o output]\n");
+        printf("  (default target platform: whatever this squash binary was itself built for)\n");
         return 1;
     }
     /* macho_builder.c targets Intel (x86-64) macOS only. 32-bit i386 macOS
@@ -786,6 +831,7 @@ int main(int argc, char **argv) {
         ebi.reloc_count       = have_merged ? merged.reloc_count   : reloc_count;
         ebi.is_arm64          = is_arm64;
         ebi.is_openbsd        = is_openbsd;
+        ebi.strip_debug_sections = nodebug;
         ebi.string_labels     = have_merged ? merged.str_labels    : str_labels;
         ebi.string_offsets    = have_merged ? merged.str_offsets   : str_offsets;
         ebi.string_count      = have_merged ? merged.str_count     : str_count;
