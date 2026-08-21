@@ -242,16 +242,49 @@ else
 fi
 
 # --- Sign the manifest, if a signing key is set up ---
+# The key is passphrase-protected (see tools/setup_signing_keys.sh) --
+# SQUASH_SIGNING_PASSPHRASE must be set to sign non-interactively (the
+# normal case: this script is meant to run unattended in CI). Run
+# interactively with it unset and this prompts once, same as any other
+# gpg operation on a protected key. Signing is always best-effort: a
+# missing/wrong passphrase produces an HONEST "not signed" manifest, not
+# a fake signature and not a hard failure of the whole verification run
+# (the self-hosting result itself, which is the actual point of this
+# script, is already decided by this point either way).
 KEY_HOME="${SQUASH_GNUPGHOME:-$HOME/.squash-signing-keys/gnupg}"
 OUT_MANIFEST="$REPO_ROOT/tools/keys/last_self_verify_manifest.txt"
 mkdir -p "$(dirname "$OUT_MANIFEST")"
 cp "$MANIFEST" "$OUT_MANIFEST"
+# Remove any signature left over from a PREVIOUS run before attempting a
+# new one -- if this run doesn't (re-)sign for any reason, a stale .asc
+# must never be left sitting next to manifest content it doesn't actually
+# cover. A leftover valid-looking signature file next to unsigned/changed
+# content is worse than no signature file at all: "gpg --verify" on it
+# reports a real, correctly-detected "BAD signature" rather than "no
+# signature", which is easy to mistake for a transient/tooling problem
+# instead of what it actually means (this manifest was never signed).
+rm -f "$OUT_MANIFEST.asc"
 if [ -d "$KEY_HOME" ] && gpg --homedir "$KEY_HOME" --list-secret-keys >/dev/null 2>&1; then
-    gpg --homedir "$KEY_HOME" --batch --yes --pinentry-mode loopback --passphrase '' \
-        --detach-sign --armor -o "$OUT_MANIFEST.asc" "$OUT_MANIFEST" 2>/dev/null
+    SIGN_OK=0
+    if [ -n "${SQUASH_SIGNING_PASSPHRASE:-}" ]; then
+        if gpg --homedir "$KEY_HOME" --batch --yes --pinentry-mode loopback --passphrase "$SQUASH_SIGNING_PASSPHRASE" \
+               --detach-sign --armor -o "$OUT_MANIFEST.asc" "$OUT_MANIFEST" 2>"$WORKDIR/sign.log"; then
+            SIGN_OK=1
+        fi
+    elif [ -t 0 ]; then
+        if gpg --homedir "$KEY_HOME" --batch --yes --pinentry-mode loopback \
+               --detach-sign --armor -o "$OUT_MANIFEST.asc" "$OUT_MANIFEST" 2>"$WORKDIR/sign.log"; then
+            SIGN_OK=1
+        fi
+    fi
     echo ""
-    echo "Manifest signed: $OUT_MANIFEST.asc"
-    echo "Verify with: gpg --verify $OUT_MANIFEST.asc $OUT_MANIFEST"
+    if [ "$SIGN_OK" -eq 1 ]; then
+        echo "Manifest signed: $OUT_MANIFEST.asc"
+        echo "Verify with: gpg --verify $OUT_MANIFEST.asc $OUT_MANIFEST"
+    else
+        echo "(Manifest NOT signed -- set SQUASH_SIGNING_PASSPHRASE, or run this"
+        echo "interactively, to sign it. See $WORKDIR/sign.log for details.)"
+    fi
 else
     echo ""
     echo "(No signing key set up -- run tools/setup_signing_keys.sh first to get a signed manifest.)"
