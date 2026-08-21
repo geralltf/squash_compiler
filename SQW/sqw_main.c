@@ -52,7 +52,12 @@
 #include "layout.c"
 #include "renderer_vk.c"
 #include "text_renderer_vk.c"
+#include "image_renderer_vk.c"
 #include "net_client.c"
+#include "img_decode_png.c"
+#include "img_decode_gif.c"
+#include "img_decode_jpeg.c"
+#include "image_cache.c"
 
 #ifdef __linux__
 /* squash_init_private_bootstrap()/SQW_GetWindowX11Display()/
@@ -223,6 +228,42 @@ static void sqw_apply_css(DomNode *root) {
     css_stylesheet_free(&sheet);
 }
 
+/* Walks the whole tree once (same "one pass right after dom_parse()/
+ * sqw_apply_css()" timing as css_apply() itself) resolving every <img
+ * src="..."> to an absolute URL, cached directly on the node (DomNode::
+ * img_url, see dom.h's own comment) and kicked off as an async fetch via
+ * sqw_image_cache_request() (image_cache.h) -- layout.c and the draw pass
+ * then only ever need node->img_url, never current_dir/current_base_url
+ * themselves. Only absolute http(s):// src (as-is) or a plain relative src
+ * on a page itself reached over the network (base_url-prefixed, the exact
+ * same rule the anchor-click handler above uses for plain relative hrefs)
+ * ever gets fetched -- a relative src on a LOCALLY loaded page (dir set,
+ * base_url empty) is left unresolved (node->img_url stays empty, draws the
+ * placeholder box forever), since this project's image pipeline only ever
+ * fetches over HTTP(S) (net_client.c has no local-file read path), matching
+ * the scope of the feature as requested. */
+static void sqw_resolve_image_urls(DomNode *node, const char *dir, const char *base_url) {
+    (void)dir;
+    if (!dom_is_text(node) && strcmp(node->tag, "img") == 0) {
+        const char *src = dom_get_attr(node, "src");
+        if (src && src[0]) {
+            char resolved[SQW_IMG_URL_MAX];
+            resolved[0] = 0;
+            if (strncmp(src, "http://", 7) == 0 || strncmp(src, "https://", 8) == 0) {
+                strncpy(resolved, src, sizeof resolved - 1);
+                resolved[sizeof resolved - 1] = 0;
+            } else if (base_url && base_url[0]) {
+                snprintf(resolved, sizeof resolved, "%s%s", base_url, src);
+            }
+            strncpy(node->img_url, resolved, sizeof node->img_url - 1);
+            node->img_url[sizeof node->img_url - 1] = 0;
+            if (node->img_url[0]) sqw_image_cache_request(node->img_url);
+        }
+    }
+    int i;
+    for (i = 0; i < node->child_count; i++) sqw_resolve_image_urls(node->children[i], dir, base_url);
+}
+
 /* Loads and parses `path` as the new current page, replacing *root_ptr
  * and recomputing layout in place. On failure (file not found/unreadable)
  * leaves the current page entirely untouched and just logs a warning --
@@ -245,10 +286,16 @@ static void sqw_navigate_to(const char *path, DomNode **root_ptr, LayoutList *bo
     dom_free(*root_ptr);
     *root_ptr = new_root;
     sqw_apply_css(*root_ptr);
-    layout_list_free(boxes_ptr);
-    layout_compute(*root_ptr, viewport_w, viewport_h, boxes_ptr);
     sqw_dirname(path, current_dir);
     current_base_url[0] = '\0';
+    /* Local-file page: <img src> only resolves (and only gets fetched) if
+     * it's already an absolute http(s):// URL -- see
+     * sqw_resolve_image_urls()'s own comment on why a bare local-relative
+     * src is left unfetched. */
+    sqw_image_cache_reset();
+    sqw_resolve_image_urls(*root_ptr, current_dir, current_base_url);
+    layout_list_free(boxes_ptr);
+    layout_compute(*root_ptr, viewport_w, viewport_h, boxes_ptr);
     fprintf(stderr, "SQW: navigated to %s (%d boxes)\n", path, boxes_ptr->count); fflush(stdout);
 }
 
@@ -273,10 +320,12 @@ static void sqw_navigate_to_html(const char *html, const char *url, DomNode **ro
     dom_free(*root_ptr);
     *root_ptr = new_root;
     sqw_apply_css(*root_ptr);
-    layout_list_free(boxes_ptr);
-    layout_compute(*root_ptr, viewport_w, viewport_h, boxes_ptr);
     current_dir[0] = '\0';
     sqw_dirname(url, current_base_url);
+    sqw_image_cache_reset();
+    sqw_resolve_image_urls(*root_ptr, current_dir, current_base_url);
+    layout_list_free(boxes_ptr);
+    layout_compute(*root_ptr, viewport_w, viewport_h, boxes_ptr);
     fprintf(stderr, "SQW: navigated to fetched page %s (%d boxes)\n", url, boxes_ptr->count); fflush(stdout);
 }
 
@@ -351,6 +400,31 @@ static void anchor_color(const DomNode *a, float *r, float *g, float *b) {
  * for the frame; caller must still sqw_text_renderer_flush() and this
  * function's own sqw_renderer_draw_rect() calls are already real draw
  * calls (not batched, see that function's own comment). */
+/* Draws every SQW_BOX_IMG box whose node->img_url has reached UPLOADED in
+ * the image cache as a real textured quad, ON TOP of the flat placeholder
+ * rect sqw_renderer_draw() (renderer_vk.c) already drew for every
+ * SQW_BOX_IMG this frame (PENDING/FAILED images fall through to keep
+ * showing that placeholder -- a deliberate "loading/broken" indicator, not
+ * a bug: renderer_vk.c was left untouched rather than teaching it about
+ * the image cache, see image_cache.h's own top comment on why this project
+ * refers to images purely by URL string). Must run AFTER sqw_renderer_draw()
+ * in the same frame so the textured quad actually ends up on top. */
+static void draw_layout_images(SqwImageRenderer *ir, SqwVkContext *vk, VkCommandBuffer cmd,
+                                LayoutList *boxes, float viewport_w, float viewport_h,
+                                float scroll_x, float scroll_y) {
+    int i;
+    for (i = 0; i < boxes->count; i++) {
+        LayoutBox *b = &boxes->boxes[i];
+        if (b->kind != SQW_BOX_IMG) continue;
+        SqwImageHandle handle;
+        if (!sqw_image_cache_get_handle(b->node->img_url, &handle)) continue;
+        float bx = b->x - scroll_x;
+        float by = b->y - scroll_y;
+        sqw_image_draw_quad(vk, ir, cmd, handle.descriptorSet, bx, by, b->w, b->h,
+            1.0f, 1.0f, 1.0f, 1.0f, viewport_w, viewport_h);
+    }
+}
+
 static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer *renderer, VkCommandBuffer cmd,
                               LayoutList *boxes, float viewport_w, float viewport_h,
                               float scroll_x, float scroll_y) {
@@ -861,6 +935,7 @@ typedef struct {
     SqwVkContext *vk;
     SqwRenderer *renderer;
     SqwTextRenderer *text_renderer;
+    SqwImageRenderer *image_renderer;
 
     DomNode *root;
     LayoutList boxes;
@@ -896,6 +971,12 @@ typedef struct {
     int test_click3_x, test_click3_y;
     SDL_Scancode test_key;
     const char *test_type_text;
+    /* SQW_TEST_SCREENSHOT_FRAME/SQW_TEST_SCREENSHOT_PATH: dumps swapchain
+     * image N straight from VRAM to a PPM file (sqw_debug_screenshot())
+     * once frame_count reaches this value -- -1 (the default) means never.
+     * See sqw_debug_screenshot()'s own comment for why this exists. */
+    int test_screenshot_frame;
+    char test_screenshot_path[SQW_PATH_MAX];
 } SqwAppState;
 
 /* Test-only synthetic input hook (SQW_TEST_CLICK_X/Y and friends): pushes
@@ -1441,6 +1522,124 @@ static void sqw_check_pending_fetch(SqwAppState *st) {
  * incrementing frame_count, matching the original "continue") on a 0x0
  * minimized-window extent, the one case sqw_vk_begin_frame() itself
  * signals by returning NULL. */
+/* Debug-only: copies swapchain image `imageIndex` (already presented --
+ * caller must vkQueueWaitIdle() first) straight out of VRAM into a binary
+ * PPM file, bypassing X11/the window system entirely -- for local
+ * automated testing where a real X11 screenshot tool isn't available/
+ * reliable (a headless or otherwise unusual X server can fail an ordinary
+ * XGetImage against this project's own window with BadMatch even though
+ * the frame itself rendered fine). Triggered by SQW_TEST_SCREENSHOT_FRAME/
+ * SQW_TEST_SCREENSHOT_PATH, see sqw_draw_frame()'s own use of it -- same
+ * SQW_TEST_* local-testing-only convention as the synthetic click/key
+ * env vars already in SqwAppState. Synchronous and slow (one-shot command
+ * buffer + a full queue wait) -- fine for a single debug capture, never
+ * called on a normal run. */
+static void sqw_debug_screenshot(SqwVkContext *vk, uint32_t imageIndex, const char *path) {
+    uint32_t w = vk->extent.width, h = vk->extent.height;
+    VkDeviceSize size = (VkDeviceSize)w * (VkDeviceSize)h * 4;
+
+    VkBuffer stagingBuf;
+    VkBufferCreateInfo bufInfo;
+    memset(&bufInfo, 0, sizeof(bufInfo));
+    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufInfo.size = size;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(vk->device, &bufInfo, NULL, &stagingBuf) != VK_SUCCESS) return;
+
+    VkMemoryRequirements memReq;
+    vkGetBufferMemoryRequirements(vk->device, stagingBuf, &memReq);
+    VkMemoryAllocateInfo allocInfo;
+    memset(&allocInfo, 0, sizeof(allocInfo));
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReq.size;
+    allocInfo.memoryTypeIndex = sqw_vk_find_memory_type(vk, memReq.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VkDeviceMemory stagingMem;
+    if (vkAllocateMemory(vk->device, &allocInfo, NULL, &stagingMem) != VK_SUCCESS) return;
+    vkBindBufferMemory(vk->device, stagingBuf, stagingMem, 0);
+
+    VkCommandBufferAllocateInfo cbInfo;
+    memset(&cbInfo, 0, sizeof(cbInfo));
+    cbInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbInfo.commandPool = vk->commandPool;
+    cbInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbInfo.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(vk->device, &cbInfo, &cmd);
+
+    VkCommandBufferBeginInfo beginInfo;
+    memset(&beginInfo, 0, sizeof(beginInfo));
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkImageMemoryBarrier toSrc;
+    memset(&toSrc, 0, sizeof(toSrc));
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.srcQueueFamilyIndex = 0xFFFFFFFFu;
+    toSrc.dstQueueFamilyIndex = 0xFFFFFFFFu;
+    toSrc.image = vk->swapImages[imageIndex];
+    toSrc.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    toSrc.subresourceRange.levelCount = 1;
+    toSrc.subresourceRange.layerCount = 1;
+    toSrc.srcAccessMask = 0;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, NULL, 0, NULL, 1, &toSrc);
+
+    VkBufferImageCopy region;
+    memset(&region, 0, sizeof(region));
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent.width = w;
+    region.imageExtent.height = h;
+    region.imageExtent.depth = 1;
+    vkCmdCopyImageToBuffer(cmd, vk->swapImages[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuf, 1, &region);
+
+    VkImageMemoryBarrier toPresent = toSrc;
+    toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    toPresent.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toPresent.dstAccessMask = 0;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0, 0, NULL, 0, NULL, 1, &toPresent);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submitInfo;
+    memset(&submitInfo, 0, sizeof(submitInfo));
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    vkQueueSubmit(vk->queue, 1, &submitInfo, NULL);
+    vkQueueWaitIdle(vk->queue);
+    vkFreeCommandBuffers(vk->device, vk->commandPool, 1, &cmd);
+
+    void *mapped = NULL;
+    vkMapMemory(vk->device, stagingMem, 0, size, 0, &mapped);
+    unsigned char *px = (unsigned char *)mapped;
+
+    FILE *fp = fopen(path, "wb");
+    if (fp) {
+        fprintf(fp, "P6\n%u %u\n255\n", w, h);
+        uint32_t i;
+        /* Swapchain format is B8G8R8A8_UNORM (see vk_context.c's own
+         * chosenFormat) -- swap B/R, drop alpha, PPM wants plain RGB. */
+        for (i = 0; i < w * h; i++) {
+            unsigned char b = px[i * 4 + 0], g = px[i * 4 + 1], r = px[i * 4 + 2];
+            fputc(r, fp); fputc(g, fp); fputc(b, fp);
+        }
+        fclose(fp);
+        fprintf(stderr, "SQW: screenshot written to %s (%ux%u)\n", path, w, h); fflush(stdout);
+    }
+
+    vkUnmapMemory(vk->device, stagingMem);
+    vkDestroyBuffer(vk->device, stagingBuf, NULL);
+    vkFreeMemory(vk->device, stagingMem, NULL);
+}
+
 static void sqw_draw_frame(SqwAppState *st) {
     uint32_t imageIndex = 0;
     VkCommandBuffer cmd = sqw_vk_begin_frame(st->vk, 0.95f, 0.95f, 0.95f, 1.0f, &imageIndex);
@@ -1455,6 +1654,8 @@ static void sqw_draw_frame(SqwAppState *st) {
      * see the adjusted value. */
     float draw_scroll_y = st->scroll_y - SQW_TOOLBAR_H;
     sqw_renderer_draw(st->vk, st->renderer, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
+    sqw_image_renderer_begin_frame(st->image_renderer);
+    draw_layout_images(st->image_renderer, st->vk, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
     draw_layout_text(st->text_renderer, st->vk, st->renderer, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
     LayoutBox vthumb_dummy, hthumb_dummy;
     draw_scrollbars(st->vk, st->renderer, cmd, st->boxes.content_w, st->boxes.content_h, st->viewport_w, st->viewport_h, st->scroll_x, st->scroll_y, &vthumb_dummy, &hthumb_dummy);
@@ -1464,6 +1665,11 @@ static void sqw_draw_frame(SqwAppState *st) {
 
     st->frame_count++;
     if (st->frame_count % 300 == 0) { fprintf(stderr, "SQW: frame=%d\n", st->frame_count); fflush(stdout); }
+
+    if (st->test_screenshot_frame >= 0 && st->frame_count == st->test_screenshot_frame) {
+        vkQueueWaitIdle(st->vk->queue); /* wait for THIS frame's present before reading it back */
+        sqw_debug_screenshot(st->vk, imageIndex, st->test_screenshot_path[0] ? st->test_screenshot_path : "SQW/screenshot.ppm");
+    }
 }
 
 int main(void) {
@@ -1528,6 +1734,14 @@ int main(void) {
         return 1;
     }
 
+    st->image_renderer = (SqwImageRenderer *)malloc(sizeof(SqwImageRenderer));
+    if (!sqw_image_renderer_init(st->vk, st->image_renderer)) {
+        fprintf(stderr, "SQW: image renderer init failed\n"); fflush(stdout);
+        return 1;
+    }
+    sqw_image_cache_init(st->vk, st->image_renderer);
+    layout_set_image_size_lookup(sqw_image_cache_get_size);
+
     sqw_dirname(SQW_INITIAL_PAGE, st->current_dir);
     /* Non-empty only when the CURRENT page was reached over the network
      * (e.g. "http://127.0.0.1:8080/") -- see sqw_navigate_to_html()'s own
@@ -1559,6 +1773,7 @@ int main(void) {
     st->root = dom_parse(initial_html);
     free(initial_html);
     sqw_apply_css(st->root);
+    sqw_resolve_image_urls(st->root, st->current_dir, st->current_base_url);
     st->viewport_w = SQW_VIEWPORT_W; st->viewport_h = SQW_VIEWPORT_H;
     layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes);
     fprintf(stderr, "SQW: DOM parsed, layout computed (%d boxes, content %.0fx%.0f)\n",
@@ -1622,6 +1837,14 @@ int main(void) {
             else if (!strcmp(tk,"down")) st->test_key = SDL_SCANCODE_DOWN;
         }
     }
+    st->test_screenshot_frame = -1;
+    st->test_screenshot_path[0] = 0;
+    {
+        const char *sf = getenv("SQW_TEST_SCREENSHOT_FRAME");
+        if (sf) st->test_screenshot_frame = atoi(sf);
+        const char *sp = getenv("SQW_TEST_SCREENSHOT_PATH");
+        if (sp) { strncpy(st->test_screenshot_path, sp, sizeof st->test_screenshot_path - 1); st->test_screenshot_path[sizeof st->test_screenshot_path - 1] = 0; }
+    }
     if (getenv("SQW_DUMP_BOXES")) {
         int bi;
         for (bi = 0; bi < st->boxes.count; bi++) {
@@ -1643,6 +1866,16 @@ int main(void) {
         if (!st->running) break;
 
         sqw_check_pending_fetch(st);
+        /* A real decoded size becoming known for the first time this poll
+         * means every <img> box layout.c sized off the SQW_IMG_SIZE
+         * placeholder is now stale -- see sqw_image_cache_poll()'s own
+         * comment; a full relayout is cheap enough at this project's scale
+         * to just always do it when that happens, same as a window resize
+         * already does. */
+        if (sqw_image_cache_poll()) {
+            layout_list_free(&st->boxes);
+            layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes);
+        }
         sqw_draw_frame(st);
     }
 

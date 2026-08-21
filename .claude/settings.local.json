@@ -2,7 +2,23 @@
   "permissions": {
     "allow": [
       "Bash(python3 bake_font.py /tmp/claude-1000/-home-squash-projects-squash-compler-squash-compiler/cf70e515-945e-42d7-8812-edd7fb8e32cf/scratchpad/font_atlas_test.h)",
-      "Bash(gpgconf --homedir /tmp/claude-1000/-home-squash-projects-squash-compler-squash-compiler/cf70e515-945e-42d7-8812-edd7fb8e32cf/scratchpad/gatetest2/gnupg --kill gpg-agent)"
+      "Bash(gpgconf --homedir /tmp/claude-1000/-home-squash-projects-squash-compler-squash-compiler/cf70e515-945e-42d7-8812-edd7fb8e32cf/scratchpad/gatetest2/gnupg --kill gpg-agent)",
+      "Bash(python3 -c \"import shutil\")",
+      "Bash(apt list *)",
+      "Bash(pip3 list *)",
+      "Bash(apt-cache search *)",
+      "Bash(apt-cache policy *)",
+      "Bash(sudo apt install -y glslang-tools)",
+      "Bash(sudo -n apt install -y glslang-tools)",
+      "Bash(apt-get download *)",
+      "Bash(dpkg-deb -x glslang-tools_16.2.0-2_amd64.deb extracted)",
+      "Bash(ldd /tmp/claude-1000/-home-squash-projects-squash-compler-squash-compiler/e54c9729-8880-484b-bf99-1d9883078ab9/scratchpad/extracted/usr/bin/glslangValidator)",
+      "Bash(/tmp/claude-1000/-home-squash-projects-squash-compler-squash-compiler/e54c9729-8880-484b-bf99-1d9883078ab9/scratchpad/extracted/usr/bin/glslangValidator --version)",
+      "Bash(./extracted/usr/bin/glslangValidator -V image.vert -o image.vert.spv)",
+      "Bash(./extracted/usr/bin/glslangValidator -V image.frag -o image.frag.spv)",
+      "Bash(python3 -)",
+      "Bash(nm -D /usr/lib/x86_64-linux-gnu/libz.so.1)",
+      "Bash(grep -E \" T \\(inflate|inflateInit_|inflateInit2_|inflateEnd|inflateReset\\)$\")"
     ]
   }
 }

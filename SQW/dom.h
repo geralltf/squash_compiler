@@ -2,6 +2,12 @@
 #define SQW_DOM_H
 #include "html_lexer.h"
 
+/* Shared with sqw_main.c's sqw_resolve_image_urls() -- squash's C frontend
+ * doesn't accept "sizeof node->img_url" as an array-size expression, so a
+ * plain named constant is used for both DomNode::img_url's own size and
+ * that function's local resolve buffer, instead. */
+#define SQW_IMG_URL_MAX 384
+
 typedef struct {
     char name[HTML_MAX_ATTR_LEN];
     char value[HTML_MAX_ATTR_LEN];
@@ -86,6 +92,18 @@ typedef struct DomNode {
     char form_value[512];
     int form_checked;
     int form_focused;
+
+    /* <img>'s "src" attribute resolved to an absolute URL (empty if unset
+     * or the node isn't an <img>) -- filled in once per page load by
+     * sqw_resolve_image_urls() (sqw_main.c), the same "walk once right
+     * after dom_parse(), cache the resolved value directly on the node"
+     * pattern css_apply() already uses for computed style, so layout.c and
+     * the draw pass can look an image up in SQW/image_cache.h's cache by
+     * URL without needing the page's current_dir/current_base_url passed
+     * down through every call. Also reused for CSS "background-image:
+     * url(...)" (css_bg_image_url below) on any element, not just <img>. */
+    char img_url[SQW_IMG_URL_MAX];
+    char css_bg_image_url[SQW_IMG_URL_MAX];
 } DomNode;
 
 DomNode *dom_parse(const char *html);

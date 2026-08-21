@@ -702,6 +702,13 @@ VkResult WINAPI vkCreateDescriptorSetLayout(VkDevice device, const VkDescriptorS
 void WINAPI vkDestroyDescriptorSetLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout, const void *pAllocator);
 VkResult WINAPI vkCreateDescriptorPool(VkDevice device, const VkDescriptorPoolCreateInfo *pCreateInfo, const void *pAllocator, VkDescriptorPool *pDescriptorPool);
 void WINAPI vkDestroyDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool, const void *pAllocator);
+/* Bulk-frees every set allocated from `descriptorPool` at once, without
+ * needing VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT (that flag is
+ * only required for vkFreeDescriptorSets, freeing individual sets) -- see
+ * SQW/image_renderer_vk.c's sqw_image_renderer_reset_pool(), called once
+ * per page navigation instead of freeing each <img>'s own set one at a
+ * time. `flags` is a reserved VkDescriptorPoolResetFlags, always 0 today. */
+VkResult WINAPI vkResetDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool, uint32_t flags);
 VkResult WINAPI vkAllocateDescriptorSets(VkDevice device, const VkDescriptorSetAllocateInfo *pAllocateInfo, VkDescriptorSet *pDescriptorSets);
 void WINAPI vkUpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount, const VkWriteDescriptorSet *pDescriptorWrites, uint32_t descriptorCopyCount, const void *pDescriptorCopies);
 void WINAPI vkCmdBindDescriptorSets(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipelineLayout layout, uint32_t firstSet, uint32_t descriptorSetCount, const VkDescriptorSet *pDescriptorSets, uint32_t dynamicOffsetCount, const uint32_t *pDynamicOffsets);
@@ -815,6 +822,10 @@ void WINAPI vkCmdCopyImageToBuffer(VkCommandBuffer commandBuffer, VkImage srcIma
  * alias of the correct enumerator value, same trick already used for
  * VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER above). */
 #define VK_FORMAT_R8_UNORM ((VkFormat)9)
+/* VK_FORMAT_R8G8B8A8_UNORM: same extend-the-enum trick, for decoded
+ * <img>/CSS background-image RGBA8 pixels (SQW/image_cache.c), real
+ * Vulkan 1.0 core enumerator value 37. */
+#define VK_FORMAT_R8G8B8A8_UNORM ((VkFormat)37)
 #define VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ((VkImageLayout)5)
 #define VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ((VkImageLayout)7)
 
@@ -826,6 +837,7 @@ typedef enum VkSamplerAddressMode { VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE = 2 } 
 typedef enum VkBorderColor { VK_BORDER_COLOR_INT_TRANSPARENT_BLACK = 1 } VkBorderColor;
 #define VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ((VkDescriptorType)1)
 
+#define VK_IMAGE_USAGE_TRANSFER_SRC_BIT 0x1
 #define VK_IMAGE_USAGE_TRANSFER_DST_BIT 0x2
 #define VK_IMAGE_USAGE_SAMPLED_BIT 0x4
 #define VK_BUFFER_USAGE_TRANSFER_SRC_BIT 0x1

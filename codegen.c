@@ -1226,13 +1226,62 @@ static int expr_is_unsigned_int(CodeGen *cg, ASTNode *n) {
     switch (n->kind) {
     case AST_VAR: {
         Symbol *s = symtable_lookup(cg->sym, n->var.name);
-        return (s && s->type) ? type_is_unsigned_resolved(cg->sym, s->type) : 0;
+        if (!s || !s->type) return 0;
+        /* AST_INDEX's own "esz==1 byte load: sign- or zero-extend?" check
+         * (see its own comment) calls this with n->index.array -- i.e. THE
+         * POINTER/ARRAY BEING INDEXED, not a plain scalar value -- to ask
+         * "is the ELEMENT type unsigned?", not "is this pointer value
+         * unsigned?" (a question that doesn't meaningfully apply to a
+         * pointer at all). type_is_unsigned_resolved() bails to 0
+         * (`pointer_depth != 0`) for exactly this case: is_unsigned is
+         * still set correctly on a pointer's own TypeInfo (it describes
+         * the POINTEE's signedness, e.g. "unsigned char *" has
+         * is_unsigned=1, pointer_depth=1 -- same field struct-member reads
+         * already trust regardless of pointer_depth, see AST_MEMBER's
+         * "field_is_unsigned = fty->is_unsigned;" a few hundred lines
+         * below), it's just that resolved-typedef helper's OWN guard was
+         * never meant to gate this call site. Read it directly instead of
+         * routing through that helper when indexing a pointer/array --
+         * confirmed as the actual cause of a real, reproducible bug: "p[i]"
+         * for a `const unsigned char *p` parameter with p[i] >= 0x80
+         * silently sign-extended to a 64-bit value with all-1s upper bits
+         * (e.g. 0x99 became 0xFFFFFFFFFFFFFF99), corrupting any OR/shift
+         * expression combining several such loads -- a plain LOCAL array
+         * of the same element type didn't hit this (its Symbol's own
+         * pointer_depth is 0, not the pointer-PARAMETER case this fixes).
+         * Every other call site of expr_is_unsigned_int() passes a plain
+         * scalar-value expression (division/modulo operands, assignment
+         * LHS), where a real C variable's pointer_depth is always 0 anyway
+         * (you can't divide by a pointer), so this branch is inert for
+         * them -- safe to widen here without touching type_is_unsigned_
+         * resolved() itself, which other, genuinely pointer-depth-sensitive
+         * callers still rely on bailing to 0 for an actual pointer VALUE. */
+        if (s->type->pointer_depth != 0) return s->type->is_unsigned ? 1 : 0;
+        return type_is_unsigned_resolved(cg->sym, s->type);
     }
     case AST_CAST:
         return n->cast.type ? type_is_unsigned_resolved(cg->sym, n->cast.type) : 0;
     case AST_MEMBER: {
+        /* Same pointer_depth!=0 gap as this function's own AST_VAR case
+         * just above (see its long comment for the full story) -- a
+         * struct field declared as a pointer, e.g. "unsigned char *plane;"
+         * indexed as "comp->plane[i]", reaches here with n->member.obj
+         * itself unused directly: field_type_of() returns THE FIELD'S OWN
+         * TypeInfo (pointer_depth==1, is_unsigned describing the POINTEE),
+         * which type_is_unsigned_resolved() then unconditionally bails to
+         * 0 for (its `pointer_depth != 0` guard, meant for a genuine
+         * pointer VALUE, not "what's the element type of what this
+         * indexes"). Confirmed as a real, reproducible bug distinct from
+         * (but the same root cause as) the AST_VAR fix above: a JPEG
+         * decoder's "unsigned char *plane" component buffer, read through
+         * a struct pointer as "comp->plane[i]", sign-extended any byte
+         * >=0x80 into a huge/negative value instead of the real 0..255
+         * unsigned sample -- corrupting chroma (Cr) reconstruction for
+         * exactly the pixel values that needed the high bit set. */
         TypeInfo *ft = field_type_of(cg, n->member.obj, n->member.field);
-        return ft ? type_is_unsigned_resolved(cg->sym, ft) : 0;
+        if (!ft) return 0;
+        if (ft->pointer_depth != 0) return ft->is_unsigned ? 1 : 0;
+        return type_is_unsigned_resolved(cg->sym, ft);
     }
     default:
         return 0;
@@ -3955,24 +4004,46 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             int is_unsigned  = n->cast.type->is_unsigned;
             int pdepth       = n->cast.type->pointer_depth;
             if (pdepth == 0) {
-                if (strcmp(base,"char")==0 || strcmp(base,"signed char")==0) {
+                /* ParseTypeSpecifier() (parser_new4.c) stores "unsigned" as
+                 * a separate is_unsigned=1 flag, NOT folded into base as
+                 * the combined string "unsigned char"/"unsigned short" --
+                 * base is always just "char"/"short" regardless of
+                 * signedness. The strcmp(base,"unsigned char"/"unsigned
+                 * short") checks below this comment used to NEVER match
+                 * anything for exactly that reason, so an "(unsigned
+                 * char)expr" cast silently emitted no mask/extend
+                 * instruction at all -- whatever sign-extended garbage
+                 * codegen_expr(n->cast.expr) already left in eax (e.g. a
+                 * plain signed `char` array/pointer read, movsx'd) passed
+                 * straight through unmodified. Confirmed via a minimal
+                 * repro: "(unsigned char)body[0]" for a char* body holding
+                 * byte 0xD8 (216) came back as -40 (the SIGNED
+                 * interpretation) instead of 216 -- the real cause of
+                 * SQW's own JPEG magic-byte sniff ("body[0]==0xFF") never
+                 * matching a real JPEG response body. Check is_unsigned
+                 * alongside the bare "char"/"short" base name instead of
+                 * ever expecting the combined string. */
+                if (is_unsigned && strcmp(base,"char")==0) {
+                    /* movzx eax,al */
+                    asm_emit3(a,0x0F,0xB6,0xC0);
+                } else if (strcmp(base,"char")==0 || strcmp(base,"signed char")==0) {
                     /* movsx eax,al */
                     if (cg->is_64bit) asm_emit4(a,0x48,0x0F,0xBE,0xC0);
                     else              asm_emit3(a,0x0F,0xBE,0xC0);
                 } else if (strcmp(base,"unsigned char")==0) {
-                    /* movzx eax,al */
+                    /* movzx eax,al -- kept for a hypothetical future parser
+                     * that DOES fold the combined string into base. */
                     asm_emit3(a,0x0F,0xB6,0xC0);
+                } else if (is_unsigned && strcmp(base,"short")==0) {
+                    /* movzx eax,ax */
+                    asm_emit3(a,0x0F,0xB7,0xC0);
                 } else if (strcmp(base,"short")==0 || strcmp(base,"signed short")==0) {
                     /* movsx eax,ax */
                     if (cg->is_64bit) asm_emit4(a,0x48,0x0F,0xBF,0xC0);
                     else              asm_emit3(a,0x0F,0xBF,0xC0);
                 } else if (strcmp(base,"unsigned short")==0) {
-                    /* movzx eax,ax */
+                    /* movzx eax,ax -- same "hypothetical combined string" note as above. */
                     asm_emit3(a,0x0F,0xB7,0xC0);
-                } else if (!is_unsigned && strcmp(base,"char")==0) {
-                    /* default char: treat as signed */
-                    if (cg->is_64bit) asm_emit4(a,0x48,0x0F,0xBE,0xC0);
-                    else              asm_emit3(a,0x0F,0xBE,0xC0);
                 }
                 /* int/long/void* etc: value already correct width in eax/rax */
             }
@@ -3987,6 +4058,14 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
     case AST_DEREF: {
         /* Dereference pointer; load size depends on pointed-to type. */
         int load1=0, load2=0, load8=0;
+        /* Signedness of the pointee, for the plain-4-byte-int case at the
+         * bottom of this block — see that code's own comment for why this
+         * matters (a real, confirmed bug: a NEGATIVE `int` read through
+         * `*ptr` came back as a huge POSITIVE value once later widened to
+         * 64-bit, e.g. by (float)(*intPtr) or intPtr's own value compared/
+         * used in a 64-bit context). Defaults to signed (0) — only set to 1
+         * when the pointee's TypeInfo explicitly says unsigned. */
+        int deref_is_unsigned = 0;
         /* Determine load size from the operand's symbol type. The operand
          * is often not a bare variable — e.g. "*string++" (SDL_strlen's own
          * loop) wraps the variable in a postfix-++ AST_UNARY node, and
@@ -4037,6 +4116,7 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 tmp.is_inline=cast_ty->is_inline; tmp.is_extern=cast_ty->is_extern;
                 tmp.is_float=cast_ty->is_float;
                 if (sizeof_type_sym(&tmp,cg->is_64bit,cg->sym)==8) load8=cg->is_64bit;
+                deref_is_unsigned = cast_ty->is_unsigned;
             }
         } else if (cast_ty && cast_ty->pointer_depth==0 &&
                    (sizeof_type_sym(cast_ty,cg->is_64bit,cg->sym)==8)) {
@@ -4076,6 +4156,7 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 else if (base && (strcmp(base,"short")==0||strcmp(base,"unsigned short")==0)) load2=1;
                 else if (base && is_byte_sized_stdint(cg->sym,base)) load1=1;
                 else if (base && is_short_sized_stdint(cg->sym,base)) load2=1;
+                else deref_is_unsigned = ds->type->is_unsigned;
             }
         }
         codegen_expr(cg,n->deref.operand);
@@ -4087,8 +4168,29 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
         } else if (load8 && cg->is_64bit) {
             asm_emit3(a,0x48,0x8B,0x00); /* mov rax,[rax] 64-bit */
         } else {
+            /* Plain 4-byte int pointee: a SIGNED int (the common case --
+             * "int *p; ...; *p") must sign-extend into the full 64-bit
+             * RAX, not just zero-extend via mov eax,[rax] -- otherwise a
+             * negative value's upper 32 bits read back as 0 instead of
+             * all-1s, and anything downstream that treats RAX as a real
+             * 64-bit signed quantity (e.g. asm_cvtsi2sd() in 64-bit mode,
+             * which ALWAYS takes a REX.W/64-bit GPR source, see its own
+             * comment) sees a huge positive number instead of the real
+             * negative value. Confirmed via a minimal repro:
+             * "(float)(*intPtr)" for a negative *intPtr came back as
+             * roughly +4.3 billion instead of the real negative value --
+             * this is what corrupted every negative JPEG DC coefficient
+             * diff in SQW's own baseline decoder (jpeg_decode_block's
+             * "*dc_pred" -- see img_decode_jpeg.c). Zero-extension (movzx-
+             * equivalent mov eax,[rax], the previous unconditional
+             * behavior) remains correct and is kept for a genuinely
+             * unsigned int pointee, where the upper bits should read as 0
+             * -- same signed-vs-unsigned distinction AST_INDEX's own
+             * array-element load already makes just above (see its
+             * comment), now applied here too. */
             if (!cg->is_64bit) asm_emit2(a,0x8B,0x00); /* mov eax,[eax] */
-            else               asm_emit2(a,0x8B,0x00); /* mov eax,[rax] zero-extends */
+            else if (deref_is_unsigned) asm_emit2(a,0x8B,0x00); /* mov eax,[rax] zero-extends */
+            else asm_emit3(a,0x48,0x63,0x00); /* movsxd rax,dword[rax] sign-extends */
         }
         break;
     }
@@ -8667,6 +8769,32 @@ static int index_elem_is_float(CodeGen *cg, ASTNode *idxnode) {
         if (s) t = s->type;
     } else if (arrexpr->kind == AST_MEMBER) {
         t = field_type_of(cg, arrexpr->member.obj, arrexpr->member.field);
+    } else if (arrexpr->kind == AST_INDEX) {
+        /* Nested index -- idxnode is "arr[x][u]", arrexpr is the OUTER
+         * "arr[x]" itself. A 2D array's element type is the same scalar
+         * base type regardless of how many dimensions have been indexed
+         * through already, so resolve it from the INNERMOST array base
+         * the same way elem_size_of()'s own "Nested index" case does.
+         * Without this, `float arr[N][M]; ... x = arr[i][j] * y;` silently
+         * treated arr[i][j]'s float bit pattern as a plain 32-bit INTEGER
+         * (routing through codegen_expr's int path + cvtsi2sd instead of
+         * codegen_float_expr's movss+cvtss2sd) -- e.g. a stored 1.0f (bit
+         * pattern 0x3F800000) read back and used in arithmetic as the
+         * integer 1065353216 converted to double, producing wildly wrong
+         * results (confirmed via a minimal repro building a cosine lookup
+         * table into a 2D float array for a JPEG IDCT: every table read
+         * inside an expression came back astronomically wrong even though
+         * the table's own stored bytes were verified correct in memory --
+         * this is a READ-side bug only, storing INTO arr[i][j] already
+         * worked correctly via a separate, already-nested-index-aware code
+         * path in codegen_lvalue/elem_size_of). */
+        ASTNode *base = arrexpr->index.array;
+        if (base && base->kind == AST_VAR) {
+            Symbol *s = symtable_lookup(cg->sym, base->var.name);
+            if (s) t = s->type;
+        } else if (base && base->kind == AST_MEMBER) {
+            t = field_type_of(cg, base->member.obj, base->member.field);
+        }
     }
     if (!t || !t->base || t->pointer_depth > 1) return 0;
     Symbol *td = symtable_lookup(cg->sym, t->base);

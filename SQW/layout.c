@@ -25,6 +25,14 @@
 #define SQW_TEXTAREA_DEFAULT_W 300.0f
 #define SQW_TEXTAREA_DEFAULT_H 80.0f
 
+/* See layout.h's own comment on why this is a plain function pointer
+ * rather than an #include of image_cache.h. */
+static int (*g_image_size_lookup)(const char *url, float *w, float *h) = NULL;
+
+void layout_set_image_size_lookup(int (*fn)(const char *url, float *w, float *h)) {
+    g_image_size_lookup = fn;
+}
+
 /* Real CSS box-model + display support (block/inline/inline-block/none/
  * flex/grid), driven entirely by each DomNode's own computed style (see
  * css.h/css.c -- css_apply() resolves that BEFORE layout_compute() ever
@@ -630,7 +638,20 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
 
         if (child->css_display == CSS_DISPLAY_INLINE && strcmp(child->tag, "img") == 0) {
             PlaceSpec spec;
-            spec.kind = SQW_BOX_IMG; spec.w = SQW_IMG_SIZE; spec.h = SQW_IMG_SIZE;
+            float iw = SQW_IMG_SIZE, ih = SQW_IMG_SIZE;
+            float real_w, real_h;
+            /* Real decoded size once known (see g_image_size_lookup's own
+             * comment); still just the placeholder square while
+             * PENDING/FAILED/unset, same as before real image support
+             * existed. Explicit CSS/attribute width/height (already
+             * resolved onto the node by css_apply(), see dom.h) always
+             * wins over either -- real browsers' own precedence. */
+            if (g_image_size_lookup && g_image_size_lookup(child->img_url, &real_w, &real_h)) {
+                iw = real_w; ih = real_h;
+            }
+            if (child->css_has_width) iw = child->css_width;
+            if (child->css_has_height) ih = child->css_height;
+            spec.kind = SQW_BOX_IMG; spec.w = iw; spec.h = ih;
             spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP;
             place_inline_run(f, out, child, &spec);
         } else if (child->css_display == CSS_DISPLAY_INLINE && strcmp(child->tag, "input") == 0) {

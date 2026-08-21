@@ -35,6 +35,30 @@ static int file_exists(const char *path) {
     return S_ISREG(st.st_mode);
 }
 
+/* find_lib()'s unversioned "lib<name>.so" candidate (below) can match a
+ * real installed FILE that isn't actually a shared object at all: modern
+ * glibc packaging ships some libs' dev-time "lib<name>.so" as a plain-text
+ * GNU ld linker script (e.g. Ubuntu's own /usr/lib/x86_64-linux-gnu/
+ * libm.so is literally "GROUP ( libm.so.6 ... )", not an ELF), meant to be
+ * understood by a real linker's script parser -- which this one doesn't
+ * have. Accepting it as-is produces a DT_NEEDED entry pointing at that
+ * non-ELF text file, which the dynamic loader then fails to mmap at
+ * runtime ("invalid ELF header") -- confirmed as the actual cause of a
+ * real "-lm" link (SQW's JPEG decoder's cos() calls) producing a binary
+ * that built without error but crashed on first run. Checking the real
+ * ELF magic here, rather than just file_exists(), makes find_lib() reject
+ * the linker-script stub and fall through to the later "lib<name>.so.N"
+ * versioned-candidate loop, which finds the real libm.so.6 ELF instead. */
+static int file_is_elf(const char *path) {
+    if (!file_exists(path)) return 0;
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    unsigned char magic[4];
+    size_t n = fread(magic, 1, 4, f);
+    fclose(f);
+    return n == 4 && magic[0] == 0x7F && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
+}
+
 static uint8_t *read_file_buf(const char *path, int *out_len) {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
@@ -189,16 +213,19 @@ static int find_lib(LinkerContext *ctx, const char *name, char *out_path, int *o
     for (si = 0; si < ctx->search_count; si++) {
         int sbase = si * LSTR256;
         char *sp = &ctx->search[sbase];
-        /* Exact name (e.g. "libGL.so.1") */
+        /* Exact name (e.g. "libGL.so.1") -- a ".a" static archive is a
+         * valid exact-name match too (not an ELF), so only require the
+         * ELF check for a ".so"-named exact match. */
         snprintf(try_path, sizeof try_path, "%s/%s", sp, name);
-        if (file_exists(try_path)) {
+        if (str_ends_with(try_path, ".a") ? file_exists(try_path) : file_is_elf(try_path)) {
             int i=0; while(try_path[i]&&i<255){out_path[i]=try_path[i];i++;}out_path[i]='\0';
             *out_static = str_ends_with(try_path, ".a");
             return 1;
         }
-        /* lib<name>.so */
+        /* lib<name>.so -- see file_is_elf()'s own comment on why this must
+         * be a real ELF check, not just file_exists(). */
         snprintf(try_path, sizeof try_path, "%s/lib%s.so", sp, name);
-        if (file_exists(try_path)) {
+        if (file_is_elf(try_path)) {
             int i=0; while(try_path[i]&&i<255){out_path[i]=try_path[i];i++;}out_path[i]='\0';
             *out_static = 0;
             return 1;
@@ -206,7 +233,7 @@ static int find_lib(LinkerContext *ctx, const char *name, char *out_path, int *o
         /* lib<name>.so.0 / .1 / .2 / .6 */
         { int v; for (v=0; v<=9; v++) {
             snprintf(try_path, sizeof try_path, "%s/lib%s.so.%d", sp, name, v);
-            if (file_exists(try_path)) {
+            if (file_is_elf(try_path)) {
                 int i=0; while(try_path[i]&&i<255){out_path[i]=try_path[i];i++;}out_path[i]='\0';
                 *out_static = 0;
                 return 1;

@@ -49,7 +49,15 @@ static int create_swapchain_and_deps(SqwVkContext *vk, uint32_t width, uint32_t 
     scInfo.imageColorSpace = chosenColorSpace;
     scInfo.imageExtent = vk->extent;
     scInfo.imageArrayLayers = 1;
-    scInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    /* VK_IMAGE_USAGE_TRANSFER_SRC_BIT (in addition to COLOR_ATTACHMENT):
+     * lets a swapchain image be vkCmdCopyImageToBuffer'd for a debug
+     * screenshot (see sqw_main.c's SQW_TEST_SCREENSHOT_FRAME) -- harmless
+     * to request unconditionally (every real GPU/ICD supports it on a
+     * presentable image; this project doesn't probe imageUsage support
+     * before requesting it, matching this whole function's existing
+     * "don't over-engineer for capabilities every real target already
+     * has" style elsewhere). */
+    scInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     scInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     scInfo.preTransform = caps.currentTransform;
     scInfo.compositeAlpha = 0x1;
@@ -287,6 +295,174 @@ int sqw_vk_create_texture_r8(SqwVkContext *vk, const unsigned char *pixels, uint
     if (vr != VK_SUCCESS) { fprintf(stderr, "sqw_vk: vkCreateSampler failed vr=%d\n", (int)vr); fflush(stdout); return 0; }
 
     fprintf(stderr, "sqw_vk: texture %ux%u created\n", w, h); fflush(stdout);
+    return 1;
+}
+
+/* Same staging-buffer/one-shot-command-buffer upload as
+ * sqw_vk_create_texture_r8() above (that function's own comment explains
+ * the technique), just VK_FORMAT_R8G8B8A8_UNORM/4-bytes-per-pixel instead
+ * of R8_UNORM/1 -- for decoded <img>/CSS background-image pixels (see
+ * SQW/image_cache.c), never the font atlas. Deliberately not factored into
+ * a shared helper with sqw_vk_create_texture_r8(): this project generally
+ * prefers a little duplication over an abstraction with only two call
+ * sites (see e.g. renderer_vk.c/text_renderer_vk.c being two whole
+ * separate pipelines rather than one parameterized one). */
+int sqw_vk_create_texture_rgba8(SqwVkContext *vk, const unsigned char *pixels, uint32_t w, uint32_t h, SqwTexture *out) {
+    VkResult vr;
+    memset(out, 0, sizeof(*out));
+    out->width = w;
+    out->height = h;
+    VkDeviceSize size = (VkDeviceSize)w * (VkDeviceSize)h * 4;
+
+    /* --- Staging buffer (host-visible, holds the raw pixels briefly) --- */
+    VkBuffer stagingBuf;
+    VkBufferCreateInfo bufInfo;
+    memset(&bufInfo, 0, sizeof(bufInfo));
+    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufInfo.size = size;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vr = vkCreateBuffer(vk->device, &bufInfo, NULL, &stagingBuf);
+    if (vr != VK_SUCCESS) { fprintf(stderr, "sqw_vk: staging vkCreateBuffer failed vr=%d\n", (int)vr); fflush(stdout); return 0; }
+
+    VkMemoryRequirements memReq;
+    vkGetBufferMemoryRequirements(vk->device, stagingBuf, &memReq);
+    VkMemoryAllocateInfo allocInfo;
+    memset(&allocInfo, 0, sizeof(allocInfo));
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReq.size;
+    allocInfo.memoryTypeIndex = sqw_vk_find_memory_type(vk, memReq.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VkDeviceMemory stagingMem;
+    vr = vkAllocateMemory(vk->device, &allocInfo, NULL, &stagingMem);
+    if (vr != VK_SUCCESS) { fprintf(stderr, "sqw_vk: staging vkAllocateMemory failed vr=%d\n", (int)vr); fflush(stdout); return 0; }
+    vkBindBufferMemory(vk->device, stagingBuf, stagingMem, 0);
+
+    void *mapped = NULL;
+    vkMapMemory(vk->device, stagingMem, 0, size, 0, &mapped);
+    memcpy(mapped, pixels, (size_t)size);
+    vkUnmapMemory(vk->device, stagingMem);
+
+    /* --- Device-local image --- */
+    VkImageCreateInfo imgInfo;
+    memset(&imgInfo, 0, sizeof(imgInfo));
+    imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imgInfo.imageType = VK_IMAGE_TYPE_2D;
+    imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imgInfo.extent.width = w;
+    imgInfo.extent.height = h;
+    imgInfo.extent.depth = 1;
+    imgInfo.mipLevels = 1;
+    imgInfo.arrayLayers = 1;
+    imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    vr = vkCreateImage(vk->device, &imgInfo, NULL, &out->image);
+    if (vr != VK_SUCCESS) { fprintf(stderr, "sqw_vk: vkCreateImage failed vr=%d\n", (int)vr); fflush(stdout); return 0; }
+
+    VkMemoryRequirements imgMemReq;
+    vkGetImageMemoryRequirements(vk->device, out->image, &imgMemReq);
+    VkMemoryAllocateInfo imgAllocInfo;
+    memset(&imgAllocInfo, 0, sizeof(imgAllocInfo));
+    imgAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    imgAllocInfo.allocationSize = imgMemReq.size;
+    imgAllocInfo.memoryTypeIndex = sqw_vk_find_memory_type(vk, imgMemReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    vr = vkAllocateMemory(vk->device, &imgAllocInfo, NULL, &out->memory);
+    if (vr != VK_SUCCESS) { fprintf(stderr, "sqw_vk: image vkAllocateMemory failed vr=%d\n", (int)vr); fflush(stdout); return 0; }
+    vkBindImageMemory(vk->device, out->image, out->memory, 0);
+
+    /* --- One-shot command buffer: layout transitions + buffer->image copy --- */
+    VkCommandBufferAllocateInfo cbInfo;
+    memset(&cbInfo, 0, sizeof(cbInfo));
+    cbInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbInfo.commandPool = vk->commandPool;
+    cbInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbInfo.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(vk->device, &cbInfo, &cmd);
+
+    VkCommandBufferBeginInfo beginInfo;
+    memset(&beginInfo, 0, sizeof(beginInfo));
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkImageMemoryBarrier toDst;
+    memset(&toDst, 0, sizeof(toDst));
+    toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toDst.srcQueueFamilyIndex = 0xFFFFFFFFu; /* VK_QUEUE_FAMILY_IGNORED */
+    toDst.dstQueueFamilyIndex = 0xFFFFFFFFu;
+    toDst.image = out->image;
+    toDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    toDst.subresourceRange.levelCount = 1;
+    toDst.subresourceRange.layerCount = 1;
+    toDst.srcAccessMask = 0;
+    toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, NULL, 0, NULL, 1, &toDst);
+
+    VkBufferImageCopy region;
+    memset(&region, 0, sizeof(region));
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent.width = w;
+    region.imageExtent.height = h;
+    region.imageExtent.depth = 1;
+    vkCmdCopyBufferToImage(cmd, stagingBuf, out->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    VkImageMemoryBarrier toShaderRead = toDst;
+    toShaderRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toShaderRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toShaderRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toShaderRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, NULL, 0, NULL, 1, &toShaderRead);
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submitInfo;
+    memset(&submitInfo, 0, sizeof(submitInfo));
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    vkQueueSubmit(vk->queue, 1, &submitInfo, NULL);
+    vkQueueWaitIdle(vk->queue);
+    vkFreeCommandBuffers(vk->device, vk->commandPool, 1, &cmd);
+
+    vkDestroyBuffer(vk->device, stagingBuf, NULL);
+    vkFreeMemory(vk->device, stagingMem, NULL);
+
+    /* --- View + sampler --- */
+    VkImageViewCreateInfo ivInfo;
+    memset(&ivInfo, 0, sizeof(ivInfo));
+    ivInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    ivInfo.image = out->image;
+    ivInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ivInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ivInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ivInfo.subresourceRange.levelCount = 1;
+    ivInfo.subresourceRange.layerCount = 1;
+    vr = vkCreateImageView(vk->device, &ivInfo, NULL, &out->view);
+    if (vr != VK_SUCCESS) { fprintf(stderr, "sqw_vk: texture vkCreateImageView failed vr=%d\n", (int)vr); fflush(stdout); return 0; }
+
+    VkSamplerCreateInfo sampInfo;
+    memset(&sampInfo, 0, sizeof(sampInfo));
+    sampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampInfo.magFilter = VK_FILTER_LINEAR;
+    sampInfo.minFilter = VK_FILTER_LINEAR;
+    sampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampInfo.maxLod = 0.0f;
+    sampInfo.borderColor = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
+    vr = vkCreateSampler(vk->device, &sampInfo, NULL, &out->sampler);
+    if (vr != VK_SUCCESS) { fprintf(stderr, "sqw_vk: vkCreateSampler failed vr=%d\n", (int)vr); fflush(stdout); return 0; }
+
+    fprintf(stderr, "sqw_vk: rgba8 texture %ux%u created\n", w, h); fflush(stdout);
     return 1;
 }
 

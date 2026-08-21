@@ -74,6 +74,19 @@ typedef struct {
 void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutList *out);
 void layout_list_free(LayoutList *list);
 
+/* Optional hook for real <img> sizing: set once by sqw_main.c (to
+ * SQW/image_cache.h's sqw_image_cache_get_size) right after the image
+ * cache is initialized. `fn(url, &w, &h)` returns 1 and fills w/h with the
+ * DECODED pixel size if known, 0 otherwise. Deliberately a plain function
+ * pointer here rather than layout.c #include-ing image_cache.h directly:
+ * that header pulls in vk_context.h (real Vulkan headers), and the
+ * "test-layout" Makefile target builds layout.c standalone with no
+ * Vulkan/X11 linkage at all -- leaving this NULL (its default) makes
+ * layout_compute() fall back to the SQW_IMG_SIZE placeholder for every
+ * <img>, exactly what it already did before real image support existed,
+ * so that test target needs no changes. */
+void layout_set_image_size_lookup(int (*fn)(const char *url, float *w, float *h));
+
 /* Linear point-in-box hit test against the most recent layout_compute()
  * output, in CONTENT space (i.e. the caller must first add the current
  * scroll offset to the raw screen-space mouse position -- this function

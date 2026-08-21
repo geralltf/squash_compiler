@@ -87,6 +87,11 @@ uint32_t sqw_vk_find_memory_type(SqwVkContext *vk, uint32_t typeBits, VkFlags pr
  * of times at startup, so a dedicated transfer-queue/async path isn't
  * warranted). Returns 1 on success, 0 on failure. */
 int sqw_vk_create_texture_r8(SqwVkContext *vk, const unsigned char *pixels, uint32_t w, uint32_t h, SqwTexture *out);
+/* Same as sqw_vk_create_texture_r8() but VK_FORMAT_R8G8B8A8_UNORM (4 bytes
+ * per pixel, `pixels` is width*height*4 bytes) -- for decoded <img>/CSS
+ * background-image pixels (SQW/image_cache.c), see vk_context.c's own
+ * comment for why this isn't just a parameterized version of the r8 one. */
+int sqw_vk_create_texture_rgba8(SqwVkContext *vk, const unsigned char *pixels, uint32_t w, uint32_t h, SqwTexture *out);
 void sqw_vk_destroy_texture(SqwVkContext *vk, SqwTexture *tex);
 
 /* Rebuilds the swapchain, image views, and framebuffers in place (same
