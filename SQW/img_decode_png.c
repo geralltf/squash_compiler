@@ -126,6 +126,30 @@ int sqw_png_decode(const unsigned char *data, long len, unsigned char **out_rgba
 
     if (!have_ihdr || width <= 0 || height <= 0 || idat.len == 0) { free(idat.buf); free(palette); free(trns); return 0; }
     if (bit_depth != 8 || interlace != 0) { free(idat.buf); free(palette); free(trns); return 0; } /* out of scope, see header */
+    /* Reject absurd claimed dimensions up front -- IHDR's width/height are
+     * a raw 4-byte-each attacker-controlled claim, unchecked by anything
+     * above (only "> 0"). Below, "stride" is computed as a plain 32-bit
+     * "int width * channels" and used both to size the `raw` (pre-RGBA)
+     * buffer AND, unchanged, to stride through it -- consistent with
+     * itself either way, BUT the later RGBA-conversion loop indexes each
+     * row using the ORIGINAL (uncapped) `width`, not `stride`. A crafted
+     * IHDR with a big enough width makes "width * channels" overflow a
+     * 32-bit int and wrap to something SMALL, undersizing `raw`'s
+     * allocation relative to the loop bounds that still use the real,
+     * large `width` -- a heap-buffer-OVER-READ (found via fuzzing this
+     * function this session; a crash was reproduced both as an
+     * AddressSanitizer OOM on the resulting ~40GB rgba allocation
+     * attempt, and this overflow was found by inspection while fixing
+     * that). This cap closes both: it keeps "width * channels" always
+     * well within int range (20000 * 4 = 80000), and separately bounds
+     * the total pixel count so a claimed-huge image can't force a
+     * multi-gigabyte allocation either (a real memory-exhaustion DoS on
+     * its own, independent of the overflow). 20000px/side and 100
+     * megapixels are both far beyond any real web image while still
+     * being nowhere near where the arithmetic below could wrap. */
+    if (width > 20000 || height > 20000 || (long)width * (long)height > 100000000L) {
+        free(idat.buf); free(palette); free(trns); return 0;
+    }
 
     int channels;
     switch (color_type) {

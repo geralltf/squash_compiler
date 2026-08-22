@@ -133,8 +133,18 @@ static void css_parse_compound(const char **p, CssCompound *out) {
             s->name[len] = 0;
         } else if (len == 0 && kind != CSS_SEL_UNIVERSAL) {
             /* Bare combinator char etc already consumed above; nothing
-             * to record -- avoid an infinite loop on a stray character. */
-            if (q == start) q++;
+             * to record -- avoid an infinite loop on a stray character.
+             * The "*q != 0" guard matters: a trailing "#"/"." at the very
+             * end of the stylesheet (e.g. a truncated/malformed file)
+             * lands here with q==start==(the NUL terminator itself) --
+             * without this guard, "q++" walked one byte PAST the
+             * terminator, and the enclosing for(;;) loop's own "c == 0"
+             * check (which would otherwise have caught it) never got a
+             * chance to see that NUL, instead dereferencing one byte past
+             * the end of the buffer on its next iteration -- a real
+             * heap-buffer-overflow READ, found via fuzzing this function
+             * this session. */
+            if (q == start && *q != 0) q++;
         }
     }
     *p = q;
@@ -462,9 +472,22 @@ static void css_set_default_style(DomNode *el) {
         strcmp(t,"figcaption")==0 || strcmp(t,"table")==0 || strcmp(t,"tr")==0 || strcmp(t,"form")==0;
     el->css_display = block ? CSS_DISPLAY_BLOCK : CSS_DISPLAY_INLINE;
     el->css_has_width = 0; el->css_has_height = 0;
-    el->css_margin[0]=el->css_margin[1]=el->css_margin[2]=el->css_margin[3]=0.0f;
-    el->css_padding[0]=el->css_padding[1]=el->css_padding[2]=el->css_padding[3]=0.0f;
-    el->css_has_color = 0; el->css_has_bg = 0;
+    /* Deliberately 4 separate statements, not one chained
+     * "a=b=c=d=0.0f;" -- a real, confirmed squash codegen bug (a minimal
+     * standalone repro: "s.w[0]=s.w[1]=s.w[2]=s.w[3]=99.0f;" on a struct
+     * float array field only assigns index 0 under squash, gcc-compiled
+     * control assigns all 4) made every one of this file's own multi-
+     * target chained assignments for css_margin/css_padding -- including
+     * the single-value and 2-value shorthand forms below, e.g. a plain
+     * "margin: 10px;" -- silently only ever set the FIRST array slot,
+     * leaving the rest at whatever they already were. A fix for the
+     * compiler bug itself may land separately in codegen.c; every
+     * chained assignment in this function is rewritten to explicit
+     * separate statements regardless, since that's correct either way. */
+    el->css_margin[0] = 0.0f; el->css_margin[1] = 0.0f; el->css_margin[2] = 0.0f; el->css_margin[3] = 0.0f;
+    el->css_padding[0] = 0.0f; el->css_padding[1] = 0.0f; el->css_padding[2] = 0.0f; el->css_padding[3] = 0.0f;
+    el->css_border_width[0] = 0.0f; el->css_border_width[1] = 0.0f; el->css_border_width[2] = 0.0f; el->css_border_width[3] = 0.0f;
+    el->css_has_color = 0; el->css_has_bg = 0; el->css_has_border_color = 0;
     el->css_flex_direction = CSS_FLEX_ROW;
     el->css_flex_wrap = 0;
     el->css_justify = CSS_JUSTIFY_START;
@@ -494,9 +517,12 @@ static void css_apply_decl(DomNode *el, const char *name, const char *value) {
         char buf[192]; strncpy(buf, value, sizeof buf - 1); buf[sizeof buf - 1] = 0;
         char *tok = strtok(buf, " \t");
         while (tok && n < 4) { if (css_parse_len(tok, &v[n])) n++; else v[n++] = 0; tok = strtok(0, " \t"); }
-        if (n == 1) { el->css_margin[0]=el->css_margin[1]=el->css_margin[2]=el->css_margin[3]=v[0]; }
-        else if (n == 2) { el->css_margin[0]=el->css_margin[2]=v[0]; el->css_margin[1]=el->css_margin[3]=v[1]; }
-        else if (n == 3) { el->css_margin[0]=v[0]; el->css_margin[1]=el->css_margin[3]=v[1]; el->css_margin[2]=v[2]; }
+        /* Explicit separate assignments, not chained -- see this
+         * function's own opening comment on the real squash codegen bug
+         * chained multi-target assignment hits here. */
+        if (n == 1) { el->css_margin[0]=v[0]; el->css_margin[1]=v[0]; el->css_margin[2]=v[0]; el->css_margin[3]=v[0]; }
+        else if (n == 2) { el->css_margin[0]=v[0]; el->css_margin[2]=v[0]; el->css_margin[1]=v[1]; el->css_margin[3]=v[1]; }
+        else if (n == 3) { el->css_margin[0]=v[0]; el->css_margin[1]=v[1]; el->css_margin[3]=v[1]; el->css_margin[2]=v[2]; }
         else if (n == 4) { el->css_margin[0]=v[0]; el->css_margin[1]=v[1]; el->css_margin[2]=v[2]; el->css_margin[3]=v[3]; }
     } else if (strcmp(name, "margin-top") == 0) { if (css_parse_len(value, &f)) el->css_margin[0] = f; }
     else if (strcmp(name, "margin-right") == 0) { if (css_parse_len(value, &f)) el->css_margin[1] = f; }
@@ -507,14 +533,76 @@ static void css_apply_decl(DomNode *el, const char *name, const char *value) {
         char buf[192]; strncpy(buf, value, sizeof buf - 1); buf[sizeof buf - 1] = 0;
         char *tok = strtok(buf, " \t");
         while (tok && n < 4) { if (css_parse_len(tok, &v[n])) n++; else v[n++] = 0; tok = strtok(0, " \t"); }
-        if (n == 1) { el->css_padding[0]=el->css_padding[1]=el->css_padding[2]=el->css_padding[3]=v[0]; }
-        else if (n == 2) { el->css_padding[0]=el->css_padding[2]=v[0]; el->css_padding[1]=el->css_padding[3]=v[1]; }
-        else if (n == 3) { el->css_padding[0]=v[0]; el->css_padding[1]=el->css_padding[3]=v[1]; el->css_padding[2]=v[2]; }
+        if (n == 1) { el->css_padding[0]=v[0]; el->css_padding[1]=v[0]; el->css_padding[2]=v[0]; el->css_padding[3]=v[0]; }
+        else if (n == 2) { el->css_padding[0]=v[0]; el->css_padding[2]=v[0]; el->css_padding[1]=v[1]; el->css_padding[3]=v[1]; }
+        else if (n == 3) { el->css_padding[0]=v[0]; el->css_padding[1]=v[1]; el->css_padding[3]=v[1]; el->css_padding[2]=v[2]; }
         else if (n == 4) { el->css_padding[0]=v[0]; el->css_padding[1]=v[1]; el->css_padding[2]=v[2]; el->css_padding[3]=v[3]; }
     } else if (strcmp(name, "padding-top") == 0) { if (css_parse_len(value, &f)) el->css_padding[0] = f; }
     else if (strcmp(name, "padding-right") == 0) { if (css_parse_len(value, &f)) el->css_padding[1] = f; }
     else if (strcmp(name, "padding-bottom") == 0) { if (css_parse_len(value, &f)) el->css_padding[2] = f; }
     else if (strcmp(name, "padding-left") == 0) { if (css_parse_len(value, &f)) el->css_padding[3] = f; }
+    else if (strcmp(name, "border-width") == 0) {
+        float v[4]; int n = 0;
+        char buf[192]; strncpy(buf, value, sizeof buf - 1); buf[sizeof buf - 1] = 0;
+        char *tok = strtok(buf, " \t");
+        while (tok && n < 4) { if (css_parse_len(tok, &v[n])) n++; else v[n++] = 0; tok = strtok(0, " \t"); }
+        if (n == 1) { el->css_border_width[0]=v[0]; el->css_border_width[1]=v[0]; el->css_border_width[2]=v[0]; el->css_border_width[3]=v[0]; }
+        else if (n == 2) { el->css_border_width[0]=v[0]; el->css_border_width[2]=v[0]; el->css_border_width[1]=v[1]; el->css_border_width[3]=v[1]; }
+        else if (n == 3) { el->css_border_width[0]=v[0]; el->css_border_width[1]=v[1]; el->css_border_width[3]=v[1]; el->css_border_width[2]=v[2]; }
+        else if (n == 4) { el->css_border_width[0]=v[0]; el->css_border_width[1]=v[1]; el->css_border_width[2]=v[2]; el->css_border_width[3]=v[3]; }
+    } else if (strcmp(name, "border-top-width") == 0) { if (css_parse_len(value, &f)) el->css_border_width[0] = f; }
+    else if (strcmp(name, "border-right-width") == 0) { if (css_parse_len(value, &f)) el->css_border_width[1] = f; }
+    else if (strcmp(name, "border-bottom-width") == 0) { if (css_parse_len(value, &f)) el->css_border_width[2] = f; }
+    else if (strcmp(name, "border-left-width") == 0) { if (css_parse_len(value, &f)) el->css_border_width[3] = f; }
+    else if (strcmp(name, "border-color") == 0) {
+        if (css_parse_color(value, rgb)) { el->css_border_color[0]=rgb[0]; el->css_border_color[1]=rgb[1]; el->css_border_color[2]=rgb[2]; el->css_has_border_color = 1; }
+    } else if (strcmp(name, "border-style") == 0) {
+        /* No visual line-style distinction is drawn yet (see
+         * css_border_width's own dom.h comment), but "none"/"hidden"
+         * still needs to zero the width -- real CSS: a border-style of
+         * none/hidden suppresses the border entirely regardless of
+         * whatever width was set, and layout.c uses width alone to
+         * decide how much box-model space to reserve. */
+        if (strstr(value, "none") || strstr(value, "hidden")) {
+            el->css_border_width[0] = 0; el->css_border_width[1] = 0; el->css_border_width[2] = 0; el->css_border_width[3] = 0;
+        }
+    } else if (strcmp(name, "border") == 0 ||
+               strcmp(name, "border-top") == 0 || strcmp(name, "border-right") == 0 ||
+               strcmp(name, "border-bottom") == 0 || strcmp(name, "border-left") == 0) {
+        /* Shorthand: any order/subset of "<width> <style> <color>", e.g.
+         * "border: 1px solid #ccc;" or "border-top: 2px dashed red;" --
+         * each whitespace-separated token is classified independently
+         * (a length -> width, a recognized style keyword -> style, else
+         * try as a color) rather than requiring a fixed order, the same
+         * approach flex-flow's own parsing above already uses. */
+        float w = -1.0f; float border_rgb[3]; int has_color = 0; int is_none = 0;
+        char buf[192]; strncpy(buf, value, sizeof buf - 1); buf[sizeof buf - 1] = 0;
+        char *tok = strtok(buf, " \t");
+        while (tok) {
+            float lf;
+            if (strcmp(tok, "none") == 0 || strcmp(tok, "hidden") == 0) {
+                is_none = 1;
+            } else if (strcmp(tok, "solid") == 0 || strcmp(tok, "dashed") == 0 || strcmp(tok, "dotted") == 0 ||
+                       strcmp(tok, "double") == 0 || strcmp(tok, "groove") == 0 || strcmp(tok, "ridge") == 0 ||
+                       strcmp(tok, "inset") == 0 || strcmp(tok, "outset") == 0) {
+                /* recognized style keyword, no visual effect yet -- consumed so it isn't mistaken for a color below */
+            } else if (css_parse_len(tok, &lf)) {
+                w = lf;
+            } else if (css_parse_color(tok, border_rgb)) {
+                has_color = 1;
+            }
+            tok = strtok(0, " \t");
+        }
+        if (is_none) w = 0.0f;
+        if (w >= 0.0f) {
+            if (strcmp(name, "border") == 0) { el->css_border_width[0]=w; el->css_border_width[1]=w; el->css_border_width[2]=w; el->css_border_width[3]=w; }
+            else if (strcmp(name, "border-top") == 0) el->css_border_width[0] = w;
+            else if (strcmp(name, "border-right") == 0) el->css_border_width[1] = w;
+            else if (strcmp(name, "border-bottom") == 0) el->css_border_width[2] = w;
+            else if (strcmp(name, "border-left") == 0) el->css_border_width[3] = w;
+        }
+        if (has_color) { el->css_border_color[0]=border_rgb[0]; el->css_border_color[1]=border_rgb[1]; el->css_border_color[2]=border_rgb[2]; el->css_has_border_color = 1; }
+    }
     else if (strcmp(name, "color") == 0) { if (css_parse_color(value, rgb)) { el->css_color[0]=rgb[0]; el->css_color[1]=rgb[1]; el->css_color[2]=rgb[2]; el->css_has_color = 1; } }
     else if (strcmp(name, "background-color") == 0 || strcmp(name, "background") == 0) {
         if (css_parse_color(value, rgb)) { el->css_bg[0]=rgb[0]; el->css_bg[1]=rgb[1]; el->css_bg[2]=rgb[2]; el->css_has_bg = 1; }

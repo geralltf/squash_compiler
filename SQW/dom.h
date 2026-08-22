@@ -54,6 +54,28 @@ typedef struct DomNode {
     int css_has_height; float css_height;
     float css_margin[4];       /* top, right, bottom, left -- px */
     float css_padding[4];      /* top, right, bottom, left -- px */
+    float css_border_width[4]; /* top, right, bottom, left -- px, 0 if
+                                   none (real CSS default). Sits between
+                                   margin and padding in the box model, so
+                                   layout.c accounts for it the same way
+                                   it already does padding -- shifting the
+                                   content box in and adding to the final
+                                   box height/width. NOT currently drawn
+                                   by the renderer (renderer_vk.c has no
+                                   per-side border-line draw pass yet,
+                                   only a flat background fill) -- this is
+                                   a real, deliberate, honestly-scoped gap
+                                   rather than a silent one: getting box
+                                   SIZING right (so later content doesn't
+                                   overlap/misalign) is the more
+                                   impactful, independently-useful half of
+                                   "support border", and was tractable to
+                                   verify (via SQW/tests/test_layout) in
+                                   an environment with no GPU display to
+                                   actually see a drawn border in;
+                                   wiring an actual visible border line
+                                   into the renderer is future work. */
+    int css_has_border_color; float css_border_color[3];
     int css_has_color; float css_color[3];
     int css_has_bg;    float css_bg[3];
     int css_flex_direction;   /* CssFlexDirection */

@@ -5,6 +5,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <sys/stat.h>
 
 /* portable strdup replacement */
 char* my_strdup(const char* src);
@@ -1449,7 +1450,22 @@ static int pp_eval_expr(PPState *st, const char *expr) {
  * src/ tree hard, since most of its .c files are found via -Isrc but sit
  * several subdirectories deep and reach shared headers via "../..". */
 static char *pp_read_file(PPState *st, const char *filename, char *resolved_out, size_t resolved_cap) {
+    /* An #include whose name resolves to a directory (e.g. a truncated
+     * "#include <" with nothing after it, flattening down to just
+     * "include/") used to still succeed here: glibc's fopen() happily
+     * opens a directory in "rb" mode, and ftell() on that stream then
+     * returns LONG_MAX rather than a real size. malloc(sz+2) on that
+     * wraps/overflows and fails, but the old code never checked the
+     * malloc return -- fread()/buf[sz]='\0' then wrote through a NULL
+     * pointer at a huge offset, a real crash on fully attacker-controlled
+     * source text (found via fuzzing, 21/21 crashes reduced to this one
+     * root cause). fstat() + S_ISREG rejects directories (and other
+     * non-regular files, e.g. FIFOs/devices) up front. */
     FILE *fp = fopen(filename, "rb");
+    if (fp) {
+        struct stat fst;
+        if (fstat(fileno(fp), &fst) != 0 || !S_ISREG(fst.st_mode)) { fclose(fp); fp = NULL; }
+    }
     if (fp) {
         if (resolved_out) snprintf(resolved_out, resolved_cap, "%s", filename);
     } else {
@@ -1457,12 +1473,21 @@ static char *pp_read_file(PPState *st, const char *filename, char *resolved_out,
         for (int i=0; i<st->n_dirs && !fp; i++) {
             snprintf(path,sizeof path,"%s/%s",st->inc_dirs[i],filename);
             fp = fopen(path,"rb");
+            if (fp) {
+                struct stat fst;
+                if (fstat(fileno(fp), &fst) != 0 || !S_ISREG(fst.st_mode)) { fclose(fp); fp = NULL; continue; }
+            }
             if (fp && resolved_out) snprintf(resolved_out, resolved_cap, "%s", path);
         }
     }
     if (!fp) return NULL;
     fseek(fp,0,SEEK_END); long sz=ftell(fp); rewind(fp);
-    char *buf = malloc(sz+2); fread(buf,1,sz,fp); buf[sz]='\0';
+    /* Defense in depth: reject a bogus/negative size and check the
+     * allocation actually succeeded before touching buf. */
+    if (sz < 0 || sz > 0x40000000L) { fclose(fp); return NULL; }
+    char *buf = malloc(sz+2);
+    if (!buf) { fclose(fp); return NULL; }
+    size_t rd = fread(buf,1,sz,fp); buf[rd]='\0';
     fclose(fp);
     /* normalize line endings: strip \r so CRLF->LF and bare CR->nothing */
     { int _ri=0, _wi=0; while (buf[_ri]) { if (buf[_ri]!='\r') buf[_wi++]=buf[_ri]; _ri++; } buf[_wi]='\0'; }

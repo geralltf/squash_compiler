@@ -1065,6 +1065,21 @@ Symbol *symtable_define_global(SymTable *st, const char *name, TypeInfo *type, i
 Symbol *symtable_define_param(SymTable *st, const char *name, TypeInfo *type, int idx, int byte_offset_32) {
     Symbol *s = alloc_sym(st, name, type, SYM_PARAM);
     s->param_index = idx;
+    /* Propagate array_size2 (row stride for a "T (*)[M]"-shaped decayed 2D
+     * array parameter, e.g. "char args[][MAX]") from the type onto the
+     * symbol itself, same as symtable_define_var()/symtable_define_global()
+     * already do — codegen.c's AST_INDEX/elem_size_of() 2D-array handling
+     * reads bsym/asym->array_size2 directly off the SYMBOL, not the type,
+     * so without this a parameter's array_size2 (now set correctly by
+     * parser_new4.c's ParseFunction) was silently invisible to codegen,
+     * leaving args[i] using stride 1 instead of the real row size. Do NOT
+     * propagate array_size here: a param's first dimension is genuinely
+     * decorative (decayed to a pointer, not a real on-stack array), and
+     * s->array_size>0 elsewhere means "this is an address-based stack
+     * array" (is_stack_array/is_pointer_base checks in codegen.c) — wrongly
+     * setting it here would misclassify a plain pointer parameter as an
+     * inline array. */
+    s->array_size2 = type ? type->array_size2 : 0;
     if (st->is_64bit && st->is_linux) {
         if (idx < 6) {
             /* Linux SysV: home reg params in local frame at fixed negative

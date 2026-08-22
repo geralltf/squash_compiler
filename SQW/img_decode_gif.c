@@ -165,6 +165,18 @@ int sqw_gif_decode(const unsigned char *data, long len, SqwGifFrame **out_frames
     int gct_flag = (lsd_packed & 0x80) != 0;
     int gct_entries = gct_flag ? (1 << ((lsd_packed & 0x07) + 1)) : 0;
     if (screen_w <= 0 || screen_h <= 0) return 0;
+    /* Reject absurd claimed screen dimensions -- found via fuzzing this
+     * session (a real hang/multi-gigabyte-allocation DoS, not just a
+     * theoretical one: a 13-byte GIF header alone can claim up to
+     * 65535x65535, and "canvas_bytes" below allocates screen_w*screen_h*4
+     * unconditionally, ~17GB for that claim, before a single further byte
+     * of the file has even been validated). Same reasoning/cap as
+     * img_decode_png.c's own identical fix -- 20000px/side and 100
+     * megapixels are both far beyond any real GIF while keeping the
+     * arithmetic safely within range. img_w/img_h (each frame's own
+     * dimensions, read further below) get the identical check, since
+     * they drive their own separate allocations. */
+    if (screen_w > 20000 || screen_h > 20000 || (long)screen_w * (long)screen_h > 100000000L) return 0;
 
     long pos = 13;
     unsigned char *gct = NULL;
@@ -241,6 +253,13 @@ int sqw_gif_decode(const unsigned char *data, long len, SqwGifFrame **out_frames
             int color_table_entries = lct ? lct_entries : gct_entries;
 
             if (pos >= len || img_w <= 0 || img_h <= 0) { free(lct); break; }
+            /* Same reasoning as the screen-dimension check above -- this
+             * frame's own img_w/img_h (also a raw attacker-controlled
+             * 2-byte-each claim) drives its own malloc(img_w*img_h) a few
+             * lines down (plus a second, identical-sized one if
+             * interlaced), independent of the screen-size cap already
+             * applied. */
+            if (img_w > 20000 || img_h > 20000 || (long)img_w * (long)img_h > 100000000L) { free(lct); break; }
             int min_code_size = data[pos++];
 
             GifByteBuf packed_buf; memset(&packed_buf, 0, sizeof(packed_buf));

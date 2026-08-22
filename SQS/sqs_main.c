@@ -81,6 +81,23 @@ static void sqs_url_decode(const char *in, char *out, int outcap) {
     out[j] = 0;
 }
 
+/* True if `path` ends in ".php", case-insensitively (real filesystems
+ * that back this server -- Linux ext4/etc -- are case-sensitive, but a
+ * client could still PUT "shell.PHP"/"shell.Php"/etc, and this server's
+ * own PHP-detection at GET time (below) needs to actually treat that as
+ * PHP for the case-insensitive check on PUT to mean anything -- so this
+ * one helper is used for BOTH, not just the PUT-blocking check it was
+ * added for. */
+static int sqs_path_is_php(const char *path) {
+    int plen = (int)strlen(path);
+    if (plen <= 4) return 0;
+    const char *ext = path + plen - 4;
+    return (ext[0] == '.') &&
+           (ext[1] == 'p' || ext[1] == 'P') &&
+           (ext[2] == 'h' || ext[2] == 'H') &&
+           (ext[3] == 'p' || ext[3] == 'P');
+}
+
 /* Percent-decodes the request path FIRST, then rejects any resulting ".."
  * (basic path-traversal protection -- "simple but secure" per the project
  * brief) and maps "/" to "index.html". Decoding before validating is the
@@ -166,11 +183,28 @@ static int sqs_find_header(const char *req, const char *name, char *out, int out
  * Content-Length has actually been received. Returns a malloc'd buffer
  * (caller frees) and sets *out_len; returns NULL on a connection that
  * sends nothing at all. */
+/* Caps total request size (headers + body) this server will ever buffer
+ * for one request -- found missing via an msfconsole-driven security
+ * review: a client could previously send an arbitrary huge
+ * "Content-Length" header (or just keep streaming body bytes past any
+ * sane size with none at all) and this function would keep doubling
+ * `cap`/calling realloc() forever trying to buffer the whole thing
+ * before doing anything else with it, a straightforward memory-
+ * exhaustion DoS against a server that has no other request-size limit
+ * anywhere. 16 MiB is comfortably above anything this test server's own
+ * use cases (serving local test pages, PUTting a test file) need. */
+#define SQS_MAX_REQUEST (16 * 1024 * 1024)
+
 static char *sqs_read_full_request(SqsConn *c, long *out_len) {
     long cap = SQS_REQ_BUF, len = 0;
     char *req = (char *)malloc((size_t)cap);
     for (;;) {
-        if (cap - len < 4097) { cap *= 2; req = (char *)realloc(req, (size_t)cap); }
+        if (len >= SQS_MAX_REQUEST) { free(req); return NULL; }
+        if (cap - len < 4097) {
+            cap *= 2;
+            if (cap > SQS_MAX_REQUEST) cap = SQS_MAX_REQUEST + 4097;
+            req = (char *)realloc(req, (size_t)cap);
+        }
         long n = sqs_conn_read(c, req + len, 4096);
         if (n <= 0) break;
         len += n;
@@ -180,6 +214,8 @@ static char *sqs_read_full_request(SqsConn *c, long *out_len) {
             char cl_str[32];
             sqs_find_header(req, "Content-Length", cl_str, sizeof cl_str);
             long content_length = atol(cl_str);
+            if (content_length < 0) content_length = 0;
+            if (content_length > SQS_MAX_REQUEST) { free(req); return NULL; }
             long body_have = len - (long)((hdr_end + 4) - req);
             if (body_have >= content_length) break;
         }
@@ -264,38 +300,26 @@ static void sqs_handle_request(SqsConn *c) {
         fprintf(stderr, "SQS: redirect: / -> /index.html\n"); fflush(stderr);
     }
 
-    /* PUT/DELETE get REAL filesystem semantics -- both used to be silently
-     * accepted by the method whitelist above and then fall through to the
-     * exact same read-only GET path, meaning a PUT client got back a
-     * misleading "200 OK" with the file's EXISTING content and nothing
-     * was ever written, and a DELETE client got the same with nothing
-     * ever removed. Confined to SQS_WWWROOT the same way GET/POST already
-     * are (sqs_resolve_path's own traversal check applies here too, since
-     * fs_path was resolved through it above, before this branch). */
-    if (strcmp(method, "PUT") == 0) {
-        FILE *wfp = fopen(fs_path, "wb");
-        if (!wfp) {
-            const char *body500 = "could not write file";
-            sqs_send_response(c, 500, "Internal Server Error", "text/plain", body500, (long)strlen(body500));
-            free(req);
-            return;
-        }
-        fwrite(body, 1, (size_t)body_len, wfp);
-        fclose(wfp);
-        const char *bodyok = "created/updated";
-        sqs_send_response(c, 201, "Created", "text/plain", bodyok, (long)strlen(bodyok));
-        free(req);
-        return;
-    }
-    if (strcmp(method, "DELETE") == 0) {
-        if (remove(fs_path) != 0) {
-            const char *body404 = "404 not found";
-            sqs_send_response(c, 404, "Not Found", "text/plain", body404, (long)strlen(body404));
-            free(req);
-            return;
-        }
-        const char *bodyok = "deleted";
-        sqs_send_response(c, 200, "OK", "text/plain", bodyok, (long)strlen(bodyok));
+    /* PUT/DELETE are RESERVED, not implemented: neither one touches the
+     * filesystem at all right now. They used to have real write/delete
+     * semantics (confined to SQS_WWWROOT, with a PUT PHP-extension block
+     * added on top after an msfconsole-driven security review flagged
+     * unauthenticated PUT+auto-executed-.php as a write-then-execute
+     * primitive) -- the user then asked, explicitly, for PUT/DELETE to
+     * perform NO filesystem writes/deletes at all, kept reserved for a
+     * future, specifically-scoped, secure use (e.g. if WordPress itself
+     * ever needs one for something -- that would be a deliberate,
+     * narrowly-authenticated addition at that point, not a blanket
+     * unauthenticated raw-filesystem endpoint like this used to be).
+     * Both methods are still accepted at the protocol level (kept in
+     * method_ok above, not folded into the generic 405 case) and get a
+     * real 501 Not Implemented -- "recognized, currently inert" -- rather
+     * than either quietly doing nothing with a misleading 2xx (the
+     * original bug this whole block's history starts from) or a flat 405
+     * that would suggest they're rejected outright rather than reserved. */
+    if (strcmp(method, "PUT") == 0 || strcmp(method, "DELETE") == 0) {
+        const char *body501 = "PUT/DELETE are reserved and currently perform no filesystem changes";
+        sqs_send_response(c, 501, "Not Implemented", "text/plain", body501, (long)strlen(body501));
         free(req);
         return;
     }
@@ -310,16 +334,23 @@ static void sqs_handle_request(SqsConn *c) {
     fseek(fp, 0, SEEK_END);
     long sz = ftell(fp);
     rewind(fp);
-    char *content = (char *)malloc((size_t)sz + 1);
+    /* "+ 2", not "+ 1", with BOTH trailing bytes zeroed -- see
+     * php_mini.c's own require_once buffer allocation for the full
+     * explanation: this content buffer is what becomes php_run()'s own
+     * `source` for a .php request, and this engine's tokenizer reads a
+     * 2-byte lookahead in many places without always checking the first
+     * byte for NUL first -- a real heap-buffer-overflow READ, found via
+     * fuzzing, that this one extra guaranteed-zero byte closes off
+     * regardless of which specific lookahead site would otherwise have
+     * hit it. Harmless for the non-PHP static-file-serving path this
+     * same buffer is also used for. */
+    char *content = (char *)malloc((size_t)sz + 2);
     long got = (long)fread(content, 1, (size_t)sz, fp);
     content[got] = 0;
+    content[got + 1] = 0;
     fclose(fp);
 
-    int is_php = 0;
-    {
-        int plen = (int)strlen(fs_path);
-        if (plen > 4 && strcmp(fs_path + plen - 4, ".php") == 0) is_php = 1;
-    }
+    int is_php = sqs_path_is_php(fs_path);
     if (is_php) {
         /* Dynamic page: $_GET from this request's own query string,
          * $_POST from the request body (parsed the same
@@ -339,7 +370,7 @@ static void sqs_handle_request(SqsConn *c) {
             free(body_cstr);
         }
         char *php_out = (char *)malloc(PHP_OUT_MAX);
-        php_run(content, &get_arr, &post_arr, method, php_out, PHP_OUT_MAX);
+        php_run(content, fs_path, &get_arr, &post_arr, method, php_out, PHP_OUT_MAX);
         sqs_send_response(c, 200, "OK", "text/html; charset=utf-8", php_out, (long)strlen(php_out));
         free(php_out);
     } else {
@@ -380,7 +411,17 @@ static int sqs_listen_on(int port) {
     memset(&addr, 0, sizeof addr);
     addr.sin_family = AF_INET;
     addr.sin_port = htons((unsigned short)port);
-    addr.sin_addr.s_addr = INADDR_ANY;
+    /* 127.0.0.1, not INADDR_ANY: this file's own top comment describes SQS
+     * as "a minimal LOCAL HTTP + HTTPS test server" -- binding all
+     * interfaces contradicted that, and combined with unauthenticated
+     * PUT (real filesystem write, confined to SQS_WWWROOT but not
+     * otherwise gated) and this server's own PHP execution of any .php
+     * file placed there, made it a genuine network-reachable
+     * write-then-execute primitive for anyone who could reach the host,
+     * not just this machine (found via an msfconsole-driven security
+     * review; SQS-DNS's own listener already got this right, binding
+     * 127.0.0.1 explicitly -- see sqs_dns.c). */
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
     if (bind(fd, (struct sockaddr *)&addr, sizeof addr) != 0) {
         fprintf(stderr, "SQS: bind() failed for port %d\n", port); close(fd); return -1;
     }

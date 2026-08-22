@@ -105,7 +105,15 @@ static int jpeg_receive_extend(JBitReader *br, int s) {
     if (s == 0) return 0;
     int v = 0, i;
     for (i = 0; i < s; i++) v = (v << 1) | jpeg_get_bit(br);
-    if (v < (1 << (s - 1))) v += ((-1) << s) + 1;
+    /* "1 - (1 << s)", not "((-1) << s) + 1" -- same value (both equal
+     * -(2^s - 1)) but the former never left-shifts a NEGATIVE value,
+     * which is undefined behavior in C (found via UBSan on this exact
+     * line, triggered by ordinary legitimate JPEG input, not even a
+     * fuzzed one -- squash's own codegen happens to produce the
+     * "expected" two's-complement result here, same as gcc/clang do in
+     * practice, but relying on that is exactly the kind of thing a
+     * future codegen change could silently break). */
+    if (v < (1 << (s - 1))) v += 1 - (1 << s);
     return v;
 }
 
@@ -208,6 +216,14 @@ int sqw_jpeg_decode(const unsigned char *data, long len, unsigned char **out_rgb
     int width = 0, height = 0;
     int restart_interval = 0;
     int have_sof = 0;
+    int have_scan = 0; /* set once an SOS has actually allocated every
+                           component's ->plane -- see the final RGBA
+                           conversion's own comment on why this matters:
+                           a SOF0-but-no-SOS (or truncated-before-that)
+                           file left every ->plane NULL while `ok` stayed
+                           true, and nothing checked for that before
+                           dereferencing them -- a real NULL-pointer SEGV
+                           found via fuzzing this function this session. */
     int ok = 1;
 
     long pos = 2;
@@ -226,9 +242,15 @@ int sqw_jpeg_decode(const unsigned char *data, long len, unsigned char **out_rgb
         if (marker == 0xDB) { /* DQT */
             long p = seg_start;
             while (p < seg_end) {
+                if (p + 1 > seg_end) { ok = 0; break; }
                 int pq = (data[p] >> 4) & 0x0F, tq = data[p] & 0x0F;
                 p++;
                 if (tq >= JPEG_MAX_QUANT_TABLES) { ok = 0; break; }
+                /* 64 entries, each 1 or 2 bytes depending on `pq` -- same
+                 * class of bug as DHT's own fix just above: nothing
+                 * previously checked this against the segment's real
+                 * remaining length before reading it. */
+                if (p + (pq ? 128 : 64) > seg_end) { ok = 0; break; }
                 int i;
                 for (i = 0; i < 64; i++) {
                     if (pq) { quant[tq].values[i] = (unsigned short)(((int)data[p] << 8) | data[p + 1]); p += 2; }
@@ -239,6 +261,7 @@ int sqw_jpeg_decode(const unsigned char *data, long len, unsigned char **out_rgb
         } else if (marker == 0xC4) { /* DHT */
             long p = seg_start;
             while (p < seg_end) {
+                if (p + 17 > seg_end) { ok = 0; break; } /* 1 (tc/th byte) + 16 (bits[1..16]) */
                 int tc = (data[p] >> 4) & 0x0F, th = data[p] & 0x0F;
                 p++;
                 if (th >= JPEG_MAX_HUFF_TABLES) { ok = 0; break; }
@@ -246,18 +269,41 @@ int sqw_jpeg_decode(const unsigned char *data, long len, unsigned char **out_rgb
                 memset(t, 0, sizeof(*t));
                 int i, total = 0;
                 for (i = 1; i <= 16; i++) { t->bits[i] = data[p++]; total += t->bits[i]; }
+                /* `total` (sum of 16 attacker-controlled byte counts) can
+                 * claim up to 16*255=4080 -- both far more than
+                 * `huffval`'s real 256-entry capacity (a real JPEG's own
+                 * Huffman table is mathematically bounded to <=256 total
+                 * codes; a crafted DHT segment isn't) and, independently,
+                 * more bytes than the segment/file actually has left.
+                 * Confirmed as a real, serious heap-buffer-OVERFLOW WRITE
+                 * via fuzzing this function this session -- `total`
+                 * unchecked against `huffval[256]`'s size let a crafted
+                 * DHT segment write arbitrarily far past it. Reject
+                 * outright (safe-degrade convention used throughout this
+                 * file) rather than silently clamping, since a clamped
+                 * total no longer matches what build_huffman_table()
+                 * below assumes about the table's own internal
+                 * consistency. */
+                if (total > 256 || p + total > seg_end || p + total > len) { ok = 0; break; }
                 for (i = 0; i < total; i++) t->huffval[i] = data[p++];
                 build_huffman_table(t);
                 t->valid = 1;
             }
         } else if (marker == 0xC0 || marker == 0xC1) { /* SOF0 baseline / SOF1 extended-sequential -- same decode path */
             long p = seg_start;
+            /* 1 (precision) + 2 (height) + 2 (width) + 1 (num_comps) before
+             * the per-component loop even starts -- nothing here checked
+             * that against the segment's real length before reading it
+             * (same missing-bounds-check pattern as DQT/DHT had, fixed
+             * above). */
+            if (p + 6 > seg_end) { ok = 0; break; }
             p++; /* precision, assumed 8 */
             height = ((int)data[p] << 8) | data[p + 1]; p += 2;
             width = ((int)data[p] << 8) | data[p + 1]; p += 2;
             num_comps = data[p++];
             if (num_comps != 1 && num_comps != 3) { ok = 0; break; } /* CMYK/4-component: out of scope */
             if (num_comps > JPEG_MAX_COMPONENTS) { ok = 0; break; }
+            if (p + 3L * num_comps > seg_end) { ok = 0; break; } /* 3 bytes/component: id, samp nibbles, quant_id */
             int i;
             for (i = 0; i < num_comps; i++) {
                 comps[i].id = data[p++];
@@ -265,7 +311,20 @@ int sqw_jpeg_decode(const unsigned char *data, long len, unsigned char **out_rgb
                 comps[i].v_samp = data[p] & 0x0F;
                 p++;
                 comps[i].quant_id = data[p++];
+                /* `quant_id` is a full attacker-controlled BYTE (0-255),
+                 * not masked at all, indexed into `quant[]` (only
+                 * JPEG_MAX_QUANT_TABLES=4 entries) both a few lines below
+                 * (h_samp/v_samp sanity) and, much later, in the main MCU
+                 * decode loop's "quant[c->quant_id].valid" check --
+                 * confirmed as a real out-of-bounds READ via fuzzing this
+                 * function this session. Reject outright rather than
+                 * mask-and-hope: a masked-but-still-wrong quant_id would
+                 * just silently use the WRONG quantization table instead
+                 * of failing cleanly. */
+                if (comps[i].quant_id >= JPEG_MAX_QUANT_TABLES) { ok = 0; break; }
+                if (comps[i].h_samp < 1 || comps[i].h_samp > 4 || comps[i].v_samp < 1 || comps[i].v_samp > 4) { ok = 0; break; }
             }
+            if (!ok) break;
             have_sof = 1;
         } else if (marker == 0xC2 || marker == 0xC3 || (marker >= 0xC5 && marker <= 0xCF && marker != 0xC8)) {
             /* Progressive (SOF2), lossless, arithmetic-coded, or any other
@@ -273,11 +332,22 @@ int sqw_jpeg_decode(const unsigned char *data, long len, unsigned char **out_rgb
              * see this file's own header comment. */
             ok = 0; break;
         } else if (marker == 0xDD) { /* DRI */
+            if (seg_start + 2 > seg_end) { ok = 0; break; }
             restart_interval = ((int)data[seg_start] << 8) | data[seg_start + 1];
         } else if (marker == 0xDA) { /* SOS -- entropy-coded data follows, handled below */
             if (!have_sof) { ok = 0; break; }
+            /* Same reasoning/cap as img_decode_png.c's/img_decode_gif.c's
+             * own identical fix -- width/height are a raw 2-byte-each
+             * attacker-controlled claim from SOF0 (up to 65535 each,
+             * unchecked before this point), and drive comps[i].plane_w *
+             * comps[i].plane_h allocations a bit further down (which can
+             * be even LARGER than width*height once each component's own
+             * sampling factor and MCU rounding are applied). */
+            if (width <= 0 || height <= 0 || width > 20000 || height > 20000 || (long)width * (long)height > 100000000L) { ok = 0; break; }
             long p = seg_start;
+            if (p + 1 > seg_end) { ok = 0; break; }
             int ns = data[p++];
+            if (p + 2L * ns > seg_end) { ok = 0; break; }
             int i;
             for (i = 0; i < ns; i++) {
                 int cs = data[p++];
@@ -285,11 +355,23 @@ int sqw_jpeg_decode(const unsigned char *data, long len, unsigned char **out_rgb
                 int ci;
                 for (ci = 0; ci < num_comps; ci++) {
                     if (comps[ci].id == cs) {
-                        comps[ci].dc_huff_id = (tables >> 4) & 0x0F;
-                        comps[ci].ac_huff_id = tables & 0x0F;
+                        /* Masked to 4 bits (0-15) by "& 0x0F" already, but
+                         * dc_huff[]/ac_huff[] only have JPEG_MAX_HUFF_
+                         * TABLES=4 entries -- 4-15 is still out of bounds.
+                         * Confirmed as a real out-of-bounds READ via
+                         * fuzzing this function this session (the same
+                         * finding as quant_id's own fix above, same fix
+                         * shape: reject outright, don't silently
+                         * re-clamp into a table that's just wrong). */
+                        int dc_id = (tables >> 4) & 0x0F, ac_id = tables & 0x0F;
+                        if (dc_id >= JPEG_MAX_HUFF_TABLES || ac_id >= JPEG_MAX_HUFF_TABLES) { ok = 0; break; }
+                        comps[ci].dc_huff_id = dc_id;
+                        comps[ci].ac_huff_id = ac_id;
                     }
                 }
+                if (!ok) break;
             }
+            if (!ok) break;
             /* Ss/Se/AhAl (3 bytes): baseline always 0,63,0 -- not read, seg_end already tells us where the header ends. */
 
             int max_h = 1, max_v = 1;
@@ -301,9 +383,19 @@ int sqw_jpeg_decode(const unsigned char *data, long len, unsigned char **out_rgb
             for (i = 0; i < num_comps; i++) {
                 comps[i].plane_w = mcus_x * comps[i].h_samp * 8;
                 comps[i].plane_h = mcus_y * comps[i].v_samp * 8;
+                /* A malformed JPEG with more than one SOS marker re-enters
+                 * this block, reallocating ->plane without ever freeing
+                 * whichever buffer it already pointed to -- a real memory
+                 * leak found via fuzzing this session (a long-running SQW
+                 * process decoding many images over time could accumulate
+                 * these). */
+                free(comps[i].plane);
                 comps[i].plane = (unsigned char *)malloc((size_t)comps[i].plane_w * (size_t)comps[i].plane_h);
+                if (!comps[i].plane) { ok = 0; }
                 comps[i].dc_pred = 0;
             }
+            if (!ok) break;
+            have_scan = 1;
 
             JBitReader br; memset(&br, 0, sizeof(br));
             br.data = data; br.len = len; br.pos = seg_end;
@@ -345,7 +437,7 @@ int sqw_jpeg_decode(const unsigned char *data, long len, unsigned char **out_rgb
         pos = seg_end;
     }
 
-    if (ok && have_sof && width > 0 && height > 0 && num_comps > 0) {
+    if (ok && have_sof && have_scan && width > 0 && height > 0 && num_comps > 0) {
         int max_h = 1, max_v = 1, i;
         for (i = 0; i < num_comps; i++) { if (comps[i].h_samp > max_h) max_h = comps[i].h_samp; if (comps[i].v_samp > max_v) max_v = comps[i].v_samp; }
         unsigned char *rgba = (unsigned char *)malloc((size_t)width * (size_t)height * 4);

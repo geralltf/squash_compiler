@@ -90,7 +90,7 @@ typedef struct {
      * All zero for the synthetic root and for any element with no
      * explicit CSS margin/padding, which exactly reproduces this
      * project's original (pre-CSS) fixed-SQW_PAD behavior. */
-    float margin_top, margin_bottom, pad_top, pad_bottom;
+    float margin_top, margin_bottom, pad_top, pad_bottom, border_top, border_bottom;
 
     /* flex-direction:row support -- precomputed once when the frame is
      * pushed (see compute_flex_row_positions()), indexed by the child's
@@ -234,6 +234,7 @@ static void init_block_frame(LayoutFrame *nf, DomNode *child, float bx, float by
     nf->is_pre = (strcmp(child->tag, "pre") == 0);
     nf->line_boxes = 0; nf->line_box_count = 0; nf->line_box_cap = 0;
     nf->margin_top = 0; nf->margin_bottom = 0; nf->pad_top = 0; nf->pad_bottom = 0;
+    nf->border_top = 0; nf->border_bottom = 0;
     nf->is_flex_row = 0; nf->flex_x = 0; nf->flex_w = 0; nf->flex_row = 0;
     nf->flex_row_at = 0; nf->flex_row_y = 0; nf->flex_row_max_h = 0;
     nf->is_grid = 0; nf->grid_col_x = 0; nf->grid_col_w = 0;
@@ -546,6 +547,7 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
     stack[stack_top].line_boxes = 0; stack[stack_top].line_box_count = 0; stack[stack_top].line_box_cap = 0;
     stack[stack_top].margin_top = 0; stack[stack_top].margin_bottom = 0;
     stack[stack_top].pad_top = 0; stack[stack_top].pad_bottom = 0;
+    stack[stack_top].border_top = 0; stack[stack_top].border_bottom = 0;
     stack[stack_top].is_flex_row = 0; stack[stack_top].flex_x = 0; stack[stack_top].flex_w = 0; stack[stack_top].flex_row = 0;
     stack[stack_top].flex_row_at = 0; stack[stack_top].flex_row_y = 0; stack[stack_top].flex_row_max_h = 0;
     stack[stack_top].is_grid = 0; stack[stack_top].grid_col_x = 0; stack[stack_top].grid_col_w = 0;
@@ -564,7 +566,7 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
             if (f->is_grid && f->grid_row_max_h > 0) f->cursor_y = f->grid_row_y + f->grid_row_max_h;
             if (f->is_flex_row && f->flex_row_max_h > 0) f->cursor_y = f->flex_row_y + f->flex_row_max_h;
             float content_h = f->cursor_y + f->line_h;
-            float box_h = content_h + f->pad_top + f->pad_bottom;
+            float box_h = content_h + f->pad_top + f->pad_bottom + f->border_top + f->border_bottom;
             if (f->box_index >= 0) {
                 out->boxes[f->box_index].h = box_h;
                 float bottom = out->boxes[f->box_index].y + box_h;
@@ -700,6 +702,8 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
             float margin_left = child->css_margin[3], margin_right = child->css_margin[1];
             float pad_top = child->css_padding[0], pad_bottom = child->css_padding[2];
             float pad_left = child->css_padding[3], pad_right = child->css_padding[1];
+            float border_top = child->css_border_width[0], border_bottom = child->css_border_width[2];
+            float border_left = child->css_border_width[3], border_right = child->css_border_width[1];
 
             float bx, by, bw;
             if (f->is_flex_row && f->flex_x && f->flex_w) {
@@ -726,14 +730,16 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
                 stack = (LayoutFrame *)realloc(stack, stack_cap * sizeof(LayoutFrame));
                 f = &stack[stack_top - 1];
             }
-            float content_x = bx + pad_left;
-            float content_w = bw - pad_left - pad_right;
+            float content_x = bx + border_left + pad_left;
+            float content_w = bw - border_left - border_right - pad_left - pad_right;
             if (content_w < 0) content_w = 0;
             init_block_frame(&stack[stack_top], child, content_x, by, content_w, idx, child_index_in_parent);
             stack[stack_top].margin_top = margin_top;
             stack[stack_top].margin_bottom = margin_bottom;
             stack[stack_top].pad_top = pad_top;
             stack[stack_top].pad_bottom = pad_bottom;
+            stack[stack_top].border_top = border_top;
+            stack[stack_top].border_bottom = border_bottom;
 
             if (child->css_display == CSS_DISPLAY_FLEX && child->css_flex_direction == CSS_FLEX_ROW) {
                 stack[stack_top].is_flex_row = 1;

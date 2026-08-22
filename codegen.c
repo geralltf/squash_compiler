@@ -1410,6 +1410,13 @@ static int elem_size_of(CodeGen *cg, ASTNode *arr_expr) {
                  * element's size"), so strip it to size just the element. */
                 TypeInfo elem_ti = *bsym->type;
                 elem_ti.array_size = 0;
+                /* Strip the decayed-first-dimension pointer level for a
+                 * "T args[][M]" parameter — see the sibling fix in this
+                 * function's Case-1 (AST_VAR) array_size2 branch below for
+                 * the full explanation; same reasoning applies here for
+                 * arr_expr[j] where arr_expr==args[i]. */
+                if (bsym->kind == SYM_PARAM && elem_ti.pointer_depth > 0)
+                    elem_ti.pointer_depth--;
                 int sz = sizeof_type_sym(&elem_ti, cg->is_64bit, cg->sym);
                 return sz < 1 ? 1 : sz;
             }
@@ -1476,6 +1483,27 @@ static int elem_size_of(CodeGen *cg, ASTNode *arr_expr) {
                  * it on top of this function's own "* array_size2" below. */
                 TypeInfo elem_ti = *asym->type;
                 elem_ti.array_size = 0;
+                /* A function PARAMETER of shape "T args[][M]" carries its
+                 * first-dimension decay as an EXTRA pointer_depth level
+                 * (parser_new4.c's ParseFunction does "pt->pointer_depth++"
+                 * for the decorative first "[]", matching real C's
+                 * array-to-pointer decay) — that level represents the
+                 * decay itself, not part of the row's element type, so it
+                 * must be stripped before sizing the row here or every
+                 * element size comes out pointer-sized (8 on 64-bit)
+                 * instead of the true scalar size. A real T x[N][M]
+                 * local/global's asym->type has NO such extra level (it's
+                 * an address-based inline array, not a pointer), so only
+                 * strip it for SYM_PARAM. Confirmed via a minimal repro:
+                 * "void show(char args[][1024], int n) {..args[i]..}"
+                 * computed a row stride of 8*1024 instead of 1*1024
+                 * (base_elem read as 8, sizeof(char*), instead of 1,
+                 * sizeof(char)), so args[1] indexed 8192 bytes past args[0]
+                 * instead of 1024 — past the real 8*1024-byte buffer,
+                 * silently reading unrelated/zeroed stack memory instead
+                 * of "world". */
+                if (asym->kind == SYM_PARAM && elem_ti.pointer_depth > 0)
+                    elem_ti.pointer_depth--;
                 base_elem = sizeof_type_sym(&elem_ti, cg->is_64bit, cg->sym);
             } else {
                 base_elem = 1;
@@ -4124,7 +4152,8 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             load8=cg->is_64bit;
         }
         ASTNode *deref_var = n->deref.operand;
-        while (!cast_ty && deref_var && deref_var->kind != AST_VAR) {
+        while (!cast_ty && deref_var && deref_var->kind != AST_VAR &&
+               deref_var->kind != AST_MEMBER) {
             if (deref_var->kind==AST_UNARY && deref_var->unary.operand)
                 deref_var = deref_var->unary.operand;
             else if (deref_var->kind==AST_BINARY && deref_var->binary.left)
@@ -4157,6 +4186,47 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 else if (base && is_byte_sized_stdint(cg->sym,base)) load1=1;
                 else if (base && is_short_sized_stdint(cg->sym,base)) load2=1;
                 else deref_is_unsigned = ds->type->is_unsigned;
+            }
+        } else if (!cast_ty && deref_var && deref_var->kind==AST_MEMBER) {
+            /* "*st.src" / "*st->src" (an explicit deref of a struct FIELD
+             * that itself holds a pointer, as opposed to "st.src[0]" which
+             * goes through AST_INDEX's own, separately-correct, field-type
+             * resolution via field_scalar_size()/elem_size_of()). The walk
+             * above previously only ever recognized a bare AST_VAR pointer
+             * operand -- for AST_MEMBER it fell straight out of the loop
+             * with deref_var==NULL, leaving load1/load2/load8 all 0 and
+             * deref_is_unsigned 0, so this silently fell all the way to the
+             * generic "plain 4-byte int pointee" default at the bottom of
+             * this case: a sign-extending 32-BYTE dword load from the
+             * pointee address instead of the real 1-byte char load.
+             * Confirmed via a minimal repro: given
+             * "typedef struct { const char *src; } St; St st; st.src =
+             * \"Xabc\";", "if (*st.src == 'X')" read the 4 bytes 'X','a',
+             * 'b','c' as one little-endian dword (0x63626158) and compared
+             * THAT against 'X' (0x58), so the comparison always failed even
+             * though *st.src genuinely held 'X' -- confirmed by printing
+             * "*st.src" right there in the same branch, which printed 'X'
+             * correctly (that printf path goes through plain codegen_expr's
+             * AST_DEREF-as-value case with a completely different immediate
+             * consumer, not this comparison-operand load). The sibling
+             * "st.src[0] == 'X'" (AST_INDEX) spelling of the exact same
+             * access was unaffected, since AST_INDEX resolves its element
+             * width from field_scalar_size()/elem_size_of() instead of this
+             * walk. field_type_of() gives the field's own declared
+             * TypeInfo directly (same helper the struct-layout/field-access
+             * code elsewhere in this file already relies on), so reuse it
+             * here rather than duplicating struct/field lookup. */
+            TypeInfo *ft = field_type_of(cg, deref_var->member.obj, deref_var->member.field);
+            if (ft && ft->pointer_depth>=1) {
+                const char *base=ft->base;
+                if (ft->pointer_depth>=2) {
+                    load8=cg->is_64bit;
+                } else if (base && (strcmp(base,"char")==0||strcmp(base,"signed char")==0||
+                             strcmp(base,"unsigned char")==0)) load1=1;
+                else if (base && (strcmp(base,"short")==0||strcmp(base,"unsigned short")==0)) load2=1;
+                else if (base && is_byte_sized_stdint(cg->sym,base)) load1=1;
+                else if (base && is_short_sized_stdint(cg->sym,base)) load2=1;
+                else deref_is_unsigned = ft->is_unsigned;
             }
         }
         codegen_expr(cg,n->deref.operand);
@@ -9169,6 +9239,39 @@ void codegen_float_expr(CodeGen *cg, ASTNode *n) {
                     asm_emit2(a,0xDD,0x1D); asm_reloc_wdata(a,lbl); /* fstp qword [lbl] */
                     asm_emit2(a,0xDD,0x05); asm_reloc_wdata(a,lbl); /* fld  qword [lbl] */
                 }
+            }
+        } else if (lhs->kind==AST_MEMBER || lhs->kind==AST_INDEX || lhs->kind==AST_DEREF) {
+            /* Chained float assignment into a struct field / array element /
+             * deref, e.g. "s.w[0] = s.w[1] = 99.0f;" or "x = s.a = 5.0f;".
+             * This AST_ASSIGN case is reached recursively: the OUTER
+             * assignment's rhs is itself an AST_ASSIGN node, and since the
+             * value being propagated is a float, codegen_expr's AST_ASSIGN
+             * handler (above, in this same file) dispatches into
+             * codegen_float_expr() for that rhs instead of evaluating it
+             * itself. Every lhs kind other than AST_VAR fell through this
+             * switch arm with NO store at all — rhs was computed into
+             * XMM0/ST0 (correctly propagated up to the next assignment in
+             * the chain) but the actual memory write for THIS link of the
+             * chain never happened. That's why "a.f = b.f = 1.0;" silently
+             * only assigned a.f: b.f's own store lived here and was always
+             * skipped. Confirmed identical for AST_INDEX (array element)
+             * and AST_DEREF (pointer deref) lhs kinds, and for both "."
+             * and "->" member access, and regardless of whether the
+             * OUTER-most target in the chain is AST_VAR or itself an
+             * AST_MEMBER — mirrors the working store logic in codegen_expr's
+             * AST_ASSIGN case for these same lhs kinds. */
+            if (cg->is_64bit) {
+                codegen_lvalue(cg, lhs); /* RAX = address of LHS */
+                if (float_store_target_size(cg, lhs) == 4) {
+                    asm_cvtsd2ss(a,0,0);
+                    asm_emit4(a,0xF3,0x0F,0x11,0x00); /* movss [rax], xmm0 */
+                } else {
+                    asm_emit4(a,0xF2,0x0F,0x11,0x00); /* movsd [rax], xmm0 */
+                }
+            } else {
+                codegen_lvalue(cg, lhs); /* EAX = address of LHS */
+                asm_fstp_mem64(a, REG_EAX, 0);  /* fstp qword ptr [eax] */
+                asm_fld_mem64(a, REG_EAX, 0);   /* fld  qword ptr [eax] — reload for propagation */
             }
         }
         break;

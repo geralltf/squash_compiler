@@ -2007,12 +2007,48 @@ ASTNode *ParseFunction(Parser *p, const char *storage, TypeInfo *ret, const char
             } else if (chk(p,TOK_IDENT)) { strncpy(pname,tok_ident(&cur(p)),sizeof pname-1); adv(p); }
             /* array param: name[] or name[N] (and possibly further
              * dimensions, e.g. "int prev[3]" or "int grid[3][4]") — a
-             * function parameter's array size is decorative in C (the
-             * parameter itself decays to a pointer), so just skip whatever
-             * constant expression sits between each bracket pair rather
-             * than requiring it to be empty. */
+             * function parameter's FIRST array dimension is decorative in C
+             * (the parameter itself decays to a pointer, so "int prev[3]"
+             * and "int prev[99]" and "int *prev" are all identical
+             * parameter types) and was previously just skipped, along with
+             * every dimension after it.
+             *
+             * That's wrong for a SECOND (or later) dimension: "char
+             * args[][MAX]" decays to "char (*args)[MAX]", a pointer whose
+             * POINTEE is an array of MAX chars — MAX is the row stride
+             * needed to compute &args[i], not decorative at all. Silently
+             * dropping it left every such 2D-array parameter behaving like
+             * a plain "char *args" (stride 1) instead of stride MAX, so
+             * indexing args[i] inside the callee computed the wrong
+             * address (off by a factor of MAX) and, since AST_INDEX/
+             * elem_size_of() also had no idea this was a 2D access, args[i]
+             * evaluated as a scalar BYTE LOAD instead of decaying to a
+             * char* row pointer — confirmed via a minimal repro
+             * ("void show(char args[][1024], int n) {..args[i]..}" passed
+             * to printf("%s", args[i])) segfaulting because args[i] handed
+             * printf a garbage byte value instead of a real pointer.
+             *
+             * Fix: mirror parse_typedef_array_dims()'s existing 2D
+             * array_size/array_size2 convention (used for local/global
+             * declarators and typedefs) — capture the SECOND bracket's
+             * constant expression into pt->array_size2 so downstream
+             * codegen's existing array_size2>0 machinery (already correct
+             * for real T x[N][M] locals/globals) recognizes this parameter
+             * as a 2D row-pointer and uses array_size2 as the row stride.
+             * Dimensions beyond the second are still just consumed (not
+             * separately modeled), same as parse_typedef_array_dims(). */
             if (chk(p,TOK_LBRACKET)) {
                 pt->pointer_depth++;
+                adv(p); /* consume first '[' */
+                while (!chk(p,TOK_RBRACKET) && !chk(p,TOK_EOF)) adv(p);
+                if (chk(p,TOK_RBRACKET)) adv(p);
+                if (chk(p,TOK_LBRACKET)) {
+                    adv(p);
+                    int dim2 = 0;
+                    if (!chk(p,TOK_RBRACKET)) dim2 = parse_const_expr(p);
+                    eat(p,TOK_RBRACKET);
+                    pt->array_size2 = dim2;
+                }
                 while (chk(p,TOK_LBRACKET)) {
                     adv(p);
                     while (!chk(p,TOK_RBRACKET) && !chk(p,TOK_EOF)) adv(p);
