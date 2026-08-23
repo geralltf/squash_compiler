@@ -12,7 +12,28 @@
  * never contains a 0x00 byte itself, so this sidesteps that entirely
  * (also keeps every one chunk under the lexer's 4096-char string-
  * literal buffer cap, which a raw one-string-literal encoding of an
- * atlas this size would blow past regardless). */
+ * atlas this size would blow past regardless).
+ *
+ * FONT-BAKE BUG FIXED (every glyph's own atlas_y below is +2 versus what
+ * bake_font.py originally emitted): the baker measured each glyph's
+ * pixel HEIGHT correctly (glyph_h, used at runtime for both the sample
+ * rect and screen-space quad size) but recorded its vertical sample
+ * ORIGIN as the glyph cell's own top edge instead of where the glyph's
+ * ink actually starts within that cell -- confirmed empirically by
+ * decoding the atlas pixels for every one of the 95 glyphs: the real
+ * ink's top row was the SAME 2px below the recorded atlas_y in 93 of 95
+ * of them (the couple of exceptions, e.g. "_", still had every ink row
+ * safely inside the corrected sample window -- no glyph is worse off).
+ * Since sqw_text_draw_char()'s UV rect is [atlas_y, atlas_y+glyph_h),
+ * sampling from 2px too high a row meant the window's bottom edge fell
+ * 2px short of the glyph's own true bottom -- the actual VISUAL bug
+ * report this fixed ("text glyphs are vertically truncated, especially
+ * in the search box"): every glyph rendered with a sliver of blank atlas
+ * space at its top and the real bottom couple of pixels (often the
+ * deepest part of a descender, e.g. "g"/"y"/"p") simply never sampled at
+ * all. bearing_x/bearing_y/glyph_w/glyph_h/advance (on-screen sizing and
+ * positioning) were already correct and are untouched -- this was
+ * purely a texture-sample-origin bug, not a metrics/layout bug. */
 
 #define SQW_FONT_ATLAS_W 432
 #define SQW_FONT_ATLAS_H 336
@@ -108,195 +129,195 @@ typedef struct {
 static SqwGlyphMetrics g_font_glyph_metrics[SQW_FONT_GLYPH_COUNT];
 
 static void sqw_font_metrics_init(void) {
-    g_font_glyph_metrics[0].atlas_x=0; g_font_glyph_metrics[0].atlas_y=0; g_font_glyph_metrics[0].atlas_w=36; g_font_glyph_metrics[0].atlas_h=42;
+    g_font_glyph_metrics[0].atlas_x=0; g_font_glyph_metrics[0].atlas_y=2; g_font_glyph_metrics[0].atlas_w=36; g_font_glyph_metrics[0].atlas_h=42;
     g_font_glyph_metrics[0].bearing_x=0; g_font_glyph_metrics[0].bearing_y=30; g_font_glyph_metrics[0].glyph_w=10; g_font_glyph_metrics[0].glyph_h=0; g_font_glyph_metrics[0].advance=10;
-    g_font_glyph_metrics[1].atlas_x=36; g_font_glyph_metrics[1].atlas_y=0; g_font_glyph_metrics[1].atlas_w=36; g_font_glyph_metrics[1].atlas_h=42;
+    g_font_glyph_metrics[1].atlas_x=36; g_font_glyph_metrics[1].atlas_y=2; g_font_glyph_metrics[1].atlas_w=36; g_font_glyph_metrics[1].atlas_h=42;
     g_font_glyph_metrics[1].bearing_x=0; g_font_glyph_metrics[1].bearing_y=7; g_font_glyph_metrics[1].glyph_w=13; g_font_glyph_metrics[1].glyph_h=23; g_font_glyph_metrics[1].advance=13;
-    g_font_glyph_metrics[2].atlas_x=72; g_font_glyph_metrics[2].atlas_y=0; g_font_glyph_metrics[2].atlas_w=36; g_font_glyph_metrics[2].atlas_h=42;
+    g_font_glyph_metrics[2].atlas_x=72; g_font_glyph_metrics[2].atlas_y=2; g_font_glyph_metrics[2].atlas_w=36; g_font_glyph_metrics[2].atlas_h=42;
     g_font_glyph_metrics[2].bearing_x=0; g_font_glyph_metrics[2].bearing_y=7; g_font_glyph_metrics[2].glyph_w=15; g_font_glyph_metrics[2].glyph_h=23; g_font_glyph_metrics[2].advance=15;
-    g_font_glyph_metrics[3].atlas_x=108; g_font_glyph_metrics[3].atlas_y=0; g_font_glyph_metrics[3].atlas_w=36; g_font_glyph_metrics[3].atlas_h=42;
+    g_font_glyph_metrics[3].atlas_x=108; g_font_glyph_metrics[3].atlas_y=2; g_font_glyph_metrics[3].atlas_w=36; g_font_glyph_metrics[3].atlas_h=42;
     g_font_glyph_metrics[3].bearing_x=0; g_font_glyph_metrics[3].bearing_y=7; g_font_glyph_metrics[3].glyph_w=27; g_font_glyph_metrics[3].glyph_h=23; g_font_glyph_metrics[3].advance=27;
-    g_font_glyph_metrics[4].atlas_x=144; g_font_glyph_metrics[4].atlas_y=0; g_font_glyph_metrics[4].atlas_w=36; g_font_glyph_metrics[4].atlas_h=42;
+    g_font_glyph_metrics[4].atlas_x=144; g_font_glyph_metrics[4].atlas_y=2; g_font_glyph_metrics[4].atlas_w=36; g_font_glyph_metrics[4].atlas_h=42;
     g_font_glyph_metrics[4].bearing_x=0; g_font_glyph_metrics[4].bearing_y=5; g_font_glyph_metrics[4].glyph_w=20; g_font_glyph_metrics[4].glyph_h=30; g_font_glyph_metrics[4].advance=20;
-    g_font_glyph_metrics[5].atlas_x=180; g_font_glyph_metrics[5].atlas_y=0; g_font_glyph_metrics[5].atlas_w=36; g_font_glyph_metrics[5].atlas_h=42;
+    g_font_glyph_metrics[5].atlas_x=180; g_font_glyph_metrics[5].atlas_y=2; g_font_glyph_metrics[5].atlas_w=36; g_font_glyph_metrics[5].atlas_h=42;
     g_font_glyph_metrics[5].bearing_x=0; g_font_glyph_metrics[5].bearing_y=7; g_font_glyph_metrics[5].glyph_w=30; g_font_glyph_metrics[5].glyph_h=23; g_font_glyph_metrics[5].advance=30;
-    g_font_glyph_metrics[6].atlas_x=216; g_font_glyph_metrics[6].atlas_y=0; g_font_glyph_metrics[6].atlas_w=36; g_font_glyph_metrics[6].atlas_h=42;
+    g_font_glyph_metrics[6].atlas_x=216; g_font_glyph_metrics[6].atlas_y=2; g_font_glyph_metrics[6].atlas_w=36; g_font_glyph_metrics[6].atlas_h=42;
     g_font_glyph_metrics[6].bearing_x=0; g_font_glyph_metrics[6].bearing_y=7; g_font_glyph_metrics[6].glyph_w=25; g_font_glyph_metrics[6].glyph_h=23; g_font_glyph_metrics[6].advance=25;
-    g_font_glyph_metrics[7].atlas_x=252; g_font_glyph_metrics[7].atlas_y=0; g_font_glyph_metrics[7].atlas_w=36; g_font_glyph_metrics[7].atlas_h=42;
+    g_font_glyph_metrics[7].atlas_x=252; g_font_glyph_metrics[7].atlas_y=2; g_font_glyph_metrics[7].atlas_w=36; g_font_glyph_metrics[7].atlas_h=42;
     g_font_glyph_metrics[7].bearing_x=0; g_font_glyph_metrics[7].bearing_y=7; g_font_glyph_metrics[7].glyph_w=9; g_font_glyph_metrics[7].glyph_h=23; g_font_glyph_metrics[7].advance=9;
-    g_font_glyph_metrics[8].atlas_x=288; g_font_glyph_metrics[8].atlas_y=0; g_font_glyph_metrics[8].atlas_w=36; g_font_glyph_metrics[8].atlas_h=42;
+    g_font_glyph_metrics[8].atlas_x=288; g_font_glyph_metrics[8].atlas_y=2; g_font_glyph_metrics[8].atlas_w=36; g_font_glyph_metrics[8].atlas_h=42;
     g_font_glyph_metrics[8].bearing_x=0; g_font_glyph_metrics[8].bearing_y=6; g_font_glyph_metrics[8].glyph_w=12; g_font_glyph_metrics[8].glyph_h=29; g_font_glyph_metrics[8].advance=12;
-    g_font_glyph_metrics[9].atlas_x=324; g_font_glyph_metrics[9].atlas_y=0; g_font_glyph_metrics[9].atlas_w=36; g_font_glyph_metrics[9].atlas_h=42;
+    g_font_glyph_metrics[9].atlas_x=324; g_font_glyph_metrics[9].atlas_y=2; g_font_glyph_metrics[9].atlas_w=36; g_font_glyph_metrics[9].atlas_h=42;
     g_font_glyph_metrics[9].bearing_x=0; g_font_glyph_metrics[9].bearing_y=6; g_font_glyph_metrics[9].glyph_w=12; g_font_glyph_metrics[9].glyph_h=29; g_font_glyph_metrics[9].advance=12;
-    g_font_glyph_metrics[10].atlas_x=360; g_font_glyph_metrics[10].atlas_y=0; g_font_glyph_metrics[10].atlas_w=36; g_font_glyph_metrics[10].atlas_h=42;
+    g_font_glyph_metrics[10].atlas_x=360; g_font_glyph_metrics[10].atlas_y=2; g_font_glyph_metrics[10].atlas_w=36; g_font_glyph_metrics[10].atlas_h=42;
     g_font_glyph_metrics[10].bearing_x=0; g_font_glyph_metrics[10].bearing_y=7; g_font_glyph_metrics[10].glyph_w=16; g_font_glyph_metrics[10].glyph_h=23; g_font_glyph_metrics[10].advance=16;
-    g_font_glyph_metrics[11].atlas_x=396; g_font_glyph_metrics[11].atlas_y=0; g_font_glyph_metrics[11].atlas_w=36; g_font_glyph_metrics[11].atlas_h=42;
+    g_font_glyph_metrics[11].atlas_x=396; g_font_glyph_metrics[11].atlas_y=2; g_font_glyph_metrics[11].atlas_w=36; g_font_glyph_metrics[11].atlas_h=42;
     g_font_glyph_metrics[11].bearing_x=0; g_font_glyph_metrics[11].bearing_y=9; g_font_glyph_metrics[11].glyph_w=27; g_font_glyph_metrics[11].glyph_h=21; g_font_glyph_metrics[11].advance=27;
-    g_font_glyph_metrics[12].atlas_x=0; g_font_glyph_metrics[12].atlas_y=42; g_font_glyph_metrics[12].atlas_w=36; g_font_glyph_metrics[12].atlas_h=42;
+    g_font_glyph_metrics[12].atlas_x=0; g_font_glyph_metrics[12].atlas_y=44; g_font_glyph_metrics[12].atlas_w=36; g_font_glyph_metrics[12].atlas_h=42;
     g_font_glyph_metrics[12].bearing_x=0; g_font_glyph_metrics[12].bearing_y=26; g_font_glyph_metrics[12].glyph_w=10; g_font_glyph_metrics[12].glyph_h=8; g_font_glyph_metrics[12].advance=10;
-    g_font_glyph_metrics[13].atlas_x=36; g_font_glyph_metrics[13].atlas_y=42; g_font_glyph_metrics[13].atlas_w=36; g_font_glyph_metrics[13].atlas_h=42;
+    g_font_glyph_metrics[13].atlas_x=36; g_font_glyph_metrics[13].atlas_y=44; g_font_glyph_metrics[13].atlas_w=36; g_font_glyph_metrics[13].atlas_h=42;
     g_font_glyph_metrics[13].bearing_x=0; g_font_glyph_metrics[13].bearing_y=20; g_font_glyph_metrics[13].glyph_w=12; g_font_glyph_metrics[13].glyph_h=10; g_font_glyph_metrics[13].advance=12;
-    g_font_glyph_metrics[14].atlas_x=72; g_font_glyph_metrics[14].atlas_y=42; g_font_glyph_metrics[14].atlas_w=36; g_font_glyph_metrics[14].atlas_h=42;
+    g_font_glyph_metrics[14].atlas_x=72; g_font_glyph_metrics[14].atlas_y=44; g_font_glyph_metrics[14].atlas_w=36; g_font_glyph_metrics[14].atlas_h=42;
     g_font_glyph_metrics[14].bearing_x=0; g_font_glyph_metrics[14].bearing_y=26; g_font_glyph_metrics[14].glyph_w=10; g_font_glyph_metrics[14].glyph_h=4; g_font_glyph_metrics[14].advance=10;
-    g_font_glyph_metrics[15].atlas_x=108; g_font_glyph_metrics[15].atlas_y=42; g_font_glyph_metrics[15].atlas_w=36; g_font_glyph_metrics[15].atlas_h=42;
+    g_font_glyph_metrics[15].atlas_x=108; g_font_glyph_metrics[15].atlas_y=44; g_font_glyph_metrics[15].atlas_w=36; g_font_glyph_metrics[15].atlas_h=42;
     g_font_glyph_metrics[15].bearing_x=0; g_font_glyph_metrics[15].bearing_y=7; g_font_glyph_metrics[15].glyph_w=11; g_font_glyph_metrics[15].glyph_h=26; g_font_glyph_metrics[15].advance=11;
-    g_font_glyph_metrics[16].atlas_x=144; g_font_glyph_metrics[16].atlas_y=42; g_font_glyph_metrics[16].atlas_w=36; g_font_glyph_metrics[16].atlas_h=42;
+    g_font_glyph_metrics[16].atlas_x=144; g_font_glyph_metrics[16].atlas_y=44; g_font_glyph_metrics[16].atlas_w=36; g_font_glyph_metrics[16].atlas_h=42;
     g_font_glyph_metrics[16].bearing_x=0; g_font_glyph_metrics[16].bearing_y=7; g_font_glyph_metrics[16].glyph_w=20; g_font_glyph_metrics[16].glyph_h=23; g_font_glyph_metrics[16].advance=20;
-    g_font_glyph_metrics[17].atlas_x=180; g_font_glyph_metrics[17].atlas_y=42; g_font_glyph_metrics[17].atlas_w=36; g_font_glyph_metrics[17].atlas_h=42;
+    g_font_glyph_metrics[17].atlas_x=180; g_font_glyph_metrics[17].atlas_y=44; g_font_glyph_metrics[17].atlas_w=36; g_font_glyph_metrics[17].atlas_h=42;
     g_font_glyph_metrics[17].bearing_x=0; g_font_glyph_metrics[17].bearing_y=7; g_font_glyph_metrics[17].glyph_w=20; g_font_glyph_metrics[17].glyph_h=23; g_font_glyph_metrics[17].advance=20;
-    g_font_glyph_metrics[18].atlas_x=216; g_font_glyph_metrics[18].atlas_y=42; g_font_glyph_metrics[18].atlas_w=36; g_font_glyph_metrics[18].atlas_h=42;
+    g_font_glyph_metrics[18].atlas_x=216; g_font_glyph_metrics[18].atlas_y=44; g_font_glyph_metrics[18].atlas_w=36; g_font_glyph_metrics[18].atlas_h=42;
     g_font_glyph_metrics[18].bearing_x=0; g_font_glyph_metrics[18].bearing_y=7; g_font_glyph_metrics[18].glyph_w=20; g_font_glyph_metrics[18].glyph_h=23; g_font_glyph_metrics[18].advance=20;
-    g_font_glyph_metrics[19].atlas_x=252; g_font_glyph_metrics[19].atlas_y=42; g_font_glyph_metrics[19].atlas_w=36; g_font_glyph_metrics[19].atlas_h=42;
+    g_font_glyph_metrics[19].atlas_x=252; g_font_glyph_metrics[19].atlas_y=44; g_font_glyph_metrics[19].atlas_w=36; g_font_glyph_metrics[19].atlas_h=42;
     g_font_glyph_metrics[19].bearing_x=0; g_font_glyph_metrics[19].bearing_y=7; g_font_glyph_metrics[19].glyph_w=20; g_font_glyph_metrics[19].glyph_h=23; g_font_glyph_metrics[19].advance=20;
-    g_font_glyph_metrics[20].atlas_x=288; g_font_glyph_metrics[20].atlas_y=42; g_font_glyph_metrics[20].atlas_w=36; g_font_glyph_metrics[20].atlas_h=42;
+    g_font_glyph_metrics[20].atlas_x=288; g_font_glyph_metrics[20].atlas_y=44; g_font_glyph_metrics[20].atlas_w=36; g_font_glyph_metrics[20].atlas_h=42;
     g_font_glyph_metrics[20].bearing_x=0; g_font_glyph_metrics[20].bearing_y=7; g_font_glyph_metrics[20].glyph_w=20; g_font_glyph_metrics[20].glyph_h=23; g_font_glyph_metrics[20].advance=20;
-    g_font_glyph_metrics[21].atlas_x=324; g_font_glyph_metrics[21].atlas_y=42; g_font_glyph_metrics[21].atlas_w=36; g_font_glyph_metrics[21].atlas_h=42;
+    g_font_glyph_metrics[21].atlas_x=324; g_font_glyph_metrics[21].atlas_y=44; g_font_glyph_metrics[21].atlas_w=36; g_font_glyph_metrics[21].atlas_h=42;
     g_font_glyph_metrics[21].bearing_x=0; g_font_glyph_metrics[21].bearing_y=7; g_font_glyph_metrics[21].glyph_w=20; g_font_glyph_metrics[21].glyph_h=23; g_font_glyph_metrics[21].advance=20;
-    g_font_glyph_metrics[22].atlas_x=360; g_font_glyph_metrics[22].atlas_y=42; g_font_glyph_metrics[22].atlas_w=36; g_font_glyph_metrics[22].atlas_h=42;
+    g_font_glyph_metrics[22].atlas_x=360; g_font_glyph_metrics[22].atlas_y=44; g_font_glyph_metrics[22].atlas_w=36; g_font_glyph_metrics[22].atlas_h=42;
     g_font_glyph_metrics[22].bearing_x=0; g_font_glyph_metrics[22].bearing_y=7; g_font_glyph_metrics[22].glyph_w=20; g_font_glyph_metrics[22].glyph_h=23; g_font_glyph_metrics[22].advance=20;
-    g_font_glyph_metrics[23].atlas_x=396; g_font_glyph_metrics[23].atlas_y=42; g_font_glyph_metrics[23].atlas_w=36; g_font_glyph_metrics[23].atlas_h=42;
+    g_font_glyph_metrics[23].atlas_x=396; g_font_glyph_metrics[23].atlas_y=44; g_font_glyph_metrics[23].atlas_w=36; g_font_glyph_metrics[23].atlas_h=42;
     g_font_glyph_metrics[23].bearing_x=0; g_font_glyph_metrics[23].bearing_y=7; g_font_glyph_metrics[23].glyph_w=20; g_font_glyph_metrics[23].glyph_h=23; g_font_glyph_metrics[23].advance=20;
-    g_font_glyph_metrics[24].atlas_x=0; g_font_glyph_metrics[24].atlas_y=84; g_font_glyph_metrics[24].atlas_w=36; g_font_glyph_metrics[24].atlas_h=42;
+    g_font_glyph_metrics[24].atlas_x=0; g_font_glyph_metrics[24].atlas_y=86; g_font_glyph_metrics[24].atlas_w=36; g_font_glyph_metrics[24].atlas_h=42;
     g_font_glyph_metrics[24].bearing_x=0; g_font_glyph_metrics[24].bearing_y=7; g_font_glyph_metrics[24].glyph_w=20; g_font_glyph_metrics[24].glyph_h=23; g_font_glyph_metrics[24].advance=20;
-    g_font_glyph_metrics[25].atlas_x=36; g_font_glyph_metrics[25].atlas_y=84; g_font_glyph_metrics[25].atlas_w=36; g_font_glyph_metrics[25].atlas_h=42;
+    g_font_glyph_metrics[25].atlas_x=36; g_font_glyph_metrics[25].atlas_y=86; g_font_glyph_metrics[25].atlas_w=36; g_font_glyph_metrics[25].atlas_h=42;
     g_font_glyph_metrics[25].bearing_x=0; g_font_glyph_metrics[25].bearing_y=7; g_font_glyph_metrics[25].glyph_w=20; g_font_glyph_metrics[25].glyph_h=23; g_font_glyph_metrics[25].advance=20;
-    g_font_glyph_metrics[26].atlas_x=72; g_font_glyph_metrics[26].atlas_y=84; g_font_glyph_metrics[26].atlas_w=36; g_font_glyph_metrics[26].atlas_h=42;
+    g_font_glyph_metrics[26].atlas_x=72; g_font_glyph_metrics[26].atlas_y=86; g_font_glyph_metrics[26].atlas_w=36; g_font_glyph_metrics[26].atlas_h=42;
     g_font_glyph_metrics[26].bearing_x=0; g_font_glyph_metrics[26].bearing_y=13; g_font_glyph_metrics[26].glyph_w=11; g_font_glyph_metrics[26].glyph_h=17; g_font_glyph_metrics[26].advance=11;
-    g_font_glyph_metrics[27].atlas_x=108; g_font_glyph_metrics[27].atlas_y=84; g_font_glyph_metrics[27].atlas_w=36; g_font_glyph_metrics[27].atlas_h=42;
+    g_font_glyph_metrics[27].atlas_x=108; g_font_glyph_metrics[27].atlas_y=86; g_font_glyph_metrics[27].atlas_w=36; g_font_glyph_metrics[27].atlas_h=42;
     g_font_glyph_metrics[27].bearing_x=0; g_font_glyph_metrics[27].bearing_y=13; g_font_glyph_metrics[27].glyph_w=11; g_font_glyph_metrics[27].glyph_h=21; g_font_glyph_metrics[27].advance=11;
-    g_font_glyph_metrics[28].atlas_x=144; g_font_glyph_metrics[28].atlas_y=84; g_font_glyph_metrics[28].atlas_w=36; g_font_glyph_metrics[28].atlas_h=42;
+    g_font_glyph_metrics[28].atlas_x=144; g_font_glyph_metrics[28].atlas_y=86; g_font_glyph_metrics[28].atlas_w=36; g_font_glyph_metrics[28].atlas_h=42;
     g_font_glyph_metrics[28].bearing_x=0; g_font_glyph_metrics[28].bearing_y=11; g_font_glyph_metrics[28].glyph_w=27; g_font_glyph_metrics[28].glyph_h=19; g_font_glyph_metrics[28].advance=27;
-    g_font_glyph_metrics[29].atlas_x=180; g_font_glyph_metrics[29].atlas_y=84; g_font_glyph_metrics[29].atlas_w=36; g_font_glyph_metrics[29].atlas_h=42;
+    g_font_glyph_metrics[29].atlas_x=180; g_font_glyph_metrics[29].atlas_y=86; g_font_glyph_metrics[29].atlas_w=36; g_font_glyph_metrics[29].atlas_h=42;
     g_font_glyph_metrics[29].bearing_x=0; g_font_glyph_metrics[29].bearing_y=15; g_font_glyph_metrics[29].glyph_w=27; g_font_glyph_metrics[29].glyph_h=15; g_font_glyph_metrics[29].advance=27;
-    g_font_glyph_metrics[30].atlas_x=216; g_font_glyph_metrics[30].atlas_y=84; g_font_glyph_metrics[30].atlas_w=36; g_font_glyph_metrics[30].atlas_h=42;
+    g_font_glyph_metrics[30].atlas_x=216; g_font_glyph_metrics[30].atlas_y=86; g_font_glyph_metrics[30].atlas_w=36; g_font_glyph_metrics[30].atlas_h=42;
     g_font_glyph_metrics[30].bearing_x=0; g_font_glyph_metrics[30].bearing_y=11; g_font_glyph_metrics[30].glyph_w=27; g_font_glyph_metrics[30].glyph_h=19; g_font_glyph_metrics[30].advance=27;
-    g_font_glyph_metrics[31].atlas_x=252; g_font_glyph_metrics[31].atlas_y=84; g_font_glyph_metrics[31].atlas_w=36; g_font_glyph_metrics[31].atlas_h=42;
+    g_font_glyph_metrics[31].atlas_x=252; g_font_glyph_metrics[31].atlas_y=86; g_font_glyph_metrics[31].atlas_w=36; g_font_glyph_metrics[31].atlas_h=42;
     g_font_glyph_metrics[31].bearing_x=0; g_font_glyph_metrics[31].bearing_y=7; g_font_glyph_metrics[31].glyph_w=17; g_font_glyph_metrics[31].glyph_h=23; g_font_glyph_metrics[31].advance=17;
-    g_font_glyph_metrics[32].atlas_x=288; g_font_glyph_metrics[32].atlas_y=84; g_font_glyph_metrics[32].atlas_w=36; g_font_glyph_metrics[32].atlas_h=42;
+    g_font_glyph_metrics[32].atlas_x=288; g_font_glyph_metrics[32].atlas_y=86; g_font_glyph_metrics[32].atlas_w=36; g_font_glyph_metrics[32].atlas_h=42;
     g_font_glyph_metrics[32].bearing_x=0; g_font_glyph_metrics[32].bearing_y=7; g_font_glyph_metrics[32].glyph_w=32; g_font_glyph_metrics[32].glyph_h=28; g_font_glyph_metrics[32].advance=32;
-    g_font_glyph_metrics[33].atlas_x=324; g_font_glyph_metrics[33].atlas_y=84; g_font_glyph_metrics[33].atlas_w=36; g_font_glyph_metrics[33].atlas_h=42;
+    g_font_glyph_metrics[33].atlas_x=324; g_font_glyph_metrics[33].atlas_y=86; g_font_glyph_metrics[33].atlas_w=36; g_font_glyph_metrics[33].atlas_h=42;
     g_font_glyph_metrics[33].bearing_x=0; g_font_glyph_metrics[33].bearing_y=7; g_font_glyph_metrics[33].glyph_w=22; g_font_glyph_metrics[33].glyph_h=23; g_font_glyph_metrics[33].advance=22;
-    g_font_glyph_metrics[34].atlas_x=360; g_font_glyph_metrics[34].atlas_y=84; g_font_glyph_metrics[34].atlas_w=36; g_font_glyph_metrics[34].atlas_h=42;
+    g_font_glyph_metrics[34].atlas_x=360; g_font_glyph_metrics[34].atlas_y=86; g_font_glyph_metrics[34].atlas_w=36; g_font_glyph_metrics[34].atlas_h=42;
     g_font_glyph_metrics[34].bearing_x=0; g_font_glyph_metrics[34].bearing_y=7; g_font_glyph_metrics[34].glyph_w=22; g_font_glyph_metrics[34].glyph_h=23; g_font_glyph_metrics[34].advance=22;
-    g_font_glyph_metrics[35].atlas_x=396; g_font_glyph_metrics[35].atlas_y=84; g_font_glyph_metrics[35].atlas_w=36; g_font_glyph_metrics[35].atlas_h=42;
+    g_font_glyph_metrics[35].atlas_x=396; g_font_glyph_metrics[35].atlas_y=86; g_font_glyph_metrics[35].atlas_w=36; g_font_glyph_metrics[35].atlas_h=42;
     g_font_glyph_metrics[35].bearing_x=0; g_font_glyph_metrics[35].bearing_y=7; g_font_glyph_metrics[35].glyph_w=22; g_font_glyph_metrics[35].glyph_h=23; g_font_glyph_metrics[35].advance=22;
-    g_font_glyph_metrics[36].atlas_x=0; g_font_glyph_metrics[36].atlas_y=126; g_font_glyph_metrics[36].atlas_w=36; g_font_glyph_metrics[36].atlas_h=42;
+    g_font_glyph_metrics[36].atlas_x=0; g_font_glyph_metrics[36].atlas_y=128; g_font_glyph_metrics[36].atlas_w=36; g_font_glyph_metrics[36].atlas_h=42;
     g_font_glyph_metrics[36].bearing_x=0; g_font_glyph_metrics[36].bearing_y=7; g_font_glyph_metrics[36].glyph_w=25; g_font_glyph_metrics[36].glyph_h=23; g_font_glyph_metrics[36].advance=25;
-    g_font_glyph_metrics[37].atlas_x=36; g_font_glyph_metrics[37].atlas_y=126; g_font_glyph_metrics[37].atlas_w=36; g_font_glyph_metrics[37].atlas_h=42;
+    g_font_glyph_metrics[37].atlas_x=36; g_font_glyph_metrics[37].atlas_y=128; g_font_glyph_metrics[37].atlas_w=36; g_font_glyph_metrics[37].atlas_h=42;
     g_font_glyph_metrics[37].bearing_x=0; g_font_glyph_metrics[37].bearing_y=7; g_font_glyph_metrics[37].glyph_w=20; g_font_glyph_metrics[37].glyph_h=23; g_font_glyph_metrics[37].advance=20;
-    g_font_glyph_metrics[38].atlas_x=72; g_font_glyph_metrics[38].atlas_y=126; g_font_glyph_metrics[38].atlas_w=36; g_font_glyph_metrics[38].atlas_h=42;
+    g_font_glyph_metrics[38].atlas_x=72; g_font_glyph_metrics[38].atlas_y=128; g_font_glyph_metrics[38].atlas_w=36; g_font_glyph_metrics[38].atlas_h=42;
     g_font_glyph_metrics[38].bearing_x=0; g_font_glyph_metrics[38].bearing_y=7; g_font_glyph_metrics[38].glyph_w=18; g_font_glyph_metrics[38].glyph_h=23; g_font_glyph_metrics[38].advance=18;
-    g_font_glyph_metrics[39].atlas_x=108; g_font_glyph_metrics[39].atlas_y=126; g_font_glyph_metrics[39].atlas_w=36; g_font_glyph_metrics[39].atlas_h=42;
+    g_font_glyph_metrics[39].atlas_x=108; g_font_glyph_metrics[39].atlas_y=128; g_font_glyph_metrics[39].atlas_w=36; g_font_glyph_metrics[39].atlas_h=42;
     g_font_glyph_metrics[39].bearing_x=0; g_font_glyph_metrics[39].bearing_y=7; g_font_glyph_metrics[39].glyph_w=25; g_font_glyph_metrics[39].glyph_h=23; g_font_glyph_metrics[39].advance=25;
-    g_font_glyph_metrics[40].atlas_x=144; g_font_glyph_metrics[40].atlas_y=126; g_font_glyph_metrics[40].atlas_w=36; g_font_glyph_metrics[40].atlas_h=42;
+    g_font_glyph_metrics[40].atlas_x=144; g_font_glyph_metrics[40].atlas_y=128; g_font_glyph_metrics[40].atlas_w=36; g_font_glyph_metrics[40].atlas_h=42;
     g_font_glyph_metrics[40].bearing_x=0; g_font_glyph_metrics[40].bearing_y=7; g_font_glyph_metrics[40].glyph_w=24; g_font_glyph_metrics[40].glyph_h=23; g_font_glyph_metrics[40].advance=24;
-    g_font_glyph_metrics[41].atlas_x=180; g_font_glyph_metrics[41].atlas_y=126; g_font_glyph_metrics[41].atlas_w=36; g_font_glyph_metrics[41].atlas_h=42;
+    g_font_glyph_metrics[41].atlas_x=180; g_font_glyph_metrics[41].atlas_y=128; g_font_glyph_metrics[41].atlas_w=36; g_font_glyph_metrics[41].atlas_h=42;
     g_font_glyph_metrics[41].bearing_x=0; g_font_glyph_metrics[41].bearing_y=7; g_font_glyph_metrics[41].glyph_w=9; g_font_glyph_metrics[41].glyph_h=23; g_font_glyph_metrics[41].advance=9;
-    g_font_glyph_metrics[42].atlas_x=216; g_font_glyph_metrics[42].atlas_y=126; g_font_glyph_metrics[42].atlas_w=36; g_font_glyph_metrics[42].atlas_h=42;
+    g_font_glyph_metrics[42].atlas_x=216; g_font_glyph_metrics[42].atlas_y=128; g_font_glyph_metrics[42].atlas_w=36; g_font_glyph_metrics[42].atlas_h=42;
     g_font_glyph_metrics[42].bearing_x=-2; g_font_glyph_metrics[42].bearing_y=7; g_font_glyph_metrics[42].glyph_w=11; g_font_glyph_metrics[42].glyph_h=29; g_font_glyph_metrics[42].advance=9;
-    g_font_glyph_metrics[43].atlas_x=252; g_font_glyph_metrics[43].atlas_y=126; g_font_glyph_metrics[43].atlas_w=36; g_font_glyph_metrics[43].atlas_h=42;
+    g_font_glyph_metrics[43].atlas_x=252; g_font_glyph_metrics[43].atlas_y=128; g_font_glyph_metrics[43].atlas_w=36; g_font_glyph_metrics[43].atlas_h=42;
     g_font_glyph_metrics[43].bearing_x=0; g_font_glyph_metrics[43].bearing_y=7; g_font_glyph_metrics[43].glyph_w=22; g_font_glyph_metrics[43].glyph_h=23; g_font_glyph_metrics[43].advance=21;
-    g_font_glyph_metrics[44].atlas_x=288; g_font_glyph_metrics[44].atlas_y=126; g_font_glyph_metrics[44].atlas_w=36; g_font_glyph_metrics[44].atlas_h=42;
+    g_font_glyph_metrics[44].atlas_x=288; g_font_glyph_metrics[44].atlas_y=128; g_font_glyph_metrics[44].atlas_w=36; g_font_glyph_metrics[44].atlas_h=42;
     g_font_glyph_metrics[44].bearing_x=0; g_font_glyph_metrics[44].bearing_y=7; g_font_glyph_metrics[44].glyph_w=18; g_font_glyph_metrics[44].glyph_h=23; g_font_glyph_metrics[44].advance=18;
-    g_font_glyph_metrics[45].atlas_x=324; g_font_glyph_metrics[45].atlas_y=126; g_font_glyph_metrics[45].atlas_w=36; g_font_glyph_metrics[45].atlas_h=42;
+    g_font_glyph_metrics[45].atlas_x=324; g_font_glyph_metrics[45].atlas_y=128; g_font_glyph_metrics[45].atlas_w=36; g_font_glyph_metrics[45].atlas_h=42;
     g_font_glyph_metrics[45].bearing_x=0; g_font_glyph_metrics[45].bearing_y=7; g_font_glyph_metrics[45].glyph_w=28; g_font_glyph_metrics[45].glyph_h=23; g_font_glyph_metrics[45].advance=28;
-    g_font_glyph_metrics[46].atlas_x=360; g_font_glyph_metrics[46].atlas_y=126; g_font_glyph_metrics[46].atlas_w=36; g_font_glyph_metrics[46].atlas_h=42;
+    g_font_glyph_metrics[46].atlas_x=360; g_font_glyph_metrics[46].atlas_y=128; g_font_glyph_metrics[46].atlas_w=36; g_font_glyph_metrics[46].atlas_h=42;
     g_font_glyph_metrics[46].bearing_x=0; g_font_glyph_metrics[46].bearing_y=7; g_font_glyph_metrics[46].glyph_w=24; g_font_glyph_metrics[46].glyph_h=23; g_font_glyph_metrics[46].advance=24;
-    g_font_glyph_metrics[47].atlas_x=396; g_font_glyph_metrics[47].atlas_y=126; g_font_glyph_metrics[47].atlas_w=36; g_font_glyph_metrics[47].atlas_h=42;
+    g_font_glyph_metrics[47].atlas_x=396; g_font_glyph_metrics[47].atlas_y=128; g_font_glyph_metrics[47].atlas_w=36; g_font_glyph_metrics[47].atlas_h=42;
     g_font_glyph_metrics[47].bearing_x=0; g_font_glyph_metrics[47].bearing_y=7; g_font_glyph_metrics[47].glyph_w=25; g_font_glyph_metrics[47].glyph_h=23; g_font_glyph_metrics[47].advance=25;
-    g_font_glyph_metrics[48].atlas_x=0; g_font_glyph_metrics[48].atlas_y=168; g_font_glyph_metrics[48].atlas_w=36; g_font_glyph_metrics[48].atlas_h=42;
+    g_font_glyph_metrics[48].atlas_x=0; g_font_glyph_metrics[48].atlas_y=170; g_font_glyph_metrics[48].atlas_w=36; g_font_glyph_metrics[48].atlas_h=42;
     g_font_glyph_metrics[48].bearing_x=0; g_font_glyph_metrics[48].bearing_y=7; g_font_glyph_metrics[48].glyph_w=19; g_font_glyph_metrics[48].glyph_h=23; g_font_glyph_metrics[48].advance=19;
-    g_font_glyph_metrics[49].atlas_x=36; g_font_glyph_metrics[49].atlas_y=168; g_font_glyph_metrics[49].atlas_w=36; g_font_glyph_metrics[49].atlas_h=42;
+    g_font_glyph_metrics[49].atlas_x=36; g_font_glyph_metrics[49].atlas_y=170; g_font_glyph_metrics[49].atlas_w=36; g_font_glyph_metrics[49].atlas_h=42;
     g_font_glyph_metrics[49].bearing_x=0; g_font_glyph_metrics[49].bearing_y=7; g_font_glyph_metrics[49].glyph_w=25; g_font_glyph_metrics[49].glyph_h=27; g_font_glyph_metrics[49].advance=25;
-    g_font_glyph_metrics[50].atlas_x=72; g_font_glyph_metrics[50].atlas_y=168; g_font_glyph_metrics[50].atlas_w=36; g_font_glyph_metrics[50].atlas_h=42;
+    g_font_glyph_metrics[50].atlas_x=72; g_font_glyph_metrics[50].atlas_y=170; g_font_glyph_metrics[50].atlas_w=36; g_font_glyph_metrics[50].atlas_h=42;
     g_font_glyph_metrics[50].bearing_x=0; g_font_glyph_metrics[50].bearing_y=7; g_font_glyph_metrics[50].glyph_w=22; g_font_glyph_metrics[50].glyph_h=23; g_font_glyph_metrics[50].advance=22;
-    g_font_glyph_metrics[51].atlas_x=108; g_font_glyph_metrics[51].atlas_y=168; g_font_glyph_metrics[51].atlas_w=36; g_font_glyph_metrics[51].atlas_h=42;
+    g_font_glyph_metrics[51].atlas_x=108; g_font_glyph_metrics[51].atlas_y=170; g_font_glyph_metrics[51].atlas_w=36; g_font_glyph_metrics[51].atlas_h=42;
     g_font_glyph_metrics[51].bearing_x=0; g_font_glyph_metrics[51].bearing_y=7; g_font_glyph_metrics[51].glyph_w=20; g_font_glyph_metrics[51].glyph_h=23; g_font_glyph_metrics[51].advance=20;
-    g_font_glyph_metrics[52].atlas_x=144; g_font_glyph_metrics[52].atlas_y=168; g_font_glyph_metrics[52].atlas_w=36; g_font_glyph_metrics[52].atlas_h=42;
+    g_font_glyph_metrics[52].atlas_x=144; g_font_glyph_metrics[52].atlas_y=170; g_font_glyph_metrics[52].atlas_w=36; g_font_glyph_metrics[52].atlas_h=42;
     g_font_glyph_metrics[52].bearing_x=-1; g_font_glyph_metrics[52].bearing_y=7; g_font_glyph_metrics[52].glyph_w=21; g_font_glyph_metrics[52].glyph_h=23; g_font_glyph_metrics[52].advance=20;
-    g_font_glyph_metrics[53].atlas_x=180; g_font_glyph_metrics[53].atlas_y=168; g_font_glyph_metrics[53].atlas_w=36; g_font_glyph_metrics[53].atlas_h=42;
+    g_font_glyph_metrics[53].atlas_x=180; g_font_glyph_metrics[53].atlas_y=170; g_font_glyph_metrics[53].atlas_w=36; g_font_glyph_metrics[53].atlas_h=42;
     g_font_glyph_metrics[53].bearing_x=0; g_font_glyph_metrics[53].bearing_y=7; g_font_glyph_metrics[53].glyph_w=23; g_font_glyph_metrics[53].glyph_h=23; g_font_glyph_metrics[53].advance=23;
-    g_font_glyph_metrics[54].atlas_x=216; g_font_glyph_metrics[54].atlas_y=168; g_font_glyph_metrics[54].atlas_w=36; g_font_glyph_metrics[54].atlas_h=42;
+    g_font_glyph_metrics[54].atlas_x=216; g_font_glyph_metrics[54].atlas_y=170; g_font_glyph_metrics[54].atlas_w=36; g_font_glyph_metrics[54].atlas_h=42;
     g_font_glyph_metrics[54].bearing_x=0; g_font_glyph_metrics[54].bearing_y=7; g_font_glyph_metrics[54].glyph_w=22; g_font_glyph_metrics[54].glyph_h=23; g_font_glyph_metrics[54].advance=22;
-    g_font_glyph_metrics[55].atlas_x=252; g_font_glyph_metrics[55].atlas_y=168; g_font_glyph_metrics[55].atlas_w=36; g_font_glyph_metrics[55].atlas_h=42;
+    g_font_glyph_metrics[55].atlas_x=252; g_font_glyph_metrics[55].atlas_y=170; g_font_glyph_metrics[55].atlas_w=36; g_font_glyph_metrics[55].atlas_h=42;
     g_font_glyph_metrics[55].bearing_x=0; g_font_glyph_metrics[55].bearing_y=7; g_font_glyph_metrics[55].glyph_w=32; g_font_glyph_metrics[55].glyph_h=23; g_font_glyph_metrics[55].advance=32;
-    g_font_glyph_metrics[56].atlas_x=288; g_font_glyph_metrics[56].atlas_y=168; g_font_glyph_metrics[56].atlas_w=36; g_font_glyph_metrics[56].atlas_h=42;
+    g_font_glyph_metrics[56].atlas_x=288; g_font_glyph_metrics[56].atlas_y=170; g_font_glyph_metrics[56].atlas_w=36; g_font_glyph_metrics[56].atlas_h=42;
     g_font_glyph_metrics[56].bearing_x=0; g_font_glyph_metrics[56].bearing_y=7; g_font_glyph_metrics[56].glyph_w=22; g_font_glyph_metrics[56].glyph_h=23; g_font_glyph_metrics[56].advance=22;
-    g_font_glyph_metrics[57].atlas_x=324; g_font_glyph_metrics[57].atlas_y=168; g_font_glyph_metrics[57].atlas_w=36; g_font_glyph_metrics[57].atlas_h=42;
+    g_font_glyph_metrics[57].atlas_x=324; g_font_glyph_metrics[57].atlas_y=170; g_font_glyph_metrics[57].atlas_w=36; g_font_glyph_metrics[57].atlas_h=42;
     g_font_glyph_metrics[57].bearing_x=-1; g_font_glyph_metrics[57].bearing_y=7; g_font_glyph_metrics[57].glyph_w=21; g_font_glyph_metrics[57].glyph_h=23; g_font_glyph_metrics[57].advance=20;
-    g_font_glyph_metrics[58].atlas_x=360; g_font_glyph_metrics[58].atlas_y=168; g_font_glyph_metrics[58].atlas_w=36; g_font_glyph_metrics[58].atlas_h=42;
+    g_font_glyph_metrics[58].atlas_x=360; g_font_glyph_metrics[58].atlas_y=170; g_font_glyph_metrics[58].atlas_w=36; g_font_glyph_metrics[58].atlas_h=42;
     g_font_glyph_metrics[58].bearing_x=0; g_font_glyph_metrics[58].bearing_y=7; g_font_glyph_metrics[58].glyph_w=22; g_font_glyph_metrics[58].glyph_h=23; g_font_glyph_metrics[58].advance=22;
-    g_font_glyph_metrics[59].atlas_x=396; g_font_glyph_metrics[59].atlas_y=168; g_font_glyph_metrics[59].atlas_w=36; g_font_glyph_metrics[59].atlas_h=42;
+    g_font_glyph_metrics[59].atlas_x=396; g_font_glyph_metrics[59].atlas_y=170; g_font_glyph_metrics[59].atlas_w=36; g_font_glyph_metrics[59].atlas_h=42;
     g_font_glyph_metrics[59].bearing_x=0; g_font_glyph_metrics[59].bearing_y=6; g_font_glyph_metrics[59].glyph_w=12; g_font_glyph_metrics[59].glyph_h=29; g_font_glyph_metrics[59].advance=12;
-    g_font_glyph_metrics[60].atlas_x=0; g_font_glyph_metrics[60].atlas_y=210; g_font_glyph_metrics[60].atlas_w=36; g_font_glyph_metrics[60].atlas_h=42;
+    g_font_glyph_metrics[60].atlas_x=0; g_font_glyph_metrics[60].atlas_y=212; g_font_glyph_metrics[60].atlas_w=36; g_font_glyph_metrics[60].atlas_h=42;
     g_font_glyph_metrics[60].bearing_x=0; g_font_glyph_metrics[60].bearing_y=7; g_font_glyph_metrics[60].glyph_w=11; g_font_glyph_metrics[60].glyph_h=26; g_font_glyph_metrics[60].advance=11;
-    g_font_glyph_metrics[61].atlas_x=36; g_font_glyph_metrics[61].atlas_y=210; g_font_glyph_metrics[61].atlas_w=36; g_font_glyph_metrics[61].atlas_h=42;
+    g_font_glyph_metrics[61].atlas_x=36; g_font_glyph_metrics[61].atlas_y=212; g_font_glyph_metrics[61].atlas_w=36; g_font_glyph_metrics[61].atlas_h=42;
     g_font_glyph_metrics[61].bearing_x=0; g_font_glyph_metrics[61].bearing_y=6; g_font_glyph_metrics[61].glyph_w=12; g_font_glyph_metrics[61].glyph_h=29; g_font_glyph_metrics[61].advance=12;
-    g_font_glyph_metrics[62].atlas_x=72; g_font_glyph_metrics[62].atlas_y=210; g_font_glyph_metrics[62].atlas_w=36; g_font_glyph_metrics[62].atlas_h=42;
+    g_font_glyph_metrics[62].atlas_x=72; g_font_glyph_metrics[62].atlas_y=212; g_font_glyph_metrics[62].atlas_w=36; g_font_glyph_metrics[62].atlas_h=42;
     g_font_glyph_metrics[62].bearing_x=0; g_font_glyph_metrics[62].bearing_y=7; g_font_glyph_metrics[62].glyph_w=27; g_font_glyph_metrics[62].glyph_h=23; g_font_glyph_metrics[62].advance=27;
-    g_font_glyph_metrics[63].atlas_x=108; g_font_glyph_metrics[63].atlas_y=210; g_font_glyph_metrics[63].atlas_w=36; g_font_glyph_metrics[63].atlas_h=42;
+    g_font_glyph_metrics[63].atlas_x=108; g_font_glyph_metrics[63].atlas_y=212; g_font_glyph_metrics[63].atlas_w=36; g_font_glyph_metrics[63].atlas_h=42;
     g_font_glyph_metrics[63].bearing_x=-1; g_font_glyph_metrics[63].bearing_y=30; g_font_glyph_metrics[63].glyph_w=18; g_font_glyph_metrics[63].glyph_h=8; g_font_glyph_metrics[63].advance=16;
-    g_font_glyph_metrics[64].atlas_x=144; g_font_glyph_metrics[64].atlas_y=210; g_font_glyph_metrics[64].atlas_w=36; g_font_glyph_metrics[64].atlas_h=42;
+    g_font_glyph_metrics[64].atlas_x=144; g_font_glyph_metrics[64].atlas_y=212; g_font_glyph_metrics[64].atlas_w=36; g_font_glyph_metrics[64].atlas_h=42;
     g_font_glyph_metrics[64].bearing_x=0; g_font_glyph_metrics[64].bearing_y=4; g_font_glyph_metrics[64].glyph_w=16; g_font_glyph_metrics[64].glyph_h=26; g_font_glyph_metrics[64].advance=16;
-    g_font_glyph_metrics[65].atlas_x=180; g_font_glyph_metrics[65].atlas_y=210; g_font_glyph_metrics[65].atlas_w=36; g_font_glyph_metrics[65].atlas_h=42;
+    g_font_glyph_metrics[65].atlas_x=180; g_font_glyph_metrics[65].atlas_y=212; g_font_glyph_metrics[65].atlas_w=36; g_font_glyph_metrics[65].atlas_h=42;
     g_font_glyph_metrics[65].bearing_x=0; g_font_glyph_metrics[65].bearing_y=12; g_font_glyph_metrics[65].glyph_w=20; g_font_glyph_metrics[65].glyph_h=18; g_font_glyph_metrics[65].advance=20;
-    g_font_glyph_metrics[66].atlas_x=216; g_font_glyph_metrics[66].atlas_y=210; g_font_glyph_metrics[66].atlas_w=36; g_font_glyph_metrics[66].atlas_h=42;
+    g_font_glyph_metrics[66].atlas_x=216; g_font_glyph_metrics[66].atlas_y=212; g_font_glyph_metrics[66].atlas_w=36; g_font_glyph_metrics[66].atlas_h=42;
     g_font_glyph_metrics[66].bearing_x=0; g_font_glyph_metrics[66].bearing_y=6; g_font_glyph_metrics[66].glyph_w=20; g_font_glyph_metrics[66].glyph_h=24; g_font_glyph_metrics[66].advance=20;
-    g_font_glyph_metrics[67].atlas_x=252; g_font_glyph_metrics[67].atlas_y=210; g_font_glyph_metrics[67].atlas_w=36; g_font_glyph_metrics[67].atlas_h=42;
+    g_font_glyph_metrics[67].atlas_x=252; g_font_glyph_metrics[67].atlas_y=212; g_font_glyph_metrics[67].atlas_w=36; g_font_glyph_metrics[67].atlas_h=42;
     g_font_glyph_metrics[67].bearing_x=0; g_font_glyph_metrics[67].bearing_y=12; g_font_glyph_metrics[67].glyph_w=18; g_font_glyph_metrics[67].glyph_h=18; g_font_glyph_metrics[67].advance=18;
-    g_font_glyph_metrics[68].atlas_x=288; g_font_glyph_metrics[68].atlas_y=210; g_font_glyph_metrics[68].atlas_w=36; g_font_glyph_metrics[68].atlas_h=42;
+    g_font_glyph_metrics[68].atlas_x=288; g_font_glyph_metrics[68].atlas_y=212; g_font_glyph_metrics[68].atlas_w=36; g_font_glyph_metrics[68].atlas_h=42;
     g_font_glyph_metrics[68].bearing_x=0; g_font_glyph_metrics[68].bearing_y=6; g_font_glyph_metrics[68].glyph_w=20; g_font_glyph_metrics[68].glyph_h=24; g_font_glyph_metrics[68].advance=20;
-    g_font_glyph_metrics[69].atlas_x=324; g_font_glyph_metrics[69].atlas_y=210; g_font_glyph_metrics[69].atlas_w=36; g_font_glyph_metrics[69].atlas_h=42;
+    g_font_glyph_metrics[69].atlas_x=324; g_font_glyph_metrics[69].atlas_y=212; g_font_glyph_metrics[69].atlas_w=36; g_font_glyph_metrics[69].atlas_h=42;
     g_font_glyph_metrics[69].bearing_x=0; g_font_glyph_metrics[69].bearing_y=12; g_font_glyph_metrics[69].glyph_w=20; g_font_glyph_metrics[69].glyph_h=18; g_font_glyph_metrics[69].advance=20;
-    g_font_glyph_metrics[70].atlas_x=360; g_font_glyph_metrics[70].atlas_y=210; g_font_glyph_metrics[70].atlas_w=36; g_font_glyph_metrics[70].atlas_h=42;
+    g_font_glyph_metrics[70].atlas_x=360; g_font_glyph_metrics[70].atlas_y=212; g_font_glyph_metrics[70].atlas_w=36; g_font_glyph_metrics[70].atlas_h=42;
     g_font_glyph_metrics[70].bearing_x=0; g_font_glyph_metrics[70].bearing_y=6; g_font_glyph_metrics[70].glyph_w=12; g_font_glyph_metrics[70].glyph_h=24; g_font_glyph_metrics[70].advance=11;
-    g_font_glyph_metrics[71].atlas_x=396; g_font_glyph_metrics[71].atlas_y=210; g_font_glyph_metrics[71].atlas_w=36; g_font_glyph_metrics[71].atlas_h=42;
+    g_font_glyph_metrics[71].atlas_x=396; g_font_glyph_metrics[71].atlas_y=212; g_font_glyph_metrics[71].atlas_w=36; g_font_glyph_metrics[71].atlas_h=42;
     g_font_glyph_metrics[71].bearing_x=0; g_font_glyph_metrics[71].bearing_y=12; g_font_glyph_metrics[71].glyph_w=20; g_font_glyph_metrics[71].glyph_h=25; g_font_glyph_metrics[71].advance=20;
-    g_font_glyph_metrics[72].atlas_x=0; g_font_glyph_metrics[72].atlas_y=252; g_font_glyph_metrics[72].atlas_w=36; g_font_glyph_metrics[72].atlas_h=42;
+    g_font_glyph_metrics[72].atlas_x=0; g_font_glyph_metrics[72].atlas_y=254; g_font_glyph_metrics[72].atlas_w=36; g_font_glyph_metrics[72].atlas_h=42;
     g_font_glyph_metrics[72].bearing_x=0; g_font_glyph_metrics[72].bearing_y=6; g_font_glyph_metrics[72].glyph_w=20; g_font_glyph_metrics[72].glyph_h=24; g_font_glyph_metrics[72].advance=20;
-    g_font_glyph_metrics[73].atlas_x=36; g_font_glyph_metrics[73].atlas_y=252; g_font_glyph_metrics[73].atlas_w=36; g_font_glyph_metrics[73].atlas_h=42;
+    g_font_glyph_metrics[73].atlas_x=36; g_font_glyph_metrics[73].atlas_y=254; g_font_glyph_metrics[73].atlas_w=36; g_font_glyph_metrics[73].atlas_h=42;
     g_font_glyph_metrics[73].bearing_x=0; g_font_glyph_metrics[73].bearing_y=6; g_font_glyph_metrics[73].glyph_w=9; g_font_glyph_metrics[73].glyph_h=24; g_font_glyph_metrics[73].advance=9;
-    g_font_glyph_metrics[74].atlas_x=72; g_font_glyph_metrics[74].atlas_y=252; g_font_glyph_metrics[74].atlas_w=36; g_font_glyph_metrics[74].atlas_h=42;
+    g_font_glyph_metrics[74].atlas_x=72; g_font_glyph_metrics[74].atlas_y=254; g_font_glyph_metrics[74].atlas_w=36; g_font_glyph_metrics[74].atlas_h=42;
     g_font_glyph_metrics[74].bearing_x=-1; g_font_glyph_metrics[74].bearing_y=6; g_font_glyph_metrics[74].glyph_w=10; g_font_glyph_metrics[74].glyph_h=31; g_font_glyph_metrics[74].advance=9;
-    g_font_glyph_metrics[75].atlas_x=108; g_font_glyph_metrics[75].atlas_y=252; g_font_glyph_metrics[75].atlas_w=36; g_font_glyph_metrics[75].atlas_h=42;
+    g_font_glyph_metrics[75].atlas_x=108; g_font_glyph_metrics[75].atlas_y=254; g_font_glyph_metrics[75].atlas_w=36; g_font_glyph_metrics[75].atlas_h=42;
     g_font_glyph_metrics[75].bearing_x=0; g_font_glyph_metrics[75].bearing_y=6; g_font_glyph_metrics[75].glyph_w=19; g_font_glyph_metrics[75].glyph_h=24; g_font_glyph_metrics[75].advance=19;
-    g_font_glyph_metrics[76].atlas_x=144; g_font_glyph_metrics[76].atlas_y=252; g_font_glyph_metrics[76].atlas_w=36; g_font_glyph_metrics[76].atlas_h=42;
+    g_font_glyph_metrics[76].atlas_x=144; g_font_glyph_metrics[76].atlas_y=254; g_font_glyph_metrics[76].atlas_w=36; g_font_glyph_metrics[76].atlas_h=42;
     g_font_glyph_metrics[76].bearing_x=0; g_font_glyph_metrics[76].bearing_y=6; g_font_glyph_metrics[76].glyph_w=9; g_font_glyph_metrics[76].glyph_h=24; g_font_glyph_metrics[76].advance=9;
-    g_font_glyph_metrics[77].atlas_x=180; g_font_glyph_metrics[77].atlas_y=252; g_font_glyph_metrics[77].atlas_w=36; g_font_glyph_metrics[77].atlas_h=42;
+    g_font_glyph_metrics[77].atlas_x=180; g_font_glyph_metrics[77].atlas_y=254; g_font_glyph_metrics[77].atlas_w=36; g_font_glyph_metrics[77].atlas_h=42;
     g_font_glyph_metrics[77].bearing_x=0; g_font_glyph_metrics[77].bearing_y=12; g_font_glyph_metrics[77].glyph_w=31; g_font_glyph_metrics[77].glyph_h=18; g_font_glyph_metrics[77].advance=31;
-    g_font_glyph_metrics[78].atlas_x=216; g_font_glyph_metrics[78].atlas_y=252; g_font_glyph_metrics[78].atlas_w=36; g_font_glyph_metrics[78].atlas_h=42;
+    g_font_glyph_metrics[78].atlas_x=216; g_font_glyph_metrics[78].atlas_y=254; g_font_glyph_metrics[78].atlas_w=36; g_font_glyph_metrics[78].atlas_h=42;
     g_font_glyph_metrics[78].bearing_x=0; g_font_glyph_metrics[78].bearing_y=12; g_font_glyph_metrics[78].glyph_w=20; g_font_glyph_metrics[78].glyph_h=18; g_font_glyph_metrics[78].advance=20;
-    g_font_glyph_metrics[79].atlas_x=252; g_font_glyph_metrics[79].atlas_y=252; g_font_glyph_metrics[79].atlas_w=36; g_font_glyph_metrics[79].atlas_h=42;
+    g_font_glyph_metrics[79].atlas_x=252; g_font_glyph_metrics[79].atlas_y=254; g_font_glyph_metrics[79].atlas_w=36; g_font_glyph_metrics[79].atlas_h=42;
     g_font_glyph_metrics[79].bearing_x=0; g_font_glyph_metrics[79].bearing_y=12; g_font_glyph_metrics[79].glyph_w=20; g_font_glyph_metrics[79].glyph_h=18; g_font_glyph_metrics[79].advance=20;
-    g_font_glyph_metrics[80].atlas_x=288; g_font_glyph_metrics[80].atlas_y=252; g_font_glyph_metrics[80].atlas_w=36; g_font_glyph_metrics[80].atlas_h=42;
+    g_font_glyph_metrics[80].atlas_x=288; g_font_glyph_metrics[80].atlas_y=254; g_font_glyph_metrics[80].atlas_w=36; g_font_glyph_metrics[80].atlas_h=42;
     g_font_glyph_metrics[80].bearing_x=0; g_font_glyph_metrics[80].bearing_y=12; g_font_glyph_metrics[80].glyph_w=20; g_font_glyph_metrics[80].glyph_h=25; g_font_glyph_metrics[80].advance=20;
-    g_font_glyph_metrics[81].atlas_x=324; g_font_glyph_metrics[81].atlas_y=252; g_font_glyph_metrics[81].atlas_w=36; g_font_glyph_metrics[81].atlas_h=42;
+    g_font_glyph_metrics[81].atlas_x=324; g_font_glyph_metrics[81].atlas_y=254; g_font_glyph_metrics[81].atlas_w=36; g_font_glyph_metrics[81].atlas_h=42;
     g_font_glyph_metrics[81].bearing_x=0; g_font_glyph_metrics[81].bearing_y=12; g_font_glyph_metrics[81].glyph_w=20; g_font_glyph_metrics[81].glyph_h=25; g_font_glyph_metrics[81].advance=20;
-    g_font_glyph_metrics[82].atlas_x=360; g_font_glyph_metrics[82].atlas_y=252; g_font_glyph_metrics[82].atlas_w=36; g_font_glyph_metrics[82].atlas_h=42;
+    g_font_glyph_metrics[82].atlas_x=360; g_font_glyph_metrics[82].atlas_y=254; g_font_glyph_metrics[82].atlas_w=36; g_font_glyph_metrics[82].atlas_h=42;
     g_font_glyph_metrics[82].bearing_x=0; g_font_glyph_metrics[82].bearing_y=12; g_font_glyph_metrics[82].glyph_w=14; g_font_glyph_metrics[82].glyph_h=18; g_font_glyph_metrics[82].advance=13;
-    g_font_glyph_metrics[83].atlas_x=396; g_font_glyph_metrics[83].atlas_y=252; g_font_glyph_metrics[83].atlas_w=36; g_font_glyph_metrics[83].atlas_h=42;
+    g_font_glyph_metrics[83].atlas_x=396; g_font_glyph_metrics[83].atlas_y=254; g_font_glyph_metrics[83].atlas_w=36; g_font_glyph_metrics[83].atlas_h=42;
     g_font_glyph_metrics[83].bearing_x=0; g_font_glyph_metrics[83].bearing_y=12; g_font_glyph_metrics[83].glyph_w=17; g_font_glyph_metrics[83].glyph_h=18; g_font_glyph_metrics[83].advance=17;
-    g_font_glyph_metrics[84].atlas_x=0; g_font_glyph_metrics[84].atlas_y=294; g_font_glyph_metrics[84].atlas_w=36; g_font_glyph_metrics[84].atlas_h=42;
+    g_font_glyph_metrics[84].atlas_x=0; g_font_glyph_metrics[84].atlas_y=296; g_font_glyph_metrics[84].atlas_w=36; g_font_glyph_metrics[84].atlas_h=42;
     g_font_glyph_metrics[84].bearing_x=0; g_font_glyph_metrics[84].bearing_y=7; g_font_glyph_metrics[84].glyph_w=13; g_font_glyph_metrics[84].glyph_h=23; g_font_glyph_metrics[84].advance=13;
-    g_font_glyph_metrics[85].atlas_x=36; g_font_glyph_metrics[85].atlas_y=294; g_font_glyph_metrics[85].atlas_w=36; g_font_glyph_metrics[85].atlas_h=42;
+    g_font_glyph_metrics[85].atlas_x=36; g_font_glyph_metrics[85].atlas_y=296; g_font_glyph_metrics[85].atlas_w=36; g_font_glyph_metrics[85].atlas_h=42;
     g_font_glyph_metrics[85].bearing_x=0; g_font_glyph_metrics[85].bearing_y=12; g_font_glyph_metrics[85].glyph_w=20; g_font_glyph_metrics[85].glyph_h=18; g_font_glyph_metrics[85].advance=20;
-    g_font_glyph_metrics[86].atlas_x=72; g_font_glyph_metrics[86].atlas_y=294; g_font_glyph_metrics[86].atlas_w=36; g_font_glyph_metrics[86].atlas_h=42;
+    g_font_glyph_metrics[86].atlas_x=72; g_font_glyph_metrics[86].atlas_y=296; g_font_glyph_metrics[86].atlas_w=36; g_font_glyph_metrics[86].atlas_h=42;
     g_font_glyph_metrics[86].bearing_x=0; g_font_glyph_metrics[86].bearing_y=12; g_font_glyph_metrics[86].glyph_w=19; g_font_glyph_metrics[86].glyph_h=18; g_font_glyph_metrics[86].advance=19;
-    g_font_glyph_metrics[87].atlas_x=108; g_font_glyph_metrics[87].atlas_y=294; g_font_glyph_metrics[87].atlas_w=36; g_font_glyph_metrics[87].atlas_h=42;
+    g_font_glyph_metrics[87].atlas_x=108; g_font_glyph_metrics[87].atlas_y=296; g_font_glyph_metrics[87].atlas_w=36; g_font_glyph_metrics[87].atlas_h=42;
     g_font_glyph_metrics[87].bearing_x=0; g_font_glyph_metrics[87].bearing_y=12; g_font_glyph_metrics[87].glyph_w=26; g_font_glyph_metrics[87].glyph_h=18; g_font_glyph_metrics[87].advance=26;
-    g_font_glyph_metrics[88].atlas_x=144; g_font_glyph_metrics[88].atlas_y=294; g_font_glyph_metrics[88].atlas_w=36; g_font_glyph_metrics[88].atlas_h=42;
+    g_font_glyph_metrics[88].atlas_x=144; g_font_glyph_metrics[88].atlas_y=296; g_font_glyph_metrics[88].atlas_w=36; g_font_glyph_metrics[88].atlas_h=42;
     g_font_glyph_metrics[88].bearing_x=0; g_font_glyph_metrics[88].bearing_y=12; g_font_glyph_metrics[88].glyph_w=19; g_font_glyph_metrics[88].glyph_h=18; g_font_glyph_metrics[88].advance=19;
-    g_font_glyph_metrics[89].atlas_x=180; g_font_glyph_metrics[89].atlas_y=294; g_font_glyph_metrics[89].atlas_w=36; g_font_glyph_metrics[89].atlas_h=42;
+    g_font_glyph_metrics[89].atlas_x=180; g_font_glyph_metrics[89].atlas_y=296; g_font_glyph_metrics[89].atlas_w=36; g_font_glyph_metrics[89].atlas_h=42;
     g_font_glyph_metrics[89].bearing_x=0; g_font_glyph_metrics[89].bearing_y=12; g_font_glyph_metrics[89].glyph_w=19; g_font_glyph_metrics[89].glyph_h=25; g_font_glyph_metrics[89].advance=19;
-    g_font_glyph_metrics[90].atlas_x=216; g_font_glyph_metrics[90].atlas_y=294; g_font_glyph_metrics[90].atlas_w=36; g_font_glyph_metrics[90].atlas_h=42;
+    g_font_glyph_metrics[90].atlas_x=216; g_font_glyph_metrics[90].atlas_y=296; g_font_glyph_metrics[90].atlas_w=36; g_font_glyph_metrics[90].atlas_h=42;
     g_font_glyph_metrics[90].bearing_x=0; g_font_glyph_metrics[90].bearing_y=12; g_font_glyph_metrics[90].glyph_w=17; g_font_glyph_metrics[90].glyph_h=18; g_font_glyph_metrics[90].advance=17;
-    g_font_glyph_metrics[91].atlas_x=252; g_font_glyph_metrics[91].atlas_y=294; g_font_glyph_metrics[91].atlas_w=36; g_font_glyph_metrics[91].atlas_h=42;
+    g_font_glyph_metrics[91].atlas_x=252; g_font_glyph_metrics[91].atlas_y=296; g_font_glyph_metrics[91].atlas_w=36; g_font_glyph_metrics[91].atlas_h=42;
     g_font_glyph_metrics[91].bearing_x=0; g_font_glyph_metrics[91].bearing_y=6; g_font_glyph_metrics[91].glyph_w=20; g_font_glyph_metrics[91].glyph_h=30; g_font_glyph_metrics[91].advance=20;
-    g_font_glyph_metrics[92].atlas_x=288; g_font_glyph_metrics[92].atlas_y=294; g_font_glyph_metrics[92].atlas_w=36; g_font_glyph_metrics[92].atlas_h=42;
+    g_font_glyph_metrics[92].atlas_x=288; g_font_glyph_metrics[92].atlas_y=296; g_font_glyph_metrics[92].atlas_w=36; g_font_glyph_metrics[92].atlas_h=42;
     g_font_glyph_metrics[92].bearing_x=0; g_font_glyph_metrics[92].bearing_y=6; g_font_glyph_metrics[92].glyph_w=11; g_font_glyph_metrics[92].glyph_h=32; g_font_glyph_metrics[92].advance=11;
-    g_font_glyph_metrics[93].atlas_x=324; g_font_glyph_metrics[93].atlas_y=294; g_font_glyph_metrics[93].atlas_w=36; g_font_glyph_metrics[93].atlas_h=42;
+    g_font_glyph_metrics[93].atlas_x=324; g_font_glyph_metrics[93].atlas_y=296; g_font_glyph_metrics[93].atlas_w=36; g_font_glyph_metrics[93].atlas_h=42;
     g_font_glyph_metrics[93].bearing_x=0; g_font_glyph_metrics[93].bearing_y=6; g_font_glyph_metrics[93].glyph_w=20; g_font_glyph_metrics[93].glyph_h=30; g_font_glyph_metrics[93].advance=20;
-    g_font_glyph_metrics[94].atlas_x=360; g_font_glyph_metrics[94].atlas_y=294; g_font_glyph_metrics[94].atlas_w=36; g_font_glyph_metrics[94].atlas_h=42;
+    g_font_glyph_metrics[94].atlas_x=360; g_font_glyph_metrics[94].atlas_y=296; g_font_glyph_metrics[94].atlas_w=36; g_font_glyph_metrics[94].atlas_h=42;
     g_font_glyph_metrics[94].bearing_x=0; g_font_glyph_metrics[94].bearing_y=16; g_font_glyph_metrics[94].glyph_w=27; g_font_glyph_metrics[94].glyph_h=14; g_font_glyph_metrics[94].advance=27;
 }
 

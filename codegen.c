@@ -1017,12 +1017,40 @@ static int struct_copy_size_of(CodeGen *cg, ASTNode *node) {
          * that first, however the array expression is spelled. */
         if (node->index.array) {
             ASTNode *arr = node->index.array;
+            /* A real fixed-size array of pointers (e.g. "Foo *arr[256]",
+             * array_size>0) is NOT reduced by indexing -- arr[i] is still
+             * a Foo*, so pointer_depth>0 correctly means "not a struct
+             * value" (see this whole check's own comment above). But a
+             * PLAIN pointer variable/field (e.g. "Row *rows;",
+             * array_size<=0, meaning it's a pointer, not a declared
+             * array) being indexed IS pointer arithmetic that
+             * dereferences one level -- "rows[i]" is a real Row struct,
+             * not a Row*. Treating it the same as the array-of-pointers
+             * case made this whole struct-copy-size check bail out with
+             * "not a struct" for e.g. "t->rows[w] = t->rows[r]" (rows
+             * declared "Row *rows;" inside Table), so the whole-struct
+             * fast-copy path below never ran and only the first 8 bytes
+             * (one field) of the struct got copied instead of the whole
+             * thing -- a real, confirmed bug (minimal repro: a Row struct
+             * with 4 char* fields, "t->rows[1] = t->rows[2];" through a
+             * malloc'd "Row *rows" member left fields[1..3] at their OLD
+             * values, only fields[0] updated). One pointer level must be
+             * subtracted here before the depth check for any indexed
+             * expression that isn't a real declared array. */
             if (arr->kind == AST_VAR) {
                 Symbol *avs = symtable_lookup(cg->sym, arr->var.name);
-                if (avs && avs->type && avs->type->pointer_depth > 0) return 0;
+                if (avs && avs->type) {
+                    int depth = avs->type->pointer_depth;
+                    if (avs->type->array_size <= 0) depth -= 1;
+                    if (depth > 0) return 0;
+                }
             } else if (arr->kind == AST_MEMBER) {
                 TypeInfo *ft = field_type_of(cg, arr->member.obj, arr->member.field);
-                if (ft && ft->pointer_depth > 0) return 0;
+                if (ft) {
+                    int depth = ft->pointer_depth;
+                    if (ft->array_size <= 0) depth -= 1;
+                    if (depth > 0) return 0;
+                }
             }
         }
         const char *tn = resolve_node_type(cg->sym, node);
@@ -4151,10 +4179,35 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             /* e.g. va_arg(ap,double)/va_arg(ap,long long): 8-byte scalar cast */
             load8=cg->is_64bit;
         }
+        /* How many EXTRA levels of dereference were peeled off below while
+         * walking down to the real underlying variable/field -- e.g. for
+         * "**p" (p typed "const char **"), codegen visits the OUTER
+         * AST_DEREF first; its operand is itself an AST_DEREF (the inner
+         * "*p"), not a bare AST_VAR, so the walk must look through it too.
+         * Before this counter existed, the loop below had no AST_DEREF
+         * case at all, so it fell into the `else { deref_var = NULL;
+         * break; }` catch-all -- leaving load1/load2/load8 all 0 and
+         * silently falling through to the generic signed-4-byte-load
+         * default at the bottom of this case. That's a REAL, confirmed
+         * bug (minimal repro: "const char *s=...; const char **p=&s; if
+         * (**p == ' ') ..." always evaluated false even when the pointee
+         * genuinely was a space, because it read 4 bytes of the string
+         * little-endian and compared THAT dword against ' ' instead of
+         * loading just the 1 real byte -- the sibling "(*p)[0] == ' '"
+         * spelling of the same access was unaffected, since AST_INDEX
+         * resolves its width completely separately). Each peeled
+         * AST_DEREF level here corresponds to one pointer_depth level
+         * already consumed before reaching this outermost deref, so the
+         * effective pointer depth used to pick a load width below is the
+         * variable/field's OWN declared depth minus this count. */
+        int extra_deref = 0;
         ASTNode *deref_var = n->deref.operand;
         while (!cast_ty && deref_var && deref_var->kind != AST_VAR &&
                deref_var->kind != AST_MEMBER) {
-            if (deref_var->kind==AST_UNARY && deref_var->unary.operand)
+            if (deref_var->kind==AST_DEREF && deref_var->deref.operand) {
+                deref_var = deref_var->deref.operand; extra_deref++;
+            }
+            else if (deref_var->kind==AST_UNARY && deref_var->unary.operand)
                 deref_var = deref_var->unary.operand;
             else if (deref_var->kind==AST_BINARY && deref_var->binary.left)
                 deref_var = deref_var->binary.left;
@@ -4166,19 +4219,25 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             Symbol *ds=symtable_lookup(cg->sym,deref_var->var.name);
             if (ds && ds->type && ds->type->pointer_depth>=1) {
                 const char *base=ds->type->base;
-                /* pointer_depth>=2 (e.g. "const char **_str") must ALWAYS
+                /* effdepth (not the raw pointer_depth) is what's actually
+                 * being loaded HERE, since `extra_deref` levels of pointer
+                 * were already peeled off by inner AST_DEREFs walked
+                 * through above -- see this block's comment above the
+                 * `extra_deref` declaration. */
+                int effdepth = ds->type->pointer_depth - extra_deref;
+                /* effdepth>=2 (e.g. "const char **_str") must ALWAYS
                  * use the 8-byte pointer load, regardless of base type —
                  * dereferencing ONE level of a multi-level pointer yields
                  * ANOTHER POINTER, not a scalar of the base type. The
                  * base=="char"/"short" checks below only apply at the
-                 * final level of indirection (pointer_depth==1); checking
+                 * final level of indirection (effdepth==1); checking
                  * base before pointer_depth let "const char **_str" (e.g.
                  * SDL3's own StepUTF8) incorrectly take a 1-byte load for
                  * "*_str" (base=="char"), loading a tiny garbage value
                  * instead of the real 8-byte char* — using that as a
                  * pointer moments later was a real STATUS_ACCESS_VIOLATION,
                  * not an SDL bug. */
-                if (ds->type->pointer_depth>=2) {
+                if (effdepth>=2) {
                     load8=cg->is_64bit;
                 } else if (base && (strcmp(base,"char")==0||strcmp(base,"signed char")==0||
                              strcmp(base,"unsigned char")==0)) load1=1;
@@ -4219,7 +4278,8 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             TypeInfo *ft = field_type_of(cg, deref_var->member.obj, deref_var->member.field);
             if (ft && ft->pointer_depth>=1) {
                 const char *base=ft->base;
-                if (ft->pointer_depth>=2) {
+                int effdepth = ft->pointer_depth - extra_deref; /* see extra_deref's own comment above */
+                if (effdepth>=2) {
                     load8=cg->is_64bit;
                 } else if (base && (strcmp(base,"char")==0||strcmp(base,"signed char")==0||
                              strcmp(base,"unsigned char")==0)) load1=1;

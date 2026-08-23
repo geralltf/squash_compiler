@@ -9,10 +9,29 @@ all: SQS/SQS
 # -lpthread: one thread per accepted connection (see sqs_main.c's own
 # comment). -lssl -lcrypto: real system OpenSSL for the HTTPS listener --
 # same versioned-.so linker fallback already used for -lvulkan/-lX11 in
-# Makefile.SQW.linux (see linker.c). Single-TU (no #include chain here --
-# sqs_main.c is self-contained), so no cross-object-link workaround needed.
-SQS/SQS: SQS/sqs_main.c SQS/dev_cert.pem SQS/dev_key.pem include/openssl/ssl.h include/sys/socket.h include/netinet/in.h include/arpa/inet.h squash
+# Makefile.SQW.linux (see linker.c). sqs_main.c #includes php_mini.c,
+# which in turn #includes db_engine.c/db_engine.h -- all one translation
+# unit (no separate .sqo link step here), same workaround SQW/SDL3 use for
+# the same known cross-.sqo symbol-resolution bug -- see db_engine.sqo's
+# own comment below and php_mini.c's #include of db_engine.c.
+SQS/SQS: SQS/sqs_main.c SQS/php_mini.c SQS/db_engine.c SQS/db_engine.h SQS/dev_cert.pem SQS/dev_key.pem include/openssl/ssl.h include/sys/socket.h include/netinet/in.h include/arpa/inet.h squash
 	$(SQUASH) -linux -64 -Iinclude SQS/sqs_main.c -o SQS/SQS -lpthread -lssl -lcrypto
+
+# Standalone .sqo build of the native DB engine -- NOT currently linked
+# into SQS/SQS (see php_mini.c's own comment on why: a real, pre-existing
+# squash bug in cross-.sqo symbol resolution segfaults the merged binary
+# at process start). Kept buildable/testable on its own so that fixing
+# that linker bug later is a one-line Makefile change, not a rewrite.
+SQS/db_engine.sqo: SQS/db_engine.c SQS/db_engine.h squash
+	$(SQUASH) -c -linux -64 SQS/db_engine.c -o SQS/db_engine.sqo
+
+# gcc- and squash-built standalone unit test for the DB engine, run
+# against both toolchains per this project's standing convention.
+SQS/tests/db_engine_test: SQS/tests/db_engine_test.c SQS/db_engine.c SQS/db_engine.h
+	$(SQUASH) -linux -64 -ISQS SQS/tests/db_engine_test.c -o SQS/tests/db_engine_test
+
+test-db-engine: SQS/tests/db_engine_test
+	./SQS/tests/db_engine_test
 
 # Regenerates the local self-signed dev cert/key (see gen_dev_cert.sh's own
 # comment) -- not a build dependency of SQS/SQS itself (an existing cert is

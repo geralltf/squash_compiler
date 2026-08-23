@@ -18,7 +18,13 @@
       "Bash(./extracted/usr/bin/glslangValidator -V image.frag -o image.frag.spv)",
       "Bash(python3 -)",
       "Bash(nm -D /usr/lib/x86_64-linux-gnu/libz.so.1)",
-      "Bash(grep -E \" T \\(inflate|inflateInit_|inflateInit2_|inflateEnd|inflateReset\\)$\")"
+      "Bash(grep -E \" T \\(inflate|inflateInit_|inflateInit2_|inflateEnd|inflateReset\\)$\")",
+      "Bash(gcc -Wall -o /tmp/db_engine_test_gcc SQS/tests/db_engine_test.c SQS/db_engine.c)",
+      "Bash(/tmp/db_engine_test_gcc)",
+      "Bash(sed -i '1i #include <stdlib.h>' /tmp/dbg.c)",
+      "Bash(gcc -Wall -o /tmp/dbg /tmp/dbg.c SQS/db_engine.c -I.)",
+      "Bash(/tmp/dbg)",
+      "Bash(./squash -linux -64 -I. SQS/tests/db_engine_test.c SQS/db_engine.c -o /tmp/db_engine_test_sq)"
     ]
   }
 }

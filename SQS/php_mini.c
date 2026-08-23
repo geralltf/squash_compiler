@@ -44,6 +44,34 @@
 #include <string.h>
 #include <sys/stat.h>
 
+/* The native database engine -- a genuinely separate, independently
+ * compilable/testable C file (SQS/db_engine.c, unit-tested on its own via
+ * SQS/tests/db_engine_test.c against both gcc and squash) that knows
+ * nothing about PhpObject/PhpKVArray. The __db_* builtins below (in
+ * php_call_function()) are the ONLY point of contact between this
+ * interpreter and it, and are what turn a sqdb_query() row-text result
+ * into real PHP row objects -- that split is what keeps the native
+ * engine swappable later without touching the interpreter.
+ *
+ * squash CAN compile db_engine.c to its own standalone ".sqo" object
+ * (`squash -c -linux -64 SQS/db_engine.c -o SQS/db_engine.sqo`, see that
+ * target in Makefile.SQS.linux) and db_engine.c is written and tested to
+ * work that way -- but linking that .sqo into another program hits a
+ * real, pre-existing squash bug in cross-object symbol resolution (the
+ * exact same class of bug already documented in Makefile.SQW.linux/
+ * Makefile.SDL3.linux's own "sdl_part_video.sqo compiles cleanly but
+ * crashes" notes: confirmed here too via a minimal repro -- the merged
+ * binary segfaults at process start, before main() even runs). Rather
+ * than build SQS/SQS against a currently-broken link path, this
+ * `#include`s db_engine.c directly (the same single-translation-unit
+ * workaround SQW/SDL3 already use for the identical bug), so it's
+ * compiled together with this file rather than merged in as a separate
+ * .sqo -- once that linker bug is fixed, swapping this #include for a
+ * real .sqo link in Makefile.SQS.linux needs no other change on either
+ * side. */
+#include "db_engine.h"
+#include "db_engine.c"
+
 #define PHP_MAX_VARS 64
 #define PHP_VAL_MAX 1024
 #define PHP_KV_MAX 32
@@ -193,6 +221,20 @@ static PhpKVArray g_arrays[PHP_ARR_MAX];
 static int g_arr_alive[PHP_ARR_MAX];
 static int g_narrays = 0;
 
+/* Error text from the most recent __db_exec()/__db_query() call, read by
+ * the $wpdb-compatible class's own last_error handling -- request-
+ * lifetime, like every other g_* table on this page, reset alongside
+ * them. */
+static char g_db_last_error[512] = "";
+/* Raw packed text from the most recent successful __db_query() (see
+ * db_engine.c's own "PACKED ROW FORMAT" comment) -- cached so
+ * __db_get_var()/__db_get_col() can answer "row R, column C" directly
+ * without needing PHP-level introspection of an object's property names
+ * (this interpreter subset has no get_object_vars()/reflection, and
+ * real wpdb's get_var()/get_col() are column-POSITION-based, not
+ * name-based, so this is enough). */
+static char g_db_last_raw[PHP_OUT_MAX] = "";
+
 static void php_globals_reset(void) {
     int i;
     g_nconsts = 0;
@@ -205,6 +247,8 @@ static void php_globals_reset(void) {
     g_nobjects = 0;
     for (i = 0; i < PHP_ARR_MAX; i++) g_arr_alive[i] = 0;
     g_narrays = 0;
+    g_db_last_error[0] = 0;
+    g_db_last_raw[0] = 0;
 }
 
 static PhpClass *php_class_find(const char *name) {
@@ -668,6 +712,7 @@ static void php_sprintf(const char *fmt, char **all_args, int arg_base, int nval
 static void php_eval_expr(PhpState *st, char *out, int outcap);
 static void php_call_function(PhpState *caller, const char *name, char **args, int nargs, char *out, int outcap);
 static void php_call_method(PhpState *caller, int obj_id, PhpMethod *m, char **args, int nargs, char *out, int outcap);
+static void php_skip_to_paren_close(PhpState *st);
 
 /* Parses a parenthesized, comma-separated argument list: "(" already NOT
  * yet consumed -- st->src is at '(' on entry. Fills args[]/*, returns
@@ -727,27 +772,65 @@ typedef struct {
     PhpVar *var;
     int has_key;
     char key[128];
+    /* "BASE->member" instead of "BASE"/"BASE[key]" -- e.g. "$wpdb->error",
+     * "$post->ID". A real, common shape (see this struct's own comment
+     * on why it's here) that the OLD version of this struct/function
+     * couldn't represent at all -- callers had no way to tell "this was
+     * a ->member access" from "this was a bare, unset variable", so
+     * isset()/empty()/count()/is_array() on one gave the WRONG answer
+     * (checking the BASE object's own truthiness instead of the
+     * member's) rather than just an incomplete one. Only ONE level of
+     * "->member" is resolved (not "$a->b->c") -- good enough for the
+     * real call shapes this was found against. */
+    int has_member;
+    int obj_id;   /* decoded object id for the has_member case, -1 if the base isn't a live object */
+    char member[64];
 } PhpVarRef;
 
-/* Parses a bare "$name" or "$name[keyExpr]" starting at the current
- * position (skipping leading whitespace first) -- does NOT consume a
- * trailing ')' or ',', callers handle that themselves the same way
- * php_parse_args' own callers do. If the current position isn't a "$",
- * `ref->var` is left NULL and nothing is consumed (a non-variable
- * argument to isset()/count()/etc. isn't meaningful in real PHP either,
- * so this subset just treats it as "doesn't exist" rather than actually
- * evaluating it as a general expression). */
+/* Parses a bare "$name", "$name[keyExpr]", or "$name->member" (also
+ * "$this->member") starting at the current position (skipping leading
+ * whitespace first) -- does NOT consume a trailing ')' or ',', callers
+ * handle that themselves the same way php_parse_args' own callers do. If
+ * the current position isn't a "$", `ref->var` is left NULL and nothing
+ * is consumed (a non-variable argument to isset()/count()/etc. isn't
+ * meaningful in real PHP either, so this subset just treats it as
+ * "doesn't exist" rather than actually evaluating it as a general
+ * expression). Real WordPress code routinely calls isset()/empty() on a
+ * "->member" access (e.g. wp-includes/load.php's "empty($wpdb->error)")
+ * -- confirmed as a real bug this session when that shape wasn't
+ * recognized at all: the caller's own resync-to-')' logic kept parsing
+ * from going off the rails, but "$wpdb->error" still evaluated based on
+ * $wpdb's OWN truthiness (always true, since $wpdb holds a valid object)
+ * rather than the actual (unset, so falsy) property, misfiring
+ * wp_set_wpdb_vars()'s "if (!empty($wpdb->error)) dead_db();" gate. */
 static void php_resolve_varref(PhpState *st, PhpVarRef *ref) {
     memset(ref, 0, sizeof *ref);
+    ref->obj_id = -1;
     php_skip_ws(st);
     char c = *st->src;
     if (c != '$') return;
     st->src++;
     char name[64];
     php_read_ident(st, name, sizeof name);
-    ref->var = php_var_find(st, name);
+    char base_val[PHP_VAL_MAX]; base_val[0] = 0;
+    if (strcmp(name, "this") == 0) {
+        if (st->has_this) php_objref_encode(st->this_obj_id, base_val, sizeof base_val);
+    } else {
+        ref->var = php_var_find(st, name);
+        if (ref->var) { strncpy(base_val, ref->var->val, sizeof base_val - 1); base_val[sizeof base_val - 1] = 0; }
+    }
     php_skip_ws(st);
     c = *st->src;
+    if (c == '-' && st->src[1] == '>') {
+        st->src += 2;
+        char member[64];
+        php_read_ident(st, member, sizeof member);
+        strncpy(ref->member, member, sizeof ref->member - 1); ref->member[sizeof ref->member - 1] = 0;
+        ref->has_member = 1;
+        ref->obj_id = php_objref_decode(base_val);
+        php_skip_ws(st);
+        return;
+    }
     if (c == '[') {
         st->src++;
         php_skip_ws(st);
@@ -1062,7 +1145,57 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
                 c = *st->src;
                 if (c == ']') st->src++;
                 if (v && v->is_array) php_kv_lookup(&v->arr, key, cur, sizeof cur);
+                else if (v) {
+                    /* `v` isn't a NATIVE array (no "$v = array(...)" ever
+                     * ran for it), but its string VALUE might still be an
+                     * arrref token -- e.g. a function/method PARAMETER
+                     * that received an array argument (php_call_function/
+                     * php_call_method bind params via a plain
+                     * php_var_set(), which always clears is_array, same
+                     * as any other assignment -- see php_var_set's own
+                     * comment), or "$b = $a;" copying an array-holding
+                     * variable's value into a fresh non-array one. Every
+                     * SUBSEQUENT "[key]" in a chain (anything past the
+                     * first, e.g. "$this->arr[$k]"/"$a[$k1][$k2]")
+                     * already decodes `cur` as a possible arrref
+                     * regardless of any flag -- this was the ONE
+                     * remaining place a first-level "$name[key]" access
+                     * didn't, silently returning "" instead of the real
+                     * value for exactly the "$data['col']"-shaped access
+                     * a $wpdb-style class needs on its own array
+                     * parameters. */
+                    int aid = php_arrref_decode(v->val);
+                    if (aid >= 0) php_kv_lookup(&g_arrays[aid], key, cur, sizeof cur);
+                    else cur[0] = 0;
+                }
                 else cur[0] = 0;
+            } else if (v && v->is_array) {
+                /* A top-level array variable read BARE (no index) -- e.g.
+                 * passed as a function/method argument, "$b = $a;",
+                 * "return $arr;". Top-level arrays store their elements
+                 * directly in the PhpVar's own embedded PhpKVArray (see
+                 * this file's top comment on why), not through an arrref
+                 * token the way a NESTED array value does, so reading
+                 * `v->val` here (meaningless for an array -- it's never
+                 * written for an array-typed PhpVar) previously handed
+                 * the caller an empty string instead of anything usable,
+                 * silently breaking every "pass a whole array by value"
+                 * pattern. Confirmed a real, practical gap this session
+                 * while wiring up "$wpdb->insert($table, $data)"-shaped
+                 * calls, a real WordPress call shape (wp-includes/
+                 * option.php builds $data as a local variable, then
+                 * passes it). Snapshot the array's current contents into
+                 * a FRESH nested-array container and hand back an arrref
+                 * to THAT (a copy, not a live alias -- matching real
+                 * PHP's own copy-on-write array value semantics) so the
+                 * callee can index/iterate it via the same
+                 * php_arrref_decode() path as any other array value. */
+                int id = php_array_new();
+                if (id >= 0) {
+                    int ii;
+                    for (ii = 0; ii < v->arr.count; ii++) php_kv_set(&g_arrays[id], v->arr.items[ii].key, v->arr.items[ii].val);
+                    php_arrref_encode(id, cur, sizeof cur);
+                } else cur[0] = 0;
             } else {
                 if (v) { strncpy(cur, v->val, sizeof cur - 1); cur[sizeof cur - 1] = 0; }
                 else cur[0] = 0;
@@ -1130,6 +1263,36 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
         php_read_ident(st, name, sizeof name);
         php_skip_ws(st);
         c = *st->src;
+        if (strcmp(name, "array") == 0 && c == '(') {
+            /* An "array(...)" literal used directly as a general
+             * expression VALUE -- e.g. "$wpdb->insert($t, array('a'=>1))",
+             * a real, common WordPress call shape (confirmed in this
+             * project's own vendored source, wp-includes/option.php).
+             * The "$var = array(...)"/"container[key] = array(...)"
+             * assignment forms already special-case this (see
+             * php_lvalue_assign's own comment on why a flat string can't
+             * represent a whole array), but that special-casing lived
+             * only in the two lvalue-assignment call sites -- an
+             * array-literal appearing as an ORDINARY sub-expression (a
+             * function argument, here) fell through to the generic
+             * fallback below instead and evaluated to garbage/nothing.
+             * Same fix shape: allocate a fresh nested-array container,
+             * parse the literal into it, and evaluate to an arrref
+             * string pointing at it -- from here on it's just another
+             * array value, indexable/iterable by the callee exactly like
+             * any other array reference. */
+            st->src++;
+            int id = php_array_new();
+            if (id >= 0) {
+                php_parse_array_literal(st, &g_arrays[id], ')', NULL);
+                php_arrref_encode(id, out, outcap);
+            } else {
+                PhpKVArray dummy; memset(&dummy, 0, sizeof dummy);
+                php_parse_array_literal(st, &dummy, ')', NULL);
+                out[0] = 0;
+            }
+            return;
+        }
         if (strcmp(name, "new") == 0) {
             /* "new ClassName(args)" -- allocates a fresh object (see
              * php_object_new) and calls its __construct(), if one's
@@ -1178,14 +1341,31 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
                 php_resolve_varref(st, &ref);
                 php_skip_ws(st);
                 c = *st->src;
+                /* php_resolve_varref() also handles the "BASE->member"
+                 * shape now (see its own comment on the real bug this
+                 * fixed) -- but it never consumes exactly up to a ')'
+                 * for every possible input shape, so a resync here is
+                 * still cheap insurance against any OTHER expression
+                 * shape it doesn't recognize leaving st->src desynced. */
+                if (c != ')') php_skip_to_paren_close(st);
+                c = *st->src;
                 if (c == ')') st->src++;
                 int result;
                 if (strcmp(name, "isset") == 0) {
-                    if (!ref.var) result = 0;
+                    if (ref.has_member) {
+                        char tmp[PHP_VAL_MAX];
+                        result = ref.obj_id >= 0 && php_kv_has(&g_objects[ref.obj_id].props, ref.member, tmp, sizeof tmp);
+                    }
+                    else if (!ref.var) result = 0;
                     else if (ref.has_key) { char tmp[PHP_VAL_MAX]; result = ref.var->is_array && php_kv_has(&ref.var->arr, ref.key, tmp, sizeof tmp); }
                     else result = 1;
                 } else { /* empty() */
-                    if (!ref.var) result = 1;
+                    if (ref.has_member) {
+                        char tmp[PHP_VAL_MAX];
+                        if (ref.obj_id < 0 || !php_kv_has(&g_objects[ref.obj_id].props, ref.member, tmp, sizeof tmp)) result = 1;
+                        else result = !php_truthy(tmp);
+                    }
+                    else if (!ref.var) result = 1;
                     else if (ref.has_key) {
                         char tmp[PHP_VAL_MAX];
                         if (!ref.var->is_array || !php_kv_has(&ref.var->arr, ref.key, tmp, sizeof tmp)) result = 1;
@@ -1202,8 +1382,35 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
                 php_resolve_varref(st, &ref);
                 php_skip_ws(st);
                 c = *st->src;
+                /* php_resolve_varref() also handles the "BASE->member"
+                 * shape now (see its own comment on the real bug this
+                 * fixed) -- but it never consumes exactly up to a ')'
+                 * for every possible input shape, so a resync here is
+                 * still cheap insurance against any OTHER expression
+                 * shape it doesn't recognize leaving st->src desynced. */
+                if (c != ')') php_skip_to_paren_close(st);
+                c = *st->src;
                 if (c == ')') st->src++;
-                int n = (ref.var && ref.var->is_array) ? ref.var->arr.count : (ref.var ? 1 : 0);
+                /* A plain non-array-flagged var whose STRING VALUE is an
+                 * arrref token (e.g. "$results = __db_query(...);" --
+                 * see php_var_set's own comment: an ordinary assignment
+                 * always clears is_array) still needs its real element
+                 * count here, not the "1" a scalar would get -- same
+                 * arrref-string fallback as the "$name[key]" read path
+                 * above, see that comment for the full story. */
+                int n;
+                if (ref.has_member) {
+                    char tmp[PHP_VAL_MAX];
+                    if (ref.obj_id >= 0 && php_kv_has(&g_objects[ref.obj_id].props, ref.member, tmp, sizeof tmp)) {
+                        int aid = php_arrref_decode(tmp);
+                        n = (aid >= 0) ? g_arrays[aid].count : 1;
+                    } else n = 0;
+                }
+                else if (ref.var && ref.var->is_array) n = ref.var->arr.count;
+                else if (ref.var) {
+                    int aid = php_arrref_decode(ref.var->val);
+                    n = (aid >= 0) ? g_arrays[aid].count : 1;
+                } else n = 0;
                 snprintf(out, outcap, "%d", n);
                 return;
             }
@@ -1213,8 +1420,23 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
                 php_resolve_varref(st, &ref);
                 php_skip_ws(st);
                 c = *st->src;
+                /* php_resolve_varref() also handles the "BASE->member"
+                 * shape now (see its own comment on the real bug this
+                 * fixed) -- but it never consumes exactly up to a ')'
+                 * for every possible input shape, so a resync here is
+                 * still cheap insurance against any OTHER expression
+                 * shape it doesn't recognize leaving st->src desynced. */
+                if (c != ')') php_skip_to_paren_close(st);
+                c = *st->src;
                 if (c == ')') st->src++;
-                strncpy(out, (ref.var && ref.var->is_array) ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+                int isarr;
+                if (ref.has_member) {
+                    char tmp[PHP_VAL_MAX];
+                    isarr = ref.obj_id >= 0 && php_kv_has(&g_objects[ref.obj_id].props, ref.member, tmp, sizeof tmp) && php_arrref_decode(tmp) >= 0;
+                } else {
+                    isarr = ref.var && (ref.var->is_array || php_arrref_decode(ref.var->val) >= 0);
+                }
+                strncpy(out, isarr ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
                 return;
             }
             char arg_storage[PHP_ARG_MAX][PHP_VAL_MAX];
@@ -2411,6 +2633,71 @@ static void php_run_statements(PhpState *st) {
     }
 }
 
+/* Quotes/escapes a value for embedding as a single-quoted SQL literal in
+ * a statement string handed to sqdb_exec()/sqdb_query() -- doubles `'`
+ * (matching sqdb_value()'s own '' escape) AND doubles `\` (so a literal
+ * backslash in the value round-trips instead of being misread as the
+ * START of one of sqdb_value()'s OWN backslash-escapes, e.g. a value
+ * ending in a backslash right before the closing quote). `out` must be
+ * at least 2*strlen(in)+3 bytes. */
+static void php_db_sql_quote(const char *in, char *out, int outcap) {
+    int o = 0;
+    const char *p;
+    if (o < outcap - 1) out[o++] = '\'';
+    for (p = in; *p && o < outcap - 3; p++) {
+        if (*p == '\'' || *p == '\\') out[o++] = '\\';
+        out[o++] = *p;
+    }
+    if (o < outcap - 1) out[o++] = '\'';
+    out[o] = 0;
+}
+
+/* Column count / one field of the cached g_db_last_raw packed query
+ * result -- see g_db_last_raw's own comment. Shared by __db_get_var()/
+ * __db_get_col() so the packed-format parsing logic (identical to
+ * __db_query()'s own row-unpacking loop, just reading one field instead
+ * of building PHP objects) lives in exactly one place. */
+static int php_db_raw_ncols(const char *raw) {
+    const char *lend = strchr(raw, '\n');
+    int llen = lend ? (int)(lend - raw) : (int)strlen(raw);
+    if (llen == 0) return 0;
+    int n = 1, i;
+    for (i = 0; i < llen; i++) if (raw[i] == ',') n++;
+    return n;
+}
+static int php_db_raw_field(const char *raw, int row_index, int col_index, char *out, int outcap) {
+    int ncols = php_db_raw_ncols(raw);
+    if (col_index < 0 || col_index >= ncols) { out[0] = 0; return 0; }
+    const char *lend = strchr(raw, '\n');
+    const char *p = lend ? lend + 1 : raw + strlen(raw);
+    int r;
+    for (r = 0; r < row_index; r++) {
+        if (!*p) { out[0] = 0; return 0; }
+        lend = strchr(p, '\n');
+        if (!lend) { out[0] = 0; return 0; }
+        p = lend + 1;
+    }
+    if (!*p) { out[0] = 0; return 0; }
+    lend = strchr(p, '\n');
+    int llen = lend ? (int)(lend - p) : (int)strlen(p);
+    const char *cp = p, *cend = p + llen;
+    int ci = 0;
+    while (ci < col_index) {
+        const char *tab = memchr(cp, '\t', (size_t)(cend - cp));
+        cp = tab ? tab + 1 : cend;
+        ci++;
+    }
+    const char *tab = memchr(cp, '\t', (size_t)(cend - cp));
+    const char *fe = tab ? tab : cend;
+    char fieldbuf[PHP_VAL_MAX];
+    int flen = (int)(fe - cp);
+    if (flen >= (int)sizeof fieldbuf) flen = (int)sizeof fieldbuf - 1;
+    memcpy(fieldbuf, cp, (size_t)flen);
+    fieldbuf[flen] = 0;
+    db_unescape_field(fieldbuf, out, outcap);
+    return 1;
+}
+
 /* Calls a user-defined function (found via php_func_find) or one of a
  * small set of builtins. Builds a fresh, isolated local-variable scope
  * for a user function (no "global", no closures -- see this file's top
@@ -2512,6 +2799,265 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
         } else {
             strncpy(out, ".", outcap - 1); out[outcap - 1] = 0;
         }
+        return;
+    }
+
+    /* ── native database engine glue (SQS/db_engine.c) ───────────────
+     * These four are the only bridge between this interpreter and the
+     * native engine; everything WordPress-shaped (the $wpdb class,
+     * table-name properties, prepare()'s placeholder substitution) is
+     * real PHP source, not builtins -- see wp-includes/class-wpdb.php in
+     * the served WordPress tree. */
+    if (strcmp(name, "__db_open") == 0 && nargs >= 1) {
+        sqdb_open(args[0]);
+        out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "__db_exec") == 0 && nargs >= 1) {
+        int r = sqdb_exec(args[0], g_db_last_error, sizeof g_db_last_error);
+        if (r >= 0) g_db_last_error[0] = 0;
+        snprintf(out, outcap, "%d", r);
+        return;
+    }
+    if (strcmp(name, "__db_query") == 0 && nargs >= 1) {
+        /* Heap, not a stack local -- PHP_OUT_MAX is 64KB and this file's
+         * own convention (see php_call_function's PhpState comment
+         * further down) is to keep anything that size off the stack. */
+        char *raw = (char *)malloc(PHP_OUT_MAX);
+        int r = raw ? sqdb_query(args[0], raw, PHP_OUT_MAX) : -1;
+        if (!raw) { snprintf(g_db_last_error, sizeof g_db_last_error, "out of memory"); g_db_last_raw[0] = 0; }
+        else if (r < 0) { strncpy(g_db_last_error, raw, sizeof g_db_last_error - 1); g_db_last_error[sizeof g_db_last_error - 1] = 0; g_db_last_raw[0] = 0; }
+        else { g_db_last_error[0] = 0; strncpy(g_db_last_raw, raw, sizeof g_db_last_raw - 1); g_db_last_raw[sizeof g_db_last_raw - 1] = 0; }
+
+        int arr_id = php_array_new();
+        if (arr_id < 0) { free(raw); out[0] = 0; return; }
+        if (raw && r > 0) {
+            /* Packed format from db_engine.c's own header comment: line 1
+             * is comma-separated column names, each following line is one
+             * row of tab-separated, backslash-escaped field values -- the
+             * SAME escaping db_engine.c's own (also #include'd into this
+             * translation unit, so directly callable) db_unescape_field()
+             * already implements, reused here rather than duplicated. */
+            char cols[PHP_KV_MAX][128];
+            int ncols = 0;
+            const char *p = raw;
+            const char *lend = strchr(p, '\n');
+            int llen = lend ? (int)(lend - p) : (int)strlen(p);
+            const char *cp = p, *cend = p + llen;
+            while (cp < cend && ncols < PHP_KV_MAX) {
+                const char *comma = memchr(cp, ',', (size_t)(cend - cp));
+                const char *fend = comma ? comma : cend;
+                int flen = (int)(fend - cp);
+                if (flen >= (int)sizeof cols[0]) flen = (int)sizeof cols[0] - 1;
+                memcpy(cols[ncols], cp, (size_t)flen);
+                cols[ncols][flen] = 0;
+                ncols++;
+                cp = comma ? comma + 1 : cend;
+            }
+            p = lend ? lend + 1 : cend;
+
+            int rowidx = 0;
+            while (*p) {
+                lend = strchr(p, '\n');
+                llen = lend ? (int)(lend - p) : (int)strlen(p);
+                int oid = php_object_new("stdClass");
+                if (oid >= 0) {
+                    cp = p; cend = p + llen;
+                    int ci = 0;
+                    while (ci < ncols) {
+                        const char *tab = memchr(cp, '\t', (size_t)(cend - cp));
+                        const char *fe = tab ? tab : cend;
+                        char fieldbuf[PHP_VAL_MAX];
+                        int flen = (int)(fe - cp);
+                        if (flen >= (int)sizeof fieldbuf) flen = (int)sizeof fieldbuf - 1;
+                        memcpy(fieldbuf, cp, (size_t)flen);
+                        fieldbuf[flen] = 0;
+                        char unesc[PHP_VAL_MAX];
+                        db_unescape_field(fieldbuf, unesc, sizeof unesc);
+                        php_kv_set(&g_objects[oid].props, cols[ci], unesc);
+                        ci++;
+                        cp = tab ? tab + 1 : cend;
+                    }
+                    char enc[32], idxbuf[16];
+                    php_objref_encode(oid, enc, sizeof enc);
+                    snprintf(idxbuf, sizeof idxbuf, "%d", rowidx);
+                    php_kv_set(&g_arrays[arr_id], idxbuf, enc);
+                    rowidx++;
+                }
+                if (!lend) break;
+                p = lend + 1;
+            }
+        }
+        free(raw);
+        php_arrref_encode(arr_id, out, outcap);
+        return;
+    }
+    if (strcmp(name, "__db_insert_id") == 0) {
+        snprintf(out, outcap, "%ld", sqdb_insert_id());
+        return;
+    }
+    if (strcmp(name, "__db_last_error") == 0) {
+        strncpy(out, g_db_last_error, outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "__db_get_var") == 0) {
+        int col = nargs >= 1 ? atoi(args[0]) : 0;
+        int row = nargs >= 2 ? atoi(args[1]) : 0;
+        if (!php_db_raw_field(g_db_last_raw, row, col, out, outcap)) out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "__db_get_col") == 0) {
+        int col = nargs >= 1 ? atoi(args[0]) : 0;
+        int arr_id = php_array_new();
+        if (arr_id < 0) { out[0] = 0; return; }
+        int r = 0;
+        char val[PHP_VAL_MAX], idxbuf[16];
+        while (php_db_raw_field(g_db_last_raw, r, col, val, sizeof val)) {
+            snprintf(idxbuf, sizeof idxbuf, "%d", r);
+            php_kv_set(&g_arrays[arr_id], idxbuf, val);
+            r++;
+        }
+        php_arrref_encode(arr_id, out, outcap);
+        return;
+    }
+    /* insert()/update()/delete() build their SQL from a PHP array
+     * argument (e.g. "$wpdb->insert($table, array('option_name'=>$n,
+     * ...))") -- decoding it HERE via php_arrref_decode() and iterating
+     * in C, rather than in the $wpdb PHP source itself, sidesteps this
+     * interpreter subset having no working "foreach"/"while"/"for" (see
+     * php_run_statement's own comment on why those are parsed-and-
+     * skipped, not executed) -- there is no PHP-level way to iterate an
+     * array of unknown size/keys in this subset today. db_engine.c still
+     * never sees a PhpKVArray -- only the finished SQL string. */
+    if (strcmp(name, "__db_insert") == 0 && nargs >= 2) {
+        int aid = php_arrref_decode(args[1]);
+        if (aid < 0) { g_db_last_error[0] = 0; strncpy(out, "-1", outcap - 1); out[outcap - 1] = 0; return; }
+        PhpKVArray *data = &g_arrays[aid];
+        char *sql = (char *)malloc(PHP_OUT_MAX);
+        if (!sql) { strncpy(out, "-1", outcap - 1); out[outcap - 1] = 0; return; }
+        int o = snprintf(sql, PHP_OUT_MAX, "INSERT INTO %s (", args[0]);
+        int i;
+        for (i = 0; i < data->count; i++) o += snprintf(sql + o, (size_t)(PHP_OUT_MAX - o), "%s%s", i ? "," : "", data->items[i].key);
+        o += snprintf(sql + o, (size_t)(PHP_OUT_MAX - o), ") VALUES (");
+        for (i = 0; i < data->count; i++) {
+            char esc[PHP_VAL_MAX * 2 + 4];
+            php_db_sql_quote(data->items[i].val, esc, sizeof esc);
+            o += snprintf(sql + o, (size_t)(PHP_OUT_MAX - o), "%s%s", i ? "," : "", esc);
+        }
+        snprintf(sql + o, (size_t)(PHP_OUT_MAX - o), ")");
+        int r = sqdb_exec(sql, g_db_last_error, sizeof g_db_last_error);
+        if (r >= 0) g_db_last_error[0] = 0;
+        free(sql);
+        snprintf(out, outcap, "%d", r);
+        return;
+    }
+    if (strcmp(name, "__db_update") == 0 && nargs >= 3) {
+        int aid = php_arrref_decode(args[1]);
+        int wid = php_arrref_decode(args[2]);
+        if (aid < 0) { strncpy(out, "-1", outcap - 1); out[outcap - 1] = 0; return; }
+        PhpKVArray *data = &g_arrays[aid];
+        char *sql = (char *)malloc(PHP_OUT_MAX);
+        if (!sql) { strncpy(out, "-1", outcap - 1); out[outcap - 1] = 0; return; }
+        int o = snprintf(sql, PHP_OUT_MAX, "UPDATE %s SET ", args[0]);
+        int i;
+        for (i = 0; i < data->count; i++) {
+            char esc[PHP_VAL_MAX * 2 + 4];
+            php_db_sql_quote(data->items[i].val, esc, sizeof esc);
+            o += snprintf(sql + o, (size_t)(PHP_OUT_MAX - o), "%s%s=%s", i ? "," : "", data->items[i].key, esc);
+        }
+        if (wid >= 0 && g_arrays[wid].count > 0) {
+            PhpKVArray *w = &g_arrays[wid];
+            o += snprintf(sql + o, (size_t)(PHP_OUT_MAX - o), " WHERE ");
+            for (i = 0; i < w->count; i++) {
+                char esc[PHP_VAL_MAX * 2 + 4];
+                php_db_sql_quote(w->items[i].val, esc, sizeof esc);
+                o += snprintf(sql + o, (size_t)(PHP_OUT_MAX - o), "%s%s=%s", i ? " AND " : "", w->items[i].key, esc);
+            }
+        }
+        int r = sqdb_exec(sql, g_db_last_error, sizeof g_db_last_error);
+        if (r >= 0) g_db_last_error[0] = 0;
+        free(sql);
+        snprintf(out, outcap, "%d", r);
+        return;
+    }
+    if (strcmp(name, "__db_delete") == 0 && nargs >= 2) {
+        int wid = php_arrref_decode(args[1]);
+        char *sql = (char *)malloc(PHP_OUT_MAX);
+        if (!sql) { strncpy(out, "-1", outcap - 1); out[outcap - 1] = 0; return; }
+        int o = snprintf(sql, PHP_OUT_MAX, "DELETE FROM %s", args[0]);
+        if (wid >= 0 && g_arrays[wid].count > 0) {
+            PhpKVArray *w = &g_arrays[wid];
+            o += snprintf(sql + o, (size_t)(PHP_OUT_MAX - o), " WHERE ");
+            int i;
+            for (i = 0; i < w->count; i++) {
+                char esc[PHP_VAL_MAX * 2 + 4];
+                php_db_sql_quote(w->items[i].val, esc, sizeof esc);
+                o += snprintf(sql + o, (size_t)(PHP_OUT_MAX - o), "%s%s=%s", i ? " AND " : "", w->items[i].key, esc);
+            }
+        }
+        int r = sqdb_exec(sql, g_db_last_error, sizeof g_db_last_error);
+        if (r >= 0) g_db_last_error[0] = 0;
+        free(sql);
+        snprintf(out, outcap, "%d", r);
+        return;
+    }
+    if (strcmp(name, "__db_is_select") == 0 && nargs >= 1) {
+        const char *p = args[0];
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+        strncpy(out, strncasecmp(p, "SELECT", 6) == 0 ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "__db_escape") == 0 && nargs >= 1) {
+        /* Same escaping as php_db_sql_quote(), minus the surrounding
+         * quotes -- real wpdb::escape()/_real_escape() return the
+         * escaped text unquoted; callers wrap it in quotes themselves. */
+        int o = 0;
+        const char *p;
+        for (p = args[0]; *p && o < outcap - 2; p++) {
+            if (*p == '\'' || *p == '\\') out[o++] = '\\';
+            out[o++] = *p;
+        }
+        out[o] = 0;
+        return;
+    }
+    if (strcmp(name, "__db_prepare") == 0 && nargs >= 1) {
+        /* %s/%d/%f placeholder substitution, positional against args[1..]
+         * -- this interpreter subset has no variadic params/func_get_args
+         * (see this file's top comment on why everything here is
+         * deliberately bounded), so the $wpdb-side prepare() method
+         * always forwards a FIXED number of slots (see class-wpdb.php's
+         * own prepare()); however many of the query's OWN %s/%d/%f
+         * tokens there are is what actually determines how many get
+         * consumed, so unused trailing slots are simply never read.
+         * Real WordPress prepare() also accepts a single array as the
+         * second argument instead of N scalar args -- NOT supported
+         * here (documented scope limit; the multi-scalar-arg form is by
+         * far the more common call shape in WordPress core). */
+        int o = 0;
+        int argi = 1;
+        const char *p;
+        for (p = args[0]; *p && o < outcap - 1; p++) {
+            if (*p == '%' && p[1] == '%') { out[o++] = '%'; p++; continue; }
+            if (*p == '%' && (p[1] == 's' || p[1] == 'd' || p[1] == 'f') && argi < nargs) {
+                const char *val = args[argi++];
+                if (p[1] == 's') {
+                    char esc[PHP_VAL_MAX * 2 + 4];
+                    php_db_sql_quote(val, esc, sizeof esc);
+                    int el = (int)strlen(esc);
+                    if (el > outcap - 1 - o) el = outcap - 1 - o;
+                    memcpy(out + o, esc, (size_t)el);
+                    o += el;
+                } else if (p[1] == 'd') {
+                    o += snprintf(out + o, (size_t)(outcap - o), "%ld", strtol(val, NULL, 10));
+                } else {
+                    o += snprintf(out + o, (size_t)(outcap - o), "%g", strtod(val, NULL));
+                }
+                p++;
+                continue;
+            }
+            out[o++] = *p;
+        }
+        out[o] = 0;
         return;
     }
 
