@@ -175,9 +175,26 @@ static int sqw_history_pop(SqwHistoryStack *h, char *out, int outcap) {
  * for this pass. A real site's externally-linked CSS (as opposed to its
  * own inline <style> blocks) currently has no effect here -- a real,
  * known limitation, not a silent gap. */
+/* Kept alive for the CURRENT page (not freed at the end of sqw_apply_css()
+ * the way its own local used to be) so sqw_handle_event()'s mouse-move
+ * hover tracking can re-resolve just the old/new hover_node's style via
+ * css_apply_one() when hover changes -- see that call site's own comment
+ * for why ":hover" needs this to have any live visual effect at all. A
+ * plain file-scope static rather than a new SqwAppState field + threading
+ * a CssStylesheet* through every navigation function's signature (
+ * sqw_navigate_to/sqw_navigate_to_html/sqw_go_navigate/submit_form and
+ * every one of THEIR several call sites) -- same "avoid a wide signature
+ * change" rationale layout.c's own g_image_size_lookup static already
+ * uses. Freed and re-initialized on every navigation (see sqw_apply_css()
+ * itself), so it's always exactly the sheet the CURRENTLY-loaded page's
+ * own <style> tags produced. */
+static CssStylesheet g_current_css_sheet;
+static int g_current_css_sheet_valid = 0;
+
 static void sqw_apply_css(DomNode *root) {
-    CssStylesheet sheet;
-    css_stylesheet_init(&sheet);
+    if (g_current_css_sheet_valid) css_stylesheet_free(&g_current_css_sheet);
+    css_stylesheet_init(&g_current_css_sheet);
+    g_current_css_sheet_valid = 1;
 
     int cap = 64, top = 0;
     DomNode **stack = (DomNode **)malloc((size_t)cap * sizeof(DomNode *));
@@ -193,7 +210,7 @@ static void sqw_apply_css(DomNode *root) {
                 int i;
                 for (i = 0; i < child->child_count; i++) {
                     DomNode *tc = child->children[i];
-                    if (dom_is_text(tc)) css_parse_into(&sheet, tc->text);
+                    if (dom_is_text(tc)) css_parse_into(&g_current_css_sheet, tc->text);
                 }
             } else if (strcmp(child->tag, "textarea") == 0) {
                 /* <textarea>'s initial value is its own raw-text content
@@ -224,8 +241,7 @@ static void sqw_apply_css(DomNode *root) {
     }
     free(stack); free(next_child);
 
-    css_apply(root, &sheet);
-    css_stylesheet_free(&sheet);
+    css_apply(root, &g_current_css_sheet);
 }
 
 /* Walks the whole tree once (same "one pass right after dom_parse()/
@@ -420,9 +436,62 @@ static void draw_layout_images(SqwImageRenderer *ir, SqwVkContext *vk, VkCommand
         if (!sqw_image_cache_get_handle(b->node->img_url, &handle)) continue;
         float bx = b->x - scroll_x;
         float by = b->y - scroll_y;
+        DomNode *n = b->node;
         sqw_image_draw_quad(vk, ir, cmd, handle.descriptorSet, bx, by, b->w, b->h,
-            1.0f, 1.0f, 1.0f, 1.0f, viewport_w, viewport_h);
+            1.0f, 1.0f, 1.0f, n->css_opacity, viewport_w, viewport_h);
     }
+}
+
+/* Draws each box's own border, per side (css_border_width[4], already
+ * factored into the box's own size by layout.c -- see dom.h's own
+ * comment on css_border_width -- so the rect below is drawn flush against
+ * b->x/b->y/b->w/b->h, no separate offset math needed). This was the one
+ * deliberately-deferred half of "support border" (dom.h's own comment on
+ * css_border_width explains why sizing landed first) -- four flat-colored
+ * strips via the same sqw_renderer_draw_rect() primitive the toolbar/
+ * scrollbars/focus rings already use, not a real line-style (solid vs.
+ * dashed/dotted/double/... all render identically, solid) -- border-style
+ * only ever zeroes width for none/hidden (see css.c's own comment), never
+ * changes how a nonzero-width border actually draws. Border color falls
+ * back to the element's own text color (real CSS's "currentColor"
+ * default for border-color), then black, when no explicit border-color
+ * was set -- matches how a real browser resolves an unset border-color. */
+static void draw_layout_borders(SqwVkContext *vk, SqwRenderer *renderer, VkCommandBuffer cmd,
+                                 LayoutList *boxes, float viewport_w, float viewport_h,
+                                 float scroll_x, float scroll_y) {
+    int i;
+    for (i = 0; i < boxes->count; i++) {
+        LayoutBox *b = &boxes->boxes[i];
+        DomNode *n = b->node;
+        if (!n || (n->css_border_width[0] <= 0.0f && n->css_border_width[1] <= 0.0f &&
+                   n->css_border_width[2] <= 0.0f && n->css_border_width[3] <= 0.0f)) continue;
+        float r, g, bl;
+        if (n->css_has_border_color) { r = n->css_border_color[0]; g = n->css_border_color[1]; bl = n->css_border_color[2]; }
+        else if (n->css_has_color) { r = n->css_color[0]; g = n->css_color[1]; bl = n->css_color[2]; }
+        else { r = 0.0f; g = 0.0f; bl = 0.0f; }
+        float bx = b->x - scroll_x, by = b->y - scroll_y;
+        float tw = n->css_border_width[0], rw = n->css_border_width[1];
+        float bw = n->css_border_width[2], lw = n->css_border_width[3];
+        if (tw > 0.0f) sqw_renderer_draw_rect(vk, renderer, cmd, bx, by, b->w, tw, r, g, bl, viewport_w, viewport_h);
+        if (bw > 0.0f) sqw_renderer_draw_rect(vk, renderer, cmd, bx, by + b->h - bw, b->w, bw, r, g, bl, viewport_w, viewport_h);
+        if (lw > 0.0f) sqw_renderer_draw_rect(vk, renderer, cmd, bx, by, lw, b->h, r, g, bl, viewport_w, viewport_h);
+        if (rw > 0.0f) sqw_renderer_draw_rect(vk, renderer, cmd, bx + b->w - rw, by, rw, b->h, r, g, bl, viewport_w, viewport_h);
+    }
+}
+
+/* font-weight:bold, real per-element (css_apply() already resolved
+ * inheritance -- see dom.h's own comment), rendered as a cheap "faux
+ * bold": the SAME string drawn twice, offset 1px right, rather than a
+ * genuinely bolder glyph -- this project's font atlas (font_atlas.h)
+ * bakes exactly one weight of DejaVu Sans, no bold variant exists to
+ * sample instead. A real second draw call, not a shader trick, so it
+ * works through the exact same sqw_text_draw_string() path (and its own
+ * SQW_TEXT_MAX_GLYPHS cap) as everything else -- doubles the glyph count
+ * for bold text only, negligible at this project's page scale. */
+static void draw_text_maybe_bold(SqwTextRenderer *tr, float x, float y, const char *s, int len, float scale,
+                                  float r, float g, float b, float a, int bold, float viewport_w, float viewport_h) {
+    if (bold) sqw_text_draw_string(tr, x + 1.0f, y, s, len, scale, r, g, b, a, viewport_w, viewport_h);
+    sqw_text_draw_string(tr, x, y, s, len, scale, r, g, b, a, viewport_w, viewport_h);
 }
 
 static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer *renderer, VkCommandBuffer cmd,
@@ -446,29 +515,50 @@ static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer 
              * ancestor declared one. */
             float tr_, tg_, tb_ = 0.0f;
             tr_ = tg_ = 0.0f;
-            DomNode *anc = b->node->parent;
+            /* "textnode" / "owner": local plain pointers, read through
+             * for every field access below -- never "b->node->parent->X"
+             * or "b->node->X" chained inline. Real, confirmed squash
+             * codegen bug (see css_set_default_style()'s own comment,
+             * css.c): chaining two "->" hops (or more) to reach a field
+             * reads back garbage on a struct this size, even though the
+             * exact same field read through an ordinary local pointer
+             * variable works correctly. */
+            DomNode *textnode = b->node;
+            DomNode *owner = textnode->parent;
+            DomNode *anc = owner;
             while (anc && !anc->css_has_color) anc = anc->parent;
             if (anc) { tr_ = anc->css_color[0]; tg_ = anc->css_color[1]; tb_ = anc->css_color[2]; }
-            sqw_text_draw_string(tr, bx, by, b->node->text + b->text_start, b->text_len,
-                SQW_TEXT_SCALE, tr_, tg_, tb_, 1.0f, viewport_w, viewport_h);
+            /* opacity is NOT inherited (see dom.h's own comment), so this
+             * is the text's DIRECT owning element's own opacity, not
+             * walked up like color above. bold likewise comes straight
+             * off the owner (IS inherited, already resolved by
+             * css_apply(), no walk needed here either). */
+            float op = owner ? owner->css_opacity : 1.0f;
+            int bold = owner && owner->css_font_weight_bold;
+            draw_text_maybe_bold(tr, bx, by, textnode->text + b->text_start, b->text_len,
+                b->text_scale, tr_, tg_, tb_, op, bold, viewport_w, viewport_h);
         } else if (b->kind == SQW_BOX_A) {
+            DomNode *n = b->node;
             float r, g, bl;
-            anchor_color(b->node, &r, &g, &bl);
-            if (b->node->css_has_color) { r = b->node->css_color[0]; g = b->node->css_color[1]; bl = b->node->css_color[2]; }
+            anchor_color(n, &r, &g, &bl);
+            if (n->css_has_color) { r = n->css_color[0]; g = n->css_color[1]; bl = n->css_color[2]; }
             /* Subtle hover feedback: a translucent-looking lighter tint by
              * blending toward white, cheap and doesn't need real alpha
              * blending on the (opaque) box pipeline. */
-            if (b->node->hover) { r = r + (1.0f - r) * 0.35f; g = g + (1.0f - g) * 0.35f; bl = bl + (1.0f - bl) * 0.35f; }
+            if (n->hover) { r = r + (1.0f - r) * 0.35f; g = g + (1.0f - g) * 0.35f; bl = bl + (1.0f - bl) * 0.35f; }
             sqw_renderer_draw_rect(vk, renderer, cmd, bx, by + b->h - 2.0f, b->w, 2.0f, r, g, bl, viewport_w, viewport_h);
-            concat_direct_text(b->node, label, sizeof label);
-            sqw_text_draw_string(tr, bx, by, label, (int)strlen(label),
-                SQW_TEXT_SCALE, r, g, bl, 1.0f, viewport_w, viewport_h);
+            concat_direct_text(n, label, sizeof label);
+            float op = n->css_opacity; int bold = n->css_font_weight_bold;
+            draw_text_maybe_bold(tr, bx, by, label, (int)strlen(label),
+                b->text_scale, r, g, bl, op, bold, viewport_w, viewport_h);
         } else if (b->kind == SQW_BOX_SPAN) {
+            DomNode *n = b->node;
             float tr_ = 0.0f, tg_ = 0.0f, tb_ = 0.0f;
-            if (b->node->css_has_color) { tr_ = b->node->css_color[0]; tg_ = b->node->css_color[1]; tb_ = b->node->css_color[2]; }
-            concat_direct_text(b->node, label, sizeof label);
-            sqw_text_draw_string(tr, bx, by, label, (int)strlen(label),
-                SQW_TEXT_SCALE, tr_, tg_, tb_, 1.0f, viewport_w, viewport_h);
+            if (n->css_has_color) { tr_ = n->css_color[0]; tg_ = n->css_color[1]; tb_ = n->css_color[2]; }
+            concat_direct_text(n, label, sizeof label);
+            float op = n->css_opacity; int bold = n->css_font_weight_bold;
+            draw_text_maybe_bold(tr, bx, by, label, (int)strlen(label),
+                b->text_scale, tr_, tg_, tb_, op, bold, viewport_w, viewport_h);
         } else if (b->kind == SQW_BOX_BUTTON) {
             /* Covers both a real <button> AND <input type="submit"/"button">
              * (see layout.c's own dispatch) -- the latter's label comes
@@ -910,6 +1000,73 @@ static void draw_toolbar(SqwVkContext *vk, SqwRenderer *renderer, SqwTextRendere
         SQW_TEXT_SCALE, 1.0f, 1.0f, 1.0f, 1.0f, viewport_w, viewport_h);
 }
 
+#define SQW_LOADBAR_H 6.0f
+
+/* Thin progress strip fixed to the bottom edge of the render window while a
+ * navigation is in flight -- the requested "loading progress" indicator.
+ * Screen-space (drawn at a fixed viewport_h-relative Y, same as every other
+ * toolbar/scrollbar draw in this file -- NEVER offset by scroll_x/scroll_y),
+ * so it stays pinned to the bottom of the window regardless of where the
+ * still-visible old page is scrolled to.
+ * Deliberately covers only the two things that can actually be measured
+ * ahead of time -- Vulkan/renderer bring-up (already fully complete by the
+ * time ANY frame, including this bar, can be drawn at all -- see this
+ * function's own weight comment below) and the network fetch itself (real
+ * bytes-received/content-length, via SqwAppState's fetch_content_length/
+ * fetch_bytes_received, refreshed once per frame by
+ * sqw_check_pending_fetch()) -- NOT the render of the fetched page's own
+ * content: this bar is drawn every frame the OLD page is still what's on
+ * screen (sqw_draw_frame() calls this before pending_fetch has been
+ * swapped in), and it disappears the instant sqw_check_pending_fetch()
+ * swaps the new DOM in and starts laying it out/painting it, at which
+ * point tracking is deliberately no longer this function's concern -- see
+ * sqw_draw_frame()'s own call site.
+ *
+ * Progress is a weighted sum of two anticipated phases:
+ *   - SQW_LOADBAR_VK_WEIGHT (25%): Vulkan/renderer readiness. There is no
+ *     way to show *partial* credit for this on-screen (nothing can be
+ *     presented until the swapchain/pipelines already exist -- see
+ *     main()'s own startup-progress fprintf()s for the only place actual
+ *     Vulkan-init sub-steps are visible, since that happens before any
+ *     window content can be drawn at all), so by the time this function
+ *     can run even once, that share is always already earned in full.
+ *   - The remaining 75%: real network progress, `bytes_received /
+ *     content_length` when the server sent a Content-Length header (the
+ *     common case), scaled into that remaining share. When the length
+ *     isn't known ahead of time (chunked/close-delimited responses -- see
+ *     content_length's own -1 convention), falls back to a slow
+ *     back-and-forth pulse driven by frame_count instead of a real
+ *     fraction, same convention every real browser's indeterminate spinner
+ *     uses for a response whose total size genuinely isn't knowable yet. */
+#define SQW_LOADBAR_VK_WEIGHT 0.25f
+
+static void sqw_draw_loading_bar(SqwVkContext *vk, SqwRenderer *renderer, VkCommandBuffer cmd,
+                                  long bytes_received, long content_length, int frame_count,
+                                  float viewport_w, float viewport_h) {
+    float frac;
+    if (content_length > 0) {
+        frac = (float)bytes_received / (float)content_length;
+        if (frac > 1.0f) frac = 1.0f;
+        if (frac < 0.0f) frac = 0.0f;
+        frac = SQW_LOADBAR_VK_WEIGHT + frac * (1.0f - SQW_LOADBAR_VK_WEIGHT);
+    } else {
+        /* Indeterminate: a ~120px band sweeping left-to-right-to-left
+         * across the bar every ~90 frames, confined to the post-Vulkan
+         * share of the bar (never dips back below SQW_LOADBAR_VK_WEIGHT)
+         * so it still visibly communicates "Vulkan/renderer is ready,
+         * fetch is in progress" even without a real byte count. */
+        float t = (float)(frame_count % 180);
+        float sweep = (t < 90.0f) ? (t / 90.0f) : (2.0f - t / 90.0f);
+        frac = SQW_LOADBAR_VK_WEIGHT + sweep * (1.0f - SQW_LOADBAR_VK_WEIGHT);
+    }
+
+    float bar_y = viewport_h - SQW_LOADBAR_H;
+    sqw_renderer_draw_rect(vk, renderer, cmd, 0.0f, bar_y, viewport_w, SQW_LOADBAR_H,
+        0.80f, 0.80f, 0.80f, viewport_w, viewport_h);
+    sqw_renderer_draw_rect(vk, renderer, cmd, 0.0f, bar_y, viewport_w * frac, SQW_LOADBAR_H,
+        0.20f, 0.45f, 0.85f, viewport_w, viewport_h);
+}
+
 /* Bundles every piece of state that used to live as one of main()'s own
  * several-dozen local variables, spanning its entire ~700-line body, into
  * one heap-allocated struct instead (malloc'd once in main(), same
@@ -946,6 +1103,14 @@ typedef struct {
     char current_url[SQW_PATH_MAX];
     char pending_fetch_url[SQW_PATH_MAX];
     SqwNetResult *pending_fetch; /* non-NULL while an http(s):// fetch is outstanding */
+    /* Loading-progress bar state -- see sqw_draw_loading_bar()'s own
+     * comment. Only meaningful while pending_fetch is non-NULL; snapshot
+     * of pending_fetch's own progress fields, refreshed once per frame by
+     * sqw_check_pending_fetch() (a single mutex-protected read, rather than
+     * the draw call locking pending_fetch->mutex itself) so the toolbar
+     * draw code never needs to touch net_client.h's threading at all. */
+    long fetch_content_length; /* -1 = unknown (falls back to an indeterminate pulse) */
+    long fetch_bytes_received;
 
     float viewport_w, viewport_h;
     float scroll_x, scroll_y;
@@ -1142,6 +1307,16 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
             if (new_hover != st->hover_node) {
                 if (st->hover_node) st->hover_node->hover = 0;
                 if (new_hover) new_hover->hover = 1;
+                /* Live ":hover" CSS re-resolve -- see g_current_css_sheet's
+                 * own comment. Re-resolving only these two nodes (not the
+                 * whole tree) is cheap enough to do on every hover change;
+                 * doesn't reflow (a ":hover" rule that changes something
+                 * layout-affecting won't visually take effect until the
+                 * next real relayout -- see css_apply_one()'s own comment). */
+                if (g_current_css_sheet_valid) {
+                    if (st->hover_node) css_apply_one(st->hover_node, &g_current_css_sheet);
+                    if (new_hover) css_apply_one(new_hover, &g_current_css_sheet);
+                }
                 st->hover_node = new_hover;
             }
         } else if (st->hover_node) {
@@ -1149,6 +1324,7 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
              * state so a link doesn't stay highlighted while the mouse is
              * nowhere near it. */
             st->hover_node->hover = 0;
+            if (g_current_css_sheet_valid) css_apply_one(st->hover_node, &g_current_css_sheet);
             st->hover_node = NULL;
         }
     } else if (ev->type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev->button.button == 1) {
@@ -1496,6 +1672,8 @@ static void sqw_check_pending_fetch(SqwAppState *st) {
     int fetch_ready = st->pending_fetch->ready;
     int fetch_success = st->pending_fetch->success;
     char *fetch_body = st->pending_fetch->body;
+    st->fetch_content_length = st->pending_fetch->content_length;
+    st->fetch_bytes_received = st->pending_fetch->bytes_received;
     pthread_mutex_unlock(&st->pending_fetch->mutex);
     if (!fetch_ready) return;
     if (fetch_success) {
@@ -1654,12 +1832,17 @@ static void sqw_draw_frame(SqwAppState *st) {
      * see the adjusted value. */
     float draw_scroll_y = st->scroll_y - SQW_TOOLBAR_H;
     sqw_renderer_draw(st->vk, st->renderer, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
+    draw_layout_borders(st->vk, st->renderer, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
     sqw_image_renderer_begin_frame(st->image_renderer);
     draw_layout_images(st->image_renderer, st->vk, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
     draw_layout_text(st->text_renderer, st->vk, st->renderer, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
     LayoutBox vthumb_dummy, hthumb_dummy;
     draw_scrollbars(st->vk, st->renderer, cmd, st->boxes.content_w, st->boxes.content_h, st->viewport_w, st->viewport_h, st->scroll_x, st->scroll_y, &vthumb_dummy, &hthumb_dummy);
     draw_toolbar(st->vk, st->renderer, st->text_renderer, cmd, st->url_bar_text, st->url_bar_focused, st->hist->count > 0, st->viewport_w, st->viewport_h);
+    if (st->pending_fetch) {
+        sqw_draw_loading_bar(st->vk, st->renderer, cmd, st->fetch_bytes_received, st->fetch_content_length,
+            st->frame_count, st->viewport_w, st->viewport_h);
+    }
     sqw_text_renderer_flush(st->vk, st->text_renderer, cmd, st->viewport_w, st->viewport_h);
     sqw_vk_end_frame(st->vk, cmd, imageIndex);
 
@@ -1712,6 +1895,17 @@ int main(void) {
     memset(st, 0, sizeof(*st));
     st->window = window;
 
+    /* Textual startup-progress reporting for the Vulkan/renderer bring-up
+     * phase -- the ONLY place these steps' progress can be shown at all:
+     * nothing can be presented to the window until the swapchain and every
+     * renderer's pipeline already exist (sqw_renderer_draw_rect() and
+     * friends all require them), so the on-screen loading bar
+     * (sqw_draw_loading_bar(), used once real page navigation starts)
+     * can't draw anything DURING this phase -- by the time it can run for
+     * the first time, this phase is always already 100% done. Anticipated
+     * weights below are rough (not measured timings), just enough to give
+     * this init sequence a legible sense of progress on the console. */
+    fprintf(stderr, "SQW: loading 0%% (starting Vulkan init)\n"); fflush(stdout);
     st->vk = (SqwVkContext *)malloc(sizeof(SqwVkContext));
 #ifdef __linux__
     if (!sqw_vk_context_init(st->vk, dpy, win, ((uint32_t)SQW_VIEWPORT_W << 16) | (uint32_t)SQW_VIEWPORT_H)) {
@@ -1721,18 +1915,21 @@ int main(void) {
         fprintf(stderr, "SQW: Vulkan init failed\n"); fflush(stdout);
         return 1;
     }
+    fprintf(stderr, "SQW: loading 40%% (Vulkan device/swapchain ready)\n"); fflush(stdout);
 
     st->renderer = (SqwRenderer *)malloc(sizeof(SqwRenderer));
     if (!sqw_renderer_init(st->vk, st->renderer)) {
         fprintf(stderr, "SQW: renderer init failed\n"); fflush(stdout);
         return 1;
     }
+    fprintf(stderr, "SQW: loading 60%% (shape renderer ready)\n"); fflush(stdout);
 
     st->text_renderer = (SqwTextRenderer *)malloc(sizeof(SqwTextRenderer));
     if (!sqw_text_renderer_init(st->vk, st->text_renderer)) {
         fprintf(stderr, "SQW: text renderer init failed\n"); fflush(stdout);
         return 1;
     }
+    fprintf(stderr, "SQW: loading 80%% (text renderer ready)\n"); fflush(stdout);
 
     st->image_renderer = (SqwImageRenderer *)malloc(sizeof(SqwImageRenderer));
     if (!sqw_image_renderer_init(st->vk, st->image_renderer)) {
@@ -1741,6 +1938,7 @@ int main(void) {
     }
     sqw_image_cache_init(st->vk, st->image_renderer);
     layout_set_image_size_lookup(sqw_image_cache_get_size);
+    fprintf(stderr, "SQW: loading 100%% (Vulkan/renderer init complete)\n"); fflush(stdout);
 
     sqw_dirname(SQW_INITIAL_PAGE, st->current_dir);
     /* Non-empty only when the CURRENT page was reached over the network

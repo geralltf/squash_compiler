@@ -76,6 +76,41 @@ static int sqw_net_parse_url(const char *url, int *is_https, char *host, int *po
     return 1;
 }
 
+/* Case-insensitive search for a "Content-Length: N" header within the
+ * already-received header block [buf, hdr_end) and returns N, or -1 if the
+ * header isn't present/parseable -- used to give sqw_net_worker() a real
+ * expected-body-size the instant headers finish arriving, so the loading
+ * bar can show a real fraction instead of an indeterminate pulse for any
+ * server that sends this (near-universal for a non-chunked response). Only
+ * searches within the header block itself (never past hdr_end), so a
+ * "Content-Length:"-looking string appearing in the body itself can't be
+ * mistaken for the real header. */
+static long sqw_net_parse_content_length(const char *buf, const char *hdr_end) {
+    const char *p = buf;
+    long name_len = (long)strlen("content-length:");
+    while (p < hdr_end) {
+        const char *line_end = p;
+        while (line_end < hdr_end - 1 && !(line_end[0] == '\r' && line_end[1] == '\n')) line_end++;
+        if (line_end - p >= name_len) {
+            int i, match = 1;
+            for (i = 0; i < name_len; i++) {
+                char c = p[i];
+                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                if (c != "content-length:"[i]) { match = 0; break; }
+            }
+            if (match) {
+                const char *v = p + name_len;
+                while (v < line_end && (*v == ' ' || *v == '\t')) v++;
+                long val = 0; int saw_digit = 0;
+                while (v < line_end && *v >= '0' && *v <= '9') { val = val * 10 + (*v - '0'); v++; saw_digit = 1; }
+                return saw_digit ? val : -1;
+            }
+        }
+        p = line_end + 2;
+    }
+    return -1;
+}
+
 /* Blocking connect + request + read-to-EOF, run entirely on the
  * background thread sqw_net_fetch_async_ex() spawns -- never touches
  * DOM/layout state, only writes into the heap SqwNetResult the main
@@ -218,6 +253,15 @@ static void *sqw_net_worker(void *arg) {
                     long cap = 65536, len = 0;
                     char *buf = (char *)malloc((size_t)cap);
                     int too_big = 0;
+                    /* Offset (not a pointer -- `buf` itself can move on any
+                     * iteration's realloc() above, which would leave a
+                     * stored pointer dangling) of the first byte AFTER the
+                     * header block's "\r\n\r\n", once it's actually finished
+                     * arriving (may take several reads). -1 until then;
+                     * everything from here on is counted as BODY progress,
+                     * matching content_length/bytes_received's own units
+                     * (see SqwNetResult's field comment). */
+                    long hdr_end_off = -1;
                     for (;;) {
                         if (len >= SQW_NET_MAX_RESPONSE) { too_big = 1; break; }
                         if (cap - len < 4097) { cap *= 2; buf = (char *)realloc(buf, (size_t)cap); }
@@ -225,6 +269,30 @@ static void *sqw_net_worker(void *arg) {
                                           : recv(fd, buf + len, 4096, 0);
                         if (n <= 0) break;
                         len += n;
+                        if (hdr_end_off < 0) {
+                            /* A bounded scan over [0, len), NOT strstr():
+                             * `buf` isn't NUL-terminated yet at this point
+                             * (that only happens once the whole read loop
+                             * ends, below) -- strstr() on it here would
+                             * read uninitialized bytes past `len` looking
+                             * for one, an out-of-bounds/UB risk for
+                             * whatever garbage malloc() handed back. */
+                            long si;
+                            for (si = 0; si + 4 <= len; si++) {
+                                if (buf[si] == '\r' && buf[si+1] == '\n' && buf[si+2] == '\r' && buf[si+3] == '\n') {
+                                    hdr_end_off = si + 4;
+                                    break;
+                                }
+                            }
+                        }
+                        pthread_mutex_lock(&r->mutex);
+                        if (hdr_end_off >= 0) {
+                            if (r->content_length < 0) {
+                                r->content_length = sqw_net_parse_content_length(buf, buf + hdr_end_off - 4);
+                            }
+                            r->bytes_received = len - hdr_end_off;
+                        }
+                        pthread_mutex_unlock(&r->mutex);
                     }
                     if (cap - len < 1) { cap += 1; buf = (char *)realloc(buf, (size_t)cap); }
                     buf[len] = 0;
@@ -297,6 +365,8 @@ SqwNetResult *sqw_net_fetch_async_ex(const char *url, const char *method, const 
     r->body = NULL;
     r->body_len = 0;
     r->abandoned = 0;
+    r->content_length = -1;
+    r->bytes_received = 0;
 
     SqwNetFetchArgs *fa = (SqwNetFetchArgs *)malloc(sizeof(SqwNetFetchArgs));
     fa->result = r;

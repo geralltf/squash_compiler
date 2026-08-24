@@ -85,6 +85,17 @@ typedef struct {
     int *line_boxes;
     int line_box_count, line_box_cap;
 
+    /* Real per-element text metrics, resolved once at push time from this
+     * frame's own node (css_font_size/css_text_align/css_line_height,
+     * already resolved by css_apply() before layout ever runs) --
+     * text_scale is what SQW_TEXT_SCALE used to be everywhere in this
+     * file (a fixed constant); normal_line_h is what SQW_LINE_H used to
+     * be. See LayoutBox::text_scale's own comment for why the exact same
+     * value has to reach the draw pass too. */
+    float text_scale;
+    float normal_line_h;
+    int text_align; /* CssDisplay-adjacent: 0=left, 1=center, 2=right (see dom.h) */
+
     /* Box-model bookkeeping for THIS frame's own box (applied when the
      * frame is popped -- see layout_compute()'s own pop-time comment).
      * All zero for the synthetic root and for any element with no
@@ -181,11 +192,24 @@ static int is_atomic_inline_tag(const char *tag) {
  * further descent) at SQW_TEXT_SCALE -- used to size <a>/<span>/<button>,
  * which this layout treats as one indivisible inline unit (unlike a plain
  * text node, which word-wraps -- see place_text_node()). */
-static float direct_text_width(const DomNode *node) {
+static float node_text_scale(const DomNode *node) {
+    return SQW_TEXT_SCALE * (node->css_font_size / 16.0f);
+}
+
+static float node_normal_line_h(const DomNode *node, float scale) {
+    /* Copy to a local before comparing -- see css.c's own top-of-file
+     * comment (and php_mini.c's, which first documented it) on the real
+     * squash codegen bug where comparing a struct field read through "->"
+     * DIRECTLY is unreliable; only comparing a plain local is safe. */
+    float lh = node->css_line_height;
+    return lh > 0.0f ? lh : (SQW_FONT_CELL_H * scale);
+}
+
+static float direct_text_width(const DomNode *node, float scale) {
     int i; float w = 0.0f;
     for (i = 0; i < node->child_count; i++) {
         DomNode *c = node->children[i];
-        if (dom_is_text(c)) w += sqw_text_measure(c->text, (int)strlen(c->text), SQW_TEXT_SCALE);
+        if (dom_is_text(c)) w += sqw_text_measure(c->text, (int)strlen(c->text), scale);
     }
     return w;
 }
@@ -239,6 +263,9 @@ static void init_block_frame(LayoutFrame *nf, DomNode *child, float bx, float by
     nf->flex_row_at = 0; nf->flex_row_y = 0; nf->flex_row_max_h = 0;
     nf->is_grid = 0; nf->grid_col_x = 0; nf->grid_col_w = 0;
     nf->grid_ncols = 0; nf->grid_col_index = 0; nf->grid_row_y = 0; nf->grid_row_max_h = 0;
+    nf->text_scale = node_text_scale(child);
+    nf->normal_line_h = node_normal_line_h(child, nf->text_scale);
+    nf->text_align = child->css_text_align;
 }
 
 static void frame_track_line_box(LayoutFrame *f, int box_index) {
@@ -252,7 +279,13 @@ static void frame_track_line_box(LayoutFrame *f, int box_index) {
 /* If this frame is a <center>, shift every box on the just-finished line so
  * the line as a whole is horizontally centered within the frame's width. */
 static void finalize_line(LayoutFrame *f, LayoutList *out) {
-    if (f->is_center && f->line_box_count > 0) {
+    /* <center> forces centering regardless of text-align (real HTML5:
+     * <center> behaves like "text-align: center" plus more, but centering
+     * text is the one part this layout engine implements); otherwise the
+     * frame's own (real, inherited) css_text_align decides. */
+    int want_center = f->is_center || f->text_align == 1;
+    int want_right = !f->is_center && f->text_align == 2;
+    if ((want_center || want_right) && f->line_box_count > 0) {
         /* Measured from the first box's left edge to the last box's right
          * edge (not f->cursor_x, which still includes one trailing
          * inter-box gap after the last box -- a word-run gap and an
@@ -261,7 +294,7 @@ static void finalize_line(LayoutFrame *f, LayoutList *out) {
         LayoutBox *lastb = &out->boxes[f->line_boxes[f->line_box_count - 1]];
         LayoutBox *firstb = &out->boxes[f->line_boxes[0]];
         float used_w = (lastb->x + lastb->w) - firstb->x;
-        float shift = (f->avail_w - used_w) / 2.0f;
+        float shift = want_center ? (f->avail_w - used_w) / 2.0f : (f->avail_w - used_w);
         if (shift > 0) {
             int i;
             for (i = 0; i < f->line_box_count; i++) out->boxes[f->line_boxes[i]].x = out->boxes[f->line_boxes[i]].x + shift;
@@ -278,6 +311,7 @@ typedef struct {
     float w, h;
     int text_start, text_len;
     float gap;
+    float text_scale; /* see LayoutBox::text_scale's own comment */
 } PlaceSpec;
 
 static void place_inline_run(LayoutFrame *f, LayoutList *out, DomNode *node, const PlaceSpec *spec) {
@@ -292,6 +326,7 @@ static void place_inline_run(LayoutFrame *f, LayoutList *out, DomNode *node, con
         f->line_h = 0;
     }
     layout_list_push_full(out, node, spec->kind, f->x + f->cursor_x, f->y + f->cursor_y, w, h, spec->text_start, spec->text_len);
+    out->boxes[out->count - 1].text_scale = spec->text_scale;
     frame_track_line_box(f, out->count - 1);
     f->cursor_x = f->cursor_x + w + spec->gap;
     if (h > f->line_h) f->line_h = h;
@@ -319,15 +354,16 @@ static void place_text_node(LayoutFrame *f, LayoutList *out, DomNode *node) {
     int word_start[SQW_MAX_WORDS_PER_TEXT_NODE];
     int word_len[SQW_MAX_WORDS_PER_TEXT_NODE];
     int nwords = split_words(s, len, word_start, word_len);
-    float space_w = sqw_text_glyph_advance(' ', SQW_TEXT_SCALE);
+    float space_w = sqw_text_glyph_advance(' ', f->text_scale);
     int wi;
     for (wi = 0; wi < nwords; wi++) {
         int start = word_start[wi];
         int wlen = word_len[wi];
-        float w = sqw_text_measure(s + start, wlen, SQW_TEXT_SCALE);
+        float w = sqw_text_measure(s + start, wlen, f->text_scale);
         PlaceSpec spec;
-        spec.kind = SQW_BOX_TEXT; spec.w = w; spec.h = SQW_LINE_H;
+        spec.kind = SQW_BOX_TEXT; spec.w = w; spec.h = f->normal_line_h;
         spec.text_start = start; spec.text_len = wlen; spec.gap = space_w;
+        spec.text_scale = f->text_scale;
         place_inline_run(f, out, node, &spec);
     }
 }
@@ -342,10 +378,11 @@ static void place_pre_text_node(LayoutFrame *f, LayoutList *out, DomNode *node) 
         while (i < len && s[i] != '\n') i++;
         int llen = i - start;
         if (llen > 0) {
-            float w = sqw_text_measure(s + start, llen, SQW_TEXT_SCALE);
-            layout_list_push_full(out, node, SQW_BOX_TEXT, f->x + f->cursor_x, f->y + f->cursor_y, w, SQW_LINE_H, start, llen);
+            float w = sqw_text_measure(s + start, llen, f->text_scale);
+            layout_list_push_full(out, node, SQW_BOX_TEXT, f->x + f->cursor_x, f->y + f->cursor_y, w, f->normal_line_h, start, llen);
+            out->boxes[out->count - 1].text_scale = f->text_scale;
         }
-        f->cursor_y = f->cursor_y + SQW_LINE_H;
+        f->cursor_y = f->cursor_y + f->normal_line_h;
         f->cursor_x = 0;
         if (i >= len) break;
         i++;
@@ -485,7 +522,7 @@ static int compute_flex_row_positions(DomNode *node, float avail_w, float *flex_
              * intrinsic sizing, but far better than either a fixed
              * constant for everything or an even split that breaks down
              * the moment wrapping is possible. */
-            float tw = direct_text_width(c);
+            float tw = direct_text_width(c, node_text_scale(c));
             w[i] = tw > 0.0f ? tw + 24.0f : 120.0f;
         }
         if (w[i] > avail_w) w[i] = avail_w;
@@ -553,6 +590,9 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
     stack[stack_top].is_grid = 0; stack[stack_top].grid_col_x = 0; stack[stack_top].grid_col_w = 0;
     stack[stack_top].grid_ncols = 0; stack[stack_top].grid_col_index = 0;
     stack[stack_top].grid_row_y = 0; stack[stack_top].grid_row_max_h = 0;
+    stack[stack_top].text_scale = node_text_scale(root);
+    stack[stack_top].normal_line_h = node_normal_line_h(root, stack[stack_top].text_scale);
+    stack[stack_top].text_align = root->css_text_align;
     stack_top++;
 
     while (stack_top > 0) {
@@ -654,12 +694,12 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
             if (child->css_has_width) iw = child->css_width;
             if (child->css_has_height) ih = child->css_height;
             spec.kind = SQW_BOX_IMG; spec.w = iw; spec.h = ih;
-            spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP;
+            spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP; spec.text_scale = SQW_TEXT_SCALE;
             place_inline_run(f, out, child, &spec);
         } else if (child->css_display == CSS_DISPLAY_INLINE && strcmp(child->tag, "input") == 0) {
             const char *type = dom_get_attr(child, "type");
             PlaceSpec spec;
-            spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP;
+            spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP; spec.text_scale = SQW_TEXT_SCALE;
             if (type && (strcmp(type, "checkbox") == 0 || strcmp(type, "radio") == 0)) {
                 spec.kind = SQW_BOX_INPUT_CHECK; spec.w = SQW_CHECK_SIZE; spec.h = SQW_CHECK_SIZE;
             } else if (type && (strcmp(type, "submit") == 0 || strcmp(type, "button") == 0 || strcmp(type, "reset") == 0)) {
@@ -682,14 +722,15 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
             float h = child->css_has_height ? child->css_height : SQW_TEXTAREA_DEFAULT_H;
             PlaceSpec spec;
             spec.kind = SQW_BOX_TEXTAREA; spec.w = w; spec.h = h;
-            spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP;
+            spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP; spec.text_scale = SQW_TEXT_SCALE;
             place_inline_run(f, out, child, &spec);
         } else if (child->css_display == CSS_DISPLAY_INLINE && is_atomic_inline_tag(child->tag)) {
-            float w = direct_text_width(child);
+            float cscale = node_text_scale(child);
+            float w = direct_text_width(child, cscale);
             if (w < 4.0f) w = 4.0f;
             PlaceSpec spec;
-            spec.kind = kind_for_tag(child->tag); spec.w = w; spec.h = SQW_LINE_H;
-            spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP;
+            spec.kind = kind_for_tag(child->tag); spec.w = w; spec.h = node_normal_line_h(child, cscale);
+            spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP; spec.text_scale = cscale;
             place_inline_run(f, out, child, &spec);
         } else if (is_block_like(child->css_display) || strcmp(child->tag, "img") == 0) {
             /* Non-atomic-inline "img"/unrecognized-inline tags fall

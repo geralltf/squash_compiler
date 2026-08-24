@@ -47,6 +47,15 @@ typedef struct {
      * DOM text node into several of these. Unused (0) for every other
      * kind. */
     int text_start, text_len;
+    /* Real per-element scale (SQW_TEXT_SCALE * css_font_size/16), same
+     * value this box's own text was measured/wrapped at -- the draw pass
+     * (sqw_main.c) MUST use this exact value, not the SQW_TEXT_SCALE
+     * constant, for any box that renders text (TEXT/SPAN/A/BUTTON/PRE),
+     * for the same reason SQW_TEXT_SCALE's own comment already gives: a
+     * mismatched scale makes wrapped text visually overflow the box it
+     * was wrapped into. Meaningless (left at whatever the last write left
+     * it) for a non-text-rendering box kind. */
+    float text_scale;
 } LayoutBox;
 
 typedef struct {

@@ -34,6 +34,18 @@ typedef struct {
     int success;
     char *body;     /* heap, NUL-terminated response body; owned by this struct */
     long body_len;
+    /* Progress fields, updated by the worker thread under `mutex` as bytes
+     * arrive (not just once at the end) -- read by the main thread once per
+     * frame while a fetch is outstanding to drive the loading-progress bar
+     * (see sqw_main.c's own sqw_draw_loading_bar()). content_length is the
+     * response's own "Content-Length" header, parsed as soon as the header
+     * block itself has been fully read; -1 until then, and permanently -1
+     * for a response that never sends one (e.g. chunked/close-delimited) --
+     * the progress bar falls back to an indeterminate animation in that
+     * case rather than a real fraction. bytes_received counts BODY bytes
+     * only (header bytes don't count), same units as content_length. */
+    long content_length;
+    long bytes_received;
     /* Set by sqw_net_result_abandon() when the main thread starts a NEW
      * fetch while this one is still in flight (a fast Go-button/anchor
      * click, or -- confirmed as a REAL, reproducible crash during this

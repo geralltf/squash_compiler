@@ -126,11 +126,43 @@ typedef struct DomNode {
      * url(...)" (css_bg_image_url below) on any element, not just <img>. */
     char img_url[SQW_IMG_URL_MAX];
     char css_bg_image_url[SQW_IMG_URL_MAX];
+
+    /* Text styling -- font_size/text_align/line_height/font_weight_bold
+     * are real CSS-inherited properties (unlike most fields above, which
+     * only ever come from a rule/inline-style directly targeting the
+     * element itself): css_apply_element() seeds each of these from the
+     * element's OWN PARENT before applying this element's own matched
+     * rules/inline style on top, same as real CSS's inheritance model,
+     * see css.c's own comment on where that seeding happens. Root default
+     * is 16px/left/normal(1.2x)/not-bold, the real CSS initial values.
+     * Deliberately appended at the very END of DomNode, not grouped in
+     * with the other css_* fields further up -- a real, confirmed squash
+     * codegen bug (struct-field read-back garbage for a float field
+     * inserted mid-struct on a struct this large/field-heavy, confirmed
+     * via a standalone repro this session) made every read of
+     * css_font_size return garbage when these fields lived between
+     * css_has_bg and css_flex_direction; appending them here instead,
+     * after every other field, avoids it entirely (gcc-compiled DomNode
+     * usage is unaffected either way -- this is purely a squash-codegen
+     * struct-layout issue, not a real C bug). */
+    float css_font_size;         /* px */
+    int css_text_align;          /* 0=left, 1=center, 2=right */
+    float css_line_height;       /* px; <=0 means "normal" (1.2 * font_size) */
+    int css_font_weight_bold;    /* 0/1 */
+    /* opacity is NOT an inherited property in real CSS (a child's own
+     * opacity is independent of its parent's) -- defaults to 1.0. */
+    float css_opacity;
 } DomNode;
 
 DomNode *dom_parse(const char *html);
 void dom_free(DomNode *root);
 const char *dom_get_attr(const DomNode *node, const char *name);
+/* Sets (overwriting an existing one, or appending a new one, capped at
+ * HTML_MAX_ATTRS same as a real parsed tag) an attribute's value --
+ * needed by js_engine.c's setAttribute()/className/id builtins, which
+ * mutate a real live DOM attribute the same way real JS does, not a
+ * side-channel. */
+void dom_set_attr(DomNode *node, const char *name, const char *value);
 int dom_is_text(const DomNode *node);
 
 #endif /* SQW_DOM_H */

@@ -5,14 +5,19 @@
  * Documented scope (a REAL CSS engine, not a fake one, but a genuinely
  * bounded subset -- see the project's own multi-session-scope discussion
  * this was built under):
- *   Selectors : tag, .class, #id, "*", and any AND-combination of those
- *               in one compound (div.foo#bar), chained with the
- *               DESCENDANT combinator (space) only. NOT supported:
- *               child ">", sibling "+"/"~", attribute "[x=y]", and
- *               pseudo-class/-element ":hover"/"::before" selectors --
- *               a rule using one parses without error but its selector
+ *   Selectors : tag, .class, #id, "*", "[attr]"/"[attr=value]", ":hover",
+ *               and any AND-combination of those in one compound
+ *               (div.foo#bar[href]:hover), chained with the DESCENDANT
+ *               combinator (space) only. NOT supported: child ">",
+ *               sibling "+"/"~" combinators, and any pseudo-class/-element
+ *               other than ":hover" (":focus", "::before", etc) -- a rule
+ *               using one of those parses without error but its selector
  *               simply never matches anything (same safe-degradation
  *               convention as the rest of this project's parsers).
+ *               ":hover" matches DomNode::hover, which sqw_main.c's mouse-
+ *               move handling already sets/clears live -- see
+ *               css_apply_one()'s own comment for how a hover change gets
+ *               re-resolved without a full-page re-layout.
  *   At-rules  : "@media { ... }" has its condition ignored and its BODY
  *               parsed as ordinary rules (ignoring the query means this
  *               is not actually responsive, but nearly all of a real
@@ -25,13 +30,21 @@
  *               for a statement-only at-rule like @import) -- never
  *               misparsed as a normal rule.
  *   Properties: display, width, height, margin(-top/right/bottom/left),
- *               padding(-top/right/bottom/left), color, background /
- *               background-color, flex-direction, justify-content,
+ *               padding(-top/right/bottom/left), border(-width/-color/
+ *               -style, shorthand and per-side), color, background /
+ *               background-color, font-size, font-weight, text-align,
+ *               line-height, opacity, flex-direction, justify-content,
  *               align-items, gap / column-gap / row-gap,
  *               grid-template-columns (stored raw, parsed by layout.c at
- *               layout time). Any other property is parsed (so it
- *               doesn't desync the declaration-list parse) and then
- *               silently ignored.
+ *               layout time). font-size/text-align/line-height/
+ *               font-weight are real INHERITED properties (see
+ *               css_apply_element()'s own comment); opacity is not.
+ *               font-style:italic is parsed but has no visual effect (no
+ *               slanted glyph variant exists in this project's single
+ *               baked atlas -- font_atlas.h); border-radius/overflow/
+ *               box-shadow/z-index/transforms are not implemented at all.
+ *               Any other property is parsed (so it doesn't desync the
+ *               declaration-list parse) and then silently ignored.
  *   Values    : lengths in px or unitless (treated as px); percentages
  *               and other units (em/rem/vw/vh/...) are parsed but not
  *               resolved (treated as "not specified"); colors as
@@ -106,12 +119,60 @@ static void css_parse_compound(const char **p, CssCompound *out) {
         char c = *q;
         if (c == 0 || isspace((unsigned char)c) || c == ',' || c == '{') break;
         if (c == '>' || c == '+' || c == '~') { q++; continue; }
-        if (c == '[') { while (*q && *q != ']') q++; if (*q) q++; continue; }
+        if (c == '[') {
+            /* "[name]" or "[name=value]"/"[name='value']"/"[name=\"value\"]"
+             * -- an operator OTHER than bare "=" (~=, |=, ^=, $=, *=) isn't
+             * recognized as an operator here, so name_end lands on it and
+             * the whole thing is treated as an attribute-PRESENCE check
+             * instead (see CSS_SEL_ATTR's own header comment) -- parses
+             * without error either way, never desyncs the bracket scan. */
+            q++;
+            const char *name_start = q;
+            while (*q && *q != ']' && *q != '=') q++;
+            const char *name_end = q;
+            int has_val = 0;
+            const char *val_start = 0, *val_end = 0;
+            if (*q == '=') {
+                q++;
+                char quote = 0;
+                if (*q == '"' || *q == '\'') { quote = *q; q++; }
+                val_start = q;
+                if (quote) { while (*q && *q != quote) q++; val_end = q; if (*q) q++; }
+                else { while (*q && *q != ']') q++; val_end = q; }
+                has_val = 1;
+            }
+            while (*q && *q != ']') q++;
+            if (*q) q++;
+            int nlen = (int)(name_end - name_start);
+            if (nlen > 0 && out->part_count < CSS_MAX_COMPOUND_PARTS) {
+                CssSimpleSel *s = &out->parts[out->part_count++];
+                s->kind = CSS_SEL_ATTR;
+                if (nlen >= (int)sizeof s->name) nlen = (int)sizeof s->name - 1;
+                int ai; for (ai = 0; ai < nlen; ai++) s->name[ai] = (char)tolower((unsigned char)name_start[ai]);
+                s->name[nlen] = 0;
+                s->value_set = has_val;
+                if (has_val) {
+                    int vlen = (int)(val_end - val_start);
+                    if (vlen >= (int)sizeof s->value) vlen = (int)sizeof s->value - 1;
+                    memcpy(s->value, val_start, (size_t)vlen);
+                    s->value[vlen] = 0;
+                } else {
+                    s->value[0] = 0;
+                }
+            }
+            continue;
+        }
         if (c == ':') {
             q++;
             if (*q == ':') q++;
+            const char *pseudo_start = q;
             while (isalnum((unsigned char)*q) || *q == '-') q++;
+            int plen = (int)(q - pseudo_start);
             if (*q == '(') { int depth = 1; q++; while (*q && depth > 0) { if (*q == '(') depth++; else if (*q == ')') depth--; q++; } }
+            if (plen == 5 && strncmp(pseudo_start, "hover", 5) == 0 && out->part_count < CSS_MAX_COMPOUND_PARTS) {
+                CssSimpleSel *s = &out->parts[out->part_count++];
+                s->kind = CSS_SEL_HOVER; s->name[0] = 0; s->value_set = 0; s->value[0] = 0;
+            }
             continue;
         }
         CssSelKind kind; const char *start;
@@ -154,7 +215,7 @@ static int css_compound_specificity(const CssCompound *c) {
     int i, sp = 0;
     for (i = 0; i < c->part_count; i++) {
         if (c->parts[i].kind == CSS_SEL_ID) sp += 100;
-        else if (c->parts[i].kind == CSS_SEL_CLASS) sp += 10;
+        else if (c->parts[i].kind == CSS_SEL_CLASS || c->parts[i].kind == CSS_SEL_ATTR || c->parts[i].kind == CSS_SEL_HOVER) sp += 10;
         else if (c->parts[i].kind == CSS_SEL_TAG) sp += 1;
     }
     return sp;
@@ -348,6 +409,12 @@ static int css_compound_matches(const CssCompound *c, const DomNode *el) {
                 if (tlen == (int)strlen(s->name) && strncmp(tok, s->name, (size_t)tlen) == 0) found = 1;
             }
             if (!found) return 0;
+        } else if (s->kind == CSS_SEL_ATTR) {
+            const char *av = dom_get_attr(el, s->name);
+            if (!av) return 0;
+            if (s->value_set && strcmp(av, s->value) != 0) return 0;
+        } else if (s->kind == CSS_SEL_HOVER) {
+            if (!el->hover) return 0;
         }
     }
     return c->part_count > 0 || 1; /* an empty (unsupported-combinator) compound never matches -- see below */
@@ -496,6 +563,45 @@ static void css_set_default_style(DomNode *el) {
     el->css_grid_template_columns[0] = 0;
     el->css_position_absolute = 0;
     el->css_has_clip = 0;
+
+    /* Real CSS inheritance: seed from the parent's ALREADY-RESOLVED
+     * computed style (guaranteed resolved first -- css_apply()'s own walk
+     * is pre-order, parent before any child) rather than a fixed default,
+     * for the handful of properties real CSS actually inherits. Every
+     * other property above (display, margin/padding/border, background,
+     * flex/grid, position) is correctly NOT inherited -- those keep their
+     * own fixed per-tag/zero defaults regardless of the parent, matching
+     * real CSS. color is deliberately left out here even though it IS a
+     * real inherited property -- sqw_main.c's own draw pass already walks
+     * up to the nearest css_has_color ancestor itself (see its own
+     * comment), so resolving it a second time here would be redundant,
+     * not wrong, but is skipped to avoid two sources of truth. opacity is
+     * real CSS's one common NOT-inherited property (a child's opacity is
+     * independent of its parent's), so it always resets to fully opaque
+     * here regardless of the parent. */
+    DomNode *p = el->parent;
+    if (p) {
+        /* Read through the LOCAL "p", never "el->parent->field" directly
+         * -- a real, confirmed squash codegen bug (found this session):
+         * chaining two "->" hops in one expression to read a field of the
+         * struct a struct-POINTER-FIELD points to reads back garbage,
+         * even though "p->field" through an ordinary local pointer
+         * variable holding the exact same address works correctly. Same
+         * underlying bug class as (but a different specific shape than)
+         * php_mini.c's own documented "struct-field-via-arrow comparison"
+         * bug and this file's own "**p" double-dereference bug -- see
+         * this file's top comment. */
+        el->css_font_size = p->css_font_size;
+        el->css_text_align = p->css_text_align;
+        el->css_line_height = p->css_line_height;
+        el->css_font_weight_bold = p->css_font_weight_bold;
+    } else {
+        el->css_font_size = 16.0f;   /* real CSS root default */
+        el->css_text_align = 0;      /* left */
+        el->css_line_height = 0.0f;  /* "normal" */
+        el->css_font_weight_bold = 0;
+    }
+    el->css_opacity = 1.0f;
 }
 
 static void css_apply_decl(DomNode *el, const char *name, const char *value) {
@@ -638,6 +744,37 @@ static void css_apply_decl(DomNode *el, const char *name, const char *value) {
     } else if (strcmp(name, "grid-template-columns") == 0) {
         strncpy(el->css_grid_template_columns, value, sizeof el->css_grid_template_columns - 1);
         el->css_grid_template_columns[sizeof el->css_grid_template_columns - 1] = 0;
+    } else if (strcmp(name, "font-size") == 0) {
+        if (css_parse_len(value, &f) && f > 0.0f) el->css_font_size = f;
+    } else if (strcmp(name, "font-weight") == 0) {
+        /* Real CSS: "bold"/"bolder", or a numeric weight >= 600 (700 is
+         * the real "bold" keyword's own numeric equivalent; 600/"semibold"
+         * is treated as bold too here since this project's faux-bold
+         * double-draw -- see sqw_main.c's draw_layout_text() -- is a
+         * binary effect with no room for a real weight gradient anyway).
+         * "normal"/400 and anything else/unrecognized leaves it unbold. */
+        if (strstr(value, "bold")) el->css_font_weight_bold = 1;
+        else { char *end; long w = strtol(value, &end, 10); if (end != value && w >= 600) el->css_font_weight_bold = 1; else if (end != value) el->css_font_weight_bold = 0; }
+    } else if (strcmp(name, "text-align") == 0) {
+        if (strstr(value, "center")) el->css_text_align = 1;
+        else if (strstr(value, "right")) el->css_text_align = 2;
+        else el->css_text_align = 0; /* left, start, justify (no real justify support) */
+    } else if (strcmp(name, "line-height") == 0) {
+        /* A bare number (no unit) is a real-CSS MULTIPLIER of the
+         * element's own font-size, not a px length -- e.g. "line-height:
+         * 1.5;" on 16px text means 24px, not 1.5px. css_parse_len() only
+         * ever returns a px value, so a unitless line-height is resolved
+         * against el->css_font_size right here instead (which is already
+         * correctly inherited/set by the time this declaration runs, same
+         * as every other property in this same cascade pass). A value
+         * WITH a unit (line-height: 24px;) is a real px length as normal. */
+        char *end; double d = strtod(value, &end);
+        while (*end && isspace((unsigned char)*end)) end++;
+        if (end != value && *end == 0) el->css_line_height = (float)(d * el->css_font_size);
+        else if (css_parse_len(value, &f)) el->css_line_height = f;
+    } else if (strcmp(name, "opacity") == 0) {
+        char *end; double d = strtod(value, &end);
+        if (end != value) { if (d < 0.0) d = 0.0; if (d > 1.0) d = 1.0; el->css_opacity = (float)d; }
     }
     /* Any other property: parsed into a CssDecl by css_parse_decls()
      * already (so the declaration-list parse stays in sync), just not
@@ -719,7 +856,28 @@ static void css_apply_element(DomNode *el, CssStylesheet *sheet) {
     }
 }
 
+void css_apply_one(DomNode *el, CssStylesheet *sheet) {
+    if (!el || dom_is_text(el)) return;
+    css_apply_element(el, sheet);
+}
+
 void css_apply(DomNode *root, CssStylesheet *sheet) {
+    /* The synthetic "#document" root itself never goes through
+     * css_apply_element() below (the walk only calls it on root's
+     * CHILDREN onward), so its own inheritable fields would otherwise sit
+     * at whatever dom_node_new()'s calloc left them (all-zero) --
+     * css_set_default_style()'s own "if (el->parent) inherit else use the
+     * real root defaults" branch relies on THIS being those real root
+     * defaults, since root's children see root as their parent and
+     * "el->parent" is non-NULL for them (it's the #document node, not
+     * NULL) even though root has no CSS parent of its own. Seeded here,
+     * once, rather than special-casing "tag == #document" inside
+     * css_set_default_style() itself. */
+    root->css_font_size = 16.0f;
+    root->css_text_align = 0;
+    root->css_line_height = 0.0f;
+    root->css_font_weight_bold = 0;
+
     /* Iterative pre-order walk (see dom_walk.c's own identical pattern --
      * not reused directly so this stays a single self-contained pass
      * with no extra callback-context allocation). */

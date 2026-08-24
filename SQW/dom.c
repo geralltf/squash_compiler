@@ -164,3 +164,23 @@ const char *dom_get_attr(const DomNode *node, const char *name) {
 int dom_is_text(const DomNode *node) {
     return node->text != 0;
 }
+
+void dom_set_attr(DomNode *node, const char *name, const char *value) {
+    int i;
+    for (i = 0; i < node->attr_count; i++) {
+        if (strcmp(node->attrs[i].name, name) == 0) {
+            strncpy(node->attrs[i].value, value, HTML_MAX_ATTR_LEN - 1);
+            node->attrs[i].value[HTML_MAX_ATTR_LEN - 1] = 0;
+            return;
+        }
+    }
+    /* New attribute -- silently dropped past HTML_MAX_ATTRS (16), the
+     * same generous-but-bounded cap dom_parse() itself already lives
+     * with for a real parsed tag's own attribute list. */
+    if (node->attr_count < HTML_MAX_ATTRS) {
+        DomAttr *a = &node->attrs[node->attr_count];
+        strncpy(a->name, name, HTML_MAX_ATTR_LEN - 1); a->name[HTML_MAX_ATTR_LEN - 1] = 0;
+        strncpy(a->value, value, HTML_MAX_ATTR_LEN - 1); a->value[HTML_MAX_ATTR_LEN - 1] = 0;
+        node->attr_count++;
+    }
+}

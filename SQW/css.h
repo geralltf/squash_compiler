@@ -28,11 +28,33 @@ typedef enum { CSS_ALIGN_START = 0, CSS_ALIGN_CENTER, CSS_ALIGN_END, CSS_ALIGN_S
 #define CSS_MAX_RULE_SELECTORS 8
 #define CSS_MAX_DECLS 24
 
-typedef enum { CSS_SEL_TAG, CSS_SEL_CLASS, CSS_SEL_ID, CSS_SEL_UNIVERSAL } CssSelKind;
+typedef enum {
+    CSS_SEL_TAG, CSS_SEL_CLASS, CSS_SEL_ID, CSS_SEL_UNIVERSAL,
+    /* [name] / [name="value"] -- name holds the attribute name; when a
+     * value is also given, value_set is 1 and value holds it (an exact
+     * match, real CSS's own "[x=y]" form -- ~=, |=, ^=, $=, *= are not
+     * supported, same safe-degradation convention as everything else this
+     * engine doesn't implement: a compound using one still parses, the
+     * attribute-name check just never finds that suffixed operator so the
+     * whole bracket is consumed as an attribute-presence check instead of
+     * failing outright -- see css_parse_compound()'s own comment). */
+    CSS_SEL_ATTR,
+    /* :hover -- matched against the DomNode's own runtime `hover` flag
+     * (already tracked by sqw_main.c's mouse-move handling for the
+     * existing hardcoded a:hover/button:hover color logic -- see css.c's
+     * own comment on how this plugs into that). No other pseudo-class/
+     * -element is supported; one still parses (css_parse_compound already
+     * consumes ":anything(...)" generically) but never matches, same
+     * convention as child/sibling combinators below. */
+    CSS_SEL_HOVER
+} CssSelKind;
 
 typedef struct {
     CssSelKind kind;
     char name[48];
+    /* CSS_SEL_ATTR only. */
+    int value_set;
+    char value[64];
 } CssSimpleSel;
 
 /* One compound selector (e.g. "div.foo#bar" -- everything with no space
@@ -89,5 +111,19 @@ void css_parse_into(CssStylesheet *sheet, const char *text);
  * after dom_parse() and after every <style> tag's text has been folded
  * into `sheet`, before layout_compute() ever runs. */
 void css_apply(DomNode *root, CssStylesheet *sheet);
+
+/* Re-resolves ONE element's computed style in place (same resolution
+ * css_apply()'s own walk already does per-element -- default style, then
+ * matched rules, then inline style="...") WITHOUT touching the rest of
+ * the tree or re-running layout. Call this on the old and new hover_node
+ * whenever it changes (sqw_main.c's mouse-move handling) so a ":hover"
+ * rule's color/background/etc takes effect live -- see css.c's own top
+ * comment on ":hover". Deliberately doesn't reflow: if a ":hover" rule
+ * changes something layout affects (width, display, ...) the visual
+ * result won't repaint correctly until the next real relayout (e.g. the
+ * next navigation or resize) -- a real, honestly-scoped limitation, not a
+ * bug, matching how rare "layout-affecting :hover" actually is in real
+ * CSS (almost all real :hover rules only touch color/background/border). */
+void css_apply_one(DomNode *el, CssStylesheet *sheet);
 
 #endif /* SQW_CSS_H */
