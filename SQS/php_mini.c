@@ -43,6 +43,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
+
+/* Explicit prototype -- squash's own <stdlib.h> shim doesn't declare
+ * realpath(), and letting it fall through to an IMPLICIT declaration
+ * (like several other libc calls already do harmlessly elsewhere in
+ * this file, e.g. strtok_r/strncasecmp) is unsafe specifically here:
+ * confirmed as a real, gcc-vs-squash-DIVERGENT bug -- squash's implicit-
+ * declaration handling assumes a 32-bit `int` return for an unprototyped
+ * call, silently truncating realpath()'s real 64-bit `char *` return
+ * value (gcc's own implicit-declaration warning doesn't do this, so the
+ * gcc build worked fine while the squash build always saw a corrupted/
+ * NULL pointer). A real prototype in scope removes the ambiguity. */
+extern char *realpath(const char *path, char *resolved_path);
 
 /* The native database engine -- a genuinely separate, independently
  * compilable/testable C file (SQS/db_engine.c, unit-tested on its own via
@@ -106,6 +119,14 @@
 #define PHP_INCLUDED_MAX 512
 #define PHP_BUF_MAX 512
 #define PHP_ARG_MAX 8
+/* Hard cap on iterations for a single while/for/foreach loop -- a real
+ * safety net now that loops actually execute (see php_run_statement's
+ * own comment on why), so a genuine infinite loop in the PHP source
+ * degrades to "stop iterating" instead of hanging the whole HTTP
+ * request forever. Generous: real WordPress loops (option lists, hook
+ * arrays, post arrays) are in the hundreds/low thousands of elements at
+ * most, never anywhere near this. */
+#define PHP_LOOP_MAX 200000
 #define PHP_PATH_MAX 512
 
 typedef struct {
@@ -141,7 +162,30 @@ typedef struct {
 #define PHP_CLASS_MAX 128
 #define PHP_CLASS_PROP_MAX 32
 #define PHP_CLASS_METHOD_MAX 160
-#define PHP_OBJ_MAX 256
+/* PHP_OBJ_MAX/PHP_ARR_MAX (see PHP_ARR_MAX's own comment further down)
+ * were both 256 until now -- fine while WordPress's own "foreach"/
+ * "for"/"while" loops were all parsed-and-skipped no-ops (see
+ * php_run_statement's own comment on why they now actually execute),
+ * since huge swaths of real array/object-creating code simply never ran.
+ * Once loops started really executing, a single real page load through
+ * the full wp-load.php->wp-settings.php boot chain (hook/filter
+ * registration, translation caches, query building, etc.) exhausted
+ * BOTH tables completely (confirmed via direct instrumentation:
+ * g_narrays=256/256 AND g_nobjects=256/256 by the time $wpdb->insert()
+ * ran) -- with the table silently full, php_array_new()/php_object_new()
+ * degrade to returning -1 (this file's standard "don't allocate, don't
+ * crash" convention), so a brand new array literal like
+ * "array('option_name'=>...)" quietly evaluates to an empty non-array
+ * value instead. That's what made $wpdb->insert() itself (already
+ * verified correct via a dozen other direct tests) mysteriously fail
+ * only once reached through the REAL full boot sequence: __db_insert()
+ * received a plain empty string instead of a real array argument.
+ * Bumped 4x, matching this project's own established "generous, cost is
+ * just static memory" convention (see PHP_FUNC_MAX/PHP_CLASS_MAX's
+ * identical story above) -- not unbounded, since each slot embeds a
+ * whole ~36KB PhpKVArray, but comfortably past what one real page load
+ * needs. */
+#define PHP_OBJ_MAX 1024
 
 typedef struct {
     char name[64];
@@ -216,7 +260,7 @@ static int g_nobjects = 0;
  * php_objref_encode's own comment): a nested array is just another
  * request-lifetime container in a global table, referenced by an
  * ordinary string value with its own magic prefix. */
-#define PHP_ARR_MAX 256
+#define PHP_ARR_MAX 1024 /* see PHP_OBJ_MAX's own comment -- bumped for the exact same reason, at the exact same point */
 static PhpKVArray g_arrays[PHP_ARR_MAX];
 static int g_arr_alive[PHP_ARR_MAX];
 static int g_narrays = 0;
@@ -225,6 +269,24 @@ static int g_narrays = 0;
  * the $wpdb-compatible class's own last_error handling -- request-
  * lifetime, like every other g_* table on this page, reset alongside
  * them. */
+/* Real "global $x;" support: a shared, request-lifetime table of
+ * PhpVar's that any function's "global $name;" declaration redirects
+ * that name's lookups into for the rest of that function -- see
+ * php_var_find()'s own comment. Before this existed, "global $x;" was
+ * parsed and silently skipped (still is, for every OTHER not-yet-
+ * modeled construct -- see php_run_statement's big skip-list), which is
+ * a real, confirmed-impactful gap: WordPress's own require_wp_db() does
+ * "global $wpdb; ... $wpdb = new wpdb(...);" -- entirely inside that
+ * function's own previously-isolated local scope, so the real wpdb
+ * object it built was simply discarded the moment the function
+ * returned, and every OTHER function that also does "global $wpdb;"
+ * (essentially all of WordPress core) saw an empty, never-connected
+ * $wpdb. PHP_MAX_VARS-sized (not request-huge) since only a small,
+ * genuinely-shared set of names (wpdb, wp_query, wp_filter, ...) ever
+ * gets globalized in practice. */
+static PhpVar g_globals[PHP_MAX_VARS];
+static int g_nglobals = 0;
+
 static char g_db_last_error[512] = "";
 /* Raw packed text from the most recent successful __db_query() (see
  * db_engine.c's own "PACKED ROW FORMAT" comment) -- cached so
@@ -247,6 +309,7 @@ static void php_globals_reset(void) {
     g_nobjects = 0;
     for (i = 0; i < PHP_ARR_MAX; i++) g_arr_alive[i] = 0;
     g_narrays = 0;
+    g_nglobals = 0;
     g_db_last_error[0] = 0;
     g_db_last_raw[0] = 0;
 }
@@ -323,6 +386,15 @@ typedef struct {
 
     int returning;            /* set by a "return" statement */
     char retval[PHP_VAL_MAX]; /* value passed to "return EXPR;", if any */
+    /* Set by "break;"/"continue;" (see their own statement handlers) --
+     * unwind exactly like `returning` through php_run_statements()/the
+     * "if" handler, but are consumed (reset to 0) by the nearest
+     * enclosing while/for/foreach loop handler instead of propagating
+     * all the way out of the function. A stray break/continue outside
+     * any loop is simply never consumed by anything and is harmless
+     * (matches this file's usual "degrade safely" convention). */
+    int breaking;
+    int continuing;
 
     int has_this;   /* set on the callee PhpState php_call_function()
                         builds for a "$obj->method(...)" call -- "$this"
@@ -331,6 +403,33 @@ typedef struct {
                         this var an object" check uses everywhere else
                         (see PhpVar's own comment) */
     int this_obj_id;
+
+    /* Names this scope has declared "global $name;" for -- see
+     * php_var_find()'s own comment on how this redirects lookups to the
+     * shared g_globals[] table instead of this PhpState's own local
+     * vars[]. Originally sized 8 on the assumption that a single
+     * FUNCTION's own "global $a, $b, ...;" line never lists more than a
+     * handful of names -- true for individual functions, but wrong for
+     * the TOP-LEVEL scope: wp-settings.php's own top-level "global
+     * $wp_version, $wp_db_version, $tinymce_version, $required_php_
+     * version, $required_php_extensions, $required_mysql_version,
+     * $wp_local_package;" alone is 7 names in ONE statement, and since
+     * every top-level require_once shares that SAME PhpState (see
+     * php_run_statement's "require_once" handling), later top-level
+     * "global $blog_id;" / "global $wpdb;" lines keep accumulating into
+     * the same scope's list rather than starting fresh. Confirmed as a
+     * real, actively-harmful bug: the 9th name ("wpdb") silently failed
+     * the "st->n_globalized < 8" capacity check in the "global" statement
+     * handler below, so it was NEVER added to this scope's globalized
+     * list -- "global $wpdb;" at wp-settings.php's own top level became a
+     * silent no-op, and every later top-level "$wpdb->..." read a plain,
+     * never-assigned LOCAL variable instead of the real, correctly-
+     * connected object require_wp_db() had built in g_globals[]. Sized to
+     * PHP_MAX_VARS now (matches g_globals[]'s own capacity -- no point
+     * letting one scope claim more distinct global names than total
+     * global slots exist). */
+    char globalized[PHP_MAX_VARS][64];
+    int n_globalized;
 } PhpState;
 
 static void php_kv_lookup(PhpKVArray *arr, const char *key, char *out, int outcap) {
@@ -507,8 +606,36 @@ static void php_parse_kv_string(const char *qs, PhpKVArray *arr) {
     }
 }
 
+static int php_name_is_globalized(PhpState *st, const char *name) {
+    int i;
+    for (i = 0; i < st->n_globalized; i++) if (strcmp(st->globalized[i], name) == 0) return 1;
+    return 0;
+}
+static PhpVar *php_global_find(const char *name) {
+    int i;
+    for (i = 0; i < g_nglobals; i++) if (strcmp(g_globals[i].name, name) == 0) return &g_globals[i];
+    return NULL;
+}
+static PhpVar *php_global_find_or_create(const char *name) {
+    PhpVar *v = php_global_find(name);
+    if (v) return v;
+    if (g_nglobals >= PHP_MAX_VARS) return NULL;
+    v = &g_globals[g_nglobals++];
+    memset(v, 0, sizeof *v);
+    strncpy(v->name, name, sizeof v->name - 1); v->name[sizeof v->name - 1] = 0;
+    return v;
+}
+/* `name`'s storage -- ordinarily this scope's OWN st->vars[], but if
+ * this scope ran "global $name;" (see php_run_statement's real handling
+ * of it now), every read/write instead redirects to the single shared
+ * g_globals[] slot for that name, exactly matching real PHP's semantics
+ * for a globalized variable (every function that globalizes the same
+ * name shares the one true value, which is what makes WordPress's own
+ * "global $wpdb;"-in-every-function convention work at all). See
+ * g_globals' own comment for why this exists. */
 static PhpVar *php_var_find(PhpState *st, const char *name) {
     int i;
+    if (php_name_is_globalized(st, name)) return php_global_find(name);
     for (i = 0; i < st->nvars; i++) if (strcmp(st->vars[i].name, name) == 0) return &st->vars[i];
     return NULL;
 }
@@ -517,6 +644,7 @@ static PhpVar *php_var_find(PhpState *st, const char *name) {
  * ("$arr['x'] = 1;" on a not-yet-seen $arr) so it doesn't need its own
  * separate create-if-missing logic. */
 static PhpVar *php_var_find_or_create(PhpState *st, const char *name) {
+    if (php_name_is_globalized(st, name)) return php_global_find_or_create(name);
     PhpVar *v = php_var_find(st, name);
     if (v) return v;
     if (st->nvars >= PHP_MAX_VARS) return NULL;
@@ -535,7 +663,26 @@ static void php_var_set(PhpState *st, const char *name, const char *val) {
     strncpy(v->val, val, sizeof v->val - 1); v->val[sizeof v->val - 1] = 0;
 }
 
-static int php_truthy(const char *s) { return s[0] != 0 && strcmp(s, "0") != 0; }
+/* Real PHP truthiness rules: an ARRAY is falsy iff it has zero elements
+ * (regardless of what its elements/keys actually contain), an OBJECT is
+ * ALWAYS truthy (even with no properties), everything else follows the
+ * usual "" / "0" scalar rule. Before this checked array/object-ness at
+ * all, EVERY array or object reference (see php_arrref_encode's/
+ * php_objref_encode's own comments -- a nested/returned array or an
+ * object is always represented as a short, non-empty, non-"0" TOKEN
+ * string like "\x01A:7", never the array's own contents) was
+ * unconditionally truthy no matter how many elements it actually held --
+ * a real, broadly-impactful bug: any "if (!$results)"/"if ($array)"-
+ * shaped check (extremely common throughout WordPress, e.g.
+ * wp_load_alloptions()'s own "if ( ! $alloptions_db ) { <fall back to a
+ * broader query> }") always took the "truthy"/"has results" branch even
+ * when the underlying query/array genuinely had zero rows/elements. */
+static int php_truthy(const char *s) {
+    int aid = php_arrref_decode(s);
+    if (aid >= 0) return g_arrays[aid].count > 0;
+    if (php_objref_decode(s) >= 0) return 1;
+    return s[0] != 0 && strcmp(s, "0") != 0;
+}
 
 static void php_emit(PhpState *st, const char *s, int len) {
     int room = st->out_cap - st->out_len - 1;
@@ -615,10 +762,29 @@ static void php_read_ident(PhpState *st, char *buf, int bufcap) {
     st->src = p;
 }
 
+static void php_eval_expr(PhpState *st, char *out, int outcap); /* forward: "{$expr}" string interpolation below needs this */
+
 /* Reads a single-or-double-quoted string literal (the opening quote is
  * already known to be at *st->src). Only supports \\, \", \', \n, \t
  * escapes inside double quotes -- single-quoted strings are literal
- * (real PHP's own distinction, kept here too). */
+ * (real PHP's own distinction, kept here too).
+ *
+ * Double-quoted strings ALSO interpolate variables, real PHP's own two
+ * forms: "simple syntax" ($name, one level of $name[key] or
+ * $name->prop -- no quotes needed on a bare-word array key, no deeper
+ * chaining) and "complex syntax" ({$anyExpression}, which can be
+ * arbitrarily deep -- "{$wpdb->options}", "{$row->option_name}", etc).
+ * Before this existed, EVERY "$var"/"{$expr}" inside a double-quoted
+ * string was emitted completely literally -- confirmed as an enormous,
+ * previously-invisible gap once real WordPress SQL queries started
+ * actually reaching this engine (see db_engine.c/php_mini.c's own
+ * __db_* builtins): essentially every WordPress core query is built as
+ * "...FROM $wpdb->options..."-shaped double-quoted strings, so every
+ * single one of them was sending the LITERAL text "$wpdb->options" as
+ * a table name instead of the real "wp_options", failing outright
+ * ("sqdb: malformed SELECT" -- $ isn't a valid identifier character).
+ * This one gap alone meant no real WordPress database query could ever
+ * have worked, regardless of how correct the rest of the DB layer is. */
 static void php_read_string_lit(PhpState *st, char *buf, int bufcap) {
     const char *p = st->src;
     char q = *p; p++;
@@ -628,9 +794,90 @@ static void php_read_string_lit(PhpState *st, char *buf, int bufcap) {
         if (q == '"' && c == '\\' && p[1]) {
             p++;
             char e = *p;
-            if (e == 'n') c = '\n';
-            else if (e == 't') c = '\t';
-            else c = e;
+            /* Real PHP only treats a fixed, small set of characters after
+             * "\" as a real escape inside a double-quoted string ("\n",
+             * "\t", "\\", "\$", "\"", a few others this subset doesn't
+             * bother with like "\r"/"\v"/"\0"/"\xNN"/"\uNNNN") -- for
+             * anything else, the backslash is kept LITERALLY (e.g. "\s"
+             * stays as the two characters '\' and 's', not just 's').
+             * This mattered for real regex patterns written as double-
+             * quoted strings ("\d+", "\s+", ...): silently DROPPING the
+             * backslash on any unrecognized escape (this file's old,
+             * unconditional "else c = e;") corrupted every such pattern
+             * before it ever reached preg_match()/preg_replace(). */
+            if (e == 'n') { c = '\n'; p++; }
+            else if (e == 't') { c = '\t'; p++; }
+            else if (e == 'r') { c = '\r'; p++; }
+            else if (e == '\\' || e == '"' || e == '$') { c = e; p++; }
+            else {
+                if (i < bufcap - 1) buf[i++] = '\\';
+                c = e; p++;
+            }
+            if (i < bufcap - 1) buf[i++] = c;
+            c = *p;
+            continue;
+        }
+        if (q == '"' && c == '{' && p[1] == '$') {
+            /* Complex syntax: "{$anyExpression}" -- st->src/php_eval_expr
+             * need to take over from here, so sync `p` into st->src
+             * first and resync back into `p` afterward (this function
+             * otherwise walks a plain local pointer, see this file's top
+             * comment on why). */
+            st->src = p + 1; /* position at the '$' */
+            char val[PHP_VAL_MAX];
+            php_eval_expr(st, val, sizeof val);
+            php_skip_ws(st);
+            if (*st->src == '}') st->src++;
+            const char *vp = val;
+            while (*vp && i < bufcap - 1) buf[i++] = *vp++;
+            p = st->src;
+            c = *p;
+            continue;
+        }
+        if (q == '"' && c == '$' && (p[1] == '_' || (p[1] >= 'a' && p[1] <= 'z') || (p[1] >= 'A' && p[1] <= 'Z'))) {
+            /* Simple syntax: "$name", "$name[key]" (bare-word key, no
+             * quotes -- real PHP's own rule for THIS form specifically),
+             * or "$name->prop" (one level only -- "$a->b->c" inside a
+             * plain simple-syntax interpolation stops after "->b" in
+             * real PHP too; deeper chains need {$a->b->c}). */
+            st->src = p + 1; /* skip '$' */
+            char name[64];
+            php_read_ident(st, name, sizeof name);
+            PhpVar *v = php_var_find(st, name);
+            char cur[PHP_VAL_MAX];
+            if (v) { strncpy(cur, v->val, sizeof cur - 1); cur[sizeof cur - 1] = 0; } else cur[0] = 0;
+            if (*st->src == '[') {
+                st->src++;
+                char key[128]; int ki = 0;
+                if (*st->src == '$') {
+                    st->src++;
+                    char idxname[64]; php_read_ident(st, idxname, sizeof idxname);
+                    PhpVar *iv = php_var_find(st, idxname);
+                    if (iv) { strncpy(key, iv->val, sizeof key - 1); key[sizeof key - 1] = 0; } else key[0] = 0;
+                } else {
+                    while (*st->src && *st->src != ']' && ki < (int)sizeof key - 1) { key[ki++] = *st->src; st->src++; }
+                    key[ki] = 0;
+                }
+                if (*st->src == ']') st->src++;
+                if (v && v->is_array) php_kv_lookup(&v->arr, key, cur, sizeof cur);
+                else {
+                    int aid = v ? php_arrref_decode(v->val) : -1;
+                    if (aid >= 0) php_kv_lookup(&g_arrays[aid], key, cur, sizeof cur);
+                    else cur[0] = 0;
+                }
+            } else if (st->src[0] == '-' && st->src[1] == '>' &&
+                       (st->src[2] == '_' || (st->src[2] >= 'a' && st->src[2] <= 'z') || (st->src[2] >= 'A' && st->src[2] <= 'Z'))) {
+                st->src += 2;
+                char member[64]; php_read_ident(st, member, sizeof member);
+                int oid = v ? php_objref_decode(v->val) : -1;
+                if (oid >= 0) php_kv_lookup(&g_objects[oid].props, member, cur, sizeof cur);
+                else cur[0] = 0;
+            }
+            const char *vp = cur;
+            while (*vp && i < bufcap - 1) buf[i++] = *vp++;
+            p = st->src;
+            c = *p;
+            continue;
         }
         if (i < bufcap - 1) buf[i++] = c;
         p++;
@@ -1067,8 +1314,40 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
         st->src++;
         char inner[PHP_VAL_MAX];
         php_eval_factor(st, inner, sizeof inner);
-        int truthy = inner[0] != 0 && strcmp(inner, "0") != 0;
+        /* php_truthy(), not an inline re-check -- this used to have its
+         * OWN separate "inner[0]!=0 && strcmp(inner,\"0\")!=0" copy of
+         * plain-scalar truthiness, predating (and never updated when)
+         * php_truthy() gained real array/object-aware rules -- so
+         * "!$emptyArray" stayed permanently wrong (always false) even
+         * after that fix, since "$emptyArray ? a : b" (which DOES call
+         * php_truthy()) and "!$emptyArray" disagreed on the exact same
+         * value. */
+        int truthy = php_truthy(inner);
         strncpy(out, truthy ? "0" : "1", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (c == '&') {
+        /* "&$var" -- PHP's reference operator, e.g. "$l10n[$domain] =
+         * &$noop_translations;" (wp-includes/l10n.php's
+         * get_translations_for_domain()). This subset has no true
+         * references (a variable's value is always a plain copied
+         * string/arrref/objref token, see this file's top comment), so
+         * the correct simplification is a plain value copy of whatever
+         * follows -- NOT a no-op. Before this case existed, a leading
+         * "&" matched nothing in this whole function (not "!"/quote/
+         * paren/"$"), so control fell all the way through to the
+         * number-literal scanner at the bottom, which requires at least
+         * one digit/'.'/'-' to match -- "&" itself doesn't, so it
+         * matched ZERO characters and returned "" WITHOUT ADVANCING
+         * st->src. Confirmed as a real, actively-harmful bug: it
+         * silently evaluated "&$noop_translations" to an empty string
+         * (instead of failing loudly or advancing past the unparsed
+         * "&"), corrupting whatever assignment it fed -- exactly what
+         * made get_translations_for_domain()'s own translation cache
+         * permanently poisoned with an empty entry once "global $l10n;"
+         * started working for real (see g_globals' own comment). */
+        st->src++;
+        php_eval_factor(st, out, outcap);
         return;
     }
     if (c == '"' || c == '\'') {
@@ -2042,6 +2321,122 @@ static void php_parse_class_decl(PhpState *st) {
 static void php_run_statements(PhpState *st); /* forward: if-bodies and function calls recurse */
 void php_run_source(PhpState *st, const char *source); /* forward: require/include recurse into this */
 
+/* Runs ONE assignment/increment/decrement/bare-expression, for its side
+ * effect only (the resulting value, if any, is discarded) -- does NOT
+ * consume a trailing ';'/','/')' , unlike php_run_statement (the caller
+ * decides what follows). Written for "for (init; cond; step)"'s own
+ * init/step clauses, which are exactly this shape ("$i = 0", "$i++",
+ * "$i = $i + 1") but are NOT full ";"-terminated statements the way
+ * php_run_statement expects -- before this existed, the "for" loop
+ * handler tried to evaluate them with the plain read-only php_eval_expr,
+ * which has no idea what "=" (an assignment) or "++"/"--" even are: it
+ * silently stopped at the first character it didn't recognize, leaving
+ * st->src desynced mid-clause and corrupting everything parsed
+ * afterward (confirmed as a real bug this session -- "for ($j=0; $j<5;
+ * $j=$j+1) { ... }" derailed so badly that not even the ECHO statement
+ * AFTER the whole loop ever ran). Also fills a real, separate gap this
+ * uncovered: "++"/"--"/"+="/"-="/"." = had NO support anywhere in this
+ * file before, not even as an ordinary top-level statement -- real
+ * WordPress code uses "$i++;"/"$count += ...;" constantly, so
+ * php_run_statement's own "$" dispatch now tries this helper FIRST too
+ * (see its own call site). */
+static void php_run_expr_stmt(PhpState *st) {
+    php_skip_ws(st);
+    const char *start = st->src;
+    char c = *st->src;
+    if ((c == '+' && st->src[1] == '+') || (c == '-' && st->src[1] == '-')) {
+        int inc = (c == '+');
+        st->src += 2;
+        php_skip_ws(st);
+        if (*st->src == '$') {
+            st->src++;
+            char name[64];
+            php_read_ident(st, name, sizeof name);
+            PhpVar *v = php_var_find_or_create(st, name);
+            if (v) {
+                double n = php_to_num(v->val) + (inc ? 1 : -1);
+                char buf[64]; php_num_to_str(n, buf, sizeof buf);
+                php_var_set(st, name, buf);
+            }
+            return;
+        }
+        st->src = start; /* wasn't really "++$x"/"--$x" -- fall through below */
+    }
+    if (*st->src == '$') {
+        st->src++;
+        char name[64];
+        php_read_ident(st, name, sizeof name);
+        php_skip_ws(st);
+        char c0 = st->src[0], c1 = st->src[1];
+        if (c0 == '+' && c1 == '+') {
+            st->src += 2;
+            PhpVar *v = php_var_find_or_create(st, name);
+            if (v) { double n = php_to_num(v->val) + 1; char buf[64]; php_num_to_str(n, buf, sizeof buf); php_var_set(st, name, buf); }
+            return;
+        }
+        if (c0 == '-' && c1 == '-') {
+            st->src += 2;
+            PhpVar *v = php_var_find_or_create(st, name);
+            if (v) { double n = php_to_num(v->val) - 1; char buf[64]; php_num_to_str(n, buf, sizeof buf); php_var_set(st, name, buf); }
+            return;
+        }
+        if ((c0 == '+' || c0 == '-' || c0 == '.') && c1 == '=') {
+            char op = c0;
+            st->src += 2;
+            php_skip_ws(st);
+            char rhs[PHP_VAL_MAX];
+            php_eval_expr(st, rhs, sizeof rhs);
+            PhpVar *v = php_var_find_or_create(st, name);
+            if (v) {
+                char buf[PHP_VAL_MAX];
+                if (op == '.') snprintf(buf, sizeof buf, "%s%s", v->val, rhs);
+                else { double n = php_to_num(v->val) + (op == '+' ? php_to_num(rhs) : -php_to_num(rhs)); php_num_to_str(n, buf, sizeof buf); }
+                php_var_set(st, name, buf);
+            }
+            return;
+        }
+        if (c0 == '=' && c1 != '=') {
+            /* Plain "$name = expr" or an lvalue chain ("$name[key]=...",
+             * "$name->prop=..."): reuse the exact same machinery
+             * php_run_statement's own "$" dispatch uses, rewinding to
+             * "$name" first since php_resolve_lvalue_chain expects to
+             * start right after the identifier with `c` as its own
+             * lookahead. */
+            st->src = start;
+            st->src++;
+            char name2[64];
+            php_read_ident(st, name2, sizeof name2);
+            php_skip_ws(st);
+            char cc = *st->src;
+            PhpKVArray *container = NULL;
+            char key[128];
+            if (php_resolve_lvalue_chain(st, name2, cc, &container, key, sizeof key)) {
+                php_skip_ws(st);
+                if (st->src[0] == '=' && st->src[1] != '=') {
+                    st->src++;
+                    php_lvalue_assign(st, container, key);
+                    return;
+                }
+            }
+            st->src = start;
+            st->src++;
+            php_read_ident(st, name2, sizeof name2);
+            php_skip_ws(st);
+            if (st->src[0] == '=' && st->src[1] != '=') {
+                st->src++;
+                php_skip_ws(st);
+                char val[PHP_VAL_MAX];
+                php_eval_expr(st, val, sizeof val);
+                php_var_set(st, name2, val);
+                return;
+            }
+        }
+        st->src = start; /* not an assignment/increment after all */
+    }
+    char tmp[PHP_VAL_MAX];
+    php_eval_expr(st, tmp, sizeof tmp);
+}
+
 /* One statement: "$var = expr;" | "echo expr (, expr)* ;" | "print expr ;"
  * | "if (cond) { stmts } [else { stmts }]" (see this file's top comment:
  * the if/else body must stay inside one continuous php block, no
@@ -2051,7 +2446,36 @@ void php_run_source(PhpState *st, const char *source); /* forward: require/inclu
 static void php_run_statement(PhpState *st) {
     php_skip_ws(st);
     char c = *st->src;
+    if ((c == '+' && st->src[1] == '+') || (c == '-' && st->src[1] == '-')) {
+        /* Prefix "++$x;"/"--$x;" as a standalone statement -- see
+         * php_run_expr_stmt's own comment on why this (and postfix
+         * "$x++;"/compound "+="/"-="/".=") had no support anywhere in
+         * this file before. */
+        php_run_expr_stmt(st);
+        php_skip_ws(st);
+        if (*st->src == ';') st->src++;
+        return;
+    }
     if (c == '$') {
+        /* Postfix "$x++;"/"$x--;" or compound "$x += ...;"/"-="/".=" as a
+         * standalone statement -- peek past the identifier without
+         * committing to it, so a PLAIN "$x = ...;"/"$x[...] = ...;"/bare-
+         * expression statement (everything below) is completely
+         * unaffected when none of these operators are actually there. */
+        {
+            const char *peek = st->src + 1;
+            char pname[64]; int pi = 0;
+            while ((peek[pi] == '_' || (peek[pi]>='a'&&peek[pi]<='z') || (peek[pi]>='A'&&peek[pi]<='Z') || (peek[pi]>='0'&&peek[pi]<='9')) && pi < (int)sizeof pname - 1) { pname[pi]=peek[pi]; pi++; }
+            const char *after = peek + pi;
+            while (*after==' '||*after=='\t') after++;
+            if (pi > 0 && ((after[0]=='+'&&after[1]=='+') || (after[0]=='-'&&after[1]=='-') ||
+                           ((after[0]=='+'||after[0]=='-'||after[0]=='.') && after[1]=='='))) {
+                php_run_expr_stmt(st);
+                php_skip_ws(st);
+                if (*st->src == ';') st->src++;
+                return;
+            }
+        }
         const char *save = st->src;
         st->src++;
         char name[64];
@@ -2422,13 +2846,16 @@ static void php_run_statement(PhpState *st) {
                 st->src++;
                 if (take) {
                     php_run_statements(st);
-                    if (st->returning) {
+                    if (st->returning || st->breaking || st->continuing) {
                         php_skip_to_brace_close(st);
                         c = *st->src;
                         if (c == '}') st->src++;
                         return; /* don't try to parse a trailing
-                                   elseif/else past a return -- matches
-                                   how php_run_statements itself stops */
+                                   elseif/else past a return/break/continue
+                                   -- matches how php_run_statements itself
+                                   stops; an enclosing while/for/foreach
+                                   loop handler is the one that actually
+                                   consumes breaking/continuing */
                     }
                 } else {
                     php_skip_to_brace_close(st);
@@ -2456,7 +2883,7 @@ static void php_run_statement(PhpState *st) {
                     st->src++;
                     if (!any_matched) {
                         php_run_statements(st);
-                        if (st->returning) {
+                        if (st->returning || st->breaking || st->continuing) {
                             php_skip_to_brace_close(st);
                             c = *st->src;
                             if (c == '}') st->src++;
@@ -2504,11 +2931,293 @@ static void php_run_statement(PhpState *st) {
      * statements execute as top-level code) -- fixed at every skip site
      * that does this kind of scan, not just the one that happened to
      * get hit first. */
+    /* "global $a, $b, ...;" -- for real now, not parsed-and-skipped (see
+     * g_globals' own comment on why: WordPress's own require_wp_db()
+     * does "global $wpdb; ... $wpdb = new wpdb(...);", and essentially
+     * every other core function that touches the database starts with
+     * "global $wpdb;" too -- without this, the real connected $wpdb
+     * object was silently discarded the instant require_wp_db()
+     * returned). Just records each named variable as globalized in THIS
+     * scope (php_var_find()/php_var_find_or_create() do the actual
+     * redirect-to-g_globals[] work from here on) -- doesn't itself read
+     * or write any value. */
+    if (strcmp(kw, "global") == 0) {
+        php_skip_ws(st);
+        for (;;) {
+            char c2 = *st->src;
+            if (c2 != '$') break;
+            st->src++;
+            char vname[64];
+            php_read_ident(st, vname, sizeof vname);
+            if (st->n_globalized < (int)(sizeof st->globalized / sizeof st->globalized[0])) {
+                strncpy(st->globalized[st->n_globalized], vname, sizeof st->globalized[0] - 1);
+                st->globalized[st->n_globalized][sizeof st->globalized[0] - 1] = 0;
+                st->n_globalized++;
+            }
+            php_skip_ws(st);
+            c2 = *st->src;
+            if (c2 == ',') { st->src++; php_skip_ws(st); continue; }
+            break;
+        }
+        php_skip_ws(st);
+        if (*st->src == ';') st->src++;
+        return;
+    }
+    if (strcmp(kw, "break") == 0) {
+        st->breaking = 1;
+        php_skip_ws(st);
+        if (*st->src == ';') st->src++;
+        return;
+    }
+    if (strcmp(kw, "continue") == 0) {
+        st->continuing = 1;
+        php_skip_ws(st);
+        if (*st->src == ';') st->src++;
+        return;
+    }
+    /* while/for/foreach -- for real now, not parsed-and-skipped. This
+     * interpreter has no AST -- it walks the SOURCE TEXT directly (see
+     * this file's top comment) -- so "executing a loop body more than
+     * once" means literally re-running php_run_statements() from the
+     * same saved source position each iteration, re-evaluating the
+     * condition (for while/for) from ITS OWN saved position each time
+     * too. PHP_LOOP_MAX bounds every loop against a genuine infinite
+     * loop (a real risk now that loops actually run) hanging the whole
+     * HTTP request forever -- degrades to "stop iterating" rather than
+     * a hang, same "generous bound, safe degradation" convention as
+     * every other capacity limit in this file. This was, by a wide
+     * margin, the single highest-impact remaining gap for running real
+     * WordPress code: "foreach" alone appears throughout WordPress core
+     * to walk arrays of options/posts/results/hooks -- e.g.
+     * wp_load_alloptions()'s own "foreach ($alloptions_db as $o) {
+     * $alloptions[$o->option_name] = $o->option_value; }" NEVER
+     * populated $alloptions before this, so is_blog_installed() (and
+     * everything downstream of it) could never see the site as
+     * installed no matter what the database actually contained. */
+    if (strcmp(kw, "while") == 0) {
+        php_skip_ws(st);
+        c = *st->src;
+        const char *cond_start = NULL;
+        if (c == '(') {
+            cond_start = st->src;
+            st->src++;
+            char condval[PHP_VAL_MAX];
+            php_eval_expr(st, condval, sizeof condval);
+            php_skip_ws(st);
+            c = *st->src;
+            if (c != ')') { php_skip_to_paren_close(st); c = *st->src; }
+            if (c == ')') st->src++;
+        }
+        php_skip_ws(st);
+        c = *st->src;
+        if (c != '{') return; /* malformed: nothing sane to do, degrade safely */
+        st->src++;
+        const char *body_start = st->src;
+        int iterations = 0;
+        for (;;) {
+            int cond = 0;
+            if (cond_start && ++iterations <= PHP_LOOP_MAX) {
+                const char *save = st->src;
+                st->src = cond_start + 1;
+                char condval[PHP_VAL_MAX];
+                php_eval_expr(st, condval, sizeof condval);
+                cond = php_truthy(condval);
+                st->src = save;
+            }
+            if (!cond) break;
+            st->src = body_start;
+            php_run_statements(st);
+            if (st->returning) {
+                st->src = body_start; php_skip_to_brace_close(st);
+                if (*st->src == '}') st->src++;
+                return;
+            }
+            if (st->breaking) { st->breaking = 0; break; }
+            if (st->continuing) st->continuing = 0;
+        }
+        st->src = body_start;
+        php_skip_to_brace_close(st);
+        c = *st->src;
+        if (c == '}') st->src++;
+        return;
+    }
+    if (strcmp(kw, "for") == 0) {
+        php_skip_ws(st);
+        c = *st->src;
+        const char *cond_start = NULL;
+        const char *step_start = NULL;
+        const char *paren_close = NULL;
+        if (c == '(') {
+            st->src++;
+            php_skip_ws(st);
+            if (*st->src != ';') {
+                for (;;) {
+                    php_run_expr_stmt(st);
+                    php_skip_ws(st);
+                    if (*st->src == ',') { st->src++; php_skip_ws(st); continue; }
+                    break;
+                }
+            }
+            php_skip_ws(st);
+            if (*st->src == ';') st->src++;
+            php_skip_ws(st);
+            cond_start = (*st->src != ';') ? st->src : NULL;
+            if (cond_start) {
+                char tmp[PHP_VAL_MAX];
+                php_eval_expr(st, tmp, sizeof tmp);
+            }
+            php_skip_ws(st);
+            if (*st->src == ';') st->src++;
+            php_skip_ws(st);
+            step_start = (*st->src != ')') ? st->src : NULL;
+            if (step_start) {
+                for (;;) {
+                    php_run_expr_stmt(st);
+                    php_skip_ws(st);
+                    if (*st->src == ',') { st->src++; php_skip_ws(st); continue; }
+                    break;
+                }
+            }
+            php_skip_ws(st);
+            paren_close = st->src;
+            if (*st->src == ')') st->src++;
+        }
+        php_skip_ws(st);
+        c = *st->src;
+        if (c != '{') return;
+        st->src++;
+        const char *body_start = st->src;
+        int iterations = 0;
+        for (;;) {
+            int cond = 1;
+            if (cond_start && ++iterations <= PHP_LOOP_MAX) {
+                const char *save = st->src;
+                st->src = cond_start;
+                char condval[PHP_VAL_MAX];
+                php_eval_expr(st, condval, sizeof condval);
+                cond = php_truthy(condval);
+                st->src = save;
+            } else if (cond_start) {
+                cond = 0; /* hit PHP_LOOP_MAX */
+            }
+            if (!cond) break;
+            st->src = body_start;
+            php_run_statements(st);
+            if (st->returning) {
+                st->src = body_start; php_skip_to_brace_close(st);
+                if (*st->src == '}') st->src++;
+                return;
+            }
+            if (st->breaking) { st->breaking = 0; break; }
+            if (st->continuing) st->continuing = 0;
+            if (step_start) {
+                const char *save = st->src;
+                st->src = step_start;
+                for (;;) {
+                    php_run_expr_stmt(st);
+                    php_skip_ws(st);
+                    if (*st->src == ',') { st->src++; php_skip_ws(st); continue; }
+                    break;
+                }
+                st->src = save;
+            }
+            (void)paren_close;
+        }
+        st->src = body_start;
+        php_skip_to_brace_close(st);
+        c = *st->src;
+        if (c == '}') st->src++;
+        return;
+    }
+    if (strcmp(kw, "foreach") == 0) {
+        php_skip_ws(st);
+        c = *st->src;
+        PhpKVArray *src_arr = NULL;
+        char keyname[64]; keyname[0] = 0;
+        char valname[64]; valname[0] = 0;
+        if (c == '(') {
+            st->src++;
+            php_skip_ws(st);
+            if (*st->src == '$') {
+                st->src++;
+                char aname[64];
+                php_read_ident(st, aname, sizeof aname);
+                PhpVar *av = php_var_find(st, aname);
+                if (av && av->is_array) src_arr = &av->arr;
+                else if (av) {
+                    int aid = php_arrref_decode(av->val);
+                    if (aid >= 0) src_arr = &g_arrays[aid];
+                }
+            } else {
+                /* Uncommon shape ("foreach (some_call() as $x)") -- this
+                 * subset can still evaluate it (for side effects/an
+                 * arrref result), just can't parse it as an lvalue. */
+                char tmp[PHP_VAL_MAX];
+                php_eval_expr(st, tmp, sizeof tmp);
+                int aid = php_arrref_decode(tmp);
+                if (aid >= 0) src_arr = &g_arrays[aid];
+            }
+            php_skip_ws(st);
+            const char *save_as = st->src;
+            char kwas[8]; php_read_ident(st, kwas, sizeof kwas);
+            if (strcmp(kwas, "as") == 0) {
+                php_skip_ws(st);
+                if (*st->src == '&') { st->src++; php_skip_ws(st); } /* "as &$v" -- no true references in this subset, treat as by-value */
+                if (*st->src == '$') { st->src++; php_read_ident(st, valname, sizeof valname); }
+                php_skip_ws(st);
+                if (st->src[0] == '=' && st->src[1] == '>') {
+                    st->src += 2;
+                    strncpy(keyname, valname, sizeof keyname - 1); keyname[sizeof keyname - 1] = 0;
+                    valname[0] = 0;
+                    php_skip_ws(st);
+                    if (*st->src == '&') { st->src++; php_skip_ws(st); }
+                    if (*st->src == '$') { st->src++; php_read_ident(st, valname, sizeof valname); }
+                }
+            } else {
+                st->src = save_as;
+            }
+            php_skip_ws(st);
+            if (*st->src == ')') st->src++;
+        }
+        php_skip_ws(st);
+        c = *st->src;
+        if (c != '{') return;
+        st->src++;
+        const char *body_start = st->src;
+        if (src_arr) {
+            int i, iterations = 0;
+            int n = src_arr->count; /* snapshot: a body that appends to the
+                                        SAME array being iterated (rare)
+                                        won't visit the new elements --
+                                        close enough to real PHP's own
+                                        "foreach iterates a copy" semantics,
+                                        and far safer than re-reading a
+                                        live, possibly-growing count */
+            for (i = 0; i < n && i < src_arr->count; i++) {
+                if (++iterations > PHP_LOOP_MAX) break;
+                if (keyname[0]) php_var_set(st, keyname, src_arr->items[i].key);
+                if (valname[0]) php_var_set(st, valname, src_arr->items[i].val);
+                st->src = body_start;
+                php_run_statements(st);
+                if (st->returning) {
+                    st->src = body_start; php_skip_to_brace_close(st);
+                    if (*st->src == '}') st->src++;
+                    return;
+                }
+                if (st->breaking) { st->breaking = 0; break; }
+                if (st->continuing) st->continuing = 0;
+            }
+        }
+        st->src = body_start;
+        php_skip_to_brace_close(st);
+        c = *st->src;
+        if (c == '}') st->src++;
+        return;
+    }
     if (strcmp(kw, "interface") == 0 || strcmp(kw, "trait") == 0 ||
         strcmp(kw, "enum") == 0 || strcmp(kw, "namespace") == 0 || strcmp(kw, "use") == 0 ||
         strcmp(kw, "try") == 0 || strcmp(kw, "catch") == 0 || strcmp(kw, "finally") == 0 ||
-        strcmp(kw, "switch") == 0 || strcmp(kw, "foreach") == 0 || strcmp(kw, "for") == 0 ||
-        strcmp(kw, "while") == 0 || strcmp(kw, "do") == 0 || strcmp(kw, "global") == 0 ||
+        strcmp(kw, "switch") == 0 || strcmp(kw, "do") == 0 ||
         strcmp(kw, "static") == 0 || strcmp(kw, "abstract") == 0 || strcmp(kw, "final") == 0 ||
         strcmp(kw, "public") == 0 || strcmp(kw, "private") == 0 || strcmp(kw, "protected") == 0 ||
         strcmp(kw, "const") == 0) {
@@ -2628,9 +3337,188 @@ static void php_run_statements(PhpState *st) {
         if (c0 == '}') return;
         const char *before = st->src;
         php_run_statement(st);
-        if (st->returning) return;
+        /* "break"/"continue" (see their own statement handlers, and the
+         * while/for/foreach loop handlers that consume these flags)
+         * unwind exactly like "return" does here -- stop running further
+         * statements in THIS block and let the caller (an enclosing if/
+         * loop body) decide what to do, all the way up to the nearest
+         * actual loop. */
+        if (st->returning || st->breaking || st->continuing) return;
         if (st->src == before) st->src++;
     }
+}
+
+/* A tiny, hand-rolled regex engine backing preg_match()/preg_replace() --
+ * see those builtins' own comment (in php_call_function) for WHY: a
+ * single missing "preg_replace('|[^a-z0-9-]+|', '', $type)" call
+ * (wp-includes/template.php's own get_query_template(), sanitizing a
+ * template TYPE name like "index") silently wiped a perfectly valid
+ * "index" down to "" (every unrecognized function call in this file
+ * degrades to returning "" -- fine for a void-ish call, actively
+ * destructive for a "return a transformed copy" one), which is what
+ * made template resolution find nothing no matter how correct the
+ * theme/DB layer was. preg_* is used FAR too pervasively throughout
+ * real WordPress (slug sanitization, URL parsing, esc_* helpers, ...)
+ * to leave unimplemented the way dozens of other, rarer builtins still
+ * are -- this earns being a real (if intentionally small) engine, not
+ * just another stub.
+ *
+ * Deliberately bounded, PCRE subset: literal characters, "." (any),
+ * "[...]"/"[^...]" character classes (with "a-z" ranges), "\d"/"\D"/
+ * "\w"/"\W"/"\s"/"\S", "^"/"$" anchors, and "*"/"+"/"?" greedy
+ * quantifiers (with backtracking) on any single token. NO grouping/
+ * alternation/backreferences/capture groups -- preg_match() only
+ * reports whether the pattern matched (the 3rd "&$matches" output-
+ * array argument real PHP supports isn't implemented), and
+ * preg_replace()'s replacement string is inserted literally (no "$1"
+ * backreferences). This covers the overwhelming majority of
+ * WordPress's own real-world preg_* call shapes (character-class-based
+ * sanitization, simple validation checks) without the much larger
+ * undertaking a full PCRE engine would be. */
+#define RTOK_MAX 128
+typedef struct {
+    int kind; /* 0=literal char, 1=any ".", 2=character class, 3="^", 4="$" */
+    char lit;
+    unsigned char cls[32]; /* 256-bit membership bitmap for kind==2 */
+    int negate;
+    char quant; /* 0 (none), '*', '+', '?' */
+} RToken;
+
+static void regex_cls_add_range(RToken *t, unsigned char lo, unsigned char hi) {
+    unsigned int cc;
+    for (cc = lo; cc <= hi; cc++) t->cls[cc / 8] |= (unsigned char)(1u << (cc % 8));
+}
+
+/* Compiles a pattern BODY (delimiters/flags already stripped by the
+ * caller) into `toks`. Returns the token count (0 for an empty/
+ * unparseable pattern -- an empty token list matches the empty string
+ * at every position, which is the same safe "no-op transform" fallback
+ * an unrecognized pattern would need anyway). */
+static int regex_compile_body(const char *p, RToken *toks, int max) {
+    int n = 0;
+    while (*p && n < max) {
+        RToken t; memset(&t, 0, sizeof t);
+        if (*p == '^') { t.kind = 3; p++; }
+        else if (*p == '$') { t.kind = 4; p++; }
+        else if (*p == '.') { t.kind = 1; p++; }
+        else if (*p == '[') {
+            p++;
+            t.kind = 2;
+            if (*p == '^') { t.negate = 1; p++; }
+            int first = 1;
+            while (*p && (*p != ']' || first)) {
+                first = 0;
+                unsigned char c0 = (unsigned char)*p;
+                if (p[1] == '-' && p[2] && p[2] != ']') {
+                    unsigned char c1 = (unsigned char)p[2];
+                    if (c1 >= c0) regex_cls_add_range(&t, c0, c1);
+                    p += 3;
+                } else {
+                    regex_cls_add_range(&t, c0, c0);
+                    p++;
+                }
+            }
+            if (*p == ']') p++;
+        } else if (*p == '\\' && p[1]) {
+            char e = p[1];
+            if (e == 'd' || e == 'D') { t.kind = 2; regex_cls_add_range(&t, '0', '9'); t.negate = (e == 'D'); }
+            else if (e == 'w' || e == 'W') {
+                t.kind = 2;
+                regex_cls_add_range(&t, 'a', 'z'); regex_cls_add_range(&t, 'A', 'Z');
+                regex_cls_add_range(&t, '0', '9'); regex_cls_add_range(&t, '_', '_');
+                t.negate = (e == 'W');
+            } else if (e == 's' || e == 'S') {
+                t.kind = 2;
+                regex_cls_add_range(&t, ' ', ' '); regex_cls_add_range(&t, '\t', '\t');
+                regex_cls_add_range(&t, '\n', '\n'); regex_cls_add_range(&t, '\r', '\r');
+                t.negate = (e == 'S');
+            } else { t.kind = 0; t.lit = e; }
+            p += 2;
+        } else { t.kind = 0; t.lit = *p; p++; }
+        char q = *p;
+        if (q == '*' || q == '+' || q == '?') { t.quant = q; p++; }
+        toks[n++] = t;
+    }
+    return n;
+}
+
+/* Strips a PHP-style delimited pattern ("|body|flags", "/body/flags",
+ * "#body#i", ...; bracket delimiters "(){}[]<>" pair with their mirror)
+ * and compiles the body. Returns 0 (no tokens: matches empty-string-
+ * only) if `pat` is malformed -- degrades safely rather than crashing
+ * on an unrecognized delimiter shape. */
+static int regex_compile_pattern(const char *pat, RToken *toks, int max) {
+    if (!pat[0]) return 0;
+    char delim = pat[0];
+    char close = delim;
+    if (delim == '(') close = ')';
+    else if (delim == '{') close = '}';
+    else if (delim == '[') close = ']';
+    else if (delim == '<') close = '>';
+    const char *p = pat + 1;
+    const char *end = strrchr(p, close);
+    if (!end) return 0;
+    char body[PHP_VAL_MAX];
+    int blen = (int)(end - p);
+    if (blen >= (int)sizeof body) blen = (int)sizeof body - 1;
+    if (blen < 0) blen = 0;
+    memcpy(body, p, (size_t)blen); body[blen] = 0;
+    return regex_compile_body(body, toks, max);
+}
+
+static int regex_tok_matches(const RToken *t, char c) {
+    if (t->kind == 1) return c != 0;
+    if (t->kind == 2) {
+        unsigned char uc = (unsigned char)c;
+        int in = (t->cls[uc / 8] >> (uc % 8)) & 1;
+        return t->negate ? !in : in;
+    }
+    return c == t->lit;
+}
+
+/* Backtracking match of toks[ti..ntoks) against text[si..], returning
+ * the end offset on success or -1. Recursion depth is bounded by
+ * pattern length (RTOK_MAX), not input length -- the quantifier
+ * backtrack loop is iterative, not recursive, so a long run of matched
+ * characters doesn't grow the call stack. */
+static int regex_match_here(const RToken *toks, int ntoks, int ti, const char *text, int si, int tlen) {
+    if (ti >= ntoks) return si;
+    const RToken *t = &toks[ti];
+    if (t->kind == 3) return (si == 0) ? regex_match_here(toks, ntoks, ti + 1, text, si, tlen) : -1;
+    if (t->kind == 4) return (si == tlen) ? regex_match_here(toks, ntoks, ti + 1, text, si, tlen) : -1;
+    if (t->quant == 0) {
+        if (si < tlen && regex_tok_matches(t, text[si])) return regex_match_here(toks, ntoks, ti + 1, text, si + 1, tlen);
+        return -1;
+    }
+    if (t->quant == '?') {
+        if (si < tlen && regex_tok_matches(t, text[si])) {
+            int r = regex_match_here(toks, ntoks, ti + 1, text, si + 1, tlen);
+            if (r >= 0) return r;
+        }
+        return regex_match_here(toks, ntoks, ti + 1, text, si, tlen);
+    }
+    /* '*' / '+': match as many as possible, then backtrack down to the minimum */
+    int count = 0;
+    while (si + count < tlen && regex_tok_matches(t, text[si + count])) count++;
+    int minc = (t->quant == '+') ? 1 : 0;
+    int k;
+    for (k = count; k >= minc; k--) {
+        int r = regex_match_here(toks, ntoks, ti + 1, text, si + k, tlen);
+        if (r >= 0) return r;
+    }
+    return -1;
+}
+
+/* Finds the first match anywhere in `text`, filling *mstart/*mend
+ * (byte offsets, mend exclusive). Returns 1 if found, 0 otherwise. */
+static int regex_search(const RToken *toks, int ntoks, const char *text, int *mstart, int *mend) {
+    int tlen = (int)strlen(text);
+    int si;
+    for (si = 0; si <= tlen; si++) {
+        int r = regex_match_here(toks, ntoks, 0, text, si, tlen);
+        if (r >= 0) { *mstart = si; *mend = r; return 1; }
+    }
+    return 0;
 }
 
 /* Quotes/escapes a value for embedding as a single-quoted SQL literal in
@@ -2719,14 +3607,44 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
     if (strcmp(name, "function_exists") == 0 && nargs >= 1) {
         int found = php_func_find(args[0]) != NULL;
         if (!found) {
-            static const char *builtins[] = {
+            /* NOT "static const char *builtins[] = {...};" -- see
+             * preg_quote's own comment on the confirmed real squash bug
+             * with "static" LOCAL string-literal initializers; this
+             * array-of-pointers shape is affected too (a minimal
+             * standalone repro of exactly this pattern printed nothing
+             * at all under squash -- the loop below would have silently
+             * treated every builtin as "not found"). Non-static costs
+             * nothing meaningful here. */
+            const char *builtins[] = {
                 "define", "defined", "function_exists", "sprintf", "printf",
-                "file_exists", "is_dir", "strlen", "dirname", NULL
+                "file_exists", "is_dir", "is_file", "is_readable", "is_writable", "is_writeable",
+                "realpath", "strlen", "dirname", "str_ends_with", "str_starts_with",
+                "str_contains", "implode", "join", "extension_loaded", NULL
             };
             int i;
             for (i = 0; builtins[i]; i++) if (strcmp(args[0], builtins[i]) == 0) { found = 1; break; }
         }
         strncpy(out, found ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "extension_loaded") == 0) {
+        /* This interpreter subset has no real concept of a "PHP
+         * extension" -- every builtin here is either always available or
+         * always absent, independent of any extension grouping (unlike
+         * mysqli, which we deliberately do NOT fake -- see
+         * wp-content/db.php's own comment; that one implies a specific,
+         * consequential capability (a working mysqli_connect()) that
+         * genuinely doesn't exist here). "extension_loaded('json')"/
+         * "'hash'"-style checks (WordPress's own $required_php_
+         * extensions, wp-includes/version.php) are purely informational
+         * gates, not something calling code branches its OWN behavior
+         * on beyond "should I warn the user" -- unconditionally true
+         * here just silences that warning, and any function from a
+         * "loaded" extension that isn't actually implemented degrades
+         * the exact same safe way every other unimplemented function in
+         * this file already does (a no-op, not a crash or a lie about
+         * doing real work). */
+        strncpy(out, "1", outcap - 1); out[outcap - 1] = 0;
         return;
     }
     if (strcmp(name, "call_user_func") == 0 && nargs >= 1) {
@@ -2782,6 +3700,253 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
         struct stat sb;
         int ok = stat(args[0], &sb) == 0 && S_ISDIR(sb.st_mode);
         strncpy(out, ok ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "is_file") == 0 && nargs >= 1) {
+        struct stat sb;
+        int ok = stat(args[0], &sb) == 0 && S_ISREG(sb.st_mode);
+        strncpy(out, ok ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "is_readable") == 0 && nargs >= 1) {
+        strncpy(out, access(args[0], R_OK) == 0 ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "is_writable") == 0 || strcmp(name, "is_writeable") == 0) {
+        if (nargs >= 1) { strncpy(out, access(args[0], W_OK) == 0 ? "1" : "0", outcap - 1); out[outcap - 1] = 0; }
+        return;
+    }
+    if (strcmp(name, "realpath") == 0 && nargs >= 1) {
+        /* Real (not stubbed) filesystem resolution -- glibc's own
+         * realpath(), same call this file's other file/path builtins
+         * (stat()-based file_exists/is_dir/is_file) already lean on for
+         * "ask the OS, don't reimplement path logic". Real PHP returns
+         * `false` (empty string here, this subset's only falsy scalar)
+         * when the path doesn't exist -- template-loader.php's own
+         * "$template = realpath(...); ... is_file($template) &&
+         * is_readable($template)" chain already handles that case
+         * correctly by simply not matching, so no special-casing needed
+         * here beyond what realpath() itself does. */
+        /* NOT realpath(path, NULL) -- that glibc/POSIX.1-2008 extension
+         * (malloc a right-sized buffer internally) is correct C and
+         * works fine under gcc, but is a real, confirmed squash codegen
+         * bug: passing a literal NULL as an external (dynamically-
+         * linked) function's argument silently breaks the call --
+         * realpath(path, NULL) always returned NULL under a squash-
+         * compiled build even for a path that genuinely exists,
+         * (gcc-compiled control returned the correct resolved path for
+         * the identical source). A minimal standalone repro (no
+         * php_mini.c/PHP involved at all) reproduces it too, so this
+         * isn't specific to this file -- it's a real squash bug,
+         * flagged for its own follow-up fix. Passing an explicit,
+         * generously-sized stack buffer instead (the OTHER, equally
+         * standard way to call realpath()) sidesteps it entirely and is
+         * just as correct. */
+        char resolved[4096];
+        if (realpath(args[0], resolved)) { strncpy(out, resolved, outcap - 1); out[outcap - 1] = 0; }
+        else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "str_ends_with") == 0 && nargs >= 2) {
+        size_t hl = strlen(args[0]), nl = strlen(args[1]);
+        int ok = nl <= hl && strcmp(args[0] + (hl - nl), args[1]) == 0;
+        strncpy(out, ok ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "str_starts_with") == 0 && nargs >= 2) {
+        size_t nl = strlen(args[1]);
+        int ok = strncmp(args[0], args[1], nl) == 0;
+        strncpy(out, ok ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "str_contains") == 0 && nargs >= 2) {
+        int ok = args[1][0] == 0 || strstr(args[0], args[1]) != NULL;
+        strncpy(out, ok ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    /* is_string()/is_object()/is_numeric()/is_int()/is_null() -- NONE of
+     * these existed anywhere before (confirmed as a real, high-impact
+     * gap this session: wp-includes/template-loader.php's own
+     * "$is_stringy = is_string($template) || (is_object($template) &&
+     * method_exists(...));" always evaluated to "" (both branches
+     * unknown-function-false), so $template was unconditionally forced
+     * to null two lines later regardless of whether template resolution
+     * had actually found a real theme file -- the WHOLE reason a fully
+     * successful boot chain still rendered a blank page). This
+     * interpreter has no real per-variable type tag (every value is
+     * just a plain string, with the object/array-reference forms being
+     * plain strings with a reserved \x01-prefixed marker -- see
+     * php_objref_encode's/php_arrref_encode's own comments), so these
+     * approximate real PHP's type predicates from the VALUE's shape
+     * rather than a stored type: is_object/is_array are exactly right
+     * (the reference-token shape IS the real distinguishing feature),
+     * is_string is right for every plain scalar (including ones that
+     * happen to look numeric, matching how a value fetched from this
+     * subset's own string-typed DB layer would behave in real PHP too),
+     * and is_numeric/is_int examine the text shape directly since
+     * that's genuinely how PHP's own is_numeric() works regardless of
+     * a value's underlying representation. */
+    if (strcmp(name, "is_string") == 0 && nargs >= 1) {
+        int is_str = php_objref_decode(args[0]) < 0 && php_arrref_decode(args[0]) < 0;
+        strncpy(out, is_str ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "is_object") == 0 && nargs >= 1) {
+        strncpy(out, php_objref_decode(args[0]) >= 0 ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "is_null") == 0 && nargs >= 1) {
+        strncpy(out, args[0][0] == 0 ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "is_numeric") == 0 && nargs >= 1) {
+        char *endp;
+        strtod(args[0], &endp);
+        int ok = args[0][0] != 0 && *endp == 0;
+        strncpy(out, ok ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "is_int") == 0 || strcmp(name, "is_integer") == 0 || strcmp(name, "is_long") == 0) {
+        if (nargs >= 1) {
+            char *endp;
+            strtol(args[0], &endp, 10);
+            int ok = args[0][0] != 0 && *endp == 0;
+            strncpy(out, ok ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        }
+        return;
+    }
+    if (strcmp(name, "is_bool") == 0 || strcmp(name, "is_float") == 0 || strcmp(name, "is_double") == 0 || strcmp(name, "is_scalar") == 0) {
+        /* No distinct bool/float type in this subset to check against --
+         * is_scalar() specifically is common enough (WordPress core uses
+         * it as a cheap "not an array/object" guard) that a safe, useful
+         * approximation matters: true for anything that isn't an
+         * object/array reference, same shape-based test as is_string(). */
+        if (nargs >= 1) {
+            if (strcmp(name, "is_scalar") == 0) {
+                int is_scalar = php_objref_decode(args[0]) < 0 && php_arrref_decode(args[0]) < 0;
+                strncpy(out, is_scalar ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+            } else {
+                strncpy(out, "0", outcap - 1); out[outcap - 1] = 0;
+            }
+        }
+        return;
+    }
+    if (strcmp(name, "method_exists") == 0 && nargs >= 2) {
+        int oid = php_objref_decode(args[0]);
+        PhpClass *cls = oid >= 0 ? php_class_find(g_objects[oid].class_name) : NULL;
+        strncpy(out, php_class_find_method(cls, args[1]) ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "get_class") == 0) {
+        int oid = nargs >= 1 ? php_objref_decode(args[0]) : (caller->has_this ? caller->this_obj_id : -1);
+        if (oid >= 0) { strncpy(out, g_objects[oid].class_name, outcap - 1); out[outcap - 1] = 0; }
+        else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "preg_match") == 0 && nargs >= 2) {
+        /* No 3rd "&$matches" output-array support -- see the regex
+         * engine's own top comment. */
+        RToken toks[RTOK_MAX];
+        int ntoks = regex_compile_pattern(args[0], toks, RTOK_MAX);
+        int mstart = 0, mend = 0;
+        int found = regex_search(toks, ntoks, args[1], &mstart, &mend);
+        snprintf(out, outcap, "%d", found);
+        return;
+    }
+    if (strcmp(name, "preg_match_all") == 0 && nargs >= 2) {
+        RToken toks[RTOK_MAX];
+        int ntoks = regex_compile_pattern(args[0], toks, RTOK_MAX);
+        int count = 0, pos = 0, slen = (int)strlen(args[1]), iterations = 0;
+        while (pos <= slen && iterations < PHP_LOOP_MAX) {
+            iterations++;
+            int mstart = -1, mend = -1, si;
+            for (si = pos; si <= slen; si++) {
+                int r = regex_match_here(toks, ntoks, 0, args[1], si, slen);
+                if (r >= 0) { mstart = si; mend = r; break; }
+            }
+            if (mstart < 0) break;
+            count++;
+            pos = (mend > mstart) ? mend : mstart + 1;
+        }
+        snprintf(out, outcap, "%d", count);
+        return;
+    }
+    if (strcmp(name, "preg_replace") == 0 && nargs >= 3) {
+        RToken toks[RTOK_MAX];
+        int ntoks = regex_compile_pattern(args[0], toks, RTOK_MAX);
+        const char *subj = args[2];
+        const char *repl = args[1];
+        int slen = (int)strlen(subj);
+        int o = 0, pos = 0, iterations = 0;
+        for (;;) {
+            if (++iterations > PHP_LOOP_MAX) break;
+            int mstart = -1, mend = -1, si;
+            for (si = pos; si <= slen; si++) {
+                int r = regex_match_here(toks, ntoks, 0, subj, si, slen);
+                if (r >= 0) { mstart = si; mend = r; break; }
+            }
+            if (mstart < 0) {
+                while (pos < slen && o < outcap - 1) out[o++] = subj[pos++];
+                break;
+            }
+            while (pos < mstart && o < outcap - 1) out[o++] = subj[pos++];
+            const char *rp = repl;
+            while (*rp && o < outcap - 1) out[o++] = *rp++;
+            if (mend == mstart) {
+                if (pos < slen && o < outcap - 1) out[o++] = subj[pos];
+                pos++;
+            } else {
+                pos = mend;
+            }
+            if (pos > slen) break;
+        }
+        out[o] = 0;
+        return;
+    }
+    if (strcmp(name, "preg_quote") == 0 && nargs >= 1) {
+        /* NOT "static const char specials[] = ...;" -- a real, confirmed
+         * squash codegen bug: a LOCAL variable's "static" storage class
+         * combined with a string-literal initializer silently breaks
+         * (reproduced in a minimal standalone repro with no PHP/this
+         * file involved at all: "static const char *p = \"abc\";
+         * printf(p);" prints "(null)" under a squash-compiled build,
+         * "abc" under gcc; "static char x[] = \"abc\";" prints "(null)"
+         * too; "const char x[] = \"abc\";" -- an array, no "static" --
+         * segfaults outright). A plain non-static local with the same
+         * initializer works correctly and costs nothing extra here
+         * (this string is tiny and the function isn't hot), so that's
+         * the fix -- the "static" bug itself is flagged for its own
+         * dedicated root-cause session, not chased further here. */
+        const char *specials = ".\\+*?[^]$(){}=!<>|:-#/";
+        int o = 0;
+        const char *p;
+        for (p = args[0]; *p && o < outcap - 2; p++) {
+            if (strchr(specials, *p)) out[o++] = '\\';
+            out[o++] = *p;
+        }
+        out[o] = 0;
+        return;
+    }
+    if (strcmp(name, "implode") == 0 || strcmp(name, "join") == 0) {
+        /* implode($glue, $array) or implode($array) (glue defaults to
+         * "") -- iterates the array's KV items directly in C (same
+         * "loops belong in the glue builtin, not in this PHP subset's
+         * own for/foreach" reasoning as __db_insert()'s own comment,
+         * though foreach DOES work now too -- this is just simpler/
+         * cheaper than writing it out in PHP for something this common). */
+        const char *glue = "";
+        int arr_idx = 0;
+        if (nargs >= 2) { glue = args[0]; arr_idx = 1; }
+        int aid = nargs > arr_idx ? php_arrref_decode(args[arr_idx]) : -1;
+        int o = 0;
+        if (aid >= 0) {
+            PhpKVArray *a = &g_arrays[aid];
+            int i;
+            for (i = 0; i < a->count; i++) {
+                o += snprintf(out + o, o < outcap ? (size_t)(outcap - o) : 0, "%s%s", i ? glue : "", a->items[i].val);
+            }
+        }
+        if (o == 0) out[0] = 0;
         return;
     }
     if (strcmp(name, "strlen") == 0 && nargs >= 1) {

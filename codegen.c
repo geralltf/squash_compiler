@@ -7019,13 +7019,111 @@ void codegen_stmt(CodeGen *cg, ASTNode *n) {
             }
 
             /* Static variable storage is zero-initialised via calloc() in the
-             * wdata pool — no inline init code is emitted.  C semantics require
-             * static locals to be initialised only once (at program start), not
-             * on every function call.  Emitting inline init code would reset the
-             * variable on every invocation, which is wrong.
-             * Non-zero initialisers: the wdata is pre-zeroed; a non-zero value
-             * can be set by the programmer on first call with an if-not-set guard,
-             * or we handle it as a one-time init (future work).               */
+             * wdata pool. C semantics require static locals to be initialised
+             * only once (the first time control reaches the declaration), not
+             * on every function call -- a hidden, zero-initialized "have I run
+             * yet" guard flag (its own wdata slot/symbol, same registration
+             * mechanism as the static variable itself just above) makes that
+             * safe to emit as ordinary run-time code.
+             *
+             * NON-constant initializers (build_static_local_init_bytes()
+             * returned NULL -- e.g. a string-literal pointer, which needs a
+             * real RIP-relative LEA, not just static bytes) used to leave the
+             * slot permanently zeroed with NO init code at all: confirmed as
+             * a real bug ("static const char *s = "hi";" read back as a
+             * permanently-NULL pointer, and "static const char *table[] =
+             * {"a","b",NULL};" left every element NULL, so a "for
+             * (i=0;table[i];i++)" loop over it never ran even once). Fixed
+             * by synthesizing a real "if (!guard) { guard = 1; <the
+             * assignment(s)> }" AST and running it through the ordinary if/
+             * assignment codegen path -- the exact same reuse this file's
+             * own Pass 0.5 (codegen_program, the identical fix for FILE-
+             * SCOPE globals) already relies on; the only difference here is
+             * the guard, since a local static's declaration statement (unlike
+             * a global's Pass-0.5-synthesized main()-prologue statement)
+             * genuinely re-executes every time its enclosing function runs.
+             * A "{...}" brace-list initializer is expanded to one assignment
+             * per FLAT element (name[i] = elem[i];, matching how the
+             * parser already flattens nested braces -- see parser_new4.c's
+             * own "nested braces are flattened" comment) rather than one
+             * whole-array assignment, since C doesn't allow assigning to an
+             * array by name at all ("arr = {...};" isn't legal C, only a
+             * declaration's own initializer position accepts it). Struct-
+             * of-arrays/array-of-struct element shapes aren't expanded (a
+             * plain per-element scalar assignment is wrong for those) --
+             * out of scope for this fix, matching Pass 0.5's own
+             * documented "large/sparse initializer" limitations. */
+            if (!const_bytes && n->var_decl.init) {
+                char guard_name[320];
+                snprintf(guard_name, sizeof guard_name, "%s_init_done", sym_name);
+                intern_wdata(cg, guard_name, 4);
+                TypeInfo *guard_ti = typeinfo_new("int");
+                symtable_define_global(cg->sym, guard_name, guard_ti, -1);
+                Symbol *guard_sym = symtable_lookup(cg->sym, guard_name);
+                if (guard_sym) { free(guard_sym->dll); guard_sym->dll = my_strdup(guard_name); }
+
+                ASTNode *init_node = n->var_decl.init;
+                n->var_decl.init = NULL; /* ownership moves to the synthesized assignment(s) below */
+
+                ASTNode *then_stmts[257];
+                int n_then = 0;
+                then_stmts[n_then++] = ast_expr_stmt(
+                    ast_assign("=", ast_var(guard_name, n->line), ast_number(1, n->line), n->line), n->line);
+                if (init_node->kind == AST_BLOCK && init_node->block.count > 0 && init_node->block.count <= 256) {
+                    for (int ei = 0; ei < init_node->block.count; ei++) {
+                        ASTNode *elem = init_node->block.stmts[ei];
+                        if (!elem || elem->kind == AST_BLOCK) continue; /* nested aggregate: already zeroed, not expanded (see this block's own comment) */
+                        ASTNode *lhs = ast_index(ast_var(n->var_decl.name, n->line), ast_number(ei, n->line), n->line);
+                        then_stmts[n_then++] = ast_expr_stmt(ast_assign("=", lhs, elem, n->line), n->line);
+                        init_node->block.stmts[ei] = NULL; /* ownership moved */
+                    }
+                    ast_free(init_node);
+                } else if (init_node->kind == AST_STRING && arr > 0) {
+                    /* "char x[] = \"abc\";" (parser_new4.c's own array_size
+                     * inference makes `arr` the string length+1 for this
+                     * exact shape) is ALSO initializing a real array, not a
+                     * pointer -- needs the same per-element treatment a
+                     * brace list gets just above, one assignment per
+                     * character plus the NUL terminator, since an array
+                     * can't be assigned a whole string via "=" any more
+                     * than it can a brace list (see this block's own
+                     * comment on why). Confirmed as a real, separate bug
+                     * from the pointer case: falling through to the plain
+                     * whole-var "else" below (a synthesized "specials =
+                     * \"abc\";") doesn't just fail to update the array --
+                     * it tries to STORE A POINTER VALUE into the first
+                     * bytes of the array's own storage, printing garbage.
+                     * Bounded the same 256-element way as the brace-list
+                     * case, same reason. */
+                    const char *sv = init_node->str.value ? init_node->str.value : "";
+                    int slen = (int)strlen(sv);
+                    int ncopy = slen + 1;
+                    if (ncopy > arr) ncopy = arr;
+                    if (ncopy > 256) ncopy = 256;
+                    for (int ci = 0; ci < ncopy; ci++) {
+                        ASTNode *lhs = ast_index(ast_var(n->var_decl.name, n->line), ast_number(ci, n->line), n->line);
+                        ASTNode *chval = ast_char_lit(ci < slen ? (unsigned char)sv[ci] : 0, n->line);
+                        then_stmts[n_then++] = ast_expr_stmt(ast_assign("=", lhs, chval, n->line), n->line);
+                    }
+                    ast_free(init_node);
+                } else {
+                    ASTNode *lhs = ast_var(n->var_decl.name, n->line);
+                    then_stmts[n_then++] = ast_expr_stmt(ast_assign("=", lhs, init_node, n->line), n->line);
+                }
+                ASTNode *then_block = ast_block(then_stmts, n_then, n->line);
+                ASTNode *cond = ast_unary("!", ast_var(guard_name, n->line), 0, n->line);
+                ASTNode *guarded_if = ast_if(cond, then_block, NULL, n->line);
+                codegen_stmt(cg, guarded_if);
+                /* Deliberately not ast_free()'d -- this subtree isn't
+                 * linked into the real program tree (nothing else will
+                 * ever walk or free it), and codegen_stmt() only READS
+                 * an AST to emit machine code, never retains pointers
+                 * into it afterward, so the safe, conservative choice is
+                 * a small one-time compile-time leak (this squash
+                 * process exits shortly after compiling anyway) rather
+                 * than risk a use-after-free/double-free in a freshly
+                 * written synthesis path. */
+            }
             (void)sym_name; /* used only for relocation symbol */
             break;
         }
@@ -8775,8 +8873,24 @@ static int field_array_size_of(CodeGen *cg, ASTNode *obj, const char *field_name
     if (ss && ss->struct_node) {
         for (int i=0;i<ss->struct_node->struct_decl.nfields;i++) {
             ASTNode *ff = ss->struct_node->struct_decl.fields[i];
-            if (ff && ff->field.name && strcmp(ff->field.name,field_name)==0)
-                return ff->field.array_size > 0 ? ff->field.array_size : 0;
+            if (ff && ff->field.name && strcmp(ff->field.name,field_name)==0) {
+                if (ff->field.array_size <= 0) return 0;
+                /* T field[N][M] (array_size2>0, the 2D case -- see ast.h's
+                 * own comment on var_decl/field's array_size2) has N*M
+                 * TOTAL elements, not just N -- this function's only
+                 * caller (the sizeof(obj.field) codegen for AST_MEMBER)
+                 * multiplies whatever this returns by ONE element's own
+                 * size, so returning just the outer dimension silently
+                 * undercounted a 2D array field's true size by a factor
+                 * of M. Confirmed as a real bug: "char globalized[8][64];"
+                 * (SQS/php_mini.c's PhpState) sized as sizeof==8 instead
+                 * of the real 512, which in turn made a
+                 * "n < sizeof(arr)/sizeof(arr[0])" bounds check evaluate
+                 * as 8/64==0 (integer division), always false -- silently
+                 * disabling every write through that check. */
+                long total = (long)ff->field.array_size * (ff->field.array_size2 > 0 ? ff->field.array_size2 : 1);
+                return (int)total;
+            }
         }
     }
     return 0;

@@ -2592,6 +2592,81 @@ static void a64_stmt(CodeGenA64 *cg, ASTNode *n) {
             symtable_define_global(cg->sym, nd->var_decl.name, ti, arr);
             Symbol *s = symtable_lookup(cg->sym, nd->var_decl.name);
             if (s) { free(s->dll); s->dll = my_strdup(lbl); }
+
+            /* ANY non-zero initializer (not just a non-constant one like a
+             * string-literal pointer -- this ARM64 backend, unlike the x86
+             * one just above build_static_local_init_bytes(), never bakes
+             * compile-time-constant initializer bytes into the wdata slot
+             * either) was previously silently discarded here -- the
+             * comment above admits it outright ("matches '= 0', which is
+             * the only case squash programs use"). Confirmed as the exact
+             * same real bug class as x86's (a minimal "static const char
+             * *s = "hi";" reads back NULL under this backend too, for the
+             * identical underlying reason: nothing ever emits code to
+             * store the initializer anywhere). Fixed the same way x86's
+             * "is_static" branch now is: synthesize a real "if (!guard) {
+             * guard = 1; <assignment(s)> }" AST and run it through this
+             * backend's own ordinary if/assignment codegen (a64_stmt) --
+             * see codegen.c's identical fix for the full reasoning
+             * (guard flag because a local static's declaration statement
+             * genuinely re-executes every call, brace-list expansion to
+             * one assignment per flat element since C doesn't allow
+             * assigning a whole array by name). No struct-of-arrays/
+             * array-of-struct expansion here either, same scope limit. */
+            if (nd->var_decl.init) {
+                char guard_lbl[300];
+                snprintf(guard_lbl, sizeof guard_lbl, "%s_init_done", lbl);
+                a64_alloc_wdata(cg, 4, guard_lbl);
+                TypeInfo *guard_ti = typeinfo_new("int");
+                symtable_define_global(cg->sym, guard_lbl, guard_ti, -1);
+                Symbol *guard_sym = symtable_lookup(cg->sym, guard_lbl);
+                if (guard_sym) { free(guard_sym->dll); guard_sym->dll = my_strdup(guard_lbl); }
+
+                ASTNode *init_node = nd->var_decl.init;
+                nd->var_decl.init = NULL; /* ownership moves to the synthesized assignment(s) below */
+
+                ASTNode *then_stmts[257];
+                int n_then = 0;
+                then_stmts[n_then++] = ast_expr_stmt(
+                    ast_assign("=", ast_var(guard_lbl, nd->line), ast_number(1, nd->line), nd->line), nd->line);
+                if (init_node->kind == AST_BLOCK && init_node->block.count > 0 && init_node->block.count <= 256) {
+                    for (int ei = 0; ei < init_node->block.count; ei++) {
+                        ASTNode *elem = init_node->block.stmts[ei];
+                        if (!elem || elem->kind == AST_BLOCK) continue;
+                        ASTNode *elhs = ast_index(ast_var(nd->var_decl.name, nd->line), ast_number(ei, nd->line), nd->line);
+                        then_stmts[n_then++] = ast_expr_stmt(ast_assign("=", elhs, elem, nd->line), nd->line);
+                        init_node->block.stmts[ei] = NULL;
+                    }
+                    ast_free(init_node);
+                } else if (init_node->kind == AST_STRING && arr > 0) {
+                    /* "char x[] = \"abc\";" -- see codegen.c's identical
+                     * fix for the full reasoning (a real array target
+                     * can't be assigned a whole string via "="). */
+                    const char *sv = init_node->str.value ? init_node->str.value : "";
+                    int slen = (int)strlen(sv);
+                    int ncopy = slen + 1;
+                    if (ncopy > arr) ncopy = arr;
+                    if (ncopy > 256) ncopy = 256;
+                    for (int ci = 0; ci < ncopy; ci++) {
+                        ASTNode *clhs = ast_index(ast_var(nd->var_decl.name, nd->line), ast_number(ci, nd->line), nd->line);
+                        ASTNode *chval = ast_char_lit(ci < slen ? (unsigned char)sv[ci] : 0, nd->line);
+                        then_stmts[n_then++] = ast_expr_stmt(ast_assign("=", clhs, chval, nd->line), nd->line);
+                    }
+                    ast_free(init_node);
+                } else {
+                    ASTNode *slhs = ast_var(nd->var_decl.name, nd->line);
+                    then_stmts[n_then++] = ast_expr_stmt(ast_assign("=", slhs, init_node, nd->line), nd->line);
+                }
+                ASTNode *then_block = ast_block(then_stmts, n_then, nd->line);
+                ASTNode *cond = ast_unary("!", ast_var(guard_lbl, nd->line), 0, nd->line);
+                ASTNode *guarded_if = ast_if(cond, then_block, NULL, nd->line);
+                a64_stmt(cg, guarded_if);
+                /* Deliberately not ast_free()'d -- see codegen.c's
+                 * identical fix for why (a64_stmt() only reads the tree
+                 * to emit code, never retains it; a small one-time
+                 * compile-time leak is the safe choice over risking a
+                 * use-after-free in a freshly written synthesis path). */
+            }
             break;
         }
         /* Allocate local — symtable tracks next_offset negatively */

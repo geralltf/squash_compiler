@@ -1870,6 +1870,28 @@ ASTNode *ParseVariable(Parser *p) {
             if (array_size == 0) array_size = ne;
         } else {
             init = ParseAssignment(p);
+            /* "char x[] = \"literal\";" (empty brackets, non-brace
+             * initializer) needs the SAME array_size inference the
+             * brace-list case just above already gets ("if (array_size
+             * == 0) array_size = ne;") -- without it, array_size stayed
+             * 0 for ANY non-brace initializer of an empty-bracket array,
+             * string literal included, so codegen allocated/treated the
+             * variable as a plain scalar (one pointer/int-sized slot)
+             * instead of a real N-byte buffer. Confirmed as a real,
+             * reproducible bug this session: a minimal "const char
+             * x[] = \"abc\";" local segfaulted (the initializer-copy
+             * code wrote "abc\0" into a slot sized for one scalar,
+             * corrupting the stack), and the identical shape with
+             * "static" silently read back as a permanently-zeroed
+             * pointer instead of crashing (see codegen.c's own
+             * "is_static" comment for that half of the bug -- a
+             * DIFFERENT root cause, fixed separately there). +1 for the
+             * NUL terminator, matching how a real C string-literal
+             * array initializer sizes itself ("char x[] = \"ab\";" is a
+             * 3-element array, not 2). */
+            if (array_size == 0 && init && init->kind == AST_STRING && init->str.value) {
+                array_size = (int)strlen(init->str.value) + 1;
+            }
         }
     }
     /* Multi-declarator: "int a=1, *b=NULL, c[4];" — collect all into a block */
