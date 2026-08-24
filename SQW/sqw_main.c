@@ -50,6 +50,7 @@
 #include "dom_walk.c"
 #include "css.c"
 #include "layout.c"
+#include "js_engine.c"
 #include "renderer_vk.c"
 #include "text_renderer_vk.c"
 #include "image_renderer_vk.c"
@@ -191,10 +192,42 @@ static int sqw_history_pop(SqwHistoryStack *h, char *out, int outcap) {
 static CssStylesheet g_current_css_sheet;
 static int g_current_css_sheet_valid = 0;
 
+/* The JS interpreter for whichever page is CURRENTLY loaded -- same
+ * "freed and replaced on every navigation, referenced by a file-scope
+ * static rather than threaded through every navigation function's
+ * signature" rationale as g_current_css_sheet just above (see its own
+ * comment); also needed by sqw_handle_event()'s click handling, to call
+ * js_dispatch_click() for whatever element was actually clicked. NULL
+ * whenever no page has run js_run_script() yet (impossible in practice --
+ * sqw_apply_css() below always calls it, even for a script-free page, so
+ * onclick="" attributes still get wired -- but checked anyway everywhere
+ * it's read, cheaply, since NULL is also this variable's own valid
+ * "nothing to call" state). */
+static JSInterp *g_current_js_interp = 0;
+
+#define SQW_SCRIPT_BUF_CAP 65536
+
 static void sqw_apply_css(DomNode *root) {
     if (g_current_css_sheet_valid) css_stylesheet_free(&g_current_css_sheet);
     css_stylesheet_init(&g_current_css_sheet);
     g_current_css_sheet_valid = 1;
+
+    /* Heap, not a stack local -- 64KB is well past this project's own
+     * "avoid large stack-resident locals" threshold (see dom_parse()'s
+     * own comment on the identical rationale for its HtmlToken). Collects
+     * every <script> tag's own text content, in document order,
+     * concatenated with a blank-line separator -- real HTML5 executes
+     * each <script> block as its own top-level program sharing one global
+     * scope, which concatenation-then-one-parse reproduces correctly for
+     * everything this engine's own scope covers (a syntax error confined
+     * to one block, in real HTML5, only aborts THAT block, not later
+     * ones -- concatenation instead aborts the whole page's script if
+     * ANY block fails to parse; a real, accepted simplification, not
+     * silent -- js_run_script() itself already logs a diagnostic either
+     * way). */
+    char *script_buf = (char *)malloc(SQW_SCRIPT_BUF_CAP);
+    int script_len = 0;
+    script_buf[0] = 0;
 
     int cap = 64, top = 0;
     DomNode **stack = (DomNode **)malloc((size_t)cap * sizeof(DomNode *));
@@ -211,6 +244,20 @@ static void sqw_apply_css(DomNode *root) {
                 for (i = 0; i < child->child_count; i++) {
                     DomNode *tc = child->children[i];
                     if (dom_is_text(tc)) css_parse_into(&g_current_css_sheet, tc->text);
+                }
+            } else if (strcmp(child->tag, "script") == 0) {
+                /* Only an inline <script>...</script> block -- a real
+                 * "src=" external script isn't fetched, the same
+                 * documented scope limit sqw_apply_css() already has for
+                 * <link rel="stylesheet">. */
+                int i;
+                for (i = 0; i < child->child_count; i++) {
+                    DomNode *tc = child->children[i];
+                    if (dom_is_text(tc) && script_len < SQW_SCRIPT_BUF_CAP - 2) {
+                        int n = snprintf(script_buf + script_len, (size_t)(SQW_SCRIPT_BUF_CAP - script_len), "%s\n", tc->text);
+                        if (n > 0) script_len += n;
+                        if (script_len > SQW_SCRIPT_BUF_CAP - 2) script_len = SQW_SCRIPT_BUF_CAP - 2;
+                    }
                 }
             } else if (strcmp(child->tag, "textarea") == 0) {
                 /* <textarea>'s initial value is its own raw-text content
@@ -240,6 +287,22 @@ static void sqw_apply_css(DomNode *root) {
         }
     }
     free(stack); free(next_child);
+
+    /* Run collected <script> text (plus wire up any "onclick" HTML
+     * attribute, even on a page with no <script> tag at all -- see
+     * js_wire_onclick_attrs()'s own comment) BEFORE css_apply(), not
+     * after: a script can mutate the DOM (innerHTML, etc) at this point,
+     * and css_apply() below needs to run AFTER that so every element --
+     * including any a script just inserted -- gets a real computed style
+     * (font_size/display/color/...), not the all-zero garbage
+     * dom_node_new()'s plain calloc leaves a brand-new node with. Running
+     * scripts any earlier (before <style>/<script> text is even fully
+     * collected) or any later (after css_apply(), leaving inserted nodes
+     * unstyled until some LATER event happens to trigger a restyle) would
+     * both be wrong; this is the one correct ordering. */
+    if (g_current_js_interp) js_interp_free(g_current_js_interp);
+    g_current_js_interp = js_run_script(script_buf, root, 0);
+    free(script_buf);
 
     css_apply(root, &g_current_css_sheet);
 }
@@ -1422,6 +1485,40 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
                     if (eff_kind == SQW_BOX_TEXT) {
                         DomNode *anc = interactive_ancestor(hb->node);
                         if (anc) { target_node = anc; eff_kind = (strcmp(anc->tag, "a") == 0) ? SQW_BOX_A : SQW_BOX_BUTTON; }
+                    }
+                    /* JS onclick dispatch -- walks up from the resolved
+                     * target (covers a plain "<div onclick=...>" too, not
+                     * just <a>/<button>) looking for the nearest ancestor
+                     * (including itself) with a registered handler (either
+                     * a real "onclick" HTML attribute, compiled once by
+                     * js_wire_onclick_attrs(), or a script's own
+                     * addEventListener('click',...)/".onclick = fn" --
+                     * see js_engine.h's own comment). Run BEFORE the
+                     * ordinary <a>/<button> handling below so a handler
+                     * that mutates the DOM (innerHTML, etc) is reflected
+                     * immediately; if it did mutate anything, this click
+                     * is treated as fully handled by JS and the function
+                     * returns right here -- target_node/hb/st->boxes may
+                     * all be stale after a DOM mutation (a relayout just
+                     * freed and rebuilt st->boxes), so nothing below this
+                     * point may safely touch them. A handler that did NOT
+                     * mutate the DOM (e.g. just a console.log) falls
+                     * through to the normal href/submit handling below,
+                     * so "<a onclick=... href=...>" still navigates too --
+                     * this engine has no real preventDefault() to
+                     * suppress that, a documented, deliberate gap. */
+                    {
+                        DomNode *oc_node = target_node;
+                        while (oc_node && !oc_node->js_onclick) oc_node = oc_node->parent;
+                        if (oc_node) {
+                            int relayout = 0;
+                            js_dispatch_click(g_current_js_interp, oc_node, &relayout);
+                            if (relayout) {
+                                layout_list_free(&st->boxes);
+                                layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes);
+                                return;
+                            }
+                        }
                     }
                     /* Clicking outside any input/textarea drops keyboard
                      * focus from whichever one had it -- reassigned below

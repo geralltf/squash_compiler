@@ -127,6 +127,23 @@ typedef struct DomNode {
     char img_url[SQW_IMG_URL_MAX];
     char css_bg_image_url[SQW_IMG_URL_MAX];
 
+    /* This element's own JS click handler (a JSObject* -- js_engine.h's
+     * own function-object type -- cast through an opaque void* so this
+     * header doesn't need to know anything about js_engine.h/JSObject;
+     * NULL if none). Set by either a real "onclick" HTML attribute
+     * (compiled into an implicit tiny function once, when its owning
+     * page's <script>s run -- see js_engine.c's own comment) or a script
+     * doing "el.onclick = fn"/"el.addEventListener('click', fn)". Lives
+     * directly on the node, same rationale as every other per-element
+     * interactive-state field above: a JS wrapper object returned by
+     * document.getElementById() is a fresh, disposable JSObject each
+     * call (this engine doesn't cache/intern one wrapper per DomNode),
+     * so a handler assigned through it would otherwise be lost the
+     * instant that wrapper is garbage -- storing it here instead makes
+     * it survive for the whole page's lifetime, exactly like this
+     * project's own click-driven navigation/hover state already does. */
+    void *js_onclick;
+
     /* Text styling -- font_size/text_align/line_height/font_weight_bold
      * are real CSS-inherited properties (unlike most fields above, which
      * only ever come from a rule/inline-style directly targeting the

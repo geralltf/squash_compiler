@@ -55,11 +55,12 @@ typedef struct {
     JSObject *obj;  /* NULL unless type==JSV_OBJECT */
 } JSValue;
 
-JSValue js_undefined(void);
-JSValue js_null_val(void);
-JSValue js_bool(int b);
-JSValue js_number(double n);
-JSValue js_string(const char *s); /* copies s */
+/* No public JSValue constructors -- js_engine.c's own top-of-Values-
+ * section comment explains why: a real squash codegen bug makes passing
+ * OR returning a multi-field struct like JSValue BY VALUE across a
+ * function call boundary unreliable, so nothing in this engine ever does
+ * that; every JSValue is built in place through an out-pointer instead.
+ * Nothing outside js_engine.c needs to construct one directly. */
 
 /* Runs `src` (a <script> tag's text content, or any other JS source)
  * against `document_root` -- installs document/console/Math/etc builtins
