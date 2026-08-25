@@ -171,6 +171,217 @@ int main(void) {
         dom_free(root);
     }
 
+    /* 6. Arrays, objects, template literals, destructuring, for-of/for-in. */
+    {
+        const char *html = "<html><body><div id=\"out\"></div></body></html>";
+        DomNode *root = dom_parse(html);
+        CssStylesheet sheet;
+        css_stylesheet_init(&sheet);
+        css_apply(root, &sheet);
+
+        const char *src =
+            "var arr = [1, 2, 3];\n"
+            "arr.push(4);\n"
+            "var sum = 0;\n"
+            "for (var v of arr) { sum = sum + v; }\n"
+            "var doubled = arr.map(function(x) { return x * 2; });\n"
+            "var evens = arr.filter(function(x) { return x % 2 == 0; });\n"
+            "var obj = { name: 'sqw', count: arr.length };\n"
+            "var keys = '';\n"
+            "for (var k in obj) { keys = keys + k + ','; }\n"
+            "var name = obj.name;\n"
+            "var msg = `sum=${sum} doubled=${doubled.join('-')} evens=${evens.join('-')} name=${name} keys=${keys}`;\n"
+            "var { name: n2, count: c2 } = obj;\n"
+            "var [first, second] = arr;\n"
+            "msg = msg + ` n2=${n2} c2=${c2} first=${first} second=${second}`;\n"
+            "document.getElementById('out').textContent = msg;\n";
+
+        int relayout = 0;
+        JSInterp *interp = js_run_script(src, root, &relayout);
+        DomNode *out = js_dom_find_by_id(root, "out");
+        char buf[512]; int len = 0;
+        if (out) js_append_text_content(out, buf, &len, sizeof buf);
+        buf[len] = 0;
+        fprintf(stderr, "  arrays/objects/template/destructure = \"%s\"\n", buf);
+        check(strcmp(buf, "sum=10 doubled=2-4-6-8 evens=2-4 name=sqw keys=name,count, n2=sqw c2=4 first=1 second=2") == 0,
+            "arrays (push/map/filter/join/for-of), object literals/for-in, template literals, and destructuring all produced expected result");
+        js_interp_free(interp);
+        css_stylesheet_free(&sheet);
+        dom_free(root);
+    }
+
+    /* 7. Classes: constructor, methods, inheritance via extends/super(). */
+    {
+        const char *html = "<html><body><div id=\"out\"></div></body></html>";
+        DomNode *root = dom_parse(html);
+        CssStylesheet sheet;
+        css_stylesheet_init(&sheet);
+        css_apply(root, &sheet);
+
+        const char *src =
+            "class Animal {\n"
+            "  constructor(name) { this.name = name; }\n"
+            "  speak() { return this.name + ' makes a sound'; }\n"
+            "}\n"
+            "class Dog extends Animal {\n"
+            "  constructor(name) { super(name); this.kind = 'dog'; }\n"
+            "  speak() { return this.name + ' barks (' + this.kind + ')'; }\n"
+            "}\n"
+            "var a = new Animal('Generic');\n"
+            "var d = new Dog('Rex');\n"
+            "document.getElementById('out').textContent = a.speak() + ' | ' + d.speak();\n";
+
+        int relayout = 0;
+        JSInterp *interp = js_run_script(src, root, &relayout);
+        DomNode *out = js_dom_find_by_id(root, "out");
+        char buf[256]; int len = 0;
+        if (out) js_append_text_content(out, buf, &len, sizeof buf);
+        buf[len] = 0;
+        fprintf(stderr, "  classes = \"%s\"\n", buf);
+        check(strcmp(buf, "Generic makes a sound | Rex barks (dog)") == 0,
+            "class constructor/methods/extends/super() all worked correctly");
+        js_interp_free(interp);
+        css_stylesheet_free(&sheet);
+        dom_free(root);
+    }
+
+    /* 8. try/catch/finally with a real thrown value. */
+    {
+        const char *html = "<html><body><div id=\"out\"></div></body></html>";
+        DomNode *root = dom_parse(html);
+        CssStylesheet sheet;
+        css_stylesheet_init(&sheet);
+        css_apply(root, &sheet);
+
+        const char *src =
+            "var log = '';\n"
+            "function risky(x) {\n"
+            "  if (x < 0) { throw 'negative!'; }\n"
+            "  return x * 2;\n"
+            "}\n"
+            "try {\n"
+            "  log = log + risky(5) + ',';\n"
+            "  log = log + risky(-1) + ',';\n"
+            "  log = log + 'unreached,';\n"
+            "} catch (e) {\n"
+            "  log = log + 'caught:' + e + ',';\n"
+            "} finally {\n"
+            "  log = log + 'done';\n"
+            "}\n"
+            "document.getElementById('out').textContent = log;\n";
+
+        int relayout = 0;
+        JSInterp *interp = js_run_script(src, root, &relayout);
+        DomNode *out = js_dom_find_by_id(root, "out");
+        char buf[256]; int len = 0;
+        if (out) js_append_text_content(out, buf, &len, sizeof buf);
+        buf[len] = 0;
+        fprintf(stderr, "  try/catch/finally = \"%s\"\n", buf);
+        check(strcmp(buf, "10,caught:negative!,done") == 0,
+            "try/catch/finally correctly stopped at the throw and ran the catch+finally blocks");
+        js_interp_free(interp);
+        css_stylesheet_free(&sheet);
+        dom_free(root);
+    }
+
+    /* 9. DOM traversal/manipulation: querySelector(All), classList,
+       children, appendChild/removeChild, createElement/createTextNode. */
+    {
+        const char *html = "<html><body><ul id=\"list\"><li class=\"item a\">one</li><li class=\"item b\">two</li></ul></body></html>";
+        DomNode *root = dom_parse(html);
+        CssStylesheet sheet;
+        css_stylesheet_init(&sheet);
+        css_apply(root, &sheet);
+
+        const char *src =
+            "var list = document.getElementById('list');\n"
+            "var items = list.querySelectorAll('.item');\n"
+            "var count = items.length;\n"
+            "var second = document.querySelector('.b');\n"
+            "second.classList.add('highlight');\n"
+            "var hasHighlight = second.classList.contains('highlight');\n"
+            "second.classList.remove('b');\n"
+            "var stillHasA = document.querySelector('.a') !== null;\n"
+            "var childCount1 = list.children.length;\n"
+            "var newLi = document.createElement('li');\n"
+            "newLi.appendChild(document.createTextNode('three'));\n"
+            "newLi.className = 'item c';\n"
+            "list.appendChild(newLi);\n"
+            "var childCount2 = list.children.length;\n"
+            "var thirdText = list.children[2].textContent;\n"
+            "list.removeChild(list.children[0]);\n"
+            "var childCount3 = list.children.length;\n"
+            "document.getElementById('list').setAttribute('data-result',\n"
+            "  count + ':' + hasHighlight + ':' + stillHasA + ':' + childCount1 + ':' + childCount2 + ':' + thirdText + ':' + childCount3);\n";
+
+        int relayout = 0;
+        JSInterp *interp = js_run_script(src, root, &relayout);
+        DomNode *list = js_dom_find_by_id(root, "list");
+        const char *result = list ? dom_get_attr(list, "data-result") : 0;
+        fprintf(stderr, "  DOM traversal/manipulation = \"%s\"\n", result ? result : "(null)");
+        check(result && !strcmp(result, "2:true:true:2:3:three:2"),
+            "querySelector(All)/classList/children/appendChild/removeChild/createElement all worked correctly");
+        js_interp_free(interp);
+        css_stylesheet_free(&sheet);
+        dom_free(root);
+    }
+
+    /* 10. setTimeout/setInterval, driven by js_run_timers() the way the
+       real render loop would, and localStorage backed by a real file. */
+    {
+        const char *html = "<html><body><div id=\"out\"></div></body></html>";
+        DomNode *root = dom_parse(html);
+        CssStylesheet sheet;
+        css_stylesheet_init(&sheet);
+        css_apply(root, &sheet);
+
+        remove("SQW/localstorage.dat"); /* clean slate */
+
+        const char *src =
+            "var log = '';\n"
+            "setTimeout(function() { log = log + 'A'; }, 100);\n"
+            "var ticks = 0;\n"
+            "var iv = setInterval(function() {\n"
+            "  ticks = ticks + 1;\n"
+            "  log = log + 'B';\n"
+            "  if (ticks >= 3) {\n"
+            "    clearInterval(iv);\n"
+            /* Read the final result from INSIDE the last callback --
+               "log" only reflects every timer's own mutation once each
+               has actually fired, which (unlike the rest of this
+               synchronous script) is driven by js_run_timers() calls the
+               TEST ITSELF makes later, below -- reading it any earlier
+               (e.g. right after registering the timers, before any of
+               them have run) would only ever see the empty initial
+               value, a mistake in the test's own design, not something
+               this comment is claiming is an engine limitation. */
+            "    var stored = localStorage.getItem('greeting');\n"
+            "    var missing = localStorage.getItem('nope');\n"
+            "    document.getElementById('out').setAttribute('data-log', log + ':' + stored + ':' + missing);\n"
+            "  }\n"
+            "}, 50);\n"
+            "localStorage.setItem('greeting', 'hello-storage');\n"
+            "localStorage.setItem('greeting', 'updated');\n";
+
+        int relayout = 0;
+        JSInterp *interp = js_run_script(src, root, &relayout);
+        /* Simulate the render loop calling js_run_timers() once per
+           frame with an advancing wall-clock time -- 5 ticks of 50ms
+           covers the interval's own 3 fires plus the one-shot timeout
+           at 100ms. */
+        double t;
+        for (t = 0.0; t <= 250.0; t += 50.0) js_run_timers(interp, t, &relayout);
+        DomNode *out = js_dom_find_by_id(root, "out");
+        const char *result = out ? dom_get_attr(out, "data-log") : 0;
+        fprintf(stderr, "  timers/localStorage = \"%s\"\n", result ? result : "(null)");
+        check(result && !strcmp(result, "BABB:updated:null"),
+            "setTimeout/setInterval (driven by js_run_timers) and localStorage.setItem/getItem all worked correctly");
+        js_interp_free(interp);
+        css_stylesheet_free(&sheet);
+        dom_free(root);
+        remove("SQW/localstorage.dat");
+    }
+
     fprintf(stderr, "---\n%s (pass=%d fail=%d)\n",
         g_fail == 0 ? "ALL JS ENGINE TESTS PASSED" : "JS ENGINE TESTS FAILED", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

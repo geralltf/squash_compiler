@@ -205,6 +205,68 @@ static int g_current_css_sheet_valid = 0;
  * "nothing to call" state). */
 static JSInterp *g_current_js_interp = 0;
 
+/* Pending fetch() calls issued by JS (see js_engine.h's own fetch-hook
+ * comment) -- a small fixed-slot table, same convention/rationale as
+ * g_current_js_interp above. Each slot pairs a real background
+ * SqwNetResult* (net_client.c's own async fetch -- exactly what page
+ * navigation itself already uses, just not swapped in as the whole
+ * document) with the fetch_id js_engine.c is tracking on its own side --
+ * sqw_js_fetch_start() (the actual hook, registered once in main()) fills
+ * a slot when a script calls fetch(); sqw_poll_js_fetches() (called once
+ * per frame, right next to js_run_timers()) polls every used slot and
+ * delivers each ready one via js_deliver_fetch_result(). */
+#define SQW_MAX_JS_FETCHES 16
+typedef struct {
+    SqwNetResult *result;
+    long fetch_id;
+    int used;
+} SqwJsFetch;
+static SqwJsFetch g_js_fetches[SQW_MAX_JS_FETCHES];
+
+static void sqw_js_fetch_start(const char *url, long fetch_id, void *user_data) {
+    (void)user_data;
+    int i;
+    for (i = 0; i < SQW_MAX_JS_FETCHES; i++) {
+        if (g_js_fetches[i].used) continue;
+        g_js_fetches[i].result = sqw_net_fetch_async(url);
+        g_js_fetches[i].fetch_id = fetch_id;
+        g_js_fetches[i].used = 1;
+        return;
+    }
+    /* No free slot -- silently dropped, same generous-but-bounded-cap
+       convention as js_engine.c's own JS_MAX_FETCHES on the other side
+       of this hook. */
+}
+
+/* Called once per frame (see the main loop, right next to
+ * js_run_timers()). Delivers every fetch() that has finished since the
+ * last poll to whatever JS callback js_engine.c is still holding for
+ * it -- see js_deliver_fetch_result()'s own comment on why it's always
+ * safe to call even if the page navigated away (a fresh JSInterp with no
+ * memory of that fetch_id) since this hook started it. */
+static void sqw_poll_js_fetches(int *relayout_needed) {
+    if (relayout_needed) *relayout_needed = 0;
+    int i;
+    for (i = 0; i < SQW_MAX_JS_FETCHES; i++) {
+        if (!g_js_fetches[i].used) continue;
+        SqwNetResult *r = g_js_fetches[i].result;
+        pthread_mutex_lock(&r->mutex);
+        int ready = r->ready;
+        int success = r->success;
+        char *body = r->body;
+        pthread_mutex_unlock(&r->mutex);
+        if (!ready) continue;
+        long fetch_id = g_js_fetches[i].fetch_id;
+        g_js_fetches[i].used = 0;
+        if (g_current_js_interp) {
+            int js_relayout = 0;
+            js_deliver_fetch_result(g_current_js_interp, fetch_id, success ? body : "", success, &js_relayout);
+            if (js_relayout && relayout_needed) *relayout_needed = 1;
+        }
+        sqw_net_result_free(r);
+    }
+}
+
 #define SQW_SCRIPT_BUF_CAP 65536
 
 static void sqw_apply_css(DomNode *root) {
@@ -1954,6 +2016,7 @@ static void sqw_draw_frame(SqwAppState *st) {
 
 int main(void) {
     squash_init_private_bootstrap();
+    js_set_fetch_hook(sqw_js_fetch_start, 0); /* wires JS's fetch() to net_client.c's real async HTTP client -- see js_engine.h's own comment */
 
     SDL_SetMainReady();
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -2161,6 +2224,27 @@ int main(void) {
         if (!st->running) break;
 
         sqw_check_pending_fetch(st);
+        /* setTimeout()/setInterval() -- see js_run_timers()'s own comment
+         * (js_engine.h) for why this engine needs the HOST render loop to
+         * drive its timers at all. Real wall-clock time (SDL_GetTicks(),
+         * ms since SDL_Init()), not a frame-count-based approximation --
+         * a script's own delay values are real milliseconds. */
+        if (g_current_js_interp) {
+            int js_relayout = 0;
+            js_run_timers(g_current_js_interp, (double)SDL_GetTicks(), &js_relayout);
+            if (js_relayout) {
+                layout_list_free(&st->boxes);
+                layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes);
+            }
+        }
+        {
+            int fetch_relayout = 0;
+            sqw_poll_js_fetches(&fetch_relayout);
+            if (fetch_relayout) {
+                layout_list_free(&st->boxes);
+                layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes);
+            }
+        }
         /* A real decoded size becoming known for the first time this poll
          * means every <img> box layout.c sized off the SQW_IMG_SIZE
          * placeholder is now stale -- see sqw_image_cache_poll()'s own

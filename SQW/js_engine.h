@@ -35,6 +35,8 @@
 #define JS_MAX_ARGS 8
 #define JS_IDENT_MAX 64
 #define JS_STR_MAX 1024
+#define JS_MAX_TIMERS 32
+#define JS_MAX_FETCHES 16
 
 typedef enum {
     JSV_UNDEFINED = 0, JSV_NULL, JSV_BOOL, JSV_NUMBER, JSV_STRING, JSV_OBJECT
@@ -94,5 +96,34 @@ void js_interp_free(JSInterp *interp);
  * handler was found and called, 0 otherwise (no handler registered --
  * NOT an error). */
 int js_dispatch_click(JSInterp *interp, DomNode *node, int *relayout_needed);
+
+/* Runs every due setTimeout()/setInterval() callback -- see js_engine.c's
+ * own comment on js_run_timers() for exactly how "due" is decided. This
+ * engine has no event loop/clock of its own (a tree-walking interpreter
+ * with no async machinery at all -- see this header's own top comment on
+ * scope), so the HOST render loop must call this once per frame with the
+ * current wall-clock time in milliseconds (SDL_GetTicks(), as a double)
+ * for setTimeout/setInterval to have any effect at all; never calling it
+ * leaves every timer registered but permanently un-fired, not an error. */
+void js_run_timers(JSInterp *interp, double now_ms, int *relayout_needed);
+
+/* fetch(url, callback) -- a minimal, callback-style (NOT a real Promise;
+ * no .then()/.catch() chaining -- see this header's own top comment on
+ * scope) network fetch. Wired to the host's real async HTTP client
+ * (SQW/net_client.c) through this decoupled hook pair rather than
+ * js_engine.c #include-ing net_client.h directly -- the same "host sets
+ * a function pointer, this file stays independent of the host's own
+ * headers" pattern layout.c's own layout_set_image_size_lookup() already
+ * uses, and for the same reason: this file's own standalone test harness
+ * (SQW/tests/test_js.c) has no network stack linked in at all. */
+typedef void (*JsFetchStartFn)(const char *url, long fetch_id, void *user_data);
+void js_set_fetch_hook(JsFetchStartFn fn, void *user_data);
+
+/* Called by the host once a fetch it started (via the hook above) has
+ * completed -- looks up whichever JS callback `interp` has registered
+ * for `fetch_id` (a no-op, not an error, if none is found -- e.g. the
+ * page navigated away and a fresh JSInterp with no memory of that id is
+ * now current) and calls it with `body` ("" on failure) and `success`. */
+void js_deliver_fetch_result(JSInterp *interp, long fetch_id, const char *body, int success, int *relayout_needed);
 
 #endif /* SQW_JS_ENGINE_H */
