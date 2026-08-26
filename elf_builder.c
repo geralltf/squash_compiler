@@ -1428,6 +1428,30 @@ int elf_link_and_write(ELFBuildInput *in) {
     fclose(fp);
     chmod(in->output_path, 0x1ED); /* 0755 octal = rwxr-xr-x */
 
+    printf("  %-10s file=0x%04X  addr=0x%04X  size=%u\n",
+           ".interp",   off_interp,  (unsigned)vma_interp,  (unsigned)interp_len);
+    printf("  %-10s file=0x%04X  addr=0x%04X  size=%u\n",
+           ".dynstr",   off_dynstr,  (unsigned)vma_dynstr,  (unsigned)dynstr_sz);
+    printf("  %-10s file=0x%04X  addr=0x%04X  size=%u\n",
+           ".dynsym",   off_dynsym,  (unsigned)vma_dynsym,  (unsigned)dynsym_sz);
+    printf("  %-10s file=0x%04X  addr=0x%04X  size=%u\n",
+           ".rela.dyn", off_reloc,   (unsigned)vma_reloc,   (unsigned)relasz);
+    printf("  %-10s file=0x%04X  addr=0x%04X  size=%u\n",
+           ".text",     off_text,    (unsigned)vma_text,    (unsigned)text_len);
+    printf("  %-10s file=0x%04X  addr=0x%04X  size=%u\n",
+           ".rodata",   off_rodata,  (unsigned)vma_rodata,  (unsigned)rodata_sz);
+    printf("  %-10s file=0x%04X  addr=0x%04X  size=%u\n",
+           ".got",      off_got,     (unsigned)vma_got,     (unsigned)got_sz);
+    printf("  %-10s file=0x%04X  addr=0x%04X  size=%u\n",
+           ".dynamic",  off_dynamic, (unsigned)vma_dynamic, (unsigned)dynamic_sz);
+    printf("  %-10s file=0x%04X  addr=0x%04X  size=%u\n",
+           ".data",     off_data,    (unsigned)vma_data,    (unsigned)data_sz);
+    if (!in->strip_debug_sections) {
+        printf("  %-10s file=0x%04X  size=%u\n", ".symtab",   off_symtab,   (unsigned)symtab_sz);
+        printf("  %-10s file=0x%04X  size=%u\n", ".strtab",   off_strtab,   (unsigned)strtab_len);
+        printf("  %-10s file=0x%04X  size=%u\n", ".shstrtab", off_shstrtab, (unsigned)shstrtab_len);
+    }
+
     printf("ELF written: %s (%d bytes)\n", in->output_path,
            in->strip_debug_sections ? rw_seg_filesz : shdrs_end);
 
