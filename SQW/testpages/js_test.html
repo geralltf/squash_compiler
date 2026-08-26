@@ -1,0 +1,14 @@
+<html><body>
+<div id="msg">not loaded</div>
+<button id="btn" style="margin-top:10px;">Click me</button>
+<script>
+document.getElementById('msg').textContent = 'Hello from JS!';
+var clicks = 0;
+document.getElementById('btn').onclick = function() {
+  clicks = clicks + 1;
+  document.getElementById('msg').textContent = 'Clicked ' + clicks + ' times!';
+  document.getElementById('msg').style.color = 'red';
+  document.getElementById('msg').style.fontSize = '28px';
+};
+</script>
+</body></html>
