@@ -143,6 +143,20 @@ typedef struct DomNode {
      * it survive for the whole page's lifetime, exactly like this
      * project's own click-driven navigation/hover state already does. */
     void *js_onclick;
+    /* Same rationale/lifetime as js_onclick above, one slot per other
+     * DOM event this project wires up: 'input' (fires on every keystroke
+     * that changes a text input/textarea's own form_value -- see
+     * sqw_main.c's own text-input handling), 'change' (fires once a
+     * checkbox/radio is toggled, or once a text input/textarea loses
+     * focus -- real HTML5's own distinction between the two events), and
+     * 'keydown' (fires for a key press while this element has keyboard
+     * focus). Sqw_main.c's own event handling is what actually calls
+     * js_dispatch_input()/js_dispatch_change()/js_dispatch_keydown() at
+     * the right moments -- these fields only hold WHICH function (if
+     * any) to call. */
+    void *js_oninput;
+    void *js_onchange;
+    void *js_onkeydown;
 
     /* Text styling -- font_size/text_align/line_height/font_weight_bold
      * are real CSS-inherited properties (unlike most fields above, which

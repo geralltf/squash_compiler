@@ -37,6 +37,29 @@
 #define JS_STR_MAX 1024
 #define JS_MAX_TIMERS 32
 #define JS_MAX_FETCHES 16
+/* Real call-stack depth cap -- see JSInterp::call_depth's own comment
+   (js_engine.c) for why this exists: unbounded JS-level recursion would
+   otherwise overflow this engine's own native C call stack (a hard
+   process crash), since this tree-walking interpreter has no separate
+   VM-level stack of its own. Comfortably below what this project's own
+   measured native stack size can hold for this interpreter's per-call C
+   stack usage. */
+#define JS_MAX_CALL_DEPTH 400
+/* while/for loop iteration cap -- see JS_WHILE's own comment (js_engine.c)
+   for why this is far below what a pure CPU-time budget alone would
+   suggest: this engine leaks a fresh, uncollected ~6.7KB JSEnv per loop
+   iteration for almost any real loop body (found via this session's own
+   fuzz testing -- a plain typo'd loop condition that never changes was
+   enough to reliably exhaust memory and get the whole host process
+   OOM-killed at the old, much higher cap). Measured to keep a runaway
+   loop's worst-case leak under ~70MB and its worst-case wall-clock delay
+   under ~0.2s on this project's own dev machine. */
+#define JS_LOOP_MAX_ITERATIONS 10000
+/* Real, hard cap on how many distinct ES modules a single page can run
+   via js_run_module() -- generous for this project's own scale of test
+   page, and a fixed-size table (never a per-module malloc list) matches
+   every other bounded table in this file. */
+#define JS_MAX_MODULES 32
 
 typedef enum {
     JSV_UNDEFINED = 0, JSV_NULL, JSV_BOOL, JSV_NUMBER, JSV_STRING, JSV_OBJECT
@@ -71,9 +94,13 @@ typedef struct {
  * keep it alive for the rest of the page's lifetime (needed for
  * addEventListener/onclick handlers registered during this run to still
  * be callable later, from js_dispatch_click() -- see its own comment) --
- * the caller owns it and must eventually js_interp_free() it. Returns
- * NULL if `src` failed to parse (a diagnostic is printed to stderr;
- * nothing from the script runs). `relayout_needed` is set to 1 if the
+ * the caller owns it and must eventually js_interp_free() it. Always
+ * returns a real, usable interp -- even if `src` failed to lex/parse (a
+ * diagnostic is printed to stderr and nothing from `src` runs, but
+ * builtins are still installed and onclick="" attributes are still wired,
+ * exactly as if `src` had been empty; found stale during this session's
+ * own fuzz testing -- this used to claim NULL here, which the code has
+ * never actually done). `relayout_needed` is set to 1 if the
  * script mutated anything that affects layout (innerHTML/textContent/
  * appendChild-equivalent, style.* affecting box-model properties) so the
  * caller knows whether to re-run layout_compute() afterward -- always
@@ -84,6 +111,19 @@ typedef struct {
  * and always correct, just not maximally efficient. */
 typedef struct JSInterp JSInterp;
 JSInterp *js_run_script(const char *src, DomNode *document_root, int *relayout_needed);
+
+/* Runs `src` as a real ES module (<script type="module">, inline or via
+ * "src=") -- real isolated top-level scope, and "import"/"export"
+ * resolved against every OTHER module already run on `interp` (keyed by
+ * caller-supplied `module_id`, typically that module's own resolved src
+ * URL). Must be called AFTER js_run_script() has already created `interp`
+ * for this page. See js_engine.c's own top-of-function comment for the
+ * full design and its one real, disclosed scope limit: modules run in
+ * whatever order the CALLER invokes this in (document order, matching
+ * real HTML5 script-tag execution before ES modules existed) -- this
+ * file has no network/file I/O of its own to fetch a not-yet-run
+ * dependency on demand. */
+void js_run_module(JSInterp *interp, const char *src, const char *module_id);
 void js_interp_free(JSInterp *interp);
 
 /* Calls the given DOM node's own onclick handler (set via either the
@@ -96,6 +136,16 @@ void js_interp_free(JSInterp *interp);
  * handler was found and called, 0 otherwise (no handler registered --
  * NOT an error). */
 int js_dispatch_click(JSInterp *interp, DomNode *node, int *relayout_needed);
+
+/* Same pattern as js_dispatch_click() above, for the other DOM events this
+ * project wires up -- see dom.h's own comment on js_oninput/js_onchange/
+ * js_onkeydown for exactly when each one fires. js_dispatch_keydown()'s
+ * `key_name` is exposed to the handler as a minimal event object's "key"
+ * property (e.g. "Enter", "Backspace") -- the one KeyboardEvent field
+ * real handler code most commonly reads. */
+int js_dispatch_input(JSInterp *interp, DomNode *node, int *relayout_needed);
+int js_dispatch_change(JSInterp *interp, DomNode *node, int *relayout_needed);
+int js_dispatch_keydown(JSInterp *interp, DomNode *node, const char *key_name, int *relayout_needed);
 
 /* Runs every due setTimeout()/setInterval() callback -- see js_engine.c's
  * own comment on js_run_timers() for exactly how "due" is decided. This

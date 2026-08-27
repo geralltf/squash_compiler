@@ -1,0 +1,8 @@
+<html><body>
+<div id="out">not loaded</div>
+<script type="module" src="math.js"></script>
+<script type="module">
+import { add, PI_APPROX } from 'math.js';
+document.getElementById('out').setAttribute('data-mod', add(2,3) + ':' + PI_APPROX);
+</script>
+</body></html>

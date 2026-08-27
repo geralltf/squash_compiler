@@ -11,6 +11,7 @@
 #ifdef __linux__
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -268,8 +269,96 @@ static void sqw_poll_js_fetches(int *relayout_needed) {
 }
 
 #define SQW_SCRIPT_BUF_CAP 65536
+/* <script type="module">'s own real (not concatenated) source text --
+   see sqw_apply_css()'s own comment on why these are collected
+   separately from ordinary script_buf text. `id` is that module's own
+   resolved src URL (or, for an inline module script, an auto-generated
+   "inline-module#N" id) -- js_run_module()'s own key for "import ...
+   from" resolution against sibling modules. `text` is malloc'd, owned by
+   whoever collected it (freed right after js_run_module() runs it). */
+#define SQW_MAX_MODULE_SCRIPTS 16
+typedef struct {
+    char id[192];
+    char *text;
+} SqwModuleScript;
 
-static void sqw_apply_css(DomNode *root) {
+/* Blocking network fetch for one <script src="..."> URL -- see
+   sqw_apply_css()'s own comment on why a plain (non-async/non-defer)
+   <script src> blocking the rest of page load until it arrives is
+   actually REAL HTML5 default behavior, not a shortcut real browsers
+   also parse-block on an ordinary <script src>. Reuses the existing
+   ASYNC fetch primitive (net_client.h, a real background pthread) polled
+   in a bounded loop here rather than adding a genuinely separate
+   synchronous code path to net_client.c itself -- net_client.c's own
+   worker thread doesn't know or care that its caller happens to be
+   waiting synchronously this time. Returns a malloc'd, NUL-terminated
+   body on success (caller frees), or NULL on failure/timeout --
+   SQW_SCRIPT_FETCH_TIMEOUT_MS caps how long a single unreachable/slow
+   external script can hold up the whole page load. */
+#define SQW_SCRIPT_FETCH_TIMEOUT_MS 8000
+static char *sqw_fetch_script_blocking(const char *url) {
+    SqwNetResult *r = sqw_net_fetch_async(url);
+    double start = (double)SDL_GetTicks();
+    for (;;) {
+        pthread_mutex_lock(&r->mutex);
+        int ready = r->ready;
+        pthread_mutex_unlock(&r->mutex);
+        if (ready) break;
+        if ((double)SDL_GetTicks() - start > SQW_SCRIPT_FETCH_TIMEOUT_MS) {
+            fprintf(stderr, "SQW: script src fetch timed out: %s\n", url); fflush(stderr);
+            sqw_net_result_abandon(r);
+            return 0;
+        }
+        usleep(2000);
+    }
+    char *out = 0;
+    pthread_mutex_lock(&r->mutex);
+    if (r->success && r->body) {
+        out = (char *)malloc((size_t)r->body_len + 1);
+        memcpy(out, r->body, (size_t)r->body_len);
+        out[r->body_len] = 0;
+    }
+    pthread_mutex_unlock(&r->mutex);
+    if (!out) { fprintf(stderr, "SQW: script src fetch failed: %s\n", url); fflush(stderr); }
+    sqw_net_result_free(r);
+    return out;
+}
+
+/* Resolves a <script src="..."> attribute value to real script TEXT --
+   absolute http(s):// is fetched over the network as-is; a plain
+   relative src on a page itself reached over the network is fetched
+   against base_url (the exact same rule sqw_resolve_image_urls() already
+   uses for <img src>); a plain relative src on a LOCALLY loaded page
+   (dir set, base_url empty) is read as a local file relative to dir --
+   unlike images (net_client.c has no local-file read path), scripts
+   already have a ready-made local reader in sqw_read_file(), and a local
+   test page referencing a local sibling script file (e.g.
+   "libs/util.js") is a genuinely common, worth-supporting case. Returns
+   a malloc'd, NUL-terminated buffer (caller frees) or NULL if the src
+   couldn't be resolved/loaded at all (a broken script src should never
+   crash or blank the rest of the page -- same "log and keep going"
+   convention as sqw_navigate_to()'s own file-not-found case). */
+static char *sqw_load_script_src(const char *src, const char *dir, const char *base_url) {
+    if (!src || !src[0]) return 0;
+    if (strncmp(src, "http://", 7) == 0 || strncmp(src, "https://", 8) == 0) {
+        return sqw_fetch_script_blocking(src);
+    }
+    if (base_url && base_url[0]) {
+        char full_url[SQW_NET_URL_MAX];
+        snprintf(full_url, sizeof full_url, "%s%s", base_url, src);
+        return sqw_fetch_script_blocking(full_url);
+    }
+    if (dir) {
+        char full_path[SQW_PATH_MAX];
+        snprintf(full_path, sizeof full_path, "%s%s", dir, src);
+        char *content = sqw_read_file(full_path);
+        if (!content) { fprintf(stderr, "SQW: script src not found: %s\n", full_path); fflush(stderr); }
+        return content;
+    }
+    return 0;
+}
+
+static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url) {
     if (g_current_css_sheet_valid) css_stylesheet_free(&g_current_css_sheet);
     css_stylesheet_init(&g_current_css_sheet);
     g_current_css_sheet_valid = 1;
@@ -291,6 +380,18 @@ static void sqw_apply_css(DomNode *root) {
     int script_len = 0;
     script_buf[0] = 0;
 
+    /* <script type="module" ...> -- collected SEPARATELY from ordinary
+       script_buf text (never concatenated into it): each one gets its
+       own isolated top-level scope via js_run_module() (see that
+       function's own comment for the full ES-module design), run once
+       g_current_js_interp actually exists, right after the ordinary
+       script_buf finishes below. A fixed-size table, same "generous but
+       bounded" convention as everywhere else in this project -- a page
+       using more than SQW_MAX_MODULE_SCRIPTS <script type="module">
+       tags silently only runs the first that many. */
+    SqwModuleScript modules[SQW_MAX_MODULE_SCRIPTS];
+    int module_count = 0;
+
     int cap = 64, top = 0;
     DomNode **stack = (DomNode **)malloc((size_t)cap * sizeof(DomNode *));
     int *next_child = (int *)malloc((size_t)cap * sizeof(int));
@@ -308,18 +409,59 @@ static void sqw_apply_css(DomNode *root) {
                     if (dom_is_text(tc)) css_parse_into(&g_current_css_sheet, tc->text);
                 }
             } else if (strcmp(child->tag, "script") == 0) {
-                /* Only an inline <script>...</script> block -- a real
-                 * "src=" external script isn't fetched, the same
-                 * documented scope limit sqw_apply_css() already has for
-                 * <link rel="stylesheet">. */
-                int i;
-                for (i = 0; i < child->child_count; i++) {
-                    DomNode *tc = child->children[i];
-                    if (dom_is_text(tc) && script_len < SQW_SCRIPT_BUF_CAP - 2) {
-                        int n = snprintf(script_buf + script_len, (size_t)(SQW_SCRIPT_BUF_CAP - script_len), "%s\n", tc->text);
-                        if (n > 0) script_len += n;
-                        if (script_len > SQW_SCRIPT_BUF_CAP - 2) script_len = SQW_SCRIPT_BUF_CAP - 2;
+                /* "src=" -- a real external script, fetched (network) or
+                   read (local file) via sqw_load_script_src() and
+                   appended into the SAME concatenated script_buf an
+                   inline block's own text would go into -- real HTML5
+                   executes every <script> in one shared global scope
+                   regardless of inline vs external, which concatenation-
+                   then-one-parse already reproduces for inline blocks
+                   (see this function's own top comment); an external
+                   script with a "src" attribute has its own inline text
+                   content (if any) IGNORED, matching real HTML5's own
+                   "src wins, inline body is dead code" rule for that
+                   case. */
+                const char *src = dom_get_attr(child, "src");
+                const char *type = dom_get_attr(child, "type");
+                int is_module = type && !strcmp(type, "module");
+                char *text = 0;
+                if (src && src[0]) {
+                    text = sqw_load_script_src(src, dir, base_url);
+                } else {
+                    /* Inline text -- collected into one buffer first
+                       (module or not) since an inline <script> can have
+                       several text-node children in principle. */
+                    char inline_buf[SQW_SCRIPT_BUF_CAP];
+                    int inline_len = 0;
+                    inline_buf[0] = 0;
+                    int i;
+                    for (i = 0; i < child->child_count; i++) {
+                        DomNode *tc = child->children[i];
+                        if (dom_is_text(tc) && inline_len < SQW_SCRIPT_BUF_CAP - 2) {
+                            int n = snprintf(inline_buf + inline_len, (size_t)(SQW_SCRIPT_BUF_CAP - inline_len), "%s\n", tc->text);
+                            if (n > 0) inline_len += n;
+                            if (inline_len > SQW_SCRIPT_BUF_CAP - 2) inline_len = SQW_SCRIPT_BUF_CAP - 2;
+                        }
                     }
+                    if (inline_len > 0) text = strdup(inline_buf);
+                }
+                if (is_module) {
+                    if (text && module_count < SQW_MAX_MODULE_SCRIPTS) {
+                        SqwModuleScript *m = &modules[module_count];
+                        if (src && src[0]) { strncpy(m->id, src, sizeof m->id - 1); m->id[sizeof m->id - 1] = 0; }
+                        else snprintf(m->id, sizeof m->id, "inline-module#%d", module_count);
+                        m->text = text;
+                        module_count++;
+                        text = 0; /* ownership moved into modules[] */
+                    }
+                    free(text);
+                } else if (text && script_len < SQW_SCRIPT_BUF_CAP - 2) {
+                    int n = snprintf(script_buf + script_len, (size_t)(SQW_SCRIPT_BUF_CAP - script_len), "%s\n", text);
+                    if (n > 0) script_len += n;
+                    if (script_len > SQW_SCRIPT_BUF_CAP - 2) script_len = SQW_SCRIPT_BUF_CAP - 2;
+                    free(text);
+                } else {
+                    free(text);
                 }
             } else if (strcmp(child->tag, "textarea") == 0) {
                 /* <textarea>'s initial value is its own raw-text content
@@ -365,6 +507,18 @@ static void sqw_apply_css(DomNode *root) {
     if (g_current_js_interp) js_interp_free(g_current_js_interp);
     g_current_js_interp = js_run_script(script_buf, root, 0);
     free(script_buf);
+
+    /* Every <script type="module"> runs AFTER the page's ordinary script,
+       in document order -- see js_run_module()'s own comment on why
+       document order (not real dependency-graph resolution) is this
+       engine's own honest scope limit for "import ... from" resolution. */
+    {
+        int i;
+        for (i = 0; i < module_count; i++) {
+            js_run_module(g_current_js_interp, modules[i].text, modules[i].id);
+            free(modules[i].text);
+        }
+    }
 
     css_apply(root, &g_current_css_sheet);
 }
@@ -426,9 +580,13 @@ static void sqw_navigate_to(const char *path, DomNode **root_ptr, LayoutList *bo
     free(html);
     dom_free(*root_ptr);
     *root_ptr = new_root;
-    sqw_apply_css(*root_ptr);
+    /* dir/base_url must be computed BEFORE sqw_apply_css() now (it needs
+       them to resolve any <script src="...">), not after as this
+       function's own code used to do when only image src resolution
+       needed them (that still happens afterward, unchanged). */
     sqw_dirname(path, current_dir);
     current_base_url[0] = '\0';
+    sqw_apply_css(*root_ptr, current_dir, current_base_url);
     /* Local-file page: <img src> only resolves (and only gets fetched) if
      * it's already an absolute http(s):// URL -- see
      * sqw_resolve_image_urls()'s own comment on why a bare local-relative
@@ -460,9 +618,10 @@ static void sqw_navigate_to_html(const char *html, const char *url, DomNode **ro
     DomNode *new_root = dom_parse(html);
     dom_free(*root_ptr);
     *root_ptr = new_root;
-    sqw_apply_css(*root_ptr);
+    /* Same reordering as sqw_navigate_to()'s own identical comment. */
     current_dir[0] = '\0';
     sqw_dirname(url, current_base_url);
+    sqw_apply_css(*root_ptr, current_dir, current_base_url);
     sqw_image_cache_reset();
     sqw_resolve_image_urls(*root_ptr, current_dir, current_base_url);
     layout_list_free(boxes_ptr);
@@ -1388,6 +1547,25 @@ static void sqw_push_test_events(SqwAppState *st) {
  * logic-for-logic, just addressing every piece of persistent state through
  * `st` instead of a same-named local. See SqwAppState's own comment for
  * why this split exists. */
+/* Maps the small fixed set of scancodes this project actually handles
+ * (see sqw_handle_event()'s own SDL_EVENT_KEY_DOWN branches) to the
+ * matching real KeyboardEvent.key string, for js_dispatch_keydown()'s
+ * benefit -- not a full keymap (this project has no general character-key
+ * scancode table, only real text via SDL_EVENT_TEXT_INPUT), so any other
+ * scancode maps to "" rather than guessing. */
+static const char *sqw_scancode_key_name(SDL_Scancode sc) {
+    if (sc == SDL_SCANCODE_BACKSPACE) return "Backspace";
+    if (sc == SDL_SCANCODE_RETURN) return "Enter";
+    if (sc == SDL_SCANCODE_ESCAPE) return "Escape";
+    if (sc == SDL_SCANCODE_PAGEDOWN) return "PageDown";
+    if (sc == SDL_SCANCODE_PAGEUP) return "PageUp";
+    if (sc == SDL_SCANCODE_HOME) return "Home";
+    if (sc == SDL_SCANCODE_END) return "End";
+    if (sc == SDL_SCANCODE_DOWN) return "ArrowDown";
+    if (sc == SDL_SCANCODE_UP) return "ArrowUp";
+    return "";
+}
+
 static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
     if (ev->type == SDL_EVENT_QUIT || ev->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
         st->running = 0;
@@ -1585,7 +1763,13 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
                     /* Clicking outside any input/textarea drops keyboard
                      * focus from whichever one had it -- reassigned below
                      * if this exact click lands on one instead. */
-                    if (st->focused_input) { st->focused_input->form_focused = 0; st->focused_input = NULL; }
+                    if (st->focused_input) {
+                        DomNode *blurred = st->focused_input;
+                        blurred->form_focused = 0; st->focused_input = NULL;
+                        int relayout = 0;
+                        js_dispatch_change(g_current_js_interp, blurred, &relayout);
+                        if (relayout) { layout_list_free(&st->boxes); layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes); return; }
+                    }
                     if (eff_kind == SQW_BOX_A && find_enclosing_form(target_node)) {
                         /* Per this project's own explicit spec (an anchor
                          * inside a <form> submits it, same as a real
@@ -1714,6 +1898,11 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
                         } else {
                             target_node->form_checked = !target_node->form_checked;
                         }
+                        {
+                            int relayout = 0;
+                            js_dispatch_change(g_current_js_interp, target_node, &relayout);
+                            if (relayout) { layout_list_free(&st->boxes); layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes); return; }
+                        }
                     }
                 }
             }
@@ -1750,9 +1939,19 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
         }
     } else if (ev->type == SDL_EVENT_KEY_DOWN && st->focused_input) {
         if (getenv("SQW_INPUT_DEBUG")) { fprintf(stderr, "[key-down-input-focused] scancode=%d\n", (int)ev->key.scancode); fflush(stderr); }
+        {
+            int relayout = 0;
+            js_dispatch_keydown(g_current_js_interp, st->focused_input, sqw_scancode_key_name(ev->key.scancode), &relayout);
+            if (relayout) { layout_list_free(&st->boxes); layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes); return; }
+        }
         int flen = (int)strlen(st->focused_input->form_value);
         if (ev->key.scancode == SDL_SCANCODE_BACKSPACE) {
-            if (flen > 0) st->focused_input->form_value[flen - 1] = 0;
+            if (flen > 0) {
+                st->focused_input->form_value[flen - 1] = 0;
+                int relayout = 0;
+                js_dispatch_input(g_current_js_interp, st->focused_input, &relayout);
+                if (relayout) { layout_list_free(&st->boxes); layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes); return; }
+            }
         } else if (ev->key.scancode == SDL_SCANCODE_RETURN) {
             if (strcmp(st->focused_input->tag, "textarea") == 0) {
                 /* Real <textarea> behavior: Enter inserts a literal
@@ -1762,6 +1961,9 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
                 if (flen < (int)sizeof st->focused_input->form_value - 1) {
                     st->focused_input->form_value[flen] = '\n';
                     st->focused_input->form_value[flen + 1] = 0;
+                    int relayout = 0;
+                    js_dispatch_input(g_current_js_interp, st->focused_input, &relayout);
+                    if (relayout) { layout_list_free(&st->boxes); layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes); return; }
                 }
             } else {
                 /* Real HTML5 behavior: Enter in a single-line text field
@@ -1769,7 +1971,13 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
                  * form's own submit control. */
                 DomNode *form = find_enclosing_form(st->focused_input);
                 if (form) {
+                    DomNode *submitted_input = st->focused_input;
                     st->focused_input->form_focused = 0; st->focused_input = NULL;
+                    {
+                        int relayout = 0;
+                        js_dispatch_change(g_current_js_interp, submitted_input, &relayout);
+                        if (relayout) { layout_list_free(&st->boxes); layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes); return; }
+                    }
                     submit_form(form, st->hist, st->current_url, &st->pending_fetch, st->pending_fetch_url,
                                 &st->root, &st->boxes, st->current_dir, st->current_base_url, st->viewport_w, st->viewport_h,
                                 &st->scroll_x, &st->scroll_y, &st->hover_node, &st->active_node);
@@ -1782,7 +1990,12 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
         int tlen = (int)strlen(ev->text.text);
         int room = (int)sizeof(st->focused_input->form_value) - 1 - flen;
         if (tlen > room) tlen = room;
-        if (tlen > 0) { memcpy(st->focused_input->form_value + flen, ev->text.text, (size_t)tlen); st->focused_input->form_value[flen + tlen] = 0; }
+        if (tlen > 0) {
+            memcpy(st->focused_input->form_value + flen, ev->text.text, (size_t)tlen); st->focused_input->form_value[flen + tlen] = 0;
+            int relayout = 0;
+            js_dispatch_input(g_current_js_interp, st->focused_input, &relayout);
+            if (relayout) { layout_list_free(&st->boxes); layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes); return; }
+        }
     } else if (ev->type == SDL_EVENT_TEXT_INPUT && st->url_bar_focused) {
         /* Real, keyboard-layout-aware printable text (see
          * PRIVATE_PumpEvents' own XLookupString comment) -- append-only,
@@ -2130,7 +2343,7 @@ int main(void) {
     }
     st->root = dom_parse(initial_html);
     free(initial_html);
-    sqw_apply_css(st->root);
+    sqw_apply_css(st->root, st->current_dir, st->current_base_url);
     sqw_resolve_image_urls(st->root, st->current_dir, st->current_base_url);
     st->viewport_w = SQW_VIEWPORT_W; st->viewport_h = SQW_VIEWPORT_H;
     layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes);

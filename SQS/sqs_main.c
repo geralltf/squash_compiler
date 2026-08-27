@@ -470,6 +470,31 @@ static void *sqs_accept_loop(void *arg) {
         pthread_attr_t th_attr;
         pthread_attr_init(&th_attr);
         pthread_attr_setdetachstate(&th_attr, PTHREAD_CREATE_DETACHED);
+        /* 64MB, not the platform default (commonly ~8MB) -- confirmed
+         * this session via a real gcc-vs-squash divergence: a genuine
+         * real-world WordPress page (twentyseventeen theme's own
+         * index.php, once php_mini.c could actually render it correctly
+         * at all -- see that file's own top-comment history) segfaulted
+         * from a plain stack overflow when served through a squash-
+         * compiled SQS, while the IDENTICAL source compiled with gcc
+         * rendered it correctly within the default 8MB stack. Root
+         * cause: squash's own codegen gives every function a much
+         * bigger, unoptimized per-call stack frame than gcc's (no
+         * register allocation/spilling tricks to shrink it), so the SAME
+         * logical call depth through a real page's full boot chain
+         * (get_header()/locate_template()/deeply nested isset()/empty()/
+         * "$arr[key]" expression evaluation, ...) consumes dramatically
+         * more real stack under squash even though neither build has any
+         * actual infinite/runaway recursion -- confirmed via direct
+         * bisection (a throwaway harness with the SAME php_mini.c source
+         * completed successfully once given a 64MB stack ulimit; smaller
+         * limits up to and including 64MB's own neighbors below it still
+         * overflowed). 64MB is comfortably above the ~64MB threshold
+         * that bisection found necessary, applied here (rather than
+         * expecting operators to raise `ulimit -s` for the whole SQS
+         * process) since it's set once per accepted connection and costs
+         * nothing but virtual address space until actually touched. */
+        pthread_attr_setstacksize(&th_attr, 64 * 1024 * 1024);
         pthread_create(&th, &th_attr, sqs_conn_thread, c);
         pthread_attr_destroy(&th_attr);
     }
