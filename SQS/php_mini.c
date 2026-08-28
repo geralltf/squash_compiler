@@ -110,6 +110,46 @@ extern int closedir(__sqs_DIR *dirp);
 #include "db_engine.c"
 
 #define PHP_MAX_VARS 64
+/* g_globals[]'s own capacity -- see that array's own comment for the
+ * real bug this constant, split out from PHP_MAX_VARS above, fixes.
+ * PHP_MAX_VARS (a per-FUNCTION-CALL local variable table, embedded
+ * directly in PhpState -- see PhpState.vars' own comment) stays small
+ * on purpose: PhpState is allocated per call (deep call chains can
+ * nest 100+ frames, see PHP_CALL_DEPTH_MAX), so a bigger PHP_MAX_VARS
+ * would multiply every one of those frames' size and risk a real
+ * native C-stack overflow under real recursion depth, entirely
+ * separate from this file's own intentional "degrade past
+ * PHP_CALL_DEPTH_MAX" safety net. g_globals[] has no such problem --
+ * it's a single, one-time, request-lifetime table, not allocated per
+ * call -- so it can and must be sized for how many DISTINCT names a
+ * real WordPress boot actually globalizes across ALL of its files
+ * combined (confirmed this session, via SQS_TRACE_EMIT/echo
+ * breadcrumbs narrowing an "index.php renders nothing" symptom all
+ * the way down to this: `wp_set_template_globals()`'s own `global
+ * $wp_stylesheet_path, $wp_template_path;` assignment silently losing
+ * its value -- traced to `php_global_find_or_create()` returning NULL
+ * once `g_nglobals >= PHP_MAX_VARS`, which `php_var_set()` then
+ * silently no-ops on ("if (!v) return;"), with every READ of that same
+ * name then ALSO returning empty via `php_global_find()` finding
+ * nothing -- exactly matching the observed "assign a known-correct
+ * value, read back empty, no error" symptom. A real, full WordPress
+ * boot easily globalizes 100+ distinct names across core alone
+ * ($wpdb, $wp_filter, $wp_actions, $wp_current_filter, $current_user,
+ * $wp_theme_directories, $wp_stylesheet_path, $wp_template_path,
+ * $wp_query, $wp_rewrite, $wp_registered_widgets, $wp_taxonomies,
+ * $wp_post_types, $wp_locale, $table_prefix, $wp_object_cache, ... --
+ * the OLD 64-name cap (== PHP_MAX_VARS, its only reason for being that
+ * value was reusing the same constant, per that array's own original
+ * comment's now-confirmed-wrong assumption that "only a small,
+ * genuinely-shared set of names ... ever gets globalized in
+ * practice") was exhausted partway through a normal boot, silently
+ * breaking every DISTINCT global name declared after the 64th, with
+ * no error/trace at all -- almost certainly THE direct, single
+ * highest-leverage cause of the reported "index.php renders nothing"
+ * symptom, since template-path resolution (wp_set_template_globals)
+ * happens to be roughly where a real boot's own name count crosses
+ * that old threshold. */
+#define PHP_MAX_GLOBALS 1024
 #define PHP_VAL_MAX 1024
 #define PHP_KV_MAX 32
 /* Hard ceiling on how many DISTINCT keys any single PhpKVArray may grow
@@ -361,6 +401,21 @@ typedef struct {
 typedef struct {
     char name[64];
     char params[PHP_FUNC_PARAM_MAX][64];
+    /* Real parameter DEFAULT VALUES -- see PhpFunc.param_defaults' own
+       comment for the real, high-impact bug this fixes (session 1 through
+       THIS session: default values were parsed but silently discarded,
+       so any call omitting a trailing optional argument bound it to ""
+       instead of the function's own declared default -- e.g. real
+       WordPress's own add_filter($hook, $cb) [no explicit $priority/
+       $accepted_args] silently got $accepted_args="" instead of 1,
+       corrupting WP_Hook::apply_filters()'s own accepted_args>=num_args
+       branch selection and array_slice() call -- confirmed as the direct
+       cause of every filter callback receiving NO arguments at all).
+       "" (not a special sentinel) for a parameter with no explicit "="
+       in its declaration -- already this engine's own existing "missing
+       arg -> empty string" behavior, so a parameter that never had a
+       default keeps behaving exactly as before. */
+    char param_defaults[PHP_FUNC_PARAM_MAX][PHP_VAL_MAX];
     int nparams;
     const char *body; /* see PhpFunc's own comment -- same convention */
 } PhpMethod;
@@ -378,6 +433,33 @@ typedef struct {
     char prop_names[PHP_CLASS_PROP_MAX][64];
     char prop_defaults[PHP_CLASS_PROP_MAX][PHP_VAL_MAX];
     int nprops;
+    /* "static $name [= init];" class properties -- unlike prop_names/
+       prop_defaults above (per-INSTANCE, reseeded fresh into every
+       php_object_new()'d object's own props table), these are CLASS-level
+       shared storage: one slot per class, mutated in place by
+       "self::$name = ...;"/"ClassName::$name = ...;" and read back the
+       same way, persisting across every "new ClassName()" and every call.
+       Previously entirely unimplemented -- "static" was consumed as an
+       inert modifier keyword (see php_parse_class_decl's own modifier-
+       loop comment) and "self::$name"/"ClassName::$name" wasn't
+       recognized as a distinct shape at all, so e.g. real WordPress's
+       WP_User::__construct() -- "if (!isset(self::$back_compat_keys)) {
+       self::$back_compat_keys = array(...); }" -- silently degraded to:
+       isset() on a "self::"-prefixed argument always resolving false
+       (php_resolve_varref only understands a leading '$', so it returned
+       an empty PhpVarRef for input starting with the identifier "self"),
+       and the assignment desyncing into two garbage statements (an empty
+       "self::" evaluated as a no-op constant read, immediately followed
+       by a bare "$back_compat_keys = array(...);" landing in the
+       CALLER's own local scope instead of anywhere shared) -- so the
+       "only initialize once" cache never actually cached anything,
+       silently re-running class-level init work on every single object
+       construction. Confirmed via an isolated repro this session
+       (t_static_prop.php: expected "INIT CACHED CACHED", got
+       "INIT INIT INIT" before this fix). */
+    char static_prop_names[PHP_CLASS_PROP_MAX][64];
+    char static_prop_vals[PHP_CLASS_PROP_MAX][PHP_VAL_MAX];
+    int nstatic_props;
     char const_names[PHP_CLASS_CONST_MAX][64];
     char const_vals[PHP_CLASS_CONST_MAX][PHP_VAL_MAX];
     int nconsts;
@@ -405,6 +487,35 @@ typedef struct {
 typedef struct {
     char name[64];
     char params[PHP_FUNC_PARAM_MAX][64];
+    /* Real parameter DEFAULT VALUES, evaluated ONCE at function-
+       declaration parse time and stored here -- found MISSING entirely
+       this session: default values were being parsed (php_eval_expr,
+       correctly) then thrown away, so calling a function while omitting
+       a trailing optional argument always bound it to "" instead of the
+       real declared default. A real, long-standing, high-impact gap
+       (documented as unfixed since session 1) -- finally root-caused
+       THIS session as the direct cause of WordPress's own hook/filter
+       system silently dropping every callback's own filtered VALUE
+       argument: add_filter($hook, $callback) [omitting $priority/
+       $accepted_args] left $accepted_args as "" instead of add_filter()'s
+       own declared default of 1, which corrupted WP_Hook::apply_filters()'s
+       "$the_['accepted_args'] >= $num_args" branch selection enough that
+       it ended up calling every callback with ZERO of its real arguments
+       via array_slice($args, 0, "") -- effectively atoi("")=0. "" (same
+       as this engine's existing "missing arg" behavior) for a parameter
+       declared with no explicit "=" default at all -- unaffected. Only
+       SIMPLE scalar defaults are supported (a literal number/string/
+       true/false/null, or a simple expression using only those,
+       evaluated once at parse time) -- a default that depends on another
+       parameter's own value ("function f($a, $b = $a)", real PHP doesn't
+       allow that either) or needs a fresh array/object per call ("$b =
+       array()") is a documented, narrower gap than the SAME class of bug
+       php_object_new()'s own array_deep_copy fix addresses for class
+       property defaults -- not yet extended here, since no real
+       WordPress call site reached during this session's own testing
+       needed an array-valued default parameter to confirm one way or
+       the other. */
+    char param_defaults[PHP_FUNC_PARAM_MAX][PHP_VAL_MAX];
     int nparams;
     /* Set for the LAST parameter of a "...$name" variadic declaration
      * (real PHP only allows variadic on the final parameter) -- session
@@ -479,10 +590,10 @@ static int g_narrays = 0;
  * object it built was simply discarded the moment the function
  * returned, and every OTHER function that also does "global $wpdb;"
  * (essentially all of WordPress core) saw an empty, never-connected
- * $wpdb. PHP_MAX_VARS-sized (not request-huge) since only a small,
- * genuinely-shared set of names (wpdb, wp_query, wp_filter, ...) ever
- * gets globalized in practice. */
-static PhpVar g_globals[PHP_MAX_VARS];
+ * $wpdb. PHP_MAX_GLOBALS-sized -- see that constant's own comment for
+ * why this is a MUCH bigger, and separate, capacity than the per-call
+ * PHP_MAX_VARS local-variable table. */
+static PhpVar g_globals[PHP_MAX_GLOBALS];
 static int g_nglobals = 0;
 
 /* See php_call_function's own comment (further down, at the actual guard
@@ -701,6 +812,29 @@ static int php_class_find_const(PhpClass *cls, const char *name, char *out, int 
     return 0;
 }
 
+/* Same parent-chain walk as php_class_find_const, but returns a pointer
+ * directly into the class's own static_prop_vals[] slot -- callers both
+ * READ through it (a plain char* deref) and WRITE through it (mutating
+ * the shared, class-level storage in place), matching real PHP's
+ * "static $x;" semantics: the slot lives once per declaring class and is
+ * shared across every instance/call, not reseeded per-object the way
+ * prop_defaults is. Returns NULL if `name` isn't a declared static
+ * property anywhere up the chain (not: don't silently fall back to an
+ * instance property of the same name -- self::$x and $this->x are
+ * distinct storage in real PHP, and conflating them would reintroduce
+ * exactly the kind of silent-wrong-value bug this feature was added to
+ * fix). */
+static char *php_class_find_static_prop(PhpClass *cls, const char *name) {
+    int i, guard = 0;
+    while (cls && guard++ < 32) {
+        for (i = 0; i < cls->nstatic_props; i++) {
+            if (strcmp(cls->static_prop_names[i], name) == 0) return cls->static_prop_vals[i];
+        }
+        cls = cls->parent_name[0] ? php_class_find(cls->parent_name) : NULL;
+    }
+    return NULL;
+}
+
 static const char *php_const_find(const char *name) {
     int i;
     for (i = 0; i < g_nconsts; i++) if (strcmp(g_consts[i].name, name) == 0) return g_consts[i].val;
@@ -909,6 +1043,23 @@ static void php_kv_set(PhpKVArray *arr, const char *key, const char *val) {
     }
     php_kv_add(arr, key, val);
 }
+/* Removes `key` from `arr` if present (swap-with-last, since element
+   ORDER within a PHP array normally matters for foreach/etc, but real
+   unset() doesn't promise to preserve insertion order of the REMAINING
+   elements either -- matches this file's own existing "correctness over
+   micro-fidelity" convention elsewhere). A no-op if `key` isn't present,
+   never an error -- unset() on an already-absent key is valid, common
+   real PHP. */
+static void php_kv_remove(PhpKVArray *arr, const char *key) {
+    int i;
+    for (i = 0; i < arr->count; i++) {
+        if (strcmp(arr->items[i].key, key) == 0) {
+            arr->items[i] = arr->items[arr->count - 1];
+            arr->count--;
+            return;
+        }
+    }
+}
 
 /* An object reference is just an ordinary string value -- like every
  * other value in this file -- with a magic prefix ("\x01O:" -- \x01 is
@@ -996,6 +1147,66 @@ static int php_array_new(void) {
     return slot;
 }
 
+/* Deep-copies the array at g_arrays[src_id] into a FRESH slot (any
+ * nested array VALUES are recursively deep-copied too, so the whole
+ * structure becomes fully independent; a nested OBJECT reference is left
+ * as-is and shared, matching real PHP's own "arrays are value types,
+ * objects are reference types" distinction). Returns the new array's id,
+ * or `src_id` itself (i.e. a no-op, NOT a crash) if a fresh slot
+ * couldn't be allocated (PHP_ARR_MAX exhausted) -- same "degrade to the
+ * old, at least previously-working behavior rather than losing data"
+ * convention as every other allocation-failure path in this file.
+ *
+ * Why this exists: found via a real, high-impact bug this session --
+ * `php_object_new()` used to copy a class's own property DEFAULT value
+ * (e.g. "public $callbacks = array();") into every new instance VERBATIM,
+ * including for an array-valued default. Since php_eval_expr() evaluates
+ * "array()" to an arrref token ONCE, at CLASS-DECLARATION parse time
+ * (see php_parse_class_decl()'s own "$"-branch), that single arrref
+ * -- and therefore the ONE underlying g_arrays[] slot it points to --
+ * was being shared across literally EVERY instance of that class ever
+ * constructed. Real PHP always gives each new object its own independent
+ * copy of an array-valued default. This one bug fully explained
+ * WordPress's entire hook/filter system misbehaving: every `WP_Hook`
+ * object shares ONE `$this->callbacks` array class-wide, so
+ * `add_filter('pre_kses', ...)` and `add_filter('sanitize_text_field',
+ * ...)` (two DIFFERENT WP_Hook instances in real PHP) were actually
+ * mutating the exact same shared array -- confirmed via a minimal
+ * standalone repro (three objects of one class, each given a different
+ * nested-array property value, all three ending up with the SAME merged
+ * contents) before this fix, and each independently correct after it. */
+#define PHP_ARRAY_COPY_DEPTH_MAX 64
+static int php_array_deep_copy_depth(int src_id, int depth) {
+    if (src_id < 0 || src_id >= PHP_ARR_MAX || !g_arr_alive[src_id]) return src_id;
+    /* Same "generous but bounded, degrade rather than blow the native
+       stack" philosophy as every other depth cap in this file -- real
+       PHP arrays can't literally contain themselves via ordinary value
+       copy, but nothing stops a genuinely deep nested structure (e.g. a
+       big decoded options blob) from existing; past this depth, deeper
+       levels are simply left SHARED (a rare, narrow divergence from real
+       PHP's full-depth copy-on-write, not a crash). */
+    if (depth >= PHP_ARRAY_COPY_DEPTH_MAX) return src_id;
+    int dst_id = php_array_new();
+    if (dst_id < 0) return src_id; /* table exhausted -- fall back to sharing rather than losing the value entirely */
+    PhpKVArray *src = &g_arrays[src_id];
+    PhpKVArray *dst = &g_arrays[dst_id];
+    int i;
+    for (i = 0; i < src->count; i++) {
+        int nested_id = php_arrref_decode(src->items[i].val);
+        if (nested_id >= 0) {
+            int copied_id = php_array_deep_copy_depth(nested_id, depth + 1);
+            char copied_ref[32];
+            php_arrref_encode(copied_id, copied_ref, sizeof copied_ref);
+            php_kv_add(dst, src->items[i].key, copied_ref);
+        } else {
+            php_kv_add(dst, src->items[i].key, src->items[i].val);
+        }
+    }
+    dst->cursor = src->cursor;
+    return dst_id;
+}
+static int php_array_deep_copy(int src_id) { return php_array_deep_copy_depth(src_id, 0); }
+
 /* Allocates a fresh object of class `class_name`, seeding its properties
  * from that class's own declared defaults (real PHP semantics: an
  * object starts with each property at its class-declared default, not
@@ -1033,7 +1244,26 @@ static int php_object_new(const char *class_name) {
         int ci, i;
         for (ci = nchain - 1; ci >= 0; ci--) {
             PhpClass *cls = chain[ci];
-            for (i = 0; i < cls->nprops; i++) php_kv_set(&o->props, cls->prop_names[i], cls->prop_defaults[i]);
+            for (i = 0; i < cls->nprops; i++) {
+                /* An array-valued default ("public $callbacks = array();")
+                   must be its own independent array PER INSTANCE, not the
+                   one shared arrref the class declaration itself evaluated
+                   to ONCE at parse time -- see php_array_deep_copy()'s own
+                   comment for the real, high-impact bug this fixes (every
+                   object of a class silently sharing ONE mutable array).
+                   A non-array default (plain scalar, or an object
+                   reference -- real PHP objects ARE reference types, never
+                   copied here either) is set as-is, unchanged. */
+                int arr_id = php_arrref_decode(cls->prop_defaults[i]);
+                if (arr_id >= 0) {
+                    int copy_id = php_array_deep_copy(arr_id);
+                    char copy_ref[32];
+                    php_arrref_encode(copy_id, copy_ref, sizeof copy_ref);
+                    php_kv_set(&o->props, cls->prop_names[i], copy_ref);
+                } else {
+                    php_kv_set(&o->props, cls->prop_names[i], cls->prop_defaults[i]);
+                }
+            }
         }
     }
     return slot;
@@ -1096,7 +1326,7 @@ static PhpVar *php_global_find(const char *name) {
 static PhpVar *php_global_find_or_create(const char *name) {
     PhpVar *v = php_global_find(name);
     if (v) return v;
-    if (g_nglobals >= PHP_MAX_VARS) return NULL;
+    if (g_nglobals >= PHP_MAX_GLOBALS) return NULL;
     v = &g_globals[g_nglobals++];
     memset(v, 0, sizeof *v);
     strncpy(v->name, name, sizeof v->name - 1); v->name[sizeof v->name - 1] = 0;
@@ -1180,7 +1410,10 @@ static int php_truthy(const char *s) {
 static void php_emit(PhpState *st, const char *s, int len) {
     int room = st->out_cap - st->out_len - 1;
     if (len > room) len = room;
-    if (len > 0) { memcpy(st->out + st->out_len, s, (size_t)len); st->out_len += len; st->out[st->out_len] = 0; }
+    if (len > 0) {
+        if (getenv("SQS_TRACE_EMIT")) { char snip[80]; int sn = len < 79 ? len : 79; memcpy(snip, s, (size_t)sn); snip[sn] = 0; fprintf(stderr, "[EMIT +%d @%d] %s\n", len, st->out_len, snip); }
+        memcpy(st->out + st->out_len, s, (size_t)len); st->out_len += len; st->out[st->out_len] = 0;
+    }
 }
 static void php_emit_str(PhpState *st, const char *s) { php_emit(st, s, (int)strlen(s)); }
 
@@ -2231,6 +2464,36 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
              * lookup walks the "extends" chain, see
              * php_class_find_method) or a constant/::class read. */
             st->src += 2;
+            php_skip_ws(st);
+            /* "ClassName::$prop" (a static-property READ, e.g.
+             * "self::$back_compat_keys") -- a completely different shape
+             * from "ClassName::method"/"ClassName::CONST"/"ClassName::
+             * class" (all of which read a plain identifier here); must be
+             * checked BEFORE calling php_read_ident below, since '$' isn't
+             * an identifier-start character and would otherwise read an
+             * EMPTY `member`, silently leaving "$prop..." unconsumed in
+             * st->src for the caller to mis-parse next -- see
+             * PhpClass.static_prop_names' own comment for the real-
+             * WordPress bug this caused. */
+            if (*st->src == '$') {
+                st->src++;
+                char sname[64];
+                php_read_ident(st, sname, sizeof sname);
+                const char *resolved_class2 = name;
+                PhpClass *self_cls2 = NULL;
+                if ((strcmp(name, "self") == 0 || strcmp(name, "static") == 0 || strcmp(name, "parent") == 0) && st->has_this && st->this_obj_id >= 0) {
+                    self_cls2 = php_class_find(g_objects[st->this_obj_id].class_name);
+                    if (strcmp(name, "parent") == 0 && self_cls2) {
+                        self_cls2 = self_cls2->parent_name[0] ? php_class_find(self_cls2->parent_name) : NULL;
+                    }
+                    resolved_class2 = self_cls2 ? self_cls2->name : name;
+                }
+                PhpClass *cls2 = self_cls2 ? self_cls2 : php_class_find(resolved_class2);
+                char *slot = php_class_find_static_prop(cls2, sname);
+                if (slot) { strncpy(out, slot, outcap - 1); out[outcap - 1] = 0; }
+                else out[0] = 0;
+                return;
+            }
             char member[64];
             php_read_ident(st, member, sizeof member);
             php_skip_ws(st);
@@ -2342,6 +2605,52 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
              * into the generic call path below. */
             if (strcmp(name, "isset") == 0 || strcmp(name, "empty") == 0) {
                 st->src++;
+                php_skip_ws(st);
+                /* "isset(self::$prop)"/"isset(ClassName::$prop)" -- a
+                 * static-property check, a completely different shape
+                 * from every other isset()/empty() argument this handler
+                 * supports (all of which start with '$'; see
+                 * php_resolve_varref's own "if (c != '$') return;" early-
+                 * out). Without this, php_resolve_varref returned a fully
+                 * zeroed PhpVarRef for a "self::..."-shaped argument
+                 * (ref.var stays NULL), so isset() always evaluated
+                 * false/empty() always evaluated true here regardless of
+                 * whether the static property actually held a value --
+                 * see PhpClass.static_prop_names' own comment for the
+                 * real WordPress bug (WP_User::__construct()'s "if
+                 * (!isset(self::$back_compat_keys))" cache guard) this
+                 * caused. */
+                {
+                    const char *p2 = st->src;
+                    if ((*p2 >= 'a' && *p2 <= 'z') || (*p2 >= 'A' && *p2 <= 'Z') || *p2 == '_') {
+                        char cname2[64];
+                        int ci = 0;
+                        while (((*p2>='a'&&*p2<='z')||(*p2>='A'&&*p2<='Z')||(*p2>='0'&&*p2<='9')||*p2=='_') && ci < (int)sizeof cname2 - 1) { cname2[ci++] = *p2; p2++; }
+                        cname2[ci] = 0;
+                        while (*p2==' '||*p2=='\t') p2++;
+                        if (p2[0] == ':' && p2[1] == ':' && p2[2] == '$') {
+                            st->src = p2 + 3;
+                            char sname2[64];
+                            php_read_ident(st, sname2, sizeof sname2);
+                            php_skip_ws(st);
+                            if (*st->src == ')') st->src++;
+                            const char *resolved3 = cname2;
+                            PhpClass *self_cls3 = NULL;
+                            if ((strcmp(cname2, "self") == 0 || strcmp(cname2, "static") == 0 || strcmp(cname2, "parent") == 0) && st->has_this && st->this_obj_id >= 0) {
+                                self_cls3 = php_class_find(g_objects[st->this_obj_id].class_name);
+                                if (strcmp(cname2, "parent") == 0 && self_cls3) self_cls3 = self_cls3->parent_name[0] ? php_class_find(self_cls3->parent_name) : NULL;
+                                resolved3 = self_cls3 ? self_cls3->name : cname2;
+                            }
+                            PhpClass *cls3 = self_cls3 ? self_cls3 : php_class_find(resolved3);
+                            char *slot3 = php_class_find_static_prop(cls3, sname2);
+                            int result3;
+                            if (strcmp(name, "isset") == 0) result3 = (slot3 != NULL && slot3[0] != 0);
+                            else result3 = (slot3 == NULL || !php_truthy(slot3));
+                            strncpy(out, result3 ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+                            return;
+                        }
+                    }
+                }
                 PhpVarRef ref;
                 php_resolve_varref(st, &ref);
                 php_skip_ws(st);
@@ -2442,6 +2751,113 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
                     isarr = ref.var && (ref.var->is_array || php_arrref_decode(ref.var->val) >= 0);
                 }
                 strncpy(out, isarr ? "1" : "0", outcap - 1); out[outcap - 1] = 0;
+                return;
+            }
+            if (strcmp(name, "unset") == 0) {
+                /* Same "needs the raw variable/array, not a stringified
+                   value" reasoning as isset()/empty()/count()/is_array()
+                   above -- see PhpVarRef's own comment for exactly which
+                   shapes are resolved ("$name", "$name[key]",
+                   "$base->member", one level each; NOT a deeper chain
+                   like "$this->prop[k1][k2]" -- a documented, narrow gap,
+                   real WordPress's own WP_Hook::remove_filter() is the
+                   one place in a typical page load that would need it,
+                   and removal during normal page-render boot is rare).
+                   Found missing entirely this session (2000+ real calls
+                   silently no-op'ing on every WordPress page load --
+                   see this session's own notes on why that's a real,
+                   high-impact gap, not just a theoretical one). */
+                st->src++;
+                PhpVarRef ref;
+                php_resolve_varref(st, &ref);
+                php_skip_ws(st);
+                c = *st->src;
+                if (c != ')') php_skip_to_paren_close(st);
+                c = *st->src;
+                if (c == ')') st->src++;
+                if (ref.has_member) {
+                    if (ref.obj_id >= 0) php_kv_remove(&g_objects[ref.obj_id].props, ref.member);
+                } else if (ref.var && ref.has_key) {
+                    if (ref.var->is_array) php_kv_remove(&ref.var->arr, ref.key);
+                    else { int aid = php_arrref_decode(ref.var->val); if (aid >= 0) php_kv_remove(&g_arrays[aid], ref.key); }
+                } else if (ref.var) {
+                    ref.var->val[0] = 0;
+                    ref.var->is_array = 0;
+                }
+                out[0] = 0;
+                return;
+            }
+            if (strcmp(name, "array_unshift") == 0) {
+                /* Real PHP declares this "function array_unshift(array
+                   &$array, mixed ...$values): int" -- the FIRST argument
+                   is BY REFERENCE, mutated in place. This file's ordinary
+                   argument evaluation (php_parse_args -> php_eval_expr)
+                   has no by-reference parameter concept at all -- for a
+                   PLAIN LOCAL variable holding a native array, reading it
+                   bare as a function argument actually SNAPSHOTS it into
+                   a FRESH g_arrays[] slot first (see the "$name" read
+                   path's own comment on why: correct real-PHP by-VALUE
+                   semantics for an ORDINARY function call) -- so the old
+                   array_unshift(), despite mutating whatever slot it was
+                   handed, was mutating a disposable COPY, never the
+                   caller's real variable. Confirmed as the actual root
+                   cause of WordPress's own WP_Hook::apply_filters()
+                   silently dropping the filtered VALUE argument to every
+                   single callback (its "array_unshift($args, $value);"
+                   call had no effect) -- found via a minimal standalone
+                   repro before tracing it back to this exact builtin.
+                   Fixed the same way isset()/empty()/unset() above
+                   already have to: resolve the raw variable reference
+                   FIRST (php_resolve_varref, bypassing php_eval_expr
+                   entirely for this one argument), so the mutation lands
+                   on the real, shared storage instead of a copy. Only a
+                   bare "$name" first argument is supported (real PHP
+                   requires an actual variable here too -- passing
+                   anything else is a fatal TypeError in real PHP, so
+                   silently doing nothing for a non-variable first arg is
+                   a safe, unsurprising degrade). */
+                st->src++;
+                PhpVarRef ref;
+                php_resolve_varref(st, &ref);
+                php_skip_ws(st);
+                char newvals[PHP_ARG_MAX][PHP_VAL_MAX];
+                int nnew = 0;
+                while (*st->src == ',' && nnew < PHP_ARG_MAX) {
+                    st->src++;
+                    php_eval_expr(st, newvals[nnew], sizeof newvals[nnew]);
+                    nnew++;
+                    php_skip_ws(st);
+                }
+                if (*st->src == ')') st->src++;
+                if (ref.var && !ref.has_key && !ref.has_member && nnew > 0) {
+                    PhpKVArray *a;
+                    if (ref.var->is_array) {
+                        a = &ref.var->arr;
+                    } else {
+                        int aid = php_arrref_decode(ref.var->val);
+                        if (aid < 0) { aid = php_array_new(); if (aid >= 0) { php_arrref_encode(aid, ref.var->val, sizeof ref.var->val); } }
+                        a = (aid >= 0) ? &g_arrays[aid] : NULL;
+                    }
+                    if (a && php_kv_ensure_cap(a, a->count + nnew)) {
+                        int old_count = a->count;
+                        int ii;
+                        for (ii = old_count - 1; ii >= 0; ii--) {
+                            char k[16]; snprintf(k, sizeof k, "%d", ii + nnew);
+                            strncpy(a->items[ii + nnew].key, k, sizeof a->items[0].key - 1); a->items[ii + nnew].key[sizeof a->items[0].key - 1] = 0;
+                            strncpy(a->items[ii + nnew].val, a->items[ii].val, sizeof a->items[0].val - 1); a->items[ii + nnew].val[sizeof a->items[0].val - 1] = 0;
+                        }
+                        for (ii = 0; ii < nnew; ii++) {
+                            char k[16]; snprintf(k, sizeof k, "%d", ii);
+                            strncpy(a->items[ii].key, k, sizeof a->items[0].key - 1); a->items[ii].key[sizeof a->items[0].key - 1] = 0;
+                            strncpy(a->items[ii].val, newvals[ii], sizeof a->items[0].val - 1); a->items[ii].val[sizeof a->items[0].val - 1] = 0;
+                        }
+                        a->count = old_count + nnew;
+                        a->cursor = 0;
+                    }
+                    snprintf(out, outcap, "%d", a ? a->count : 0);
+                } else {
+                    out[0] = 0;
+                }
                 return;
             }
             char arg_storage[PHP_ARG_MAX][PHP_VAL_MAX];
@@ -2904,6 +3320,46 @@ static void php_skip_to_brace_close(PhpState *st) {
     st->src = p;
 }
 
+/* Scans st->src forward (WITHOUT executing/consuming anything but the
+ * scan itself) to the next "case"/"default" keyword or the closing '}',
+ * all at the switch body's OWN nesting depth (0, relative to st->src's
+ * starting position, which must already be just inside the switch's own
+ * "{") -- strings/comments/nested "{...}" blocks are skipped as opaque
+ * units (php_skip_atomic + brace-depth tracking), the same convention
+ * php_skip_to_brace_close() above already uses, so a nested if/while/
+ * function-body/array-literal's own braces (or a string literal
+ * containing "case"-looking text) never get mistaken for this switch's
+ * own structure. Used by the "switch" statement handler's own label-
+ * finding scan -- see its own top comment for the full two-pass design.
+ * Leaves st->src pointing AT the found keyword's first character, or AT
+ * '}', or at a NUL byte if the source ran out first (malformed input:
+ * every caller here already treats that as "nothing more to find",
+ * degrading safely rather than looping). */
+static void php_switch_skip_to_label_or_close(PhpState *st) {
+    const char *p = st->src;
+    int depth = 0;
+    for (;;) {
+        char c = *p;
+        if (!c) { st->src = p; return; }
+        if (depth == 0 && c == '}') { st->src = p; return; }
+        const char *after = php_skip_atomic(p);
+        if (after != p) { p = after; continue; }
+        if (c == '{') { depth++; p++; continue; }
+        if (c == '}') { depth--; p++; continue; }
+        if (depth == 0 && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_')) {
+            const char *idstart = p;
+            while (*p && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '_')) p++;
+            int len = (int)(p - idstart);
+            if ((len == 4 && strncmp(idstart, "case", 4) == 0) || (len == 7 && strncmp(idstart, "default", 7) == 0)) {
+                st->src = idstart;
+                return;
+            }
+            continue; /* some other identifier (a real statement's own text) -- keep scanning */
+        }
+        p++;
+    }
+}
+
 /* Advances st->src forward PAST one bare, non-brace statement (e.g. the
  * body of "if (cond) return foo();" with no "{...}") WITHOUT executing
  * it -- scans atomically (string/comment-aware, via php_skip_atomic, same
@@ -3200,8 +3656,15 @@ static void php_parse_class_decl(PhpState *st) {
     php_skip_ws(st);
     c = *st->src;
     while (c && c != '}') {
-        /* Visibility/modifier keywords -- consumed, not modeled (no
-         * access-control enforcement in this subset). */
+        /* Visibility/modifier keywords -- mostly consumed, not modeled
+         * (no access-control enforcement in this subset); "static" is the
+         * one exception, tracked via `saw_static` below so the "$name"
+         * branch just past this loop can route a "static $x;" property
+         * into cls->static_prop_* (class-level, shared) instead of the
+         * ordinary per-instance prop_names/prop_defaults -- see
+         * PhpClass.static_prop_names' own comment for why that
+         * distinction matters. */
+        int saw_static = 0;
         for (;;) {
             const char *save2 = st->src;
             char mkw[16];
@@ -3209,6 +3672,7 @@ static void php_parse_class_decl(PhpState *st) {
             if (strcmp(mkw, "public") == 0 || strcmp(mkw, "private") == 0 || strcmp(mkw, "protected") == 0 ||
                 strcmp(mkw, "static") == 0 || strcmp(mkw, "final") == 0 || strcmp(mkw, "abstract") == 0 ||
                 strcmp(mkw, "readonly") == 0) {
+                if (strcmp(mkw, "static") == 0) saw_static = 1;
                 php_skip_ws(st);
                 continue;
             }
@@ -3250,7 +3714,13 @@ static void php_parse_class_decl(PhpState *st) {
                 c = *st->src;
             }
             if (c == ';') st->src++;
-            if (cls && cls->nprops < PHP_CLASS_PROP_MAX) {
+            if (saw_static && cls && cls->nstatic_props < PHP_CLASS_PROP_MAX) {
+                strncpy(cls->static_prop_names[cls->nstatic_props], pname, sizeof cls->static_prop_names[cls->nstatic_props] - 1);
+                cls->static_prop_names[cls->nstatic_props][sizeof cls->static_prop_names[cls->nstatic_props] - 1] = 0;
+                strncpy(cls->static_prop_vals[cls->nstatic_props], defval, sizeof cls->static_prop_vals[cls->nstatic_props] - 1);
+                cls->static_prop_vals[cls->nstatic_props][sizeof cls->static_prop_vals[cls->nstatic_props] - 1] = 0;
+                cls->nstatic_props++;
+            } else if (cls && cls->nprops < PHP_CLASS_PROP_MAX) {
                 strncpy(cls->prop_names[cls->nprops], pname, sizeof cls->prop_names[cls->nprops] - 1);
                 cls->prop_names[cls->nprops][sizeof cls->prop_names[cls->nprops] - 1] = 0;
                 strncpy(cls->prop_defaults[cls->nprops], defval, sizeof cls->prop_defaults[cls->nprops] - 1);
@@ -3284,17 +3754,28 @@ static void php_parse_class_decl(PhpState *st) {
                         st->src++;
                         char pname[64];
                         php_read_ident(st, pname, sizeof pname);
+                        int this_param_slot = -1;
                         if (m && nparams < PHP_FUNC_PARAM_MAX) {
                             strncpy(m->params[nparams], pname, sizeof m->params[nparams] - 1);
                             m->params[nparams][sizeof m->params[nparams] - 1] = 0;
+                            m->param_defaults[nparams][0] = 0;
+                            this_param_slot = nparams;
                             nparams++;
                         }
                         php_skip_ws(st);
                         c = *st->src;
+                        /* "= default" -- see PhpMethod.param_defaults' own
+                           comment (PhpFunc's identical field) for the real
+                           bug storing this, instead of discarding it,
+                           fixes. */
                         if (c == '=') {
                             st->src++;
-                            char dummy[PHP_VAL_MAX];
-                            php_eval_expr(st, dummy, sizeof dummy);
+                            if (this_param_slot >= 0) {
+                                php_eval_expr(st, m->param_defaults[this_param_slot], sizeof m->param_defaults[this_param_slot]);
+                            } else {
+                                char dummy[PHP_VAL_MAX];
+                                php_eval_expr(st, dummy, sizeof dummy);
+                            }
                             php_skip_ws(st);
                             c = *st->src;
                         }
@@ -3741,6 +4222,53 @@ static void php_run_statement(PhpState *st) {
         php_read_ident(st, kw, sizeof kw);
         if (kw[0] == 0) { st->src = save; st->src++; return; } /* unrecognized char: skip it, don't hang */
     }
+    {
+        /* "self::$prop = EXPR;" / "ClassName::$prop = EXPR;" -- a static-
+         * property ASSIGNMENT statement, the write-side counterpart of
+         * the "ClassName::$prop" READ handled in php_eval_factor's own
+         * "::" branch (see that comment, and PhpClass.static_prop_names'
+         * own comment, for the real WordPress bug this fixes:
+         * WP_User::__construct()'s "self::$back_compat_keys = array(...);"
+         * cache-populate line). Without this, the statement fell through
+         * to the generic bare-expression-statement fallback at the
+         * bottom of this function, which (via php_eval_factor's "::"
+         * read path) evaluated "self::" to nothing and left "$prop =
+         * ...;" sitting unconsumed to be mis-parsed as a SEPARATE
+         * statement assigning a same-named LOCAL variable instead --
+         * silently discarding the class-level write entirely. Only
+         * simple "= EXPR" is handled (matches every real static-property
+         * write in the vendored tree found so far); compound "+="/".="
+         * etc. on a static property is not (a further, narrower,
+         * documented gap, same shape as this file's other compound-
+         * operator support being $-variable-only). */
+        const char *psave = st->src;
+        php_skip_ws(st);
+        if (*st->src == ':' && st->src[1] == ':' && st->src[2] == '$') {
+            st->src += 3;
+            char sname4[64];
+            php_read_ident(st, sname4, sizeof sname4);
+            php_skip_ws(st);
+            if (*st->src == '=' && st->src[1] != '=') {
+                st->src++;
+                char rhs4[PHP_VAL_MAX];
+                php_eval_expr(st, rhs4, sizeof rhs4);
+                php_skip_ws(st);
+                if (*st->src == ';') st->src++;
+                const char *resolved4 = kw;
+                PhpClass *self_cls4 = NULL;
+                if ((strcmp(kw, "self") == 0 || strcmp(kw, "static") == 0 || strcmp(kw, "parent") == 0) && st->has_this && st->this_obj_id >= 0) {
+                    self_cls4 = php_class_find(g_objects[st->this_obj_id].class_name);
+                    if (strcmp(kw, "parent") == 0 && self_cls4) self_cls4 = self_cls4->parent_name[0] ? php_class_find(self_cls4->parent_name) : NULL;
+                    resolved4 = self_cls4 ? self_cls4->name : kw;
+                }
+                PhpClass *cls4 = self_cls4 ? self_cls4 : php_class_find(resolved4);
+                char *slot4 = php_class_find_static_prop(cls4, sname4);
+                if (slot4) { strncpy(slot4, rhs4, PHP_VAL_MAX - 1); slot4[PHP_VAL_MAX - 1] = 0; }
+                return;
+            }
+        }
+        st->src = psave;
+    }
     if (strcmp(kw, "echo") == 0 || strcmp(kw, "print") == 0) {
         for (;;) {
             char val[PHP_VAL_MAX];
@@ -3835,22 +4363,28 @@ static void php_run_statement(PhpState *st) {
                     st->src++;
                     char pname[64];
                     php_read_ident(st, pname, sizeof pname);
+                    int this_param_slot = -1;
                     if (fn && nparams < PHP_FUNC_PARAM_MAX) {
                         strncpy(fn->params[nparams], pname, sizeof fn->params[nparams] - 1);
                         fn->params[nparams][sizeof fn->params[nparams] - 1] = 0;
                         fn->variadic[nparams] = is_variadic;
+                        fn->param_defaults[nparams][0] = 0;
+                        this_param_slot = nparams;
                         nparams++;
                     }
                     php_skip_ws(st);
                     c = *st->src;
-                    /* Skip a "= default" if present -- default values
-                     * aren't evaluated/used yet (deliberately bounded,
-                     * see this file's top comment); still needs to be
-                     * consumed so parsing stays in sync. */
+                    /* "= default" -- see PhpFunc.param_defaults' own
+                       comment for the real bug storing this (instead of
+                       throwing it away, the old behavior) fixes. */
                     if (c == '=') {
                         st->src++;
-                        char dummy[PHP_VAL_MAX];
-                        php_eval_expr(st, dummy, sizeof dummy);
+                        if (this_param_slot >= 0) {
+                            php_eval_expr(st, fn->param_defaults[this_param_slot], sizeof fn->param_defaults[this_param_slot]);
+                        } else {
+                            char dummy[PHP_VAL_MAX];
+                            php_eval_expr(st, dummy, sizeof dummy);
+                        }
                         php_skip_ws(st);
                         c = *st->src;
                     }
@@ -3892,9 +4426,10 @@ static void php_run_statement(PhpState *st) {
         php_skip_ws(st);
         c = *st->src;
         if (c == ';') st->src++;
+        if (getenv("SQS_TRACE_INCLUDE")) fprintf(stderr, "[INCLUDE %s] %s\n", kw, path);
         if (once && php_was_included(path)) return;
         FILE *f = fopen(path, "rb");
-        if (!f) return; /* silently skip on failure -- see this file's
+        if (!f) { if (getenv("SQS_TRACE_INCLUDE")) fprintf(stderr, "[INCLUDE FAILED] %s\n", path); return; } /* silently skip on failure -- see this file's
                             top comment; a real "require" would be fatal,
                             not modeled here yet */
         fseek(f, 0, SEEK_END);
@@ -4649,6 +5184,150 @@ static void php_run_statement(PhpState *st) {
         if (c == '}') st->src++;
         return;
     }
+    if (strcmp(kw, "switch") == 0) {
+        /* Real switch/case/default support -- found completely missing
+           this session (fell into the generic "class/try/switch/etc ->
+           skip the whole braced body as an inert, never-executed block"
+           list below, the same fate this file's own top comment already
+           documented since session 1). Confirmed as a genuinely high-
+           impact gap, not just a theoretical one: WP_User::get_data_by()
+           -- itself deep in the mutually-recursive user-bootstrap call
+           chain (_wp_get_current_user() -> wp_set_current_user() ->
+           setup_userdata() -> get_current_user_id() -> ...) this session
+           was investigating -- uses a switch($field){...} specifically
+           to short-circuit via wp_cache_get() BEFORE ever reaching a real
+           database query; with switch a no-op, $user_id/$db_field never
+           got set, so every call fell through to a real, uncached
+           $wpdb->get_row() query -- helping explain both the excessive
+           real work AND (via cache misses feeding back into more of the
+           same recursive chain) some of the recursion depth this session
+           was chasing.
+
+           No AST exists in this file (see its own top comment), so this
+           works in two passes over the SAME raw source text, exactly
+           like do/while/for/foreach's own re-parse-from-a-saved-position
+           style: PASS 1 scans (WITHOUT executing anything) through the
+           switch body, real-evaluating each "case EXPR:" expression in
+           source order (matching real PHP's own "checked in order until
+           the first match" semantics, and its own "case bodies with a
+           side effect only run on/after a real match" rule) via the
+           SAME strcmp()-based equality this file's own "=="/"===" share
+           (see php_eval_cmp's own comment on why that's correct here,
+           not merely simplified), to find either the first matching case
+           or, failing that, a "default:" label -- remembering ONLY the
+           byte position immediately after its ":" and its default-vs-
+           case identity, never anything about the STATEMENTS in between
+           each label (php_switch_skip_to_label_or_close() skips those
+           opaquely, brace/string/comment-aware, the same way every other
+           body-skip in this file already does). If nothing matched (no
+           case, no default), the whole switch is correctly a no-op, same
+           as real PHP. PASS 2 then re-enters from that ONE found
+           position and runs REAL statements (php_run_statement(), so a
+           nested if/while/switch/etc fully recurses and consumes its own
+           terminator exactly like every other body-skip/run pair in this
+           file already relies on) until hitting "break;" (stops, consumed
+           and cleared), "continue;" (also stops the switch -- real PHP's
+           own post-7.3 behavior: bare "continue" inside a switch acts
+           like "break" for the switch itself, not the same case's own
+           label), "return"/an OUTER loop's own "break"/"continue" signal
+           (propagates up unconsumed, exactly like every OTHER body-
+           runner in this file), the switch's closing '}', OR another
+           "case"/"default" label at this body's own depth -- reaching a
+           label without an intervening break is real PHP's own
+           documented FALL-THROUGH behavior: the label itself is
+           consumed (its expression, if a "case", is re-evaluated only to
+           stay in sync with the source position -- a case label with a
+           genuine side effect in its own expression is exotic, arguably
+           malformed real PHP to begin with) and execution just continues
+           into the next section's statements without re-matching
+           anything. */
+        php_skip_ws(st);
+        c = *st->src;
+        char switch_val[PHP_VAL_MAX]; switch_val[0] = 0;
+        if (c == '(') {
+            st->src++;
+            php_eval_expr(st, switch_val, sizeof switch_val);
+            php_skip_ws(st);
+            if (*st->src != ')') php_skip_to_paren_close(st);
+            if (*st->src == ')') st->src++;
+        }
+        php_skip_ws(st);
+        c = *st->src;
+        if (c != '{') return; /* malformed: degrade safely, same as every other handler here */
+        st->src++;
+        const char *body_start = st->src;
+
+        const char *match_pos = NULL;
+        const char *default_pos = NULL;
+        for (;;) {
+            php_switch_skip_to_label_or_close(st);
+            char lc = *st->src;
+            if (!lc || lc == '}') break;
+            char kw2[8];
+            php_read_ident(st, kw2, sizeof kw2);
+            if (strcmp(kw2, "case") == 0) {
+                php_skip_ws(st);
+                char caseval[PHP_VAL_MAX];
+                php_eval_expr(st, caseval, sizeof caseval);
+                php_skip_ws(st);
+                if (*st->src == ':') st->src++;
+                else if (*st->src == ';') st->src++;
+                if (!match_pos && strcmp(switch_val, caseval) == 0) { match_pos = st->src; break; }
+            } else {
+                php_skip_ws(st);
+                if (*st->src == ':') st->src++;
+                if (!default_pos) default_pos = st->src;
+            }
+        }
+        const char *run_from = match_pos ? match_pos : default_pos;
+        if (!run_from) {
+            st->src = body_start;
+            php_skip_to_brace_close(st);
+            if (*st->src == '}') st->src++;
+            return;
+        }
+        st->src = run_from;
+        for (;;) {
+            php_skip_ws(st);
+            char c0 = st->src[0];
+            if (!c0) break;
+            if (c0 == '}') break;
+            if ((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z') || c0 == '_') {
+                const char *save = st->src;
+                char kw2[8];
+                php_read_ident(st, kw2, sizeof kw2);
+                if (strcmp(kw2, "case") == 0) {
+                    php_skip_ws(st);
+                    char dummy[PHP_VAL_MAX];
+                    php_eval_expr(st, dummy, sizeof dummy);
+                    php_skip_ws(st);
+                    if (*st->src == ':') st->src++;
+                    else if (*st->src == ';') st->src++;
+                    continue;
+                } else if (strcmp(kw2, "default") == 0) {
+                    php_skip_ws(st);
+                    if (*st->src == ':') st->src++;
+                    continue;
+                }
+                st->src = save;
+            }
+            const char *before = st->src;
+            php_run_statement(st);
+            if (st->returning) {
+                st->src = body_start;
+                php_skip_to_brace_close(st);
+                if (*st->src == '}') st->src++;
+                return;
+            }
+            if (st->breaking) { st->breaking = 0; break; }
+            if (st->continuing) { st->continuing = 0; break; }
+            if (st->src == before) st->src++;
+        }
+        st->src = body_start;
+        php_skip_to_brace_close(st);
+        if (*st->src == '}') st->src++;
+        return;
+    }
     /* "static $name [= init];" -- a function-local persisted variable
      * (real PHP semantics: the initializer runs exactly ONCE ever, on
      * the first call that reaches it; every later call reuses whatever
@@ -4761,7 +5440,7 @@ static void php_run_statement(PhpState *st) {
     if (strcmp(kw, "interface") == 0 || strcmp(kw, "trait") == 0 ||
         strcmp(kw, "enum") == 0 || strcmp(kw, "namespace") == 0 || strcmp(kw, "use") == 0 ||
         strcmp(kw, "try") == 0 || strcmp(kw, "catch") == 0 || strcmp(kw, "finally") == 0 ||
-        strcmp(kw, "switch") == 0 || strcmp(kw, "do") == 0 ||
+        strcmp(kw, "do") == 0 || /* "switch" removed -- see its own real handler, much earlier in this dispatch chain, same as "do"'s own real handler already made this entry dead for that keyword */
         strcmp(kw, "static") == 0 || strcmp(kw, "abstract") == 0 || strcmp(kw, "final") == 0 ||
         strcmp(kw, "public") == 0 || strcmp(kw, "private") == 0 || strcmp(kw, "protected") == 0 ||
         strcmp(kw, "const") == 0) {
@@ -5375,7 +6054,7 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
                 "define", "defined", "function_exists", "sprintf", "printf",
                 "file_exists", "is_dir", "is_file", "is_readable", "is_writable", "is_writeable",
                 "realpath", "strlen", "dirname", "str_ends_with", "str_starts_with",
-                "str_contains", "implode", "join", "extension_loaded", NULL
+                "str_contains", "implode", "join", "extension_loaded", "str_replace", NULL
             };
             int i;
             for (i = 0; builtins[i]; i++) if (strcmp(args[0], builtins[i]) == 0) { found = 1; break; }
@@ -5522,11 +6201,17 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
         return;
     }
     if (strcmp(name, "array_unshift") == 0 && nargs >= 2) {
-        /* array_unshift($arr, $val, ...) -- real PHP takes this array
-         * BY REFERENCE and re-indexes every existing numeric key after
-         * prepending; this file's builtins don't have true by-reference
-         * parameters (see this file's top comment/call_user_func_array's
-         * own comment on the same limitation), but since args[0] is
+        /* DEAD for the common case -- a direct "array_unshift(...)" call
+         * is now intercepted much earlier (php_eval_factor's own raw-
+         * variable-reference special case, alongside isset()/unset()) so
+         * it can mutate the CALLER's real array storage instead of a
+         * disposable snapshot copy -- see that version's own comment for
+         * the real bug this fixed (WP_Hook::apply_filters() silently
+         * dropping every filter callback's own $value argument). Left
+         * here, unreachable from ordinary syntax but still reachable via
+         * an INDIRECT call (call_user_func('array_unshift', $args, ...)),
+         * as a harmless (if imperfect -- same old no-real-mutation
+         * limitation) fallback for that much rarer path, since args[0] is
          * already an arrref TOKEN identifying a shared g_arrays[] slot
          * (not a copy), mutating that slot directly still correctly
          * affects whatever variable/property the caller's own
@@ -5915,6 +6600,41 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
          * offset text on a match and "" only when genuinely not found. */
         if (found) snprintf(out, outcap, "%d", (int)(found - args[0]));
         else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "str_replace") == 0 && nargs >= 3) {
+        /* Found completely missing this session -- ~100 real calls per
+           WordPress page load silently no-op'd (this file's own "unknown
+           function -> no-op" convention meant str_replace(...) always
+           returned "", not the unmodified subject, actively CORRUPTING
+           every string it touched rather than just leaving it unchanged
+           -- one of the most consequential single-builtin gaps found,
+           given how pervasively real PHP code uses str_replace() for
+           basic string assembly/escaping). Only the scalar
+           search/replace/subject form is supported -- real PHP also
+           accepts an ARRAY for $search (and/or $replace), replacing each
+           pair in turn; that form isn't implemented (a documented,
+           narrower gap than the scalar form's total absence was). */
+        const char *search = args[0];
+        const char *replace = args[1];
+        const char *subject = args[2];
+        int slen = (int)strlen(search);
+        if (slen == 0) { strncpy(out, subject, outcap - 1); out[outcap - 1] = 0; return; }
+        int o = 0;
+        const char *p = subject;
+        while (*p && o < outcap - 1) {
+            if (strncmp(p, search, (size_t)slen) == 0) {
+                int rlen = (int)strlen(replace);
+                int room = outcap - 1 - o;
+                if (rlen > room) rlen = room;
+                memcpy(out + o, replace, (size_t)rlen);
+                o += rlen;
+                p += slen;
+            } else {
+                out[o++] = *p++;
+            }
+        }
+        out[o] = 0;
         return;
     }
     if (strcmp(name, "explode") == 0 && nargs >= 2) {
@@ -6769,6 +7489,7 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
         if (getenv("SQS_TRACE_CALLS")) fprintf(stderr, "[CALL DEPTH LIMIT] %s() at depth %d\n", name, g_call_depth);
         out[0] = 0; return;
     }
+    if (g_call_depth > 100 && getenv("SQS_TRACE_DEEP")) fprintf(stderr, "[DEEP %d] %s()\n", g_call_depth, name);
     g_call_depth++;
 
     /* Heap-allocated, not a plain stack local -- PhpState is genuinely
@@ -6818,7 +7539,7 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
                 v->next_index = ki;
             }
         } else {
-            php_var_set(callee, fn->params[i], i < nargs ? args[i] : "");
+            php_var_set(callee, fn->params[i], i < nargs ? args[i] : fn->param_defaults[i]);
         }
     }
     callee->src = fn->body;
@@ -6849,6 +7570,7 @@ static void php_call_method(PhpState *caller, int obj_id, PhpMethod *m, char **a
         if (getenv("SQS_TRACE_CALLS")) fprintf(stderr, "[CALL DEPTH LIMIT] ->%s() at depth %d\n", m->name, g_call_depth);
         out[0] = 0; return;
     }
+    if (g_call_depth > 100 && getenv("SQS_TRACE_DEEP")) fprintf(stderr, "[DEEP %d] ->%s()\n", g_call_depth, m->name);
     g_call_depth++;
     /* Heap-allocated -- see php_call_function's own comment on why a
      * stack-local PhpState here is a real stack-overflow risk now that
@@ -6869,7 +7591,7 @@ static void php_call_method(PhpState *caller, int obj_id, PhpMethod *m, char **a
       for (ai2 = 0; ai2 < callee->n_raw_args; ai2++) { strncpy(callee->raw_args[ai2], args[ai2], PHP_VAL_MAX - 1); callee->raw_args[ai2][PHP_VAL_MAX - 1] = 0; } }
     int i;
     for (i = 0; i < m->nparams; i++) {
-        php_var_set(callee, m->params[i], i < nargs ? args[i] : "");
+        php_var_set(callee, m->params[i], i < nargs ? args[i] : m->param_defaults[i]);
     }
     callee->src = m->body;
     php_run_statements(callee);
@@ -6898,6 +7620,7 @@ static void php_call_static(PhpState *caller, PhpMethod *m, char **args, int nar
         if (getenv("SQS_TRACE_CALLS")) fprintf(stderr, "[CALL DEPTH LIMIT] ::%s() at depth %d\n", m->name, g_call_depth);
         out[0] = 0; return;
     }
+    if (g_call_depth > 100 && getenv("SQS_TRACE_DEEP")) fprintf(stderr, "[DEEP %d] ::%s()\n", g_call_depth, m->name);
     g_call_depth++;
     PhpState *callee = (PhpState *)malloc(sizeof *callee);
     memset(callee, 0, sizeof *callee);
@@ -6915,7 +7638,7 @@ static void php_call_static(PhpState *caller, PhpMethod *m, char **args, int nar
     }
     int i;
     for (i = 0; i < m->nparams; i++) {
-        php_var_set(callee, m->params[i], i < nargs ? args[i] : "");
+        php_var_set(callee, m->params[i], i < nargs ? args[i] : m->param_defaults[i]);
     }
     callee->src = m->body;
     php_run_statements(callee);
