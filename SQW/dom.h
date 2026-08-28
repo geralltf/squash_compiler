@@ -83,6 +83,20 @@ typedef struct DomNode {
     int css_justify;          /* CssJustify */
     int css_align;             /* CssAlign */
     float css_gap;
+    /* "flex-grow: N;" (also the first number of the "flex: N [S [B]];"
+     * shorthand) -- how much of a flex ROW's own leftover space (after
+     * every item's natural/shrink-to-fit width, see
+     * compute_flex_row_positions()'s own comment) this item should
+     * absorb, proportional to every OTHER item in the same row that also
+     * has a non-zero flex-grow, real CSS's own algorithm (simplified: no
+     * flex-shrink/flex-basis modeling, no min/max-width clamping during
+     * growth -- see layout.c's own comment on where this is applied).
+     * Real CSS default is 0 (an item doesn't grow unless told to) --
+     * matches this field's own zero-initialized default, so a flex
+     * container with no flex-grow anywhere behaves exactly as it did
+     * before this field existed (falls through to justify-content's own
+     * existing space distribution, unchanged). */
+    float css_flex_grow;
     /* Heuristic detection of the extremely common real-world "visually
      * hidden, screen-reader-only" CSS pattern (position:absolute +
      * clip:rect(...) or a ~1x1px box) -- see css.c's own comment on why

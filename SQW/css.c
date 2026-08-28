@@ -8,32 +8,48 @@
  *   Selectors : tag, .class, #id, "*", "[attr]"/"[attr=value]", ":hover",
  *               and any AND-combination of those in one compound
  *               (div.foo#bar[href]:hover), chained with the DESCENDANT
- *               combinator (space) only. NOT supported: child ">",
- *               sibling "+"/"~" combinators, and any pseudo-class/-element
- *               other than ":hover" (":focus", "::before", etc) -- a rule
- *               using one of those parses without error but its selector
- *               simply never matches anything (same safe-degradation
- *               convention as the rest of this project's parsers).
+ *               combinator (space, any ancestor) or the CHILD combinator
+ *               (">", the ancestor must be the EXACT immediate parent --
+ *               see css_selector_matches()'s own comment and CssCompound.
+ *               is_child_combinator). NOT supported: sibling "+"/"~"
+ *               combinators, and any pseudo-class/-element other than
+ *               ":hover" (":focus", "::before", ":nth-child()", etc) -- a
+ *               rule using one of those parses without error but its
+ *               selector simply never matches anything (same safe-
+ *               degradation convention as the rest of this project's
+ *               parsers).
  *               ":hover" matches DomNode::hover, which sqw_main.c's mouse-
  *               move handling already sets/clears live -- see
  *               css_apply_one()'s own comment for how a hover change gets
  *               re-resolved without a full-page re-layout.
- *   At-rules  : "@media { ... }" has its condition ignored and its BODY
- *               parsed as ordinary rules (ignoring the query means this
- *               is not actually responsive, but nearly all of a real
- *               site's real layout-affecting CSS lives inside @media
- *               blocks, so unwrapping unconditionally recovers far more
- *               real style than skipping them entirely would). Every
- *               other @-rule (@import/@font-face/@keyframes/@supports/
- *               @charset/@page/...) is properly skipped as a whole
- *               (balanced-brace block, or up to the next top-level ";"
- *               for a statement-only at-rule like @import) -- never
- *               misparsed as a normal rule.
+ *   At-rules  : "@media (min-width: ...px)" / "(max-width: ...px)"
+ *               (ANDed with "and", nested @media intersected) is REALLY
+ *               evaluated against the current viewport width -- see
+ *               CssRule.media_min_width's own comment and
+ *               css_parse_media_prelude() -- so responsive breakpoints
+ *               now actually turn on/off correctly, including live on
+ *               window resize (see css_apply()'s own comment on when to
+ *               re-run it). Any OTHER media feature this engine doesn't
+ *               recognize (orientation, prefers-color-scheme, hover, a
+ *               comma-separated OR'd query list, ...) simply contributes
+ *               no constraint, same "recover more than we lose" tradeoff
+ *               as before -- only min-width/max-width are REAL gates now,
+ *               everything else still unwraps unconditionally. A "print"
+ *               media type (bare "@media print" or "@media print and
+ *               (...)") is recognized and its whole block is skipped
+ *               outright, never applied to the screen. Every other
+ *               @-rule (@import/@font-face/@keyframes/@supports/@charset/
+ *               @page/...) is properly skipped as a whole (balanced-brace
+ *               block, or up to the next top-level ";" for a statement-
+ *               only at-rule like @import) -- never misparsed as a normal
+ *               rule.
  *   Properties: display, width, height, margin(-top/right/bottom/left),
  *               padding(-top/right/bottom/left), border(-width/-color/
  *               -style, shorthand and per-side), color, background /
  *               background-color, font-size, font-weight, text-align,
- *               line-height, opacity, flex-direction, justify-content,
+ *               line-height, opacity, flex-direction, flex-wrap,
+ *               flex-flow, flex-grow, flex (shorthand -- grow component
+ *               only, see css_apply_decl's own comment), justify-content,
  *               align-items, gap / column-gap / row-gap,
  *               grid-template-columns (stored raw, parsed by layout.c at
  *               layout time). font-size/text-align/line-height/
@@ -107,18 +123,22 @@ static void css_skip_ws(const char **p) {
 }
 
 /* Parses one compound selector ("div.foo#bar" -- no whitespace) starting
- * at *p, stopping at whitespace/','/'{'/'>'/'+'/'~'/end. Unsupported
- * combinators (>,+,~) and attribute/pseudo forms ([...], :...) are
+ * at *p, stopping at whitespace/','/'{'/'>'/'+'/'~'/end -- the combinator
+ * characters are left UNCONSUMED for css_parse_selector's own caller loop
+ * to see and act on (real child-combinator support, and the still-
+ * unsupported-but-safely-degrading sibling combinators -- see that
+ * function's own comment) rather than being silently eaten here the way
+ * they used to be. Attribute/pseudo forms ([...], :...) are still
  * consumed (so the overall parse stays in sync) but contribute no simple
- * selector, so a compound built from one is empty and never matches --
- * see this file's own top comment. */
+ * selector for anything this engine doesn't understand -- see this
+ * file's own top comment. */
 static void css_parse_compound(const char **p, CssCompound *out) {
     out->part_count = 0;
+    out->is_child_combinator = 0;
     const char *q = *p;
     for (;;) {
         char c = *q;
-        if (c == 0 || isspace((unsigned char)c) || c == ',' || c == '{') break;
-        if (c == '>' || c == '+' || c == '~') { q++; continue; }
+        if (c == 0 || isspace((unsigned char)c) || c == ',' || c == '{' || c == '>' || c == '+' || c == '~') break;
         if (c == '[') {
             /* "[name]" or "[name=value]"/"[name='value']"/"[name=\"value\"]"
              * -- an operator OTHER than bare "=" (~=, |=, ^=, $=, *=) isn't
@@ -222,22 +242,47 @@ static int css_compound_specificity(const CssCompound *c) {
 }
 
 /* Parses one full selector (comma-separated list item) into `out`,
- * stopping at ',' or '{'. */
+ * stopping at ',' or '{'. Also handles the combinator BETWEEN two
+ * compounds -- plain whitespace (descendant, the default), "> " (real
+ * child-combinator support, tracked via the next compound's own
+ * is_child_combinator -- see CssCompound's own comment), and "+ "/"~ "
+ * (sibling combinators, still not supported: the compound that follows
+ * one is forced to zero parts, same "parses cleanly but never matches"
+ * degradation this engine already used for every unsupported combinator
+ * before child-combinator support existed -- see
+ * css_selector_matches()'s own comment on how a zero-part compound
+ * always fails the match). */
 static void css_parse_selector(const char **p, CssSelector *out) {
     out->chain_len = 0;
     out->specificity = 0;
+    int pending_child = 0, pending_unsupported = 0;
     for (;;) {
         css_skip_ws(p);
         const char *q = *p;
         if (*q == 0 || *q == ',' || *q == '{') break;
-        if (out->chain_len < CSS_MAX_SELECTOR_CHAIN) {
-            CssCompound *comp = &out->chain[out->chain_len++];
-            css_parse_compound(p, comp);
-            out->specificity += css_compound_specificity(comp);
-        } else {
-            CssCompound dummy;
-            css_parse_compound(p, &dummy);
+        if (*q == '>') {
+            q++; *p = q; css_skip_ws(p);
+            pending_child = 1;
+            continue;
         }
+        if (*q == '+' || *q == '~') {
+            q++; *p = q; css_skip_ws(p);
+            pending_unsupported = 1;
+            continue;
+        }
+        CssCompound *comp;
+        CssCompound dummy;
+        if (out->chain_len < CSS_MAX_SELECTOR_CHAIN) {
+            comp = &out->chain[out->chain_len++];
+        } else {
+            comp = &dummy;
+        }
+        css_parse_compound(p, comp);
+        comp->is_child_combinator = pending_child;
+        if (pending_unsupported) comp->part_count = 0; /* +/~ target: never matches, see this function's own comment */
+        pending_child = 0;
+        pending_unsupported = 0;
+        if (comp != &dummy) out->specificity += css_compound_specificity(comp);
     }
 }
 
@@ -300,25 +345,86 @@ static void css_skip_block(const char **p) {
     *p = q;
 }
 
-static void css_parse_rule_body(CssStylesheet *sheet, const char **p, int *source_order);
+static void css_parse_rule_body(CssStylesheet *sheet, const char **p, int *source_order, int mq_min, int mq_max);
+
+/* Parses an "@media" prelude -- the text between "media" and the opening
+ * '{' -- for the subset of real media-query syntax this engine
+ * understands: a "print" media type (sets *out_print_only, so the caller
+ * can skip the whole block instead of unwrapping it -- a real screen
+ * renderer should never apply print-only rules) and "(min-width: Npx)" /
+ * "(max-width: Npx)" features, ANDed together same as real CSS's own
+ * "and" between features. Any OTHER feature this engine doesn't
+ * recognize (orientation, prefers-color-scheme, hover, ...), or a comma-
+ * separated OR'd query list, simply contributes no constraint -- same
+ * "recover more than we lose" tradeoff the old unconditional-unwrap
+ * already made, just narrowed to the one real case (min/max-width) this
+ * engine can now actually evaluate correctly. */
+static void css_parse_media_prelude(const char *start, const char *end, int *out_print_only, int *out_min, int *out_max) {
+    *out_print_only = 0;
+    *out_min = -1;
+    *out_max = -1;
+    const char *q = start;
+    while (q < end) {
+        char c = *q;
+        if (isalpha((unsigned char)c)) {
+            const char *w = q;
+            while (q < end && (isalpha((unsigned char)*q) || *q == '-')) q++;
+            int wlen = (int)(q - w);
+            if (wlen == 5 && strncmp(w, "print", 5) == 0) *out_print_only = 1;
+            continue;
+        }
+        if (c == '(') {
+            const char *fstart = q + 1;
+            const char *fend = fstart;
+            while (fend < end && *fend != ')') fend++;
+            const char *colon = fstart;
+            while (colon < fend && *colon != ':') colon++;
+            if (colon < fend) {
+                const char *nstart = fstart;
+                int name_len = (int)(colon - fstart);
+                while (name_len > 0 && isspace((unsigned char)*nstart)) { nstart++; name_len--; }
+                while (name_len > 0 && isspace((unsigned char)nstart[name_len - 1])) name_len--;
+                const char *vstart = colon + 1;
+                while (vstart < fend && isspace((unsigned char)*vstart)) vstart++;
+                int val = atoi(vstart); /* stops at the first non-digit ("px"/"em"/end) -- treats any unit as px, same convention as this engine's other length handling */
+                if (name_len == 9 && strncmp(nstart, "min-width", 9) == 0) *out_min = val;
+                else if (name_len == 9 && strncmp(nstart, "max-width", 9) == 0) *out_max = val;
+            }
+            q = (fend < end) ? fend + 1 : fend;
+            continue;
+        }
+        q++;
+    }
+}
 
 /* Handles one "@...". @media's body is unwrapped and parsed as ordinary
- * rules (see this file's top comment on why); every other @-rule is
- * properly skipped, whole. */
-static void css_parse_at_rule(CssStylesheet *sheet, const char **p, int *source_order) {
+ * rules, now gated by a real (if scoped) evaluation of its condition --
+ * see css_parse_media_prelude()'s own comment -- instead of unconditional
+ * unwrap; `mq_min`/`mq_max` are the ENCLOSING @media's own constraint (for
+ * a nested "@media" inside another, real but rare), combined with this
+ * one's own via intersection so the tighter of the two always wins.
+ * Every other @-rule is properly skipped, whole. */
+static void css_parse_at_rule(CssStylesheet *sheet, const char **p, int *source_order, int mq_min, int mq_max) {
     const char *kw_start = *p + 1;
     const char *q = kw_start;
     while (isalpha((unsigned char)*q) || *q == '-') q++;
     int kw_len = (int)(q - kw_start);
     int is_media = (kw_len == 5 && strncmp(kw_start, "media", 5) == 0);
+    const char *prelude_start = q;
     /* Skip the prelude (condition/selector-like text before '{' or ';'). */
     while (*q && *q != '{' && *q != ';') q++;
+    const char *prelude_end = q;
     if (*q == ';') { q++; *p = q; return; }
     if (*q != '{') { *p = q; return; }
     if (is_media) {
+        int print_only, own_min, own_max;
+        css_parse_media_prelude(prelude_start, prelude_end, &print_only, &own_min, &own_max);
+        if (print_only) { *p = q; css_skip_block(p); return; }
+        int combined_min = (own_min < 0) ? mq_min : (mq_min < 0 ? own_min : (own_min > mq_min ? own_min : mq_min));
+        int combined_max = (own_max < 0) ? mq_max : (mq_max < 0 ? own_max : (own_max < mq_max ? own_max : mq_max));
         q++; /* enter the block */
         *p = q;
-        css_parse_rule_body(sheet, p, source_order);
+        css_parse_rule_body(sheet, p, source_order, combined_min, combined_max);
         q = *p;
         if (*q == '}') q++;
         *p = q;
@@ -330,18 +436,23 @@ static void css_parse_at_rule(CssStylesheet *sheet, const char **p, int *source_
 
 /* Parses a sequence of ordinary rules (and nested @-rules) until a
  * top-level '}' or end of input -- used both for the whole stylesheet
- * and for an unwrapped @media body. */
-static void css_parse_rule_body(CssStylesheet *sheet, const char **p, int *source_order) {
+ * and for an unwrapped @media body. `mq_min`/`mq_max` (see CssRule.
+ * media_min_width's own comment) are stamped onto every rule pushed from
+ * here -- (-1,-1) at the true top level, the enclosing @media's own
+ * combined constraint otherwise. */
+static void css_parse_rule_body(CssStylesheet *sheet, const char **p, int *source_order, int mq_min, int mq_max) {
     const char *q = *p;
     for (;;) {
         *p = q;
         css_skip_ws(p);
         q = *p;
         if (*q == 0 || *q == '}') { *p = q; return; }
-        if (*q == '@') { *p = q; css_parse_at_rule(sheet, p, source_order); q = *p; continue; }
+        if (*q == '@') { *p = q; css_parse_at_rule(sheet, p, source_order, mq_min, mq_max); q = *p; continue; }
 
         CssRule tmp;
         memset(&tmp, 0, sizeof tmp);
+        tmp.media_min_width = mq_min;
+        tmp.media_max_width = mq_max;
         for (;;) {
             *p = q;
             css_skip_ws(p);
@@ -378,7 +489,7 @@ static void css_parse_rule_body(CssStylesheet *sheet, const char **p, int *sourc
 void css_parse_into(CssStylesheet *sheet, const char *text) {
     const char *p = text;
     int source_order = sheet->count; /* continue numbering across multiple <style> tags */
-    css_parse_rule_body(sheet, &p, &source_order);
+    css_parse_rule_body(sheet, &p, &source_order, -1, -1);
 }
 
 /* ---- selector matching ---- */
@@ -417,18 +528,32 @@ static int css_compound_matches(const CssCompound *c, const DomNode *el) {
             if (!el->hover) return 0;
         }
     }
-    return c->part_count > 0 || 1; /* an empty (unsupported-combinator) compound never matches -- see below */
+    /* An empty (zero-part, unsupported-combinator-target) compound is
+     * rejected by css_selector_matches()'s own callers BEFORE this
+     * function is ever called on one -- see that function's own comment
+     * -- so reaching here with part_count==0 (nothing to check) is a
+     * real, if vacuous, match: every check above was trivially satisfied
+     * (there were none). */
+    return 1;
 }
 
-/* Descendant-combinator chain match: chain[last] must match `el` itself;
- * each earlier chain[i] must match SOME ancestor, in order (walking up
- * from `el`, each successive required compound found further up than
- * the last one matched) -- the real definition of the CSS descendant
- * combinator. */
+/* Descendant/child-combinator chain match: chain[last] must match `el`
+ * itself; each earlier chain[i] must match an ancestor, walking up from
+ * `el` -- by DEFAULT (plain whitespace between compounds) any ancestor,
+ * matching real CSS's descendant combinator, but when chain[i+1] (the
+ * LATER, already-matched compound) was preceded by "> " in the source
+ * (chain[i+1].is_child_combinator, see CssCompound's own comment) that
+ * ancestor must be EXACTLY the immediate parent of whatever chain[i+1]
+ * matched, not some further-up one -- real CSS's child-combinator
+ * semantics. A zero-part compound (the target of a still-unsupported "+"/
+ * "~" sibling combinator, or beyond CSS_MAX_SELECTOR_CHAIN) never
+ * matches, failing the whole selector immediately -- same "parses
+ * cleanly, degrades to never-matching" convention as everywhere else in
+ * this file. */
 static int css_selector_matches(const CssSelector *sel, const DomNode *el) {
     if (sel->chain_len == 0) return 0;
     const CssCompound *last = &sel->chain[sel->chain_len - 1];
-    if (last->part_count == 0) return 0; /* unsupported-combinator compound: never matches */
+    if (last->part_count == 0) return 0;
     if (!css_compound_matches(last, el)) return 0;
     if (sel->chain_len == 1) return 1;
 
@@ -436,8 +561,16 @@ static int css_selector_matches(const CssSelector *sel, const DomNode *el) {
     const DomNode *anc = el->parent;
     while (ci >= 0 && anc) {
         const CssCompound *c = &sel->chain[ci];
-        if (c->part_count > 0 && css_compound_matches(c, anc)) ci--;
-        anc = anc->parent;
+        if (c->part_count == 0) return 0;
+        int must_be_immediate = sel->chain[ci + 1].is_child_combinator;
+        if (css_compound_matches(c, anc)) {
+            ci--;
+            anc = anc->parent;
+        } else if (must_be_immediate) {
+            return 0;
+        } else {
+            anc = anc->parent;
+        }
     }
     return ci < 0;
 }
@@ -560,6 +693,7 @@ static void css_set_default_style(DomNode *el) {
     el->css_justify = CSS_JUSTIFY_START;
     el->css_align = CSS_ALIGN_START;
     el->css_gap = 0.0f;
+    el->css_flex_grow = 0.0f;
     el->css_grid_template_columns[0] = 0;
     el->css_position_absolute = 0;
     el->css_has_clip = 0;
@@ -724,6 +858,27 @@ static void css_apply_decl(DomNode *el, const char *name, const char *value) {
          * rather than requiring a specific order. */
         el->css_flex_direction = strstr(value, "column") ? CSS_FLEX_COLUMN : CSS_FLEX_ROW;
         el->css_flex_wrap = (strstr(value, "nowrap") == 0 && strstr(value, "wrap") != 0) ? 1 : 0;
+    } else if (strcmp(name, "flex-grow") == 0) {
+        el->css_flex_grow = (float)atof(value);
+    } else if (strcmp(name, "flex") == 0) {
+        /* "flex: <grow> [<shrink>] [<basis>];" shorthand, or one of the
+         * real CSS keyword forms ("flex: none" == "0 0 auto", "flex:
+         * auto" == "1 1 auto", "flex: 1" == "1 1 0%" -- real CSS's own
+         * single-number-means-grow-only special case). Only the GROW
+         * component is modeled (see css_flex_grow's own comment on why
+         * shrink/basis aren't) -- extracted as simply "the first token
+         * that parses as a plain number", which correctly handles the
+         * extremely common real-world "flex: 1;" / "flex: 1 1 auto;" /
+         * "flex: 1 0 0%;" shapes without needing to fully parse the
+         * shorthand's real 1-to-3-value grammar. */
+        if (strstr(value, "none")) el->css_flex_grow = 0.0f;
+        else if (strstr(value, "auto") && !isdigit((unsigned char)value[0])) el->css_flex_grow = 1.0f;
+        else {
+            char buf[192];
+            strncpy(buf, value, sizeof buf - 1); buf[sizeof buf - 1] = 0;
+            char *tok = strtok(buf, " \t");
+            if (tok) el->css_flex_grow = (float)atof(tok);
+        }
     } else if (strcmp(name, "position") == 0) {
         el->css_position_absolute = (strstr(value, "absolute") || strstr(value, "fixed")) ? 1 : 0;
     } else if (strcmp(name, "clip") == 0) {
@@ -794,7 +949,7 @@ static int css_match_cmp(const void *a, const void *b) {
 
 #define CSS_MAX_MATCHES 128
 
-static void css_apply_element(DomNode *el, CssStylesheet *sheet) {
+static void css_apply_element(DomNode *el, CssStylesheet *sheet, float viewport_w) {
     css_set_default_style(el);
 
     CssMatchedRule matches[CSS_MAX_MATCHES];
@@ -802,6 +957,15 @@ static void css_apply_element(DomNode *el, CssStylesheet *sheet) {
     int ri;
     for (ri = 0; ri < sheet->count && nmatch < CSS_MAX_MATCHES; ri++) {
         CssRule *rule = &sheet->rules[ri];
+        /* @media (min-width/max-width) gate -- see CssRule.media_min_width's
+         * own comment. A rule whose enclosing @media doesn't match the
+         * current viewport width is skipped entirely here, same as if it
+         * had no matching selector -- so a mobile-only rule stops
+         * overriding a desktop rule the instant the viewport widens past
+         * its breakpoint (as long as css_apply()/css_apply_one() is
+         * re-run with the new width -- see css_apply()'s own comment). */
+        if (rule->media_min_width >= 0 && viewport_w < (float)rule->media_min_width) continue;
+        if (rule->media_max_width >= 0 && viewport_w > (float)rule->media_max_width) continue;
         int si, best_spec = -1, any = 0;
         for (si = 0; si < rule->selector_count; si++) {
             if (css_selector_matches(&rule->selectors[si], el)) {
@@ -856,12 +1020,12 @@ static void css_apply_element(DomNode *el, CssStylesheet *sheet) {
     }
 }
 
-void css_apply_one(DomNode *el, CssStylesheet *sheet) {
+void css_apply_one(DomNode *el, CssStylesheet *sheet, float viewport_w) {
     if (!el || dom_is_text(el)) return;
-    css_apply_element(el, sheet);
+    css_apply_element(el, sheet, viewport_w);
 }
 
-void css_apply(DomNode *root, CssStylesheet *sheet) {
+void css_apply(DomNode *root, CssStylesheet *sheet, float viewport_w) {
     /* The synthetic "#document" root itself never goes through
      * css_apply_element() below (the walk only calls it on root's
      * CHILDREN onward), so its own inheritable fields would otherwise sit
@@ -892,7 +1056,7 @@ void css_apply(DomNode *root, CssStylesheet *sheet) {
         DomNode *child = n->children[next_child[top - 1]];
         next_child[top - 1]++;
         if (!dom_is_text(child)) {
-            css_apply_element(child, sheet);
+            css_apply_element(child, sheet, viewport_w);
             if (top >= cap) {
                 cap *= 2;
                 stack = (DomNode **)realloc(stack, (size_t)cap * sizeof(DomNode *));

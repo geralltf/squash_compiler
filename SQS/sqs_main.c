@@ -19,6 +19,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/stat.h>
 #include <openssl/ssl.h>
 #include "php_mini.c"
 #include "sqs_dns.c"
@@ -145,6 +146,41 @@ static void sqs_send_response(SqsConn *c, int status, const char *status_text,
     if (body_len > 0) sqs_conn_write(c, body, body_len);
 }
 
+/* Same as sqs_send_response(), but also emits any extra raw response
+ * headers PHP code itself set via header()/setcookie() (see PhpState.
+ * headers_buf's own comment in php_mini.c) -- one already-formatted
+ * "Name: value" line per line of `extra_headers`. If any of those lines
+ * is a real "Location:" redirect, the status is upgraded to a real 302
+ * (a plain 200 with a Location header is NOT how a real browser follows
+ * a redirect) UNLESS the caller already asked for a specific non-200
+ * status itself. */
+static void sqs_send_response_ex(SqsConn *c, int status, const char *status_text,
+                                  const char *content_type, const char *body, long body_len,
+                                  const char *extra_headers) {
+    if (status == 200 && extra_headers && extra_headers[0] && strstr(extra_headers, "Location:")) {
+        status = 302; status_text = "Found";
+    }
+    char header[512];
+    int hlen = snprintf(header, sizeof header,
+        "HTTP/1.1 %d %s\r\nServer: " SQ_SPOOF_IDENTITY "\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n",
+        status, status_text, content_type, body_len);
+    sqs_conn_write(c, header, hlen);
+    if (extra_headers && extra_headers[0]) {
+        /* headers_buf lines are "\n"-terminated (see header()'s own
+         * builtin), not the real "\r\n" an HTTP response header line
+         * needs -- rewrite each line's terminator when forwarding it. */
+        const char *p = extra_headers;
+        while (*p) {
+            const char *nl = strchr(p, '\n');
+            int len = nl ? (int)(nl - p) : (int)strlen(p);
+            if (len > 0) { sqs_conn_write(c, p, len); sqs_conn_write(c, "\r\n", 2); }
+            p = nl ? nl + 1 : p + len;
+        }
+    }
+    sqs_conn_write(c, "\r\n", 2);
+    if (body_len > 0) sqs_conn_write(c, body, body_len);
+}
+
 /* Case-insensitive search for a "\r\nHeaderName: " line within the raw
  * request buffer, copying its value (up to the trailing \r\n) into `out`.
  * Used only for the User-Agent header -- see sqs_handle_request's own
@@ -153,6 +189,34 @@ static void sqs_send_response(SqsConn *c, int status, const char *status_text,
  * if the header is absent -- a request needn't be, and often isn't, sent
  * by anything that bothers with one at all (curl -A "" style tools, raw
  * netcat testing, etc). */
+/* Parses a real HTTP "Cookie:" header value ("name1=val1; name2=val2",
+ * semicolon-space-separated -- NOT the "&"-separated query-string shape
+ * php_parse_kv_string() already handles) into $_COOKIE's own backing
+ * PhpKVArray. No URL-decoding (real browsers don't URL-encode ordinary
+ * cookie values either, and this project's own cookies -- the login
+ * test-cookie, the auth cookie -- never contain characters that would
+ * need it; a real edge case, not silently wrong for the cookies this
+ * project actually sets/reads). */
+static void sqs_parse_cookie_header(const char *hdr, PhpKVArray *arr) {
+    const char *p = hdr;
+    while (*p) {
+        while (*p == ' ') p++;
+        const char *semi = strchr(p, ';');
+        if (!semi) semi = p + strlen(p);
+        const char *eq = memchr(p, '=', (size_t)(semi - p));
+        if (eq) {
+            char key[128], val[PHP_VAL_MAX];
+            int klen = (int)(eq - p); if (klen >= (int)sizeof key) klen = (int)sizeof key - 1;
+            memcpy(key, p, (size_t)klen); key[klen] = 0;
+            int vlen = (int)(semi - (eq + 1)); if (vlen >= (int)sizeof val) vlen = (int)sizeof val - 1;
+            if (vlen > 0) memcpy(val, eq + 1, (size_t)vlen);
+            val[vlen > 0 ? vlen : 0] = 0;
+            if (key[0]) php_kv_add(arr, key, val);
+        }
+        p = *semi ? semi + 1 : semi;
+    }
+}
+
 static int sqs_find_header(const char *req, const char *name, char *out, int outcap) {
     int name_len = (int)strlen(name);
     const char *p = req;
@@ -300,6 +364,53 @@ static void sqs_handle_request(SqsConn *c) {
         fprintf(stderr, "SQS: redirect: / -> /index.html\n"); fflush(stderr);
     }
 
+    /* A request path resolving to a real ON-DISK DIRECTORY (e.g. "/blog/"
+     * or, critically, any WordPress sub-page reached by directory URL
+     * rather than a literal "...index.php" -- exactly how a real browser
+     * or WordPress's own internal links navigate) used to fall straight
+     * through to fopen(fs_path, "rb") below with NO directory check at
+     * all. On Linux, fopen() on a directory SUCCEEDS (glibc doesn't
+     * reject it), but the stream is unreadable in the normal sense --
+     * this confirmed, via a real crash while testing, to end in a
+     * SIGSEGV (NULL-pointer write) somewhere downstream once the rest of
+     * this function's request-handling code (Content-Type sniffing/PHP
+     * detection/etc, all written assuming a real FILE's worth of bytes)
+     * operates on that directory "file". Real web servers instead try a
+     * configured index file for a directory request -- this does the
+     * same, real-WordPress-relevant subset: try "index.php" first (a
+     * WordPress site's real front controller), then "index.html", both
+     * confined to the already-validated `fs_path` (sqs_resolve_path()'s
+     * own ".." rejection already ran above, so appending a fixed literal
+     * filename here can't escape SQS_WWWROOT), falling through to the
+     * existing 404 path if neither exists -- never fopen()ing the bare
+     * directory path itself. */
+    {
+        struct stat st;
+        if (stat(fs_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+            char idx_path[SQS_REQ_BUF];
+            int base_len = (int)strlen(fs_path);
+            int has_slash = base_len > 0 && fs_path[base_len - 1] == '/';
+            int found = 0;
+            const char *candidates[2] = { "index.php", "index.html" };
+            int ci;
+            for (ci = 0; ci < 2 && !found; ci++) {
+                snprintf(idx_path, sizeof idx_path, "%s%s%s", fs_path, has_slash ? "" : "/", candidates[ci]);
+                struct stat ist;
+                if (stat(idx_path, &ist) == 0 && S_ISREG(ist.st_mode)) {
+                    strncpy(fs_path, idx_path, sizeof fs_path - 1);
+                    fs_path[sizeof fs_path - 1] = 0;
+                    found = 1;
+                }
+            }
+            if (!found) {
+                const char *body404 = "404 not found";
+                sqs_send_response(c, 404, "Not Found", "text/plain", body404, (long)strlen(body404));
+                free(req);
+                return;
+            }
+        }
+    }
+
     /* PUT/DELETE are RESERVED, not implemented: neither one touches the
      * filesystem at all right now. They used to have real write/delete
      * semantics (confined to SQS_WWWROOT, with a PUT PHP-extension block
@@ -358,9 +469,10 @@ static void sqs_handle_request(SqsConn *c) {
          * of the actual Content-Type -- a deliberate simplification for
          * this test/dev subset, see php_mini.c's own top comment on
          * scope), $_SERVER['REQUEST_METHOD'] from the real HTTP method. */
-        PhpKVArray get_arr, post_arr;
+        PhpKVArray get_arr, post_arr, cookie_arr;
         memset(&get_arr, 0, sizeof get_arr);
         memset(&post_arr, 0, sizeof post_arr);
+        memset(&cookie_arr, 0, sizeof cookie_arr);
         php_parse_kv_string(query, &get_arr);
         if (body_len > 0) {
             char *body_cstr = (char *)malloc((size_t)body_len + 1);
@@ -369,10 +481,18 @@ static void sqs_handle_request(SqsConn *c) {
             php_parse_kv_string(body_cstr, &post_arr);
             free(body_cstr);
         }
+        {
+            char cookie_hdr[PHP_VAL_MAX];
+            if (sqs_find_header(req, "Cookie", cookie_hdr, sizeof cookie_hdr)) {
+                sqs_parse_cookie_header(cookie_hdr, &cookie_arr);
+            }
+        }
         char *php_out = (char *)malloc(PHP_OUT_MAX);
-        php_run(content, fs_path, &get_arr, &post_arr, method, php_out, PHP_OUT_MAX);
-        sqs_send_response(c, 200, "OK", "text/html; charset=utf-8", php_out, (long)strlen(php_out));
+        char *php_headers = (char *)malloc(PHP_OUT_MAX);
+        php_run(content, fs_path, &get_arr, &post_arr, &cookie_arr, method, php_out, PHP_OUT_MAX, php_headers, PHP_OUT_MAX);
+        sqs_send_response_ex(c, 200, "OK", "text/html; charset=utf-8", php_out, (long)strlen(php_out), php_headers);
         free(php_out);
+        free(php_headers);
     } else {
         sqs_send_response(c, 200, "OK", "text/html; charset=utf-8", content, got);
     }

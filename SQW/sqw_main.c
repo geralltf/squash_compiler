@@ -358,7 +358,7 @@ static char *sqw_load_script_src(const char *src, const char *dir, const char *b
     return 0;
 }
 
-static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url) {
+static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, float viewport_w) {
     if (g_current_css_sheet_valid) css_stylesheet_free(&g_current_css_sheet);
     css_stylesheet_init(&g_current_css_sheet);
     g_current_css_sheet_valid = 1;
@@ -520,7 +520,7 @@ static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url) 
         }
     }
 
-    css_apply(root, &g_current_css_sheet);
+    css_apply(root, &g_current_css_sheet, viewport_w);
 }
 
 /* Walks the whole tree once (same "one pass right after dom_parse()/
@@ -586,7 +586,7 @@ static void sqw_navigate_to(const char *path, DomNode **root_ptr, LayoutList *bo
        needed them (that still happens afterward, unchanged). */
     sqw_dirname(path, current_dir);
     current_base_url[0] = '\0';
-    sqw_apply_css(*root_ptr, current_dir, current_base_url);
+    sqw_apply_css(*root_ptr, current_dir, current_base_url, viewport_w);
     /* Local-file page: <img src> only resolves (and only gets fetched) if
      * it's already an absolute http(s):// URL -- see
      * sqw_resolve_image_urls()'s own comment on why a bare local-relative
@@ -621,7 +621,7 @@ static void sqw_navigate_to_html(const char *html, const char *url, DomNode **ro
     /* Same reordering as sqw_navigate_to()'s own identical comment. */
     current_dir[0] = '\0';
     sqw_dirname(url, current_base_url);
-    sqw_apply_css(*root_ptr, current_dir, current_base_url);
+    sqw_apply_css(*root_ptr, current_dir, current_base_url, viewport_w);
     sqw_image_cache_reset();
     sqw_resolve_image_urls(*root_ptr, current_dir, current_base_url);
     layout_list_free(boxes_ptr);
@@ -1575,6 +1575,13 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
             uint32_t packed = ((uint32_t)new_w << 16) | (uint32_t)new_h;
             sqw_vk_recreate_swapchain(st->vk, packed);
             st->viewport_w = (float)new_w; st->viewport_h = (float)new_h;
+            /* Re-resolve CSS before relayout, not just relayout alone --
+             * a "@media (min-width/max-width: ...)" rule's applicability
+             * can change with the new width (see css_apply()'s own
+             * comment), so without this a responsive breakpoint would
+             * only ever take effect at initial page load, never live on
+             * resize. */
+            if (g_current_css_sheet_valid) css_apply(st->root, &g_current_css_sheet, st->viewport_w);
             layout_list_free(&st->boxes);
             layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes);
             st->scroll_x = clamp_scroll(st->scroll_x, st->boxes.content_w, st->viewport_w);
@@ -1617,8 +1624,8 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
                  * layout-affecting won't visually take effect until the
                  * next real relayout -- see css_apply_one()'s own comment). */
                 if (g_current_css_sheet_valid) {
-                    if (st->hover_node) css_apply_one(st->hover_node, &g_current_css_sheet);
-                    if (new_hover) css_apply_one(new_hover, &g_current_css_sheet);
+                    if (st->hover_node) css_apply_one(st->hover_node, &g_current_css_sheet, st->viewport_w);
+                    if (new_hover) css_apply_one(new_hover, &g_current_css_sheet, st->viewport_w);
                 }
                 st->hover_node = new_hover;
             }
@@ -1627,7 +1634,7 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
              * state so a link doesn't stay highlighted while the mouse is
              * nowhere near it. */
             st->hover_node->hover = 0;
-            if (g_current_css_sheet_valid) css_apply_one(st->hover_node, &g_current_css_sheet);
+            if (g_current_css_sheet_valid) css_apply_one(st->hover_node, &g_current_css_sheet, st->viewport_w);
             st->hover_node = NULL;
         }
     } else if (ev->type == SDL_EVENT_MOUSE_BUTTON_DOWN && ev->button.button == 1) {
@@ -2343,9 +2350,9 @@ int main(void) {
     }
     st->root = dom_parse(initial_html);
     free(initial_html);
-    sqw_apply_css(st->root, st->current_dir, st->current_base_url);
-    sqw_resolve_image_urls(st->root, st->current_dir, st->current_base_url);
     st->viewport_w = SQW_VIEWPORT_W; st->viewport_h = SQW_VIEWPORT_H;
+    sqw_apply_css(st->root, st->current_dir, st->current_base_url, st->viewport_w);
+    sqw_resolve_image_urls(st->root, st->current_dir, st->current_base_url);
     layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes);
     fprintf(stderr, "SQW: DOM parsed, layout computed (%d boxes, content %.0fx%.0f)\n",
         st->boxes.count, st->boxes.content_w, st->boxes.content_h); fflush(stdout);

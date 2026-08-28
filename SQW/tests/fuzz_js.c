@@ -209,7 +209,7 @@ static void fuzz_run_one(const char *src) {
     DomNode *root = dom_parse(html);
     CssStylesheet sheet;
     css_stylesheet_init(&sheet);
-    css_apply(root, &sheet);
+    css_apply(root, &sheet, 1024.0f);
 
     int relayout = 0;
     JSInterp *interp = js_run_script(src, root, &relayout);

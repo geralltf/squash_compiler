@@ -31,7 +31,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "function add(a, b) { return a + b; }\n"
@@ -76,7 +76,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "var el = document.getElementById('p1');\n"
@@ -104,7 +104,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "document.getElementById('box').innerHTML = '<span id=\"s1\">new content</span>';\n";
@@ -116,7 +116,7 @@ int main(void) {
            script-then-css_apply ordering (see its comment); this test
            does the same "css_apply AFTER the script ran" step manually
            since it doesn't go through sqw_apply_css() itself. */
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
         DomNode *s1 = js_dom_find_by_id(root, "s1");
         check(s1 != 0, "innerHTML-inserted <span id=s1> found in the DOM");
         if (s1) {
@@ -140,7 +140,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         int relayout = 0;
         JSInterp *interp = js_run_script("", root, &relayout); /* no <script> text at all */
@@ -177,7 +177,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "var arr = [1, 2, 3];\n"
@@ -216,7 +216,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "class Animal {\n"
@@ -251,7 +251,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "var log = '';\n"
@@ -291,7 +291,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "var list = document.getElementById('list');\n"
@@ -333,7 +333,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         remove("SQW/localstorage.dat"); /* clean slate */
 
@@ -388,7 +388,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "var obj = { a: 1, b: 'two', c: [3, 4] };\n"
@@ -420,7 +420,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "document.getElementById('txt').oninput = function() {\n"
@@ -476,7 +476,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         /* HTML_MAX_ATTR_LEN is only 64 bytes (html_lexer.h), so each
            checked result is split across several short attributes rather
@@ -535,7 +535,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "var out = document.getElementById('out');\n"
@@ -591,7 +591,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "var out = document.getElementById('out');\n"
@@ -630,7 +630,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         char deep_parens[2000]; int i, n = 0;
         strcpy(deep_parens + n, "var x = "); n += (int)strlen(deep_parens + n);
@@ -684,7 +684,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "var out = document.getElementById('out');\n"
@@ -714,7 +714,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "var out = document.getElementById('out');\n"
@@ -748,7 +748,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "var obj = { _x: 5, get x() { return this._x * 2; }, set x(v) { this._x = v + 1; } };\n"
@@ -785,7 +785,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "var log = '';\n"
@@ -823,7 +823,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         const char *src =
             "var log = '';\n"
@@ -872,7 +872,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         /* HTML_MAX_ATTR_LEN is only 64 bytes (html_lexer.h -- same
            truncation limit test 13's own comment already documented), so
@@ -927,7 +927,7 @@ int main(void) {
         DomNode *root = dom_parse(html);
         CssStylesheet sheet;
         css_stylesheet_init(&sheet);
-        css_apply(root, &sheet);
+        css_apply(root, &sheet, 1024.0f);
 
         int relayout = 0;
         JSInterp *interp = js_run_script("", root, &relayout);

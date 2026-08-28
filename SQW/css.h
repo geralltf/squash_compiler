@@ -63,6 +63,15 @@ typedef struct {
 typedef struct {
     CssSimpleSel parts[CSS_MAX_COMPOUND_PARTS];
     int part_count;
+    /* Real CHILD combinator ("A > B") support -- see
+     * css_selector_matches()'s own comment. 0 (the default, and every
+     * chain[0]) means this compound relates to the PREVIOUS one in the
+     * chain via the DESCENDANT combinator (plain whitespace, matches any
+     * ancestor); 1 means it was preceded by "> " in the source, so it
+     * must match EXACTLY the previous compound's own immediate parent,
+     * not just some further-up ancestor. Meaningless for chain[0] (there
+     * is no earlier compound to relate to). */
+    int is_child_combinator;
 } CssCompound;
 
 /* A full selector: a whitespace-separated chain of compounds, matched as
@@ -88,6 +97,19 @@ typedef struct {
     CssDecl decls[CSS_MAX_DECLS];
     int decl_count;
     int source_order; /* later rules win a specificity tie -- real cascade order */
+    /* Real "@media (min-width: ...px)"/"(max-width: ...px)" support -- see
+     * css_parse_at_rule()'s own comment. -1 means unconstrained on that
+     * side (a rule with both at -1 is either not inside an @media block at
+     * all, or inside one with no min-width/max-width feature this engine
+     * understands, e.g. "@media (prefers-color-scheme: dark)" -- treated
+     * as always-matching, same "recover more than we lose" tradeoff the
+     * old unconditional-unwrap already made). Checked against the real
+     * current viewport width in css_apply_element(), so a rule inside a
+     * "@media (max-width: 481px)" block now only actually applies when the
+     * viewport really is that narrow, instead of always applying
+     * regardless of width. */
+    int media_min_width;
+    int media_max_width;
 } CssRule;
 
 typedef struct {
@@ -109,8 +131,14 @@ void css_parse_into(CssStylesheet *sheet, const char *text);
  * always wins regardless of specificity -- real CSS's own rule) directly
  * into its DomNode fields (see dom.h's own comment on those). Call once,
  * after dom_parse() and after every <style> tag's text has been folded
- * into `sheet`, before layout_compute() ever runs. */
-void css_apply(DomNode *root, CssStylesheet *sheet);
+ * into `sheet`, before layout_compute() ever runs. `viewport_w` is the
+ * current viewport width in CSS px, used to decide which "@media
+ * (min-width/max-width: ...)" rules actually apply (see CssRule.
+ * media_min_width's own comment) -- also call this again (before the
+ * next layout_compute()) whenever the viewport width changes, e.g. on a
+ * window resize, so a responsive breakpoint's rules can turn on/off live;
+ * see sqw_main.c's window-resize handler for that call site. */
+void css_apply(DomNode *root, CssStylesheet *sheet, float viewport_w);
 
 /* Re-resolves ONE element's computed style in place (same resolution
  * css_apply()'s own walk already does per-element -- default style, then
@@ -123,7 +151,8 @@ void css_apply(DomNode *root, CssStylesheet *sheet);
  * result won't repaint correctly until the next real relayout (e.g. the
  * next navigation or resize) -- a real, honestly-scoped limitation, not a
  * bug, matching how rare "layout-affecting :hover" actually is in real
- * CSS (almost all real :hover rules only touch color/background/border). */
-void css_apply_one(DomNode *el, CssStylesheet *sheet);
+ * CSS (almost all real :hover rules only touch color/background/border).
+ * `viewport_w` -- see css_apply()'s own comment. */
+void css_apply_one(DomNode *el, CssStylesheet *sheet, float viewport_w);
 
 #endif /* SQW_CSS_H */

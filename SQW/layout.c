@@ -40,11 +40,23 @@ void layout_set_image_size_lookup(int (*fn)(const char *url, float *w, float *h)
  * table). Two real, if intentionally scoped, layout algorithms beyond
  * plain block/inline flow:
  *   flex-direction:row    -- a genuine up-front pass distributes each
- *                             item's width along the main axis per
- *                             justify-content (explicit widths honored,
- *                             remaining space split evenly among items
- *                             without one) before any of them are laid
- *                             out; align-items is NOT implemented (every
+ *                             item's width along the main axis: explicit
+ *                             widths are honored; any item with a real
+ *                             flex-grow (see DomNode.css_flex_grow's own
+ *                             comment) absorbs the row's own leftover
+ *                             space proportionally to its grow factor
+ *                             BEFORE justify-content ever sees any of
+ *                             that space, matching real CSS's own
+ *                             priority; only once nothing in a row has
+ *                             flex-grow does justify-content distribute
+ *                             the leftover space as inter-item spacing
+ *                             instead (its original, still-real
+ *                             behavior). flex-shrink/flex-basis are NOT
+ *                             modeled (an item never shrinks below its
+ *                             own natural/shrink-to-fit width, and
+ *                             "basis" is always treated as auto/content-
+ *                             based, never a real flex-basis: Npx/%
+ *                             value). align-items is NOT implemented (every
  *                             row-flex item is top-aligned, i.e. treated
  *                             as align-items:flex-start regardless of
  *                             the real value) -- real align-items:center/
@@ -540,12 +552,31 @@ static int compute_flex_row_positions(DomNode *node, float avail_w, float *flex_
     int r;
     for (r = 0; r < num_rows; r++) {
         float total_w = 0.0f; int row_cnt = 0;
-        for (i = 0; i < cnt; i++) if (row[i] == r) { total_w += w[i]; row_cnt++; }
+        float grow_sum = 0.0f;
+        for (i = 0; i < cnt; i++) {
+            if (row[i] != r) continue;
+            total_w += w[i]; row_cnt++;
+            DomNode *c = node->children[idx[i]];
+            if (c->css_flex_grow > 0.0f) grow_sum += c->css_flex_grow;
+        }
         float used = total_w + gap * (float)(row_cnt > 1 ? row_cnt - 1 : 0);
         float extra = avail_w - used;
         if (extra < 0.0f) extra = 0.0f;
         float start_x = 0.0f, spacing_extra = 0.0f;
-        if (node->css_justify == CSS_JUSTIFY_CENTER) start_x = extra / 2.0f;
+        /* Real CSS flex-grow consumes the row's own leftover space FIRST,
+         * before justify-content ever sees any -- an item that grows
+         * fills the gap itself rather than leaving it to be distributed
+         * as inter-item spacing. Only reached when at least one item in
+         * THIS row actually has flex-grow > 0 (see grow_sum above); a
+         * container with no flex-grow anywhere falls straight through to
+         * the existing justify-content logic below, unchanged. */
+        if (extra > 0.0f && grow_sum > 0.0f) {
+            for (i = 0; i < cnt; i++) {
+                if (row[i] != r) continue;
+                DomNode *c = node->children[idx[i]];
+                if (c->css_flex_grow > 0.0f) w[i] += extra * (c->css_flex_grow / grow_sum);
+            }
+        } else if (node->css_justify == CSS_JUSTIFY_CENTER) start_x = extra / 2.0f;
         else if (node->css_justify == CSS_JUSTIFY_END) start_x = extra;
         else if (node->css_justify == CSS_JUSTIFY_BETWEEN && row_cnt > 1) spacing_extra = extra / (float)(row_cnt - 1);
         else if (node->css_justify == CSS_JUSTIFY_AROUND && row_cnt > 0) { start_x = extra / (float)(row_cnt * 2); spacing_extra = extra / (float)row_cnt; }

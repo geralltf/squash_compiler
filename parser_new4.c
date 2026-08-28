@@ -680,6 +680,30 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
             for (int i=0;i<nf;i++) {
                 ASTNode *fi = fields[i];
                 int fs=typeinfo_size(fi->field.type,p->sym->is_64bit);
+                /* Real alignment of a struct/union-typed field — its own
+                 * max member alignment, which is NOT the same thing as its
+                 * total SIZE (0 = "not struct-typed, use the size-based
+                 * alignment below"). See symtable_compute_struct_alignment()'s
+                 * comment for the same bug class in symtable.c (the FILETIME
+                 * case). Here it bit through a different door: this pre-pass
+                 * size is handed to symtable_define_struct(), which keeps
+                 * MAX(this, its own correct recomputation) — so an
+                 * over-estimate here silently WINS over the correct value and
+                 * becomes the cached struct_size that sizeof() reports, while
+                 * every actual field offset keeps using the correct (smaller)
+                 * recomputed layout. Concretely: a struct whose only members
+                 * are int/char (true alignment 4) but whose size is >= 8 —
+                 * e.g. SQW/css.h's CssSimpleSel — was treated as needing
+                 * 8-byte alignment purely because its size was big, so a
+                 * struct holding an ARRAY of it (CssCompound) had its size
+                 * rounded up to a multiple of 8 it never needed, and the
+                 * error compounded through each further nesting level. Code
+                 * then malloc'd/memset'd with the too-large sizeof() while
+                 * indexing with the smaller real stride, so every element
+                 * after the first zeroed part of its NEXT neighbour —
+                 * confirmed as the real corruption behind CSS rules losing
+                 * their declarations mid-array in SQW's layout engine. */
+                int fstruct_align=0;
                 /* typeinfo_size returns 4 for typedefs/structs — resolve via symtable */
                 if (fi->field.type && fi->field.type->pointer_depth==0 && fi->field.type->base) {
                     const char *fb=fi->field.type->base;
@@ -691,6 +715,7 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
                         Symbol *ss2=symtable_lookup(p->sym,sk);
                         if (ss2 && ss2->struct_size>0) fs=ss2->struct_size;
                         else if (ss2 && ss2->struct_node) fs=symtable_sizeof_struct(p->sym,ss2->struct_node);
+                        if (ss2 && ss2->struct_node) fstruct_align=symtable_compute_struct_alignment(p->sym,ss2->struct_node);
                     } else {
                         Symbol *td=symtable_lookup(p->sym,fb);
                         if (td && td->kind==SYM_TYPEDEF && td->type && td->type->pointer_depth==0) {
@@ -702,6 +727,7 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
                                 Symbol *tss=symtable_lookup(p->sym,tk);
                                 if (tss && tss->struct_size>0) fs=tss->struct_size;
                                 else if (tss && tss->struct_node) fs=symtable_sizeof_struct(p->sym,tss->struct_node);
+                                if (tss && tss->struct_node) fstruct_align=symtable_compute_struct_alignment(p->sym,tss->struct_node);
                             } else {
                                 /* Trust the resolved typedef size outright, not just when
                                  * it's larger: `fs` up above started from typeinfo_size()
@@ -715,7 +741,10 @@ TypeInfo *ParseTypeSpecifier(Parser *p) {
                         }
                     }
                 }
-                int fa = fs < 8 ? fs : 8; /* natural alignment (max 8) */
+                /* struct/union-typed fields use their OWN real alignment;
+                 * everything else uses element size capped at 8 (correct for
+                 * primitives, where size always equals natural alignment). */
+                int fa = fstruct_align>0 ? fstruct_align : (fs < 8 ? fs : 8);
                 if (fa < 1) fa = 1;
                 if (fa > max_align) max_align = fa;
                 if (fi->field.array_size>0) fs*=fi->field.array_size;

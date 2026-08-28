@@ -52,7 +52,7 @@ int main(void) {
      * table), just with no author CSS rules on top of it. */
     CssStylesheet sheet;
     css_stylesheet_init(&sheet);
-    css_apply(root, &sheet);
+    css_apply(root, &sheet, 1024.0f);
     css_stylesheet_free(&sheet);
 
     LayoutList list;
@@ -80,7 +80,7 @@ int main(void) {
     DomNode *froot = dom_parse(TEST_FORM_HTML);
     CssStylesheet fsheet;
     css_stylesheet_init(&fsheet);
-    css_apply(froot, &fsheet);
+    css_apply(froot, &fsheet, 1024.0f);
     css_stylesheet_free(&fsheet);
 
     LayoutList flist;

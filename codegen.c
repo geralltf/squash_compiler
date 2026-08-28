@@ -5647,10 +5647,40 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
              * uses movsd to store float params, so the float value must be in xmm's lower 32 bits. */
             {
 #define CALL_IREG(i) ((i)==0?REG_RDI:(i)==1?REG_RSI:(i)==2?REG_RDX:(i)==3?REG_RCX:(i)==4?REG_R8:REG_R9)
+                /* A variadic function DEFINED IN THIS PROGRAM (as opposed to
+                 * a real libc one) reads its varargs through squash's own
+                 * simplified va_list: a flat pointer walking the contiguous
+                 * region its prologue spills the incoming INTEGER argument
+                 * registers into — there is no separate XMM register-save
+                 * area (see codegen_func's SysV variadic-spill comment).
+                 * So a float/double vararg handed to such a callee in an XMM
+                 * register the way the real SysV ABI requires is never
+                 * spilled anywhere va_arg can see it, and "va_arg(ap,
+                 * double)" reads whatever stale stack word happens to sit in
+                 * that slot. That is not a hypothetical: on Linux
+                 * include/stdio.h's fprintf() IS exactly such a
+                 * squash-defined variadic function (real glibc fprintf can't
+                 * be called with squash's sentinel stdout/stderr FILE*
+                 * values), so EVERY "%f" ever printed through fprintf on a
+                 * -linux build came out as garbage — most confusingly as the
+                 * PREVIOUS fprintf's own return value, which looks like a
+                 * plausible number rather than obvious corruption.
+                 * Pass such an argument in the INTEGER register slot instead
+                 * (its raw 8-byte double bit pattern, already sitting in the
+                 * scratch slot from the movsd store above), consuming an
+                 * integer register just like every other vararg so the
+                 * callee's flat walk stays in argument order. Named
+                 * (non-variadic) float parameters are unaffected — they're
+                 * read from XMM by the normal prologue path. */
+                int va_flat_callee = (sym && sym->func_node && sym->func_node->func.body &&
+                                      sym->func_node->func.is_variadic) ? sym->func_node->func.paramc : -1;
                 int ireg = 0, freg = 0;
                 int _k;
                 for (_k = 0; _k < nreg; _k++) {
-                    if (arg_is_float[_k]) {
+                    if (arg_is_float[_k] && va_flat_callee >= 0 && _k >= va_flat_callee) {
+                        asm_mov_reg_mem(a, CALL_IREG(ireg), REG_RSP, scratch + _k*8);
+                        ireg++;
+                    } else if (arg_is_float[_k]) {
                         asm_movsd_load(a, freg, REG_RSP, scratch + _k*8);
                         if (param_is_single_float(sym, _k, cg->sym, cg->is_64bit))
                             asm_cvtsd2ss(a, freg, freg);
@@ -9182,6 +9212,20 @@ int codegen_is_float_expr(CodeGen *cg, ASTNode *n) {
         if (op && op->kind == AST_VAR) {
             Symbol *s = symtable_lookup(cg->sym, op->var.name);
             if (s) t = s->type;
+        } else if (op && op->kind == AST_CAST && op->cast.type) {
+            /* "*(double*)expr" — the cast itself names the pointee type,
+             * so no declared variable needs to be traced back (and often
+             * there isn't one: the pointer is an arbitrary expression).
+             * This is not an exotic spelling — it's literally what
+             * stdarg.h's va_arg() expands to, so without this case every
+             * "va_arg(ap, double)" in a squash-defined variadic function
+             * was classified as an integer expression and read the
+             * argument's IEEE-754 bit pattern back as a huge integer
+             * (e.g. 100.0 came out as 4636737291354636288.0) — which is
+             * exactly how "%f" behaved in include/stdio.h's own Linux
+             * fprintf() shim, i.e. every float ever printed to
+             * stdout/stderr through fprintf on a -linux build. */
+            t = op->cast.type;
         }
         if (!t || !t->base || t->pointer_depth != 1) return 0;
         Symbol *td = symtable_lookup(cg->sym, t->base);
@@ -9535,6 +9579,14 @@ void codegen_float_expr(CodeGen *cg, ASTNode *n) {
         if (op && op->kind == AST_VAR) {
             Symbol *s = symtable_lookup(cg->sym, op->var.name);
             if (s) t = s->type;
+        } else if (op && op->kind == AST_CAST && op->cast.type) {
+            /* "*(double*)expr" / "*(float*)expr" — see
+             * codegen_is_float_expr()'s matching AST_CAST case for why
+             * (va_arg's own expansion). Without the pointee type the
+             * single/double width below defaulted to a movsd load, which
+             * happens to be right for double but silently wrong for
+             * "*(float*)p". */
+            t = op->cast.type;
         }
         Symbol *td = (t && t->base) ? symtable_lookup(cg->sym, t->base) : NULL;
         TypeInfo *pt = (td && td->kind==SYM_TYPEDEF && td->type) ? td->type : t;

@@ -9,13 +9,16 @@ all: SQS/SQS
 # -lpthread: one thread per accepted connection (see sqs_main.c's own
 # comment). -lssl -lcrypto: real system OpenSSL for the HTTPS listener --
 # same versioned-.so linker fallback already used for -lvulkan/-lX11 in
-# Makefile.SQW.linux (see linker.c). sqs_main.c #includes php_mini.c,
-# which in turn #includes db_engine.c/db_engine.h -- all one translation
-# unit (no separate .sqo link step here), same workaround SQW/SDL3 use for
-# the same known cross-.sqo symbol-resolution bug -- see db_engine.sqo's
-# own comment below and php_mini.c's #include of db_engine.c.
+# Makefile.SQW.linux (see linker.c). -lsqlite3: db_engine.c is now a real
+# SQLite-backed engine (see its own top comment) linked against the
+# system's real /usr/lib/x86_64-linux-gnu/libsqlite3.so.0 the same
+# versioned-.so way. sqs_main.c #includes php_mini.c, which in turn
+# #includes db_engine.c/db_engine.h -- all one translation unit (no
+# separate .sqo link step here), same workaround SQW/SDL3 use for the
+# same known cross-.sqo symbol-resolution bug -- see db_engine.sqo's own
+# comment below and php_mini.c's #include of db_engine.c.
 SQS/SQS: SQS/sqs_main.c SQS/php_mini.c SQS/db_engine.c SQS/db_engine.h SQS/dev_cert.pem SQS/dev_key.pem include/openssl/ssl.h include/sys/socket.h include/netinet/in.h include/arpa/inet.h squash
-	$(SQUASH) -linux -64 -Iinclude SQS/sqs_main.c -o SQS/SQS -lpthread -lssl -lcrypto
+	$(SQUASH) -linux -64 -Iinclude SQS/sqs_main.c -o SQS/SQS -lpthread -lssl -lcrypto -lsqlite3
 
 # Standalone .sqo build of the native DB engine -- NOT currently linked
 # into SQS/SQS (see php_mini.c's own comment on why: a real, pre-existing
