@@ -9,7 +9,7 @@ CFLAGS=-I. -Wall -pedantic
 LDFLAGS=
 DEPS =
 HEADERS =
-OBJ = compiler.o assembler.o ast.o codegen.o arm64_asm.o codegen_arm64.o lexer.o parser_new4.o pe_builder.o elf_builder.o macho_builder.o symtable.o linker.o winlinker.o objfile.o implib.o diag.o
+OBJ = compiler.o assembler.o ast.o codegen.o arm64_asm.o codegen_arm64.o lexer.o parser_new4.o pe_builder.o elf_builder.o macho_builder.o symtable.o linker.o winlinker.o objfile.o implib.o diag.o CS/cs_ast.o CS/cs_lexer.o CS/cs_parser.o CS/cs_lower.o
 
 %.o: %.c $(DEPS)
 	$(CC) -c -o $@ $< $(CFLAGS)

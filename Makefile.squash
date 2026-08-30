@@ -9,7 +9,7 @@ CFLAGS=-64 -windows -I.
 LDFLAGS=
 DEPS =
 HEADERS =
-OBJ = compiler.sqo assembler.sqo ast.sqo codegen.sqo arm64_asm.sqo codegen_arm64.sqo lexer.sqo parser_new4.sqo pe_builder.sqo elf_builder.sqo macho_builder.sqo symtable.sqo linker.sqo winlinker.sqo objfile.sqo implib.sqo diag.sqo
+OBJ = compiler.sqo assembler.sqo ast.sqo codegen.sqo arm64_asm.sqo codegen_arm64.sqo lexer.sqo parser_new4.sqo pe_builder.sqo elf_builder.sqo macho_builder.sqo symtable.sqo linker.sqo winlinker.sqo objfile.sqo implib.sqo diag.sqo CS/cs_ast.sqo CS/cs_lexer.sqo CS/cs_parser.sqo CS/cs_lower.sqo
 
 %.sqo: %.c $(DEPS)
 	$(CC) -c $(CFLAGS) $< -o $@
