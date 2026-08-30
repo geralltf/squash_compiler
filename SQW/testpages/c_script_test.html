@@ -1,0 +1,18 @@
+<html><body>
+<div id="msg">C script has not run yet</div>
+<p>This page's inline <code>&lt;script type="text/c"&gt;</code> block below is raw,
+unmodified squash C (see SQW/sqw_main.c's sqw_run_c_script() -- no C# lowering step
+at all, unlike the neighboring vulkan_csharp_test.html page). SQW compiles it with
+squash and loads it in-process the same way; its Console.WriteLine-equivalent output
+(a direct csr_console_write_line() call) appears on SQW's own stdout/console, since
+in-process DOM mutation from a script this way isn't wired up yet.</p>
+<script type="text/c">
+#include "csharp_rt.h"
+
+int main(void) {
+    csr_console_write_line(cs_string_new("hello from a raw text/c script"));
+    csr_console_write_line(cs_string_from_int(6 * 7));
+    return 0;
+}
+</script>
+</body></html>

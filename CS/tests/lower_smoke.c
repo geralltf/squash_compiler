@@ -162,6 +162,39 @@ int main(int argc, char **argv) {
             "  }\n"
             "}\n";
         lower_one(src, out_path);
+    } else if (strcmp(which, "6") == 0) {
+        /* Phase 6e: interfaces with real per-class vtables -- two
+         * unrelated classes implementing the same interface, dispatched
+         * through a single interface-typed local each, proving genuine
+         * runtime dispatch (not resolved at compile time to one fixed
+         * class's function). Also exercises the single-interface
+         * "class X : IFoo" shape, where cs_parser.c's own base-class/
+         * interface ambiguity lands the name in base_class_name instead
+         * of interface_names[] (see class_implements()'s own comment). */
+        const char *src =
+            "interface IShape {\n"
+            "  int Area();\n"
+            "}\n"
+            "class Circle : IShape {\n"
+            "  public int Radius;\n"
+            "  public Circle(int r) { Radius = r; }\n"
+            "  public int Area() { return Radius * Radius * 3; }\n"
+            "}\n"
+            "class Square : IShape {\n"
+            "  public int Side;\n"
+            "  public Square(int s) { Side = s; }\n"
+            "  public int Area() { return Side * Side; }\n"
+            "}\n"
+            "class Program {\n"
+            "  static void Main() {\n"
+            "    IShape a = new Circle(2);\n"
+            "    IShape b = new Square(4);\n"
+            "    int aArea = a.Area();\n"
+            "    int bArea = b.Area();\n"
+            "    if (aArea == 12 && bArea == 16) { Console.WriteLine(\"interface-dispatch-ok\"); }\n"
+            "  }\n"
+            "}\n";
+        lower_one(src, out_path);
     } else {
         fprintf(stderr, "unknown fixture '%s'\n", which);
         return 1;

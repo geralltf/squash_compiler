@@ -324,6 +324,16 @@ typedef struct {
     char *text;
 } SqwCsharpScript;
 
+/* Phase 6f: <script type="text/c"> -- raw squash C, the most mechanical
+ * remaining Phase 6 piece (see sqw_run_c_script()'s own comment for how
+ * it differs from the C# path above -- barely at all). Same collect-
+ * separately reasoning as SqwCsharpScript. */
+#define SQW_MAX_C_SCRIPTS 16
+typedef struct {
+    char id[192];
+    char *text;
+} SqwCScript;
+
 /* squash's own include/stdlib.h shim doesn't declare system() -- hand-
  * declared here rather than widening the shim (out of scope for this
  * integration), matching this project's own established pattern for a
@@ -420,6 +430,73 @@ static void sqw_run_csharp_script(const char *cs_text, const char *id) {
     main_fn = (int (*)(void))sqo_loader_get_symbol(&loaded, "main");
     if (!main_fn) {
         fprintf(stderr, "SQW: C# script '%s': loaded but has no 'main' export\n", id);
+        fflush(stderr);
+    } else {
+        main_fn();
+    }
+
+    sqo_loader_free(&loaded);
+    remove(src_path);
+    remove(sqo_path);
+}
+
+/* Phase 6f: <script type="text/c"> -- the most mechanical Phase 6 piece.
+ * `c_text` is already valid squash C (no lowering step at all, unlike
+ * sqw_run_csharp_script() right above -- this is the one real difference
+ * between the two functions, everything else mirrors it exactly): write
+ * to a temp ".c" file, compile with a real "squash -c" subprocess (same
+ * reasoning as the C# path for why this stays a subprocess even though
+ * loading/running is in-process -- recompiling THIS process's own
+ * CodeGen/Assembler global state mid-render for a wholly different
+ * translation unit would be a real, avoidable risk), then load and run
+ * the result in-process via sqo_loader_load(). Given the same host
+ * symbol table as a C# script (csharp_rt + Vulkan) for parity -- a raw C
+ * script is free to call csr_* directly (e.g. csr_console_write_line())
+ * or a real Vulkan function exactly like a C#
+ * [DllImport]-declared one, without needing its own separate native-
+ * interop story. Same real, working DOM-event-dispatch gap as the C#
+ * path -- runs its "main" once at page load, not wired to click/input/
+ * etc. handlers yet (see sqw_run_csharp_script()'s own comment). */
+static void sqw_run_c_script(const char *c_text, const char *id) {
+    char src_path[256];
+    char sqo_path[256];
+    char cmd[1024];
+    FILE *f;
+    static int g_c_run_counter = 0;
+    SqoLoaded loaded;
+    SqoHostSymbol host_syms[SQO_HOST_SYMS_COUNT + SQO_HOST_SYMS_VULKAN_COUNT];
+    int n_host_syms, n_rt_syms;
+    int (*main_fn)(void);
+
+    snprintf(src_path, sizeof src_path, "/tmp/sqw_c_%d_%d.c", (int)getpid(), g_c_run_counter);
+    snprintf(sqo_path, sizeof sqo_path, "/tmp/sqw_c_%d_%d.sqo", (int)getpid(), g_c_run_counter);
+    g_c_run_counter++;
+
+    f = fopen(src_path, "w");
+    if (!f) { fprintf(stderr, "SQW: C script '%s': could not create temp file %s\n", id, src_path); fflush(stderr); return; }
+    fputs(c_text, f);
+    fclose(f);
+
+    snprintf(cmd, sizeof cmd, "./squash -c -linux -64 -ICSR %s -o %s >/tmp/sqw_c_compile.log 2>&1", src_path, sqo_path);
+    if (system(cmd) != 0) {
+        fprintf(stderr, "SQW: C script '%s' failed to compile -- see /tmp/sqw_c_compile.log\n", id);
+        fflush(stderr);
+        remove(src_path);
+        return;
+    }
+
+    n_rt_syms = sqo_host_syms_csharp_rt(host_syms);
+    n_host_syms = n_rt_syms + sqo_host_syms_vulkan(host_syms + n_rt_syms);
+    if (!sqo_loader_load(sqo_path, host_syms, n_host_syms, &loaded)) {
+        fprintf(stderr, "SQW: C script '%s' compiled but failed to load in-process\n", id);
+        fflush(stderr);
+        remove(src_path); remove(sqo_path);
+        return;
+    }
+
+    main_fn = (int (*)(void))sqo_loader_get_symbol(&loaded, "main");
+    if (!main_fn) {
+        fprintf(stderr, "SQW: C script '%s': loaded but has no 'main' function\n", id);
         fflush(stderr);
     } else {
         main_fn();
@@ -546,6 +623,10 @@ static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, 
     SqwCsharpScript cs_scripts[SQW_MAX_CSHARP_SCRIPTS];
     int cs_script_count = 0;
 
+    /* <script type="text/c"> -- see SqwCScript's own comment above. */
+    SqwCScript c_scripts[SQW_MAX_C_SCRIPTS];
+    int c_script_count = 0;
+
     int cap = 64, top = 0;
     DomNode **stack = (DomNode **)malloc((size_t)cap * sizeof(DomNode *));
     int *next_child = (int *)malloc((size_t)cap * sizeof(int));
@@ -579,6 +660,7 @@ static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, 
                 const char *type = dom_get_attr(child, "type");
                 int is_module = type && !strcmp(type, "module");
                 int is_csharp = type && !strcmp(type, "text/csharp");
+                int is_c = type && !strcmp(type, "text/c");
                 char *text = 0;
                 if (src && src[0]) {
                     text = sqw_load_script_src(src, dir, base_url);
@@ -608,6 +690,16 @@ static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, 
                         m->text = text;
                         cs_script_count++;
                         text = 0; /* ownership moved into cs_scripts[] */
+                    }
+                    free(text);
+                } else if (is_c) {
+                    if (text && c_script_count < SQW_MAX_C_SCRIPTS) {
+                        SqwCScript *m = &c_scripts[c_script_count];
+                        if (src && src[0]) { strncpy(m->id, src, sizeof m->id - 1); m->id[sizeof m->id - 1] = 0; }
+                        else snprintf(m->id, sizeof m->id, "inline-c#%d", c_script_count);
+                        m->text = text;
+                        c_script_count++;
+                        text = 0; /* ownership moved into c_scripts[] */
                     }
                     free(text);
                 } else if (is_module) {
@@ -695,6 +787,17 @@ static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, 
         for (i = 0; i < cs_script_count; i++) {
             sqw_run_csharp_script(cs_scripts[i].text, cs_scripts[i].id);
             free(cs_scripts[i].text);
+        }
+    }
+
+    /* Phase 6f: <script type="text/c"> -- see sqw_run_c_script()'s own
+       comment. Runs after the C# scripts, same "runs once at page load"
+       model as every other script type integrated so far. */
+    {
+        int i;
+        for (i = 0; i < c_script_count; i++) {
+            sqw_run_c_script(c_scripts[i].text, c_scripts[i].id);
+            free(c_scripts[i].text);
         }
     }
 

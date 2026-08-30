@@ -22,6 +22,33 @@
 #include <dirent.h>
 #endif
 
+/* Bumped alongside the "[v96]"-style banner already printed at the start
+ * of every real compile (see main()'s own "Compiling: ..." line below) --
+ * pulled out into one named constant so print_help()'s banner and that
+ * existing line can never drift apart. */
+#define SQUASH_VERSION "v96"
+
+/* Adaptive coloring for --help's own output, matching diag.c's own
+ * established convention exactly (GCC-style: color only when stdout is a
+ * real terminal, always off if NO_COLOR is set to anything -- see
+ * https://no-color.org/) -- diag.c's own color macros are private to that
+ * file (not exposed via diag.h), so this is a small, deliberate
+ * duplication of the same three lines rather than a shared header for
+ * three macros used in exactly two places. */
+#if defined(_WIN32)
+#include <io.h>
+#define SQ_ISATTY(fd) _isatty(fd)
+#else
+#include <unistd.h>
+#define SQ_ISATTY(fd) isatty(fd)
+#endif
+static int g_help_color = 0;
+#define HC_RESET  (g_help_color ? "\033[0m"    : "")
+#define HC_BOLD   (g_help_color ? "\033[1m"    : "")
+#define HC_DIM    (g_help_color ? "\033[90m"   : "")
+#define HC_FLAG   (g_help_color ? "\033[1;36m" : "")
+#define HC_HEAD   (g_help_color ? "\033[1;33m" : "")
+
 /* Only meaningful when squash itself is running natively on an OpenBSD host
  * (self-hosted bootstrap, or a native OpenBSD build compiling OpenBSD
  * targets) — there is no way to know a *different* OpenBSD release's exact
@@ -171,6 +198,102 @@ static void inject_entry_reloc_a64(Arm64Asm *a, const char *entry) {
     r->offset=0; r->kind=RELOC_ABS32; r->symbol=my_strdup("__entry__"); r->addend=off;
 }
 
+/* The short, one-line reminder printed when squash is run with no source
+ * file at all (unchanged trigger/exit-code from before -- still returns 1
+ * from main(), since this is the "you forgot something" case, not a real
+ * request for help). Kept deliberately terse -- "-h/--help" right there
+ * at the end is the pointer to the real, detailed screen below. */
+static void print_usage_short(void) {
+    printf("Usage: squash [options] <source.c|source.cs> [object.sqo ...] [-o output]\n");
+    printf("  (default target platform: whatever this squash binary was itself built for)\n");
+    printf("  Run 'squash --help' for the full option reference.\n");
+}
+
+/* One argument-reference row: the flag(s) in cyan, a short one-line
+ * description dimmed/plain after it, hand-aligned to a fixed column so
+ * the whole table reads as a clean grid regardless of how long each
+ * flag spelling is -- the same visual shape `git --help`/`gcc --help`
+ * use, not a bare unaligned list. */
+static void help_row(const char *flag, const char *desc) {
+    int pad = 22 - (int)strlen(flag);
+    printf("  %s%s%s", HC_FLAG, flag, HC_RESET);
+    while (pad-- > 0) putchar(' ');
+    printf("%s\n", desc);
+}
+
+/* "squash --help" / "squash -h" -- the detailed reference this session
+ * was asked to add, printed instead of (not in addition to) an actual
+ * compile. Organized like a real CLI's --help (a short usage line, then
+ * grouped sections, then worked examples) rather than one flat option
+ * dump -- deliberately calls out ".cs" C# source files as a first-class
+ * input alongside ".c" (see is_csharp_source_path()/lower_csharp_file()
+ * above), which the plain no-args usage line only hints at via the
+ * "<source.c|source.cs>" placeholder. */
+static void print_help(void) {
+    g_help_color = SQ_ISATTY(1) && !getenv("NO_COLOR");
+    printf("%ssquash%s %s%s%s -- a from-scratch C (and C#) compiler, straight to native machine code\n\n",
+           HC_BOLD, HC_RESET, HC_DIM, SQUASH_VERSION, HC_RESET);
+
+    printf("%sUSAGE%s\n", HC_HEAD, HC_RESET);
+    printf("  squash [options] <source.c|source.cs> [object.sqo ...] [-o output]\n\n");
+
+    printf("%sINPUT%s\n", HC_HEAD, HC_RESET);
+    printf("  A single %ssource.c%s file compiles as ordinary C, unchanged. A single\n", HC_BOLD, HC_RESET);
+    printf("  %ssource.cs%s file is instead lowered from C# to C first (classes, structs,\n", HC_BOLD, HC_RESET);
+    printf("  generics-erased List<T>, LINQ method chains, string interpolation,\n");
+    printf("  interfaces with real per-class vtables, and [DllImport]-declared native\n");
+    printf("  calls are all supported -- see CS/cs_lower.h for the exact scope) and then\n");
+    printf("  fed through the SAME unmodified codegen every .c file goes through. Extra\n");
+    printf("  \".sqo\" arguments (previously-compiled squash objects, see objfile.h) are\n");
+    printf("  linked in alongside the freshly-compiled source.\n\n");
+
+    printf("%sTARGET PLATFORM%s  (default: whatever this squash binary was itself built for)\n", HC_HEAD, HC_RESET);
+    help_row("-linux",            "native ELF output for Linux");
+    help_row("-windows",          "native PE output for Windows (this compiler's original target)");
+    help_row("-macos",            "native Mach-O output for Intel (x86-64) macOS");
+    help_row("-openbsd",          "native ELF output for OpenBSD");
+    help_row("-openbsd-libc <so>","override the OpenBSD libc.so soname this compile links against");
+    printf("\n");
+
+    printf("%sTARGET WORD SIZE%s\n", HC_HEAD, HC_RESET);
+    help_row("-32",  "32-bit output (Windows only -- every other target is 64-bit-only)");
+    help_row("-64",  "64-bit output (the default)");
+    help_row("-arm64","AArch64 output instead of x86-64 (implies -64; Linux/macOS only)");
+    printf("\n");
+
+    printf("%sCOMPILE MODE%s\n", HC_HEAD, HC_RESET);
+    help_row("-c",      "emit a linkable \".sqo\" object instead of a finished executable");
+    help_row("-o <path>","output file path (default: <source> with its extension replaced)");
+    printf("\n");
+
+    printf("%sSEARCH PATHS & LINKING%s\n", HC_HEAD, HC_RESET);
+    help_row("-I <dir>", "add a directory to the #include search path (repeatable)");
+    help_row("-L <dir>", "add a directory to the native library search path (repeatable)");
+    help_row("-l <name>","link a native library by name, e.g. -lvulkan -> libvulkan.so (repeatable)");
+    printf("  A bare %s.sqo%s / %s.so%s / %s.a%s argument is accepted directly too, without\n", HC_BOLD, HC_RESET, HC_BOLD, HC_RESET, HC_BOLD, HC_RESET);
+    printf("  needing -l/-L.\n\n");
+
+    printf("%sDIAGNOSTICS%s\n", HC_HEAD, HC_RESET);
+    help_row("-dump",   "print the fully preprocessed source before compiling it");
+    help_row("-nodebug","strip ELF .symtab/.strtab/.shstrtab from the output (Linux only)");
+    help_row("-h, --help","show this screen and exit");
+    printf("  %sNO_COLOR=1%s disables the coloring in this screen and in compile\n", HC_DIM, HC_RESET);
+    printf("  diagnostics alike (https://no-color.org/); both auto-detect a real\n");
+    printf("  terminal either way.\n\n");
+
+    printf("%sEXAMPLES%s\n", HC_HEAD, HC_RESET);
+    printf("  %ssquash hello.c -o hello%s\n", HC_DIM, HC_RESET);
+    printf("      Compile and link a native executable for this host.\n");
+    printf("  %ssquash game.cs -o game%s\n", HC_DIM, HC_RESET);
+    printf("      Compile a C# script straight to a native executable.\n");
+    printf("  %ssquash -c -linux -64 big_shared.c -o common.sqo%s\n", HC_DIM, HC_RESET);
+    printf("      Precompile a shared translation unit once, ahead of time.\n");
+    printf("  %ssquash main.c common.sqo -o app%s\n", HC_DIM, HC_RESET);
+    printf("      Recompile only main.c and relink it against that .sqo.\n");
+    printf("  %ssquash -windows -64 app.c -lvulkan -o app.exe%s\n", HC_DIM, HC_RESET);
+    printf("      Cross-compile a Windows binary that links against Vulkan.\n");
+}
+
 int main(int argc, char **argv) {
     int    is_64bit=1;
     int    is_linux=0;
@@ -224,6 +347,18 @@ int main(int argc, char **argv) {
      * recompiling the whole shared body from source every time. */
     const char *obj_flags[64]; int n_obj=0;
 
+    /* "-h"/"--help" short-circuits everything else, exactly like every
+     * other real CLI -- checked as its own pass BEFORE the main option
+     * loop below (rather than as one more "else if" arm in it) so it
+     * still works no matter where it appears among other flags/a source
+     * path, and so it can print+exit without needing to first finish
+     * validating (or erroring on) anything else on the command line. */
+    for (int i=1;i<argc;i++) {
+        if (strcmp(argv[i],"-h")==0 || strcmp(argv[i],"--help")==0) {
+            print_help();
+            return 0;
+        }
+    }
     for (int i=1;i<argc;i++) {
         if      (strcmp(argv[i],"-32")==0)      is_64bit=0;
         else if (strcmp(argv[i],"-64")==0)      is_64bit=1;
@@ -297,8 +432,7 @@ int main(int argc, char **argv) {
         /* else: leave is_linux=0 (Windows), matching the pre-existing default. */
     }
     if (!src_path) {
-        printf("Usage: compiler [-32|-64|-arm64] [-linux|-windows|-macos|-openbsd] [-openbsd-libc soname] [-c] [-dump] [-nodebug] [-I dir] [-l lib] [-L path] <source.c> [object.sqo ...] [-o output]\n");
-        printf("  (default target platform: whatever this squash binary was itself built for)\n");
+        print_usage_short();
         return 1;
     }
     /* macho_builder.c targets Intel (x86-64) macOS only. 32-bit i386 macOS
@@ -383,7 +517,7 @@ int main(int argc, char **argv) {
         out_path=out_buf;
     }
 
-    printf("Compiling: %s -> %s (%s, %s) [v96]\n",src_path,out_path,
+    printf("Compiling: %s -> %s (%s, %s) [" SQUASH_VERSION "]\n",src_path,out_path,
            is_arm64?"arm64":(is_64bit?"64-bit":"32-bit"),
            is_macos?"macos":(is_openbsd?"openbsd":(is_linux?"linux":"windows")));
 

@@ -42,7 +42,22 @@ static void lower_error(int line, const char *fmt, ...) {
 }
 
 /* ---- program-wide class registry ---- */
-typedef struct { CsNode **classes; int n_classes; int type_id_next; int *type_ids; } ClassRegistry;
+typedef struct {
+    CsNode **classes; int n_classes; int type_id_next; int *type_ids;
+    /* Phase 6e: interfaces, registered separately from classes/structs
+     * (they carry no fields/ctor/instance-storage to lower -- only
+     * method SIGNATURES, used to build each implementing class's real
+     * vtable). Each interface's index in this array IS its "interface
+     * id" -- deterministic within one compile (collect_classes walks
+     * decls in file order), which is all a single-program vtable-
+     * dispatch switch (see lower_interface_vtables()) ever needs -- no
+     * runtime registration API required, unlike the general per-class
+     * (type_id, interface_id) registry the plan originally sketched:
+     * every (class, interface) pairing implemented anywhere in this
+     * program is already known at LOWERING time, so the dispatch table
+     * itself can just be generated, compile-time-constant C code. */
+    CsNode **interfaces; int n_interfaces;
+} ClassRegistry;
 
 static void collect_classes(CsNode *decl, ClassRegistry *reg) {
     if (!decl) return;
@@ -52,14 +67,14 @@ static void collect_classes(CsNode *decl, ClassRegistry *reg) {
         reg->type_ids[reg->n_classes] = reg->type_id_next++;
         reg->classes[reg->n_classes] = decl;
         reg->n_classes++;
+    } else if (decl->kind == CS_INTERFACE_DECL) {
+        reg->interfaces = (CsNode **)realloc(reg->interfaces, sizeof(CsNode *) * (unsigned int)(reg->n_interfaces + 1));
+        reg->interfaces[reg->n_interfaces] = decl;
+        reg->n_interfaces++;
     } else if (decl->kind == CS_NAMESPACE) {
         int i;
         for (i = 0; i < decl->namespace_decl.n_decls; i++) collect_classes(decl->namespace_decl.decls[i], reg);
     }
-    /* CS_INTERFACE_DECL deliberately not registered as a concrete lowerable
-     * type in this phase -- interfaces carry no fields/bodies to lower;
-     * virtual dispatch through an interface reference is documented as
-     * out of scope (see cs_lower.h). */
 }
 
 static CsNode *reg_find_class(ClassRegistry *reg, const char *name) {
@@ -70,6 +85,31 @@ static CsNode *reg_find_class(ClassRegistry *reg, const char *name) {
 static int reg_type_id(ClassRegistry *reg, CsNode *class_decl) {
     int i;
     for (i = 0; i < reg->n_classes; i++) if (reg->classes[i] == class_decl) return reg->type_ids[i];
+    return 0;
+}
+static CsNode *reg_find_interface(ClassRegistry *reg, const char *name) {
+    int i;
+    for (i = 0; i < reg->n_interfaces; i++) if (strcmp(reg->interfaces[i]->class_decl.name, name) == 0) return reg->interfaces[i];
+    return 0;
+}
+/* True if `cls` (a class/struct decl) implements `iface_name` -- checks
+ * both "interface_names" (class_decl.interface_names, populated by
+ * cs_parser.c's ":" handling for every name AFTER the first) and
+ * "base_class_name" (the FIRST name after ":"). The parser can't tell a
+ * base class from an interface at parse time (no symbol table yet -- C#
+ * syntax is genuinely ambiguous there, "class Circle : IShape" and
+ * "class Circle : SomeBaseClass" parse identically), so it always
+ * assigns the first name to base_class_name as a guess; this lowering
+ * pass, which DOES have every interface registered by now, corrects that
+ * guess here rather than in the parser. Real class inheritance itself is
+ * still out of scope (base_class_name is otherwise unused anywhere in
+ * this file) -- this only re-checks it as a possible interface name, the
+ * one case that actually needs to work for Phase 6e. */
+static int class_implements(CsNode *cls, const char *iface_name, ClassRegistry *reg) {
+    int i;
+    if (cls->class_decl.base_class_name && strcmp(cls->class_decl.base_class_name, iface_name) == 0 && reg_find_interface(reg, iface_name)) return 1;
+    for (i = 0; i < cls->class_decl.n_interfaces; i++)
+        if (strcmp(cls->class_decl.interface_names[i], iface_name) == 0) return 1;
     return 0;
 }
 
@@ -165,6 +205,16 @@ static char *lower_type_str(CsType *t, ClassRegistry *reg, int line) {
             }
         }
     }
+    /* Phase 6e: an interface-typed local/field/parameter lowers to a
+     * plain, type-erased "void*" -- it can hold a pointer to any class
+     * implementing the interface (there's no single common C struct
+     * layout across unrelated classes the way a real base-class pointer
+     * would have one), so the underlying object's real layout is only
+     * ever accessed indirectly, through a per-interface vtable resolved
+     * at the call site by the object's own runtime type id -- see
+     * lower_interface_vtables()/the CS_MEMBER-call dispatch this enables
+     * for the actual mechanism. */
+    if (reg_find_interface(reg, t->name)) return cs_strdup("void*");
     lower_error(line, "unknown type '%s'", t->name);
     return cs_strdup("void*");
 }
@@ -296,6 +346,33 @@ static CsNode *infer_class_type(CsNode *e, MethodCtx *mc) {
     }
     if (e->kind == CS_NEW_OBJECT) return reg_find_class(mc->reg, e->new_object.type->name);
     if (e->kind == CS_CAST) return reg_find_class(mc->reg, e->cast.type->name);
+    return 0;
+}
+
+/* Phase 6e: same best-effort resolution as infer_class_type() above, but
+ * for an expression whose STATIC type is an INTERFACE (a local variable
+ * or field declared "IShape shape;", not a class) -- used to decide
+ * whether a method call needs real vtable dispatch (lower_call's own use
+ * site). Deliberately narrower than infer_class_type: an interface-typed
+ * value only ever comes from a local/parameter/field declaration or a
+ * cast in this phase's scope (no interface-returning method inference,
+ * matching every other "best-effort, not full type inference" limitation
+ * already documented throughout this file). */
+static CsNode *infer_interface_type(CsNode *e, MethodCtx *mc) {
+    if (!e) return 0;
+    if (e->kind == CS_IDENT) {
+        CsType *t = mc_lookup_local(mc, e->ident.name);
+        if (t && t->n_type_args == 0 && t->array_rank == 0) return reg_find_interface(mc->reg, t->name);
+        if (!t && mc->class_decl) {
+            CsNode *f = class_find_field(mc->class_decl, e->ident.name);
+            if (f) {
+                CsType *ft = f->kind == CS_FIELD_DECL ? f->field_decl.type : f->property_decl.type;
+                if (ft && ft->n_type_args == 0 && ft->array_rank == 0) return reg_find_interface(mc->reg, ft->name);
+            }
+        }
+        return 0;
+    }
+    if (e->kind == CS_CAST) return reg_find_interface(mc->reg, e->cast.type->name);
     return 0;
 }
 
@@ -451,6 +528,29 @@ static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
             }
         }
         {
+            /* Phase 6e: an interface-typed receiver dispatches through
+             * that interface's real vtable, resolved at RUNTIME by the
+             * object's own type id -- genuine dynamic dispatch, unlike
+             * every other call shape in this function (all compile-time-
+             * resolved to one fixed "ClassName__Method" function). Must
+             * be checked before infer_class_type() below: an interface-
+             * typed local's declared type name is never a registered
+             * CLASS, so infer_class_type would just return NULL for it
+             * and fall into the "cannot resolve receiver type" error. */
+            CsNode *iface = infer_interface_type(obj, mc);
+            if (iface) {
+                CsNode *im = class_find_method(iface, mname);
+                if (!im) { lower_error(e->line, "'%s' has no method '%s'", iface->class_decl.name, mname); sb_append(out, "((void)0)"); return; }
+                sb_appendf(out, "csr_vtable_for_%s(csr_type_id_of(", iface->class_decl.name);
+                lower_expr(obj, mc, out);
+                sb_appendf(out, "))->%s(", mname);
+                lower_expr(obj, mc, out);
+                for (i = 0; i < e->call.argc; i++) { sb_append(out, ", "); lower_expr(e->call.args[i], mc, out); }
+                sb_append(out, ")");
+                return;
+            }
+        }
+        {
             CsNode *owner = infer_class_type(obj, mc);
             CsNode *m;
             if (!owner) { lower_error(e->line, "cannot resolve receiver type for call to '.%s(...)' (no local type inference for this expression shape)", mname); sb_append(out, "((void)0)"); return; }
@@ -527,6 +627,30 @@ static void lower_expr(CsNode *e, MethodCtx *mc, StrBuf *out) {
                 if (mc->is_instance) sb_appendf(out, "this->%s", e->ident.name);
                 else sb_appendf(out, "%s__%s", mc->class_decl->class_decl.name, e->ident.name);
                 return;
+            }
+            {
+                /* Phase 6d: a bare static method NAME used as a VALUE, not
+                 * called (e.g. "RegisterCallback(MyCallback)") -- a real,
+                 * C-ABI-compatible function pointer for native callback
+                 * registration (Vulkan's debug-messenger/allocation-
+                 * callback APIs are exactly this shape). Only static
+                 * methods: an instance method's real C function also
+                 * needs a "this" pointer bound in, which is full
+                 * delegate/closure territory (still queued separately,
+                 * see cs_lower.h's own scope notes) -- a static method
+                 * has no such need, its "ClassName__Method" C function is
+                 * ALREADY the real, complete function value, exactly like
+                 * a plain C function name decaying to a pointer. Not
+                 * reached for the callee of an actual call expression
+                 * (CS_CALL) -- lower_call() handles that shape itself,
+                 * directly, without going through lower_expr on the
+                 * callee node at all. */
+                CsNode *m = class_find_method(mc->class_decl, e->ident.name);
+                if (m && m->method_decl.is_static) {
+                    if (m->method_decl.dllimport_name) sb_append(out, e->ident.name);
+                    else sb_appendf(out, "%s__%s", mc->class_decl->class_decl.name, e->ident.name);
+                    return;
+                }
             }
         }
         sb_append(out, e->ident.name); /* best-effort fallback -- see header comment */
@@ -645,6 +769,26 @@ static void lower_expr(CsNode *e, MethodCtx *mc, StrBuf *out) {
             lower_expr(e->member.obj, mc, out);
             sb_append(out, ")->len");
             return;
+        }
+        /* Phase 6d: "ClassName.Method" used as a VALUE (not called) --
+         * same static-method-as-real-function-pointer case as the
+         * unqualified CS_IDENT branch above, just class-qualified. Must
+         * be checked BEFORE infer_class_type(e->member.obj, ...) below:
+         * "obj" here is a class NAME, not a variable/field of some class
+         * TYPE, so infer_class_type (which only resolves a variable's/
+         * field's own declared type) would never recognize it -- this
+         * mirrors lower_call()'s own "Static-class-qualified call" check
+         * for the exact same "Obj is a known class name" shape. */
+        if (e->member.obj->kind == CS_IDENT && !mc_lookup_local(mc, e->member.obj->ident.name)) {
+            CsNode *cls = reg_find_class(mc->reg, e->member.obj->ident.name);
+            if (cls) {
+                CsNode *m = class_find_method(cls, e->member.name);
+                if (m && m->method_decl.is_static) {
+                    if (m->method_decl.dllimport_name) sb_append(out, e->member.name);
+                    else sb_appendf(out, "%s__%s", cls->class_decl.name, e->member.name);
+                    return;
+                }
+            }
         }
         owner = infer_class_type(e->member.obj, mc);
         if (owner) {
@@ -914,6 +1058,172 @@ static void lower_struct_decl(CsNode *cls, ClassRegistry *reg, StrBuf *out) {
     sb_appendf(out, "} %s;\n\n", cls->class_decl.name);
 }
 
+/* Phase 6e: emits one "typedef struct { RetType (*Method)(void *self,
+ * Args...); ... } IfaceName_VTable;" per interface -- the real dispatch
+ * mechanism (not a type-switch): a class implementing this interface
+ * gets its own "static const IfaceName_VTable ClassName__IfaceName_
+ * vtable = { ...ClassName's own matching functions... };" (see
+ * lower_interface_impls() below), and calling an interface-typed
+ * receiver's method resolves the right vtable at runtime by the
+ * object's own type id (see lower_call()'s own dispatch-emission site)
+ * -- genuinely dynamic dispatch, not compile-time-resolved to one
+ * class's function the way a plain class-typed call already is.
+ *
+ * "self" is untyped ("void*") in the vtable's own function-pointer
+ * field type, since a single struct type must describe every
+ * implementing class's function uniformly even though each class's
+ * REAL function takes its own concrete "ClassName *this" first
+ * parameter -- lower_interface_impls() casts each function pointer to
+ * this exact signature when building the vtable literal, the standard
+ * C vtable-emulation technique (real per-class dispatch through a
+ * uniform pointer-sized "self" is well past what strict ISO C function-
+ * pointer compatibility rules allow, but is exactly how every C-based
+ * OOP vtable, including this project's own compiler internals in spirit,
+ * has always actually worked in practice). No return-type-covariance or
+ * default-interface-method support -- every interface method must be a
+ * plain abstract signature, matching cs_parser.c's own existing "body ==
+ * NULL" handling for an interface member. */
+static void lower_interface_vtable_structs(ClassRegistry *reg, StrBuf *out) {
+    int i;
+    for (i = 0; i < reg->n_interfaces; i++) {
+        CsNode *iface = reg->interfaces[i];
+        int j;
+        sb_appendf(out, "typedef struct {\n");
+        for (j = 0; j < iface->class_decl.n_members; j++) {
+            CsNode *m = iface->class_decl.members[j];
+            char *rt; int k;
+            if (m->kind != CS_METHOD_DECL) continue;
+            rt = lower_type_str(m->method_decl.ret_type, reg, m->line);
+            sb_appendf(out, "    %s (*%s)(void *self", rt, m->method_decl.name);
+            free(rt);
+            for (k = 0; k < m->method_decl.n_params; k++) {
+                char *pt = lower_type_str(m->method_decl.params[k]->param.type, reg, m->line);
+                sb_appendf(out, ", %s", pt);
+                free(pt);
+            }
+            sb_append(out, ");\n");
+        }
+        sb_appendf(out, "} %s_VTable;\n\n", iface->class_decl.name);
+        /* Forward declaration for the real csr_vtable_for_<Iface>()
+         * dispatch function -- its FULL DEFINITION (lower_interface_
+         * dispatch()) has to come after every class's methods and vtable
+         * instance are emitted (needs their addresses), but any method
+         * call through an interface-typed receiver anywhere in the
+         * program (potentially emitted much earlier -- e.g. inside
+         * "static void Main()", if Main happens to be declared before
+         * the classes it uses, which real C# allows freely) needs a
+         * visible prototype before that point. Squash's own C parser is
+         * lenient about a forward call with no visible prototype at all
+         * (treats it as an implicit external declaration, resolved via
+         * same-TU direct-call label fixup) -- but this project holds
+         * every cs_lower.c fixture to gcc-vs-squash PARITY (see this
+         * file's whole test-fixture convention), and plain gcc genuinely
+         * rejects this: an implicit-declaration function defaults to
+         * returning "int", which doesn't match this function's real
+         * "const IfaceName_VTable *" return type, a hard type-conflict
+         * error at the real definition site later in the same file
+         * (confirmed via a direct repro before this forward declaration
+         * was added). */
+        sb_appendf(out, "static const %s_VTable *csr_vtable_for_%s(int type_id);\n\n", iface->class_decl.name, iface->class_decl.name);
+    }
+}
+
+/* For every class implementing 1+ interfaces: verify (a lower_error, not
+ * a silent skip, if not) it defines every interface method by name+arity,
+ * then emit its real vtable -- a "static const" struct of function
+ * pointers pointing at that class's own matching "ClassName__Method"
+ * functions, each cast to the vtable field's uniform "(RetType
+ * (*)(void*, Args...))" signature (see lower_interface_vtable_structs()'s
+ * own comment on why the cast is needed and safe in practice). Must run
+ * AFTER lower_class_methods() has emitted every class's real method
+ * function definitions (referencing a function by name before its own
+ * definition needs at least a prior prototype, which plain instance
+ * methods don't get here -- simplest to just order this pass after). */
+static void lower_interface_impls(ClassRegistry *reg, StrBuf *out) {
+    int i;
+    for (i = 0; i < reg->n_classes; i++) {
+        CsNode *cls = reg->classes[i];
+        /* candidate interface names: base_class_name (if it turns out to
+         * actually be an interface -- see class_implements()'s own
+         * comment on why the parser can't tell) followed by
+         * interface_names[]. */
+        int n_cand = cls->class_decl.n_interfaces + (cls->class_decl.base_class_name ? 1 : 0);
+        int ii;
+        for (ii = 0; ii < n_cand; ii++) {
+            const char *cand_name = (ii == 0 && cls->class_decl.base_class_name)
+                ? cls->class_decl.base_class_name
+                : cls->class_decl.interface_names[ii - (cls->class_decl.base_class_name ? 1 : 0)];
+            CsNode *iface = reg_find_interface(reg, cand_name);
+            int j;
+            if (!iface) {
+                /* base_class_name not resolving to a registered interface
+                 * just means it's a real (still-unsupported) base CLASS
+                 * name -- not an error here, that's a separate, already-
+                 * documented gap, not this function's concern. Only an
+                 * explicit interface_names[] entry that fails to resolve
+                 * is a real error (a class can't list something in a ","-
+                 * separated interface list that isn't a known interface). */
+                if (ii == 0 && cls->class_decl.base_class_name && cand_name == cls->class_decl.base_class_name) continue;
+                lower_error(cls->line, "'%s' implements unknown interface '%s'", cls->class_decl.name, cand_name);
+                continue;
+            }
+            sb_appendf(out, "static const %s_VTable %s__%s_vtable = {\n",
+                       iface->class_decl.name, cls->class_decl.name, iface->class_decl.name);
+            for (j = 0; j < iface->class_decl.n_members; j++) {
+                CsNode *im = iface->class_decl.members[j];
+                CsNode *cm; char *rt; int k;
+                if (im->kind != CS_METHOD_DECL) continue;
+                cm = class_find_method(cls, im->method_decl.name);
+                if (!cm || cm->method_decl.n_params != im->method_decl.n_params) {
+                    lower_error(cls->line, "'%s' does not implement '%s.%s' (interface method missing or wrong parameter count)",
+                                cls->class_decl.name, iface->class_decl.name, im->method_decl.name);
+                    sb_append(out, "    0,\n");
+                    continue;
+                }
+                rt = lower_type_str(im->method_decl.ret_type, reg, im->line);
+                sb_appendf(out, "    (%s (*)(void*", rt);
+                free(rt);
+                for (k = 0; k < im->method_decl.n_params; k++) {
+                    char *pt = lower_type_str(im->method_decl.params[k]->param.type, reg, im->line);
+                    sb_appendf(out, ", %s", pt);
+                    free(pt);
+                }
+                sb_appendf(out, "))%s__%s,\n", cls->class_decl.name, im->method_decl.name);
+            }
+            sb_append(out, "};\n\n");
+        }
+    }
+}
+
+/* One dispatch function per interface: "static const IfaceName_VTable
+ * *csr_vtable_for_IfaceName(int type_id)" -- a plain switch over every
+ * class in THIS program implementing the interface, returning that
+ * class's own vtable instance (or NULL if `type_id` implements no such
+ * interface, e.g. a stale/foreign type id -- callers are expected to
+ * only ever pass a type id that's already known to implement the
+ * interface, matching every other best-effort-not-fully-checked
+ * assumption in this lowering pass, but NULL is safer than an
+ * out-of-bounds table read if that assumption is ever violated). Real,
+ * runtime dynamic dispatch (decided by the object's ACTUAL type id, read
+ * fresh at each call via csr_type_id_of()) -- not resolved at compile
+ * time to one fixed class's function, unlike an ordinary class-typed
+ * method call. */
+static void lower_interface_dispatch(ClassRegistry *reg, StrBuf *out) {
+    int i;
+    for (i = 0; i < reg->n_interfaces; i++) {
+        CsNode *iface = reg->interfaces[i];
+        int ci;
+        sb_appendf(out, "static const %s_VTable *csr_vtable_for_%s(int type_id) {\n    switch (type_id) {\n",
+                   iface->class_decl.name, iface->class_decl.name);
+        for (ci = 0; ci < reg->n_classes; ci++) {
+            CsNode *cls = reg->classes[ci];
+            if (class_implements(cls, iface->class_decl.name, reg))
+                sb_appendf(out, "    case %d: return &%s__%s_vtable;\n", reg_type_id(reg, cls), cls->class_decl.name, iface->class_decl.name);
+        }
+        sb_append(out, "    default: return 0;\n    }\n}\n\n");
+    }
+}
+
 static void lower_static_fields(CsNode *cls, ClassRegistry *reg, StrBuf *out) {
     int i;
     for (i = 0; i < cls->class_decl.n_members; i++) {
@@ -1117,9 +1427,14 @@ CsLowerResult cs_lower_unit(CsNode *unit, const char *runtime_header) {
     sb_appendf(&out, "#include \"%s\"\n\n", runtime_header);
 
     for (i = 0; i < reg.n_classes; i++) lower_struct_decl(reg.classes[i], &reg, &out);
+    lower_interface_vtable_structs(&reg, &out);
     for (i = 0; i < reg.n_classes; i++) lower_static_fields(reg.classes[i], &reg, &out);
     sb_append(&out, "\n");
     for (i = 0; i < reg.n_classes; i++) lower_class_methods(reg.classes[i], &reg, &out);
+    /* Phase 6e: must run AFTER lower_class_methods() -- see
+     * lower_interface_impls()'s own comment on why. */
+    lower_interface_impls(&reg, &out);
+    lower_interface_dispatch(&reg, &out);
 
     /* lower_class_methods() above already emitted "<MainClass>__Main(void) {
      * ... }" as an ordinary static method -- the real C entry point below
@@ -1137,5 +1452,6 @@ CsLowerResult cs_lower_unit(CsNode *unit, const char *runtime_header) {
     res.ok = (g_error_count == 0);
     free(reg.classes);
     free(reg.type_ids);
+    free(reg.interfaces);
     return res;
 }
