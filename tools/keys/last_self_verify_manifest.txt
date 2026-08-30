@@ -1,17 +1,17 @@
 squash self-hosting verification manifest
-git_commit=9b814f4be30591b696f4d7d715cb4f363b8f95d3
-git_describe=9b814f4-dirty
+git_commit=9005ceb25aa175985121a5ef5d43b399f523b964
+git_describe=9005ceb-dirty
 git_branch=main
 platform=Linux x86_64 kernel=7.0.0-30-generic
 bootstrap_cc=gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
-timestamp=2026-08-28T10:45:01Z
+timestamp=2026-08-30T06:47:20Z
 rounds_requested=2
 target_platform=linux
-gen0_sha256=ab33f9a901023e9692555a2c515d59c4732155da2f6347b4f742c7faf5ea08af
+gen0_sha256=51d13279057bcd8227e2612005794fe2a604423072030f56d7484aab12f3d9ae
 gen0_battery=PASS
-gen1_sha256=4f6c01b14cc9f8fd4c36c41802ac5eced3b3c3446dd305853cb8a703a55b6887
+gen1_sha256=ec6559b9166328b21117dac5faa00f8eceb736d1e8c48cfedbbe1c56f9cf5f1c
 gen1_battery=PASS
-gen2_sha256=4f6c01b14cc9f8fd4c36c41802ac5eced3b3c3446dd305853cb8a703a55b6887
+gen2_sha256=ec6559b9166328b21117dac5faa00f8eceb736d1e8c48cfedbbe1c56f9cf5f1c
 gen2_battery=PASS
 converged_at_generation=2
 status=PASS_CONVERGED

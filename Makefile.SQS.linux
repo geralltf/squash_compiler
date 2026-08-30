@@ -18,7 +18,7 @@ all: SQS/SQS
 # same known cross-.sqo symbol-resolution bug -- see db_engine.sqo's own
 # comment below and php_mini.c's #include of db_engine.c.
 SQS/SQS: SQS/sqs_main.c SQS/php_mini.c SQS/db_engine.c SQS/db_engine.h SQS/dev_cert.pem SQS/dev_key.pem include/openssl/ssl.h include/sys/socket.h include/netinet/in.h include/arpa/inet.h squash
-	$(SQUASH) -linux -64 -Iinclude SQS/sqs_main.c -o SQS/SQS -lpthread -lssl -lcrypto -lsqlite3
+	$(SQUASH) -linux -64 -Iinclude SQS/sqs_main.c -o SQS/SQS -lpthread -lssl -lcrypto -lsqlite3 -lm
 
 # Standalone .sqo build of the native DB engine -- NOT currently linked
 # into SQS/SQS (see php_mini.c's own comment on why: a real, pre-existing

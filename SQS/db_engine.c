@@ -232,10 +232,46 @@ static int sqdb_do_create(const char *sql, char *err, int errcap) {
         return -1;
     }
     /* p now points just past the first column name (and any trailing
-     * whitespace) -- everything from here to the closing ')' (the rest
-     * of the column list) is copied through verbatim. */
+     * whitespace) -- every REMAINING column in the list (up to the
+     * closing ')') gets rewritten with an explicit "TEXT" type instead
+     * of being copied through untyped/verbatim. This matters more than
+     * it looks: a column declared with NO type name at all gets SQLite's
+     * own "BLOB affinity" (see SQLite's type-affinity rules), which does
+     * NOT coerce an INTEGER literal to TEXT before comparing -- so
+     * "WHERE user_id = 1" (an unquoted numeric literal, exactly what
+     * __db_prepare()'s own "%d" placeholder substitution produces) NEVER
+     * matched a real row whose user_id was actually stored as the text
+     * string "1" (every id column this project's own schema holds is
+     * stored as text, packed-row-format all the way down -- see this
+     * file's own top comment). Confirmed as a real, severe, silent bug:
+     * update_metadata()'s own "SELECT umeta_id FROM wp_usermeta WHERE
+     * meta_key = %s AND user_id = %d" always returned zero rows
+     * regardless of how many real matching rows existed, so
+     * update_user_meta() never found the row it should have updated and
+     * fell through to add_metadata() (a fresh INSERT) EVERY time instead
+     * -- directly breaking WP_User_Meta_Session_Tokens's own "update my
+     * one row of session data" call, silently accumulating a new,
+     * never-updated duplicate row per login instead, and (since
+     * get_user_meta()'s own "$single=true" mode reads back only the
+     * FIRST/oldest such row) permanently losing every session actually
+     * created after the very first one. A TEXT-affinity column DOES
+     * coerce a bare integer literal to text for comparison purposes,
+     * matching what every real WHERE clause built by this project's own
+     * $wpdb-alike actually needs. */
+    char coltypes[SQDB_FIELD_MAX];
+    int co = 0;
+    sqdb_ch(&p, ','); /* the separator between first_col and the rest of the list -- sqdb_ident() left it unconsumed */
+    for (;;) {
+        char col[64];
+        if (!sqdb_ident(&p, col, sizeof col)) break;
+        int n = snprintf(coltypes + co, (size_t)(sizeof coltypes - co), ", %s TEXT", col);
+        if (n > 0) co += n;
+        if (co >= (int)sizeof coltypes) break;
+        if (!sqdb_ch(&p, ',')) break;
+    }
+    coltypes[co] = 0;
     char stmt[SQDB_FIELD_MAX];
-    snprintf(stmt, sizeof stmt, "CREATE TABLE IF NOT EXISTS %s (%s INTEGER PRIMARY KEY%s", name, first_col, p);
+    snprintf(stmt, sizeof stmt, "CREATE TABLE IF NOT EXISTS %s (%s INTEGER PRIMARY KEY%s%s", name, first_col, coltypes, p);
     char *errmsg = NULL;
     int rc = sqlite3_exec(g_db, stmt, NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {

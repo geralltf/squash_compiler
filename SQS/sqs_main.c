@@ -49,6 +49,41 @@ static pthread_mutex_t g_stats_mutex = PTHREAD_MUTEX_INITIALIZER;
 static long g_total_connections = 0;
 static long g_active_connections = 0;
 
+/* Guards every call to php_run() -- SQS runs each accepted connection on
+ * its own OS thread (see sqs_accept_loop's own "pthread_create(&th, ...,
+ * sqs_conn_thread, ...)"), but php_mini.c's own interpreter state is
+ * ENTIRELY a set of plain `static` globals (g_objects[]/g_arrays[]/
+ * g_classes[]/g_funcs[]/g_narrays/g_nobjects/g_globals[]/g_statics[]/
+ * g_exiting/g_suppress_calls/g_call_depth/g_db_last_raw/..., not a
+ * per-thread or per-request struct) -- it was never built with real
+ * concurrent access in mind, and php_run()'s own very first line,
+ * php_globals_reset(), unconditionally zeroes every one of those tables
+ * back to empty. Two real browser connections landing on the server at
+ * close enough to the same moment (a real, common, unremarkable pattern
+ * -- a single page load routinely opens more than one connection) used
+ * to run php_run() on two different threads AT THE SAME TIME with no
+ * serialization at all: one request's own mid-flight php_globals_reset()
+ * call could wipe every array/object/class slot a DIFFERENT request's
+ * still-running PHP code was actively reading through, producing stale/
+ * dangling indices into now-empty or reallocated tables -- confirmed as
+ * the real, reproducible cause of a hard SIGSEGV crashing the entire
+ * live server (found via a real browser session hitting wp-login.php:
+ * the server's own request log showed "active=2" -- a second overlapping
+ * connection -- immediately before the crash; a single, isolated request
+ * through the same code path, sequentially, via a standalone harness
+ * never reproduced it at all). The correct, general fix would be making
+ * every one of those globals genuinely per-request (a much larger
+ * restructuring of php_mini.c, out of scope for a single-session fix);
+ * the pragmatic, safe fix that matches this project's own "MVP first,
+ * document the real tradeoff" philosophy is to simply serialize ALL PHP
+ * execution behind one mutex -- concurrent connections still accept and
+ * queue normally (only the actual php_run() call itself is exclusive),
+ * so this costs real request-handling throughput under heavy concurrent
+ * load but is the difference between "the server crashes under normal
+ * real-browser usage" and "requests are correct, just not concurrent
+ * with each other specifically while running PHP." */
+static pthread_mutex_t g_php_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 /* Real send()/recv() for plain HTTP, SSL_write()/SSL_read() for HTTPS --
  * every other function in this file only ever calls these two, never the
  * raw socket/SSL calls directly, so the request-handling logic itself
@@ -489,7 +524,9 @@ static void sqs_handle_request(SqsConn *c) {
         }
         char *php_out = (char *)malloc(PHP_OUT_MAX);
         char *php_headers = (char *)malloc(PHP_OUT_MAX);
+        pthread_mutex_lock(&g_php_mutex);
         php_run(content, fs_path, &get_arr, &post_arr, &cookie_arr, method, php_out, PHP_OUT_MAX, php_headers, PHP_OUT_MAX);
+        pthread_mutex_unlock(&g_php_mutex);
         sqs_send_response_ex(c, 200, "OK", "text/html; charset=utf-8", php_out, (long)strlen(php_out), php_headers);
         free(php_out);
         free(php_headers);
@@ -621,7 +658,34 @@ static void *sqs_accept_loop(void *arg) {
     return NULL;
 }
 
+/* No "signal.h" in this project's own squash-compiler header shims
+ * (include/*.h) -- rather than add a whole new shim header for one
+ * constant + one function, declare just what's needed directly (SIGPIPE
+ * is POSIX-standardized as 13 on every real Unix this project targets;
+ * "signal" is a completely standard, stable libc entry point already
+ * linked in via every other libc call this file makes). */
+typedef void (*sqs_sighandler_t)(int);
+extern sqs_sighandler_t signal(int signum, sqs_sighandler_t handler);
+#define SQS_SIGPIPE 13
+#define SQS_SIG_IGN ((sqs_sighandler_t)1)
+
 int main(void) {
+    /* A real network server MUST ignore SIGPIPE -- writing to a socket
+     * whose peer already closed its end raises it, and the POSIX default
+     * disposition is to TERMINATE THE WHOLE PROCESS, not just fail that
+     * one write. Previously unhandled: confirmed via gdb as a real,
+     * reproducible cause of the entire live server dying outright (not a
+     * SIGSEGV at all, despite looking like one from the outside -- "the
+     * page stops responding") the moment more than one real connection
+     * was in flight and any one of them closed early (a real browser
+     * routinely does this -- speculative/prefetch connections, a
+     * navigation cancelling an in-flight request, a slow response the
+     * client gives up waiting for) while the server was still trying to
+     * write to it. With SIGPIPE ignored, that same write instead just
+     * fails locally (errno EPIPE) and the one connection's own thread
+     * unwinds normally -- every OTHER connection, and the server itself,
+     * keeps running exactly as a real HTTP server should. */
+    signal(SQS_SIGPIPE, SQS_SIG_IGN);
     fprintf(stderr, "SQS: starting (http :%d, https :%d, wwwroot %s)\n", SQS_HTTP_PORT, SQS_HTTPS_PORT, SQS_WWWROOT); fflush(stdout);
 
     int http_fd = sqs_listen_on(SQS_HTTP_PORT);

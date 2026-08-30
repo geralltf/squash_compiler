@@ -46,6 +46,7 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <time.h>
+#include <math.h>
 
 /* Explicit prototype -- squash's own <stdlib.h> shim doesn't declare
  * realpath(), and letting it fall through to an IMPLICIT declaration
@@ -688,6 +689,30 @@ static int g_exiting = 0;
  * the server. */
 static int g_suppress_calls = 0;
 
+/* Real PHP output buffering (ob_start()/ob_get_clean()/etc) -- previously
+ * entirely UNIMPLEMENTED. A real, high-impact gap: real WordPress core
+ * uses this constantly to CAPTURE a template/widget/shortcode's own
+ * `echo`'d output as a plain string instead of sending it straight to
+ * the page (get_search_form(), dynamic_sidebar()-adjacent widget
+ * rendering, many shortcode handlers, wp_print_inline_script_tag()'s own
+ * callers, ...) -- without it, any code shaped like "ob_start(); ...
+ * echo-heavy template...; $html = ob_get_clean();" silently captured
+ * NOTHING (ob_get_clean() itself didn't exist, degrading to ""), so
+ * every such captured fragment was simply missing from the final page.
+ * A small GLOBAL stack (not per-PhpState) since PhpState.out/out_len/
+ * out_cap are themselves a SHARED pointer propagated across an entire
+ * call tree (see "callee->out = caller->out;" throughout this file) --
+ * ob_start() redirects THAT shared pointer to a fresh buffer (saving the
+ * previous one here), so every echo/print anywhere in the call tree
+ * until the matching ob_*_clean()/ob_end_flush() lands in the new
+ * buffer, exactly matching real PHP's own request-global (not call-
+ * frame-local) output-buffer-stack semantics. */
+#define PHP_OB_STACK_MAX 8
+static char *g_ob_saved_out[PHP_OB_STACK_MAX];
+static int g_ob_saved_len[PHP_OB_STACK_MAX];
+static int g_ob_saved_cap[PHP_OB_STACK_MAX];
+static int g_ob_depth = 0;
+
 /* Real function-local "static $x [= init];" support (PHP's per-function-
  * persisted local, e.g. "static $first_init = true;" used as a run-once
  * guard) -- session 8: previously a complete no-op (fell into the
@@ -797,6 +822,20 @@ static void php_globals_reset(void) {
     g_exiting = 0; /* a "die"/"exit" from the PREVIOUS request must not
                       also halt the next one on this same long-running
                       server -- see g_exiting's own comment */
+    /* An unbalanced ob_start() (no matching ob_*_clean()/ob_end_flush())
+     * left over from the previous request must not leave the NEXT
+     * request's own g_ob_depth stack looking non-empty. Frees every
+     * INTERMEDIATE buffer this file itself malloc'd during those pushes
+     * (index 0 is always the ORIGINAL, request-owned buffer -- never
+     * ours to free); the one buffer that was still ACTIVE (top of stack)
+     * when the leak happened is unreachable by this point (the PhpState
+     * that referenced it was already freed when the previous php_run()
+     * returned) and is a real, small, bounded, documented leak for this
+     * one misuse pattern -- not a correctness bug for the well-behaved
+     * "every ob_start() has a matching ob_*_clean()" code real WordPress
+     * core actually uses. */
+    for (i = 1; i < g_ob_depth; i++) { if (g_ob_saved_out[i]) free(g_ob_saved_out[i]); }
+    g_ob_depth = 0;
     g_nconsts = 0;
     g_nfuncs = 0;
     for (i = 0; i < PHP_FUNC_HASH_SIZE; i++) g_func_hash_head[i] = -1; /* see php_func_hash_insert's own comment */
@@ -1109,6 +1148,106 @@ typedef struct {
     int headers_cap;
 } PhpState;
 
+/* Real PHP: "$str[N]" on a plain (non-array, non-object) string is
+ * BYTE-indexing into the string itself (a single-character substring,
+ * empty if out of range; a negative N counts from the end) -- previously
+ * entirely UNIMPLEMENTED at every "$var[key]"-shaped read site (each one
+ * only ever checked "is this an array reference" / "is this an object
+ * reference", falling straight to "" for a plain string with no third
+ * case at all). A real, high-impact, previously-undiscovered gap: real
+ * WordPress core's own is_serialized() (wp-includes/functions.php,
+ * gating EVERY maybe_unserialize() call -- i.e. every options/postmeta/
+ * usermeta read of a stored array/object value) does "if (':' !==
+ * $data[1]) return false;" as its very first real check -- with
+ * "$data[1]" always empty, is_serialized() always returned false, so
+ * maybe_unserialize() always returned the raw serialized STRING
+ * unchanged instead of the real decoded array -- confirmed as the
+ * direct, final cause of WP_User_Meta_Session_Tokens's own session data
+ * always looking unset even once every other layer (real SQL storage,
+ * ARRAY_A row conversion, array_map()/array_filter(), the "%" operator
+ * it also depends on transitively) was already fixed and confirmed
+ * correct in isolation. */
+static void php_string_char_at(const char *s, const char *key, char *out, int outcap) {
+    char *endp;
+    long idx = strtol(key, &endp, 10);
+    if (key[0] == 0 || *endp != 0) { out[0] = 0; return; }
+    int len = (int)strlen(s);
+    if (idx < 0) idx += len;
+    if (idx < 0 || idx >= len || outcap < 2) { out[0] = 0; return; }
+    out[0] = s[idx];
+    out[1] = 0;
+}
+/* Real PHP date()/gmdate() format-character support -- previously
+ * entirely UNIMPLEMENTED (date()/gmdate()/mktime()/strtotime() all fell
+ * through to this file's own generic "unknown function -> ''" degrade),
+ * a real, high-impact gap found in this session's own audit: real
+ * WordPress core displays a post/comment's own date on essentially every
+ * single-post/archive/comment-listing page via mysql2date()/
+ * get_the_date()/... which all eventually reach a real date()-shaped
+ * call. This subset always operates in UTC (via gmtime(), never the
+ * process's own local timezone, and never a real IANA timezone
+ * database) -- a real, documented simplification matching this file's
+ * "no per-site timezone configuration modeled" scope; covers the
+ * overwhelmingly common real format characters, not the full real PHP
+ * set (no ISO week-year "o", no timezone-abbreviation "e"/"T" beyond a
+ * hardcoded "UTC", no Swatch Internet time "B"). */
+static void php_format_date(const char *fmt, time_t t, char *out, int outcap) {
+    struct tm tmv;
+    gmtime_r(&t, &tmv);
+    static const char *mon_full[] = {"January","February","March","April","May","June","July","August","September","October","November","December"};
+    static const char *mon_abbr[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+    static const char *day_full[] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+    static const char *day_abbr[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+    int o = 0;
+    const char *p;
+    char buf[32];
+    for (p = fmt; *p && o < outcap - 1; p++) {
+        int n = -1;
+        buf[0] = 0;
+        switch (*p) {
+            case '\\': if (p[1] && o < outcap - 1) { out[o++] = p[1]; p++; } continue;
+            case 'Y': snprintf(buf, sizeof buf, "%d", tmv.tm_year + 1900); break;
+            case 'y': snprintf(buf, sizeof buf, "%02d", (tmv.tm_year + 1900) % 100); break;
+            case 'm': snprintf(buf, sizeof buf, "%02d", tmv.tm_mon + 1); break;
+            case 'n': snprintf(buf, sizeof buf, "%d", tmv.tm_mon + 1); break;
+            case 'd': snprintf(buf, sizeof buf, "%02d", tmv.tm_mday); break;
+            case 'j': snprintf(buf, sizeof buf, "%d", tmv.tm_mday); break;
+            case 'H': snprintf(buf, sizeof buf, "%02d", tmv.tm_hour); break;
+            case 'G': snprintf(buf, sizeof buf, "%d", tmv.tm_hour); break;
+            case 'h': snprintf(buf, sizeof buf, "%02d", tmv.tm_hour % 12 == 0 ? 12 : tmv.tm_hour % 12); break;
+            case 'g': snprintf(buf, sizeof buf, "%d", tmv.tm_hour % 12 == 0 ? 12 : tmv.tm_hour % 12); break;
+            case 'i': snprintf(buf, sizeof buf, "%02d", tmv.tm_min); break;
+            case 's': snprintf(buf, sizeof buf, "%02d", tmv.tm_sec); break;
+            case 'D': strncpy(buf, day_abbr[tmv.tm_wday], sizeof buf - 1); break;
+            case 'l': strncpy(buf, day_full[tmv.tm_wday], sizeof buf - 1); break;
+            case 'M': strncpy(buf, mon_abbr[tmv.tm_mon], sizeof buf - 1); break;
+            case 'F': strncpy(buf, mon_full[tmv.tm_mon], sizeof buf - 1); break;
+            case 'A': strncpy(buf, tmv.tm_hour < 12 ? "AM" : "PM", sizeof buf - 1); break;
+            case 'a': strncpy(buf, tmv.tm_hour < 12 ? "am" : "pm", sizeof buf - 1); break;
+            case 'N': snprintf(buf, sizeof buf, "%d", tmv.tm_wday == 0 ? 7 : tmv.tm_wday); break;
+            case 'w': snprintf(buf, sizeof buf, "%d", tmv.tm_wday); break;
+            case 'z': snprintf(buf, sizeof buf, "%d", tmv.tm_yday); break;
+            case 'U': snprintf(buf, sizeof buf, "%ld", (long)t); break;
+            case 't': { static const int dim[] = {31,28,31,30,31,30,31,31,30,31,30,31}; int y = tmv.tm_year + 1900; int d = dim[tmv.tm_mon]; if (tmv.tm_mon == 1 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) d = 29; snprintf(buf, sizeof buf, "%d", d); break; }
+            case 'L': { int y = tmv.tm_year + 1900; snprintf(buf, sizeof buf, "%d", (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 1 : 0); break; }
+            case 'S': { int d = tmv.tm_mday; const char *suf = "th"; if (d % 10 == 1 && d != 11) suf = "st"; else if (d % 10 == 2 && d != 12) suf = "nd"; else if (d % 10 == 3 && d != 13) suf = "rd"; strncpy(buf, suf, sizeof buf - 1); break; }
+            case 'e': case 'T': strncpy(buf, "UTC", sizeof buf - 1); break;
+            case 'P': strncpy(buf, "+00:00", sizeof buf - 1); break;
+            case 'O': strncpy(buf, "+0000", sizeof buf - 1); break;
+            case 'Z': strncpy(buf, "0", sizeof buf - 1); break;
+            case 'u': strncpy(buf, "000000", sizeof buf - 1); break;
+            case 'v': strncpy(buf, "000", sizeof buf - 1); break;
+            case 'c': php_format_date("Y-m-d\\TH:i:sP", t, buf, sizeof buf); break;
+            case 'r': php_format_date("D, d M Y H:i:s O", t, buf, sizeof buf); break;
+            default: out[o++] = *p; continue;
+        }
+        (void)n;
+        int bl = (int)strlen(buf);
+        if (bl > outcap - 1 - o) bl = outcap - 1 - o;
+        memcpy(out + o, buf, (size_t)bl); o += bl;
+    }
+    out[o] = 0;
+}
 static void php_kv_lookup(PhpKVArray *arr, const char *key, char *out, int outcap) {
     int i;
     for (i = 0; i < arr->count; i++) {
@@ -1716,7 +1855,8 @@ static void php_read_string_lit(PhpState *st, char *buf, int bufcap) {
                 else {
                     int aid = v ? php_arrref_decode(v->val) : -1;
                     if (aid >= 0) php_kv_lookup(&g_arrays[aid], key, cur, sizeof cur);
-                    else cur[0] = 0;
+                    else if (php_objref_decode(cur) >= 0) cur[0] = 0;
+                    else { char sc[2]; php_string_char_at(cur, key, sc, sizeof sc); strncpy(cur, sc, sizeof cur - 1); cur[sizeof cur - 1] = 0; }
                 }
             } else if (st->src[0] == '-' && st->src[1] == '>' &&
                        (st->src[2] == '_' || (st->src[2] >= 'a' && st->src[2] <= 'z') || (st->src[2] >= 'A' && st->src[2] <= 'Z'))) {
@@ -1811,6 +1951,7 @@ static void php_sprintf(const char *fmt, char **all_args, int arg_base, int nval
 
 static void php_eval_expr(PhpState *st, char *out, int outcap);
 static void php_eval_factor(PhpState *st, char *out, int outcap); /* forward: dynamic "->$field" member-name evaluation needs this before its own definition */
+static void php_invoke_callable(PhpState *caller, const char *callable, char **args, int nargs, char *out, int outcap); /* forward: usort()/uasort()/uksort()'s own custom-comparator dispatch needs this before its own definition */
 static void php_call_function(PhpState *caller, const char *name, char **args, int nargs, char *out, int outcap);
 static void php_call_method(PhpState *caller, int obj_id, PhpMethod *m, char **args, int nargs, char *out, int outcap);
 static void php_call_static(PhpState *caller, PhpMethod *m, char **args, int nargs, char *out, int outcap);
@@ -1962,6 +2103,79 @@ static PhpKVArray *php_var_real_array(PhpVar *v) {
     if (v->is_array) return &v->arr;
     int aid = php_arrref_decode(v->val);
     return (aid >= 0) ? &g_arrays[aid] : NULL;
+}
+
+/* Same idea as php_var_real_array(), but for the several real by-
+ * reference array builtins (sort()/rsort()/ksort()/.../array_push()/
+ * array_shift()/...) that need to MUTATE the caller's real array
+ * in place, not just read it -- auto-vivifies a real (empty) array
+ * container if `v` isn't already array-shaped, matching real PHP's own
+ * "sort($x)" on an unset $x silently making it an empty array. Shared
+ * factoring of the exact by-ref-array-resolution logic array_unshift()
+ * pioneered (see its own comment for the full "why a bare read snapshots
+ * instead of sharing storage" story) -- every one of these sort/mutate
+ * builtins needs the identical "resolve the raw variable, not a
+ * stringified value" special-cased argument parsing isset()/empty()/
+ * unset()/array_unshift() already have, hence living in that same
+ * special-cased dispatch block in php_eval_factor rather than the
+ * ordinary php_call_function() strcmp chain. */
+/* Real PHP's own "loose" default ordering: two values that both LOOK
+ * numeric compare numerically, otherwise plain byte-string comparison --
+ * matches this file's own existing "<"/">"-shaped comparisons (see
+ * php_eval_cmp's own php_to_num()-based numeric coercion), used here for
+ * sort()/rsort()/asort()/arsort()/ksort()/krsort()'s own default
+ * (SORT_REGULAR-shaped) comparator. */
+static int php_default_cmp(const char *a, const char *b) {
+    char *ea, *eb;
+    double da = strtod(a, &ea), db = strtod(b, &eb);
+    int a_num = (ea != a && *ea == 0 && a[0] != 0);
+    int b_num = (eb != b && *eb == 0 && b[0] != 0);
+    if (a_num && b_num) { if (da < db) return -1; if (da > db) return 1; return 0; }
+    return strcmp(a, b);
+}
+/* A simple insertion sort (this file's own established "simple first,
+ * real WordPress array sizes never need anything fancier" convention,
+ * matching e.g. the flat-file DB engine's own scope-limit philosophy) --
+ * O(n^2), fine for the small option/meta/query-result arrays real
+ * WordPress core actually sorts. `cmp_by_key` sorts by each item's KEY
+ * instead of its VALUE (ksort()/krsort()); `reverse` flips the ordering
+ * (rsort()/arsort()/krsort()); `reindex` renumbers keys 0..n-1 after
+ * sorting (sort()/rsort() -- real PHP semantics: these two specifically
+ * DISCARD the original keys, unlike every other sort variant here). */
+static void php_array_sort_by(PhpKVArray *a, int cmp_by_key, int reverse, int reindex) {
+    int i, j;
+    for (i = 1; i < a->count; i++) {
+        PhpKV tmp = a->items[i];
+        j = i - 1;
+        while (j >= 0) {
+            const char *ka = cmp_by_key ? a->items[j].key : a->items[j].val;
+            const char *kb = cmp_by_key ? tmp.key : tmp.val;
+            int c = php_default_cmp(ka, kb);
+            if (reverse) c = -c;
+            if (c <= 0) break;
+            a->items[j + 1] = a->items[j];
+            j--;
+        }
+        a->items[j + 1] = tmp;
+    }
+    if (reindex) {
+        for (i = 0; i < a->count; i++) {
+            char k[16]; snprintf(k, sizeof k, "%d", i);
+            strncpy(a->items[i].key, k, sizeof a->items[i].key - 1); a->items[i].key[sizeof a->items[i].key - 1] = 0;
+        }
+    }
+    a->cursor = 0;
+}
+static PhpKVArray *php_varref_mutable_array(PhpVarRef *ref) {
+    if (!ref->var || ref->has_key || ref->has_member) return NULL;
+    if (ref->var->is_array) return &ref->var->arr;
+    int aid = php_arrref_decode(ref->var->val);
+    if (aid < 0) {
+        aid = php_array_new();
+        if (aid < 0) return NULL;
+        php_arrref_encode(aid, ref->var->val, sizeof ref->var->val);
+    }
+    return &g_arrays[aid];
 }
 
 /* Same idea as php_var_real_array(), for an OBJECT PROPERTY's value
@@ -2179,6 +2393,43 @@ static void php_lvalue_assign(PhpState *st, PhpKVArray *container, const char *k
     }
     char val[PHP_VAL_MAX];
     php_eval_expr(st, val, sizeof val);
+    /* Real PHP: array assignment is always a VALUE copy, never aliasing
+     * -- "$this->b = $this->a;" (or "$arr2[$k] = $arr1['x'];", any
+     * "container[key] = <bare-expression-yielding-an-array>;" shape)
+     * must give $this->b its OWN independent array, not point it at the
+     * exact same g_arrays[] slot $this->a already uses. This is a
+     * DIFFERENT code path from the "array(...)"/"[...]" literal-RHS
+     * branches just above (those already allocate a genuinely fresh
+     * g_arrays[] slot on every assignment, since a literal always
+     * builds new storage) -- this is specifically the "RHS already
+     * evaluated to an existing arrref TOKEN, pointing at storage some
+     * OTHER variable/property already owns" case, which php_eval_expr's
+     * own "$name" bare-read path already handles correctly for a PLAIN
+     * local variable (see its own "snapshot into a fresh slot" comment)
+     * but this container-based lvalue path never did. Confirmed as a
+     * real, severe, previously-undiscovered bug via a direct repro
+     * ("$this->b = $this->a; $this->b['y'] = 2;" also mutating
+     * $this->a) traced back from real WordPress core's own
+     * WP_Query::parse_query() ("$this->query = wp_parse_args($query);
+     * $this->query_vars = $this->query;" -- two DIFFERENT properties
+     * meant to independently diverge, since $this->query_vars is
+     * immediately afterward filled in with ~60 more default keys via
+     * fill_query_vars() while $this->query is supposed to stay exactly
+     * the caller's own original, unfilled keys) -- with the two
+     * properties actually ALIASED, $this->query ended up with every
+     * one of those same ~60 default keys too, so "isset($this->query
+     * ['s'])" (WordPress's own real way of asking "did the ORIGINAL
+     * request explicitly include a search term") was always true
+     * (every request has an empty 's' DEFAULT key once fill_query_vars
+     * runs), permanently misclassifying every single page load as a
+     * search query -- is_home()/is_front_page()/the document title/
+     * the whole template-selection conditional-tag chain downstream of
+     * that one flag were all silently wrong as a direct result. */
+    int aid = php_arrref_decode(val);
+    if (aid >= 0) {
+        int copy_id = php_array_deep_copy(aid);
+        if (copy_id >= 0) php_arrref_encode(copy_id, val, sizeof val);
+    }
     if (container) php_kv_set(container, key, val);
 }
 
@@ -2389,6 +2640,27 @@ static int php_resolve_lvalue_chain(PhpState *st, const char *name, char c, PhpK
 static void php_eval_factor(PhpState *st, char *out, int outcap) {
     php_skip_ws(st);
     char c = *st->src;
+    if (c == '@') {
+        /* "@expr" -- real PHP's error-suppression operator (silences
+         * any warning/notice the expression would otherwise raise).
+         * This subset has no warnings/notices to suppress in the first
+         * place, so the correct simplification is a plain pass-through
+         * to the following expression -- NOT a no-op that leaves "@"
+         * unconsumed. Before this case existed, a leading "@" matched
+         * nothing in this whole function (same failure shape as "&"'s
+         * own fix just above: falls through everything else, including
+         * the number-literal scanner at the bottom, which needs a
+         * digit/'.'/'-' and "@" has none) -- st->src never advanced,
+         * so the expression evaluated to "" and desynced whatever
+         * parsing happened next. Confirmed as a real bug via
+         * maybe_unserialize()'s own "return @unserialize(trim($data));"
+         * (wp-includes/functions.php) -- the single most common real
+         * use of "@" across WordPress core -- always returning empty
+         * instead of the real unserialized value. */
+        st->src++;
+        php_eval_factor(st, out, outcap);
+        return;
+    }
     if (c == '!') {
         st->src++;
         char inner[PHP_VAL_MAX];
@@ -2672,7 +2944,8 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
                      * parameters. */
                     int aid = php_arrref_decode(v->val);
                     if (aid >= 0) php_kv_lookup(&g_arrays[aid], key, cur, sizeof cur);
-                    else cur[0] = 0;
+                    else if (php_objref_decode(v->val) >= 0) cur[0] = 0;
+                    else php_string_char_at(v->val, key, cur, sizeof cur);
                 }
                 else cur[0] = 0;
             } else if (v && v->is_array) {
@@ -2775,8 +3048,14 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
                 }
                 c = *st->src;
                 if (c == ']') st->src++;
-                if (aid >= 0) php_kv_lookup(&g_arrays[aid], key, cur, sizeof cur);
-                else cur[0] = 0;
+                if (aid >= 0) {
+                    php_kv_lookup(&g_arrays[aid], key, cur, sizeof cur);
+                } else if (php_objref_decode(cur) >= 0) {
+                    cur[0] = 0;
+                } else {
+                    char sc[2]; php_string_char_at(cur, key, sc, sizeof sc);
+                    strncpy(cur, sc, sizeof cur - 1); cur[sizeof cur - 1] = 0;
+                }
             }
             php_skip_ws(st);
             c = *st->src;
@@ -2921,7 +3200,26 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
              * it as a function argument, ...) just work through the
              * existing plain-string machinery with no special-casing. */
             char cname[64];
-            php_read_ident(st, cname, sizeof cname);
+            php_skip_ws(st);
+            if (*st->src == '$') {
+                /* "new $manager($user_id)" -- a DYNAMIC class name (the
+                 * name itself is a variable, e.g. built from a filtered
+                 * string like WP_Session_Tokens::get_instance()'s own
+                 * "$manager = apply_filters('session_token_manager',
+                 * 'WP_User_Meta_Session_Tokens'); return new
+                 * $manager($user_id);") -- a real, common PHP pattern
+                 * for pluggable/filterable class instantiation.
+                 * php_read_ident() returns an empty string and consumes
+                 * NOTHING when the next char is "$", which used to leave
+                 * "$manager(...)" completely unconsumed, badly desyncing
+                 * everything parsed after it. Same fix, same reasoning,
+                 * as the "$obj->$field" dynamic-member-name fix. */
+                char dyn[PHP_VAL_MAX];
+                php_eval_factor(st, dyn, sizeof dyn);
+                strncpy(cname, dyn, sizeof cname - 1); cname[sizeof cname - 1] = 0;
+            } else {
+                php_read_ident(st, cname, sizeof cname);
+            }
             php_skip_ws(st);
             c = *st->src;
             char arg_storage[PHP_ARG_MAX][PHP_VAL_MAX];
@@ -3323,6 +3621,166 @@ static void php_eval_factor(PhpState *st, char *out, int outcap) {
                 }
                 return;
             }
+            if (strcmp(name, "sort") == 0 || strcmp(name, "rsort") == 0 || strcmp(name, "asort") == 0 ||
+                strcmp(name, "arsort") == 0 || strcmp(name, "ksort") == 0 || strcmp(name, "krsort") == 0) {
+                /* Real PHP declares every one of these "function
+                 * sort(array &$array, ...): bool" -- by reference, same
+                 * "resolve the raw variable" story as array_unshift()
+                 * above (see its own comment for why a bare read
+                 * otherwise snapshots instead of sharing storage).
+                 * Previously entirely UNIMPLEMENTED -- found in this
+                 * session's own audit of real builtins the vendored
+                 * WordPress tree calls vs. what this file implements. */
+                st->src++;
+                PhpVarRef ref;
+                php_resolve_varref(st, &ref);
+                php_skip_ws(st);
+                if (*st->src == ',') { st->src++; php_eval_expr(st, out, outcap); php_skip_ws(st); } /* optional $flags arg, evaluated for side effects/consumption then ignored -- SORT_REGULAR-shaped default only, see php_default_cmp's own comment */
+                if (*st->src == ')') st->src++;
+                PhpKVArray *a = php_varref_mutable_array(&ref);
+                if (a) {
+                    int by_key = (strcmp(name, "ksort") == 0 || strcmp(name, "krsort") == 0);
+                    int reverse = (strcmp(name, "rsort") == 0 || strcmp(name, "arsort") == 0 || strcmp(name, "krsort") == 0);
+                    int reindex = (strcmp(name, "sort") == 0 || strcmp(name, "rsort") == 0);
+                    php_array_sort_by(a, by_key, reverse, reindex);
+                }
+                strncpy(out, "1", outcap - 1); out[outcap - 1] = 0;
+                return;
+            }
+            if (strcmp(name, "usort") == 0 || strcmp(name, "uasort") == 0 || strcmp(name, "uksort") == 0) {
+                /* Same by-reference story, plus a real user callback
+                 * (a bare insertion sort, same "simple first" scope as
+                 * php_array_sort_by's own comment -- calls the callback
+                 * via php_invoke_callable for every comparison, same
+                 * mechanism call_user_func() already uses). */
+                st->src++;
+                PhpVarRef ref;
+                php_resolve_varref(st, &ref);
+                php_skip_ws(st);
+                char callable[PHP_VAL_MAX]; callable[0] = 0;
+                if (*st->src == ',') { st->src++; php_eval_expr(st, callable, sizeof callable); php_skip_ws(st); }
+                if (*st->src == ')') st->src++;
+                PhpKVArray *a = php_varref_mutable_array(&ref);
+                if (a && callable[0]) {
+                    int by_key = (strcmp(name, "uksort") == 0);
+                    int reindex = (strcmp(name, "usort") == 0);
+                    int i, j;
+                    for (i = 1; i < a->count; i++) {
+                        PhpKV tmp = a->items[i];
+                        j = i - 1;
+                        while (j >= 0) {
+                            char *cargs[2];
+                            char c0[128], c1[128];
+                            cargs[0] = c0; cargs[1] = c1;
+                            strncpy(c0, by_key ? a->items[j].key : a->items[j].val, sizeof c0 - 1); c0[sizeof c0 - 1] = 0;
+                            strncpy(c1, by_key ? tmp.key : tmp.val, sizeof c1 - 1); c1[sizeof c1 - 1] = 0;
+                            char r[PHP_VAL_MAX];
+                            php_invoke_callable(st, callable, cargs, 2, r, sizeof r);
+                            if (atoi(r) <= 0) break;
+                            a->items[j + 1] = a->items[j];
+                            j--;
+                        }
+                        a->items[j + 1] = tmp;
+                    }
+                    if (reindex) {
+                        for (i = 0; i < a->count; i++) {
+                            char k[16]; snprintf(k, sizeof k, "%d", i);
+                            strncpy(a->items[i].key, k, sizeof a->items[i].key - 1); a->items[i].key[sizeof a->items[i].key - 1] = 0;
+                        }
+                    }
+                    a->cursor = 0;
+                }
+                strncpy(out, "1", outcap - 1); out[outcap - 1] = 0;
+                return;
+            }
+            if (strcmp(name, "array_push") == 0) {
+                /* "function array_push(array &$array, mixed ...$values): int"
+                 * -- by reference, same story as array_unshift() (its own
+                 * mirror-image sibling) but appending at the END instead
+                 * of the front, with fresh auto-incrementing integer
+                 * keys (real PHP semantics -- array_push() always uses
+                 * plain 0..n-1-shaped NEXT keys, even on an array with
+                 * non-sequential/string keys already in it). */
+                st->src++;
+                PhpVarRef ref;
+                php_resolve_varref(st, &ref);
+                php_skip_ws(st);
+                PhpKVArray *a = php_varref_mutable_array(&ref);
+                while (*st->src == ',') {
+                    st->src++;
+                    char v[PHP_VAL_MAX];
+                    php_eval_expr(st, v, sizeof v);
+                    php_skip_ws(st);
+                    if (a) {
+                        int maxk = -1, ii;
+                        for (ii = 0; ii < a->count; ii++) { char *e; long n = strtol(a->items[ii].key, &e, 10); if (*e == 0 && (int)n > maxk) maxk = (int)n; }
+                        char k[16]; snprintf(k, sizeof k, "%d", maxk + 1);
+                        php_kv_set(a, k, v);
+                    }
+                }
+                if (*st->src == ')') st->src++;
+                snprintf(out, outcap, "%d", a ? a->count : 0);
+                return;
+            }
+            if (strcmp(name, "array_shift") == 0) {
+                /* "function array_shift(array &$array): mixed" -- by
+                 * reference; removes and returns the FIRST element,
+                 * shifting every remaining element down and (real PHP
+                 * semantics) renumbering every INTEGER key back to
+                 * 0..n-2 (string keys are left untouched). */
+                st->src++;
+                PhpVarRef ref;
+                php_resolve_varref(st, &ref);
+                php_skip_ws(st);
+                if (*st->src == ')') st->src++;
+                PhpKVArray *a = php_varref_mutable_array(&ref);
+                if (a && a->count > 0) {
+                    strncpy(out, a->items[0].val, outcap - 1); out[outcap - 1] = 0;
+                    int i, next_idx = 0;
+                    for (i = 1; i < a->count; i++) {
+                        char *e; strtol(a->items[i].key, &e, 10);
+                        int is_int_key = (*e == 0 && a->items[i].key[0] != 0);
+                        a->items[i - 1] = a->items[i];
+                        if (is_int_key) {
+                            char k[16]; snprintf(k, sizeof k, "%d", next_idx++);
+                            strncpy(a->items[i - 1].key, k, sizeof a->items[i - 1].key - 1); a->items[i - 1].key[sizeof a->items[i - 1].key - 1] = 0;
+                        }
+                    }
+                    a->count--;
+                    a->cursor = 0;
+                } else {
+                    out[0] = 0;
+                }
+                return;
+            }
+            if (strcmp(name, "parse_str") == 0) {
+                /* "function parse_str(string $string, array &$result): void"
+                 * -- the SECOND argument is by reference, same story as
+                 * array_unshift()/sort()/etc above (see array_unshift's
+                 * own comment). Previously entirely UNIMPLEMENTED. Parses
+                 * a real query-string ("a=1&b[]=2&c=3") the same way
+                 * php_parse_kv_string() already does for $_GET/$_POST
+                 * (this file's own request-parsing helper), reused here
+                 * directly. */
+                st->src++;
+                char qs[PHP_VAL_MAX];
+                php_eval_expr(st, qs, sizeof qs);
+                php_skip_ws(st);
+                if (*st->src == ',') {
+                    st->src++;
+                    PhpVarRef ref;
+                    php_resolve_varref(st, &ref);
+                    php_skip_ws(st);
+                    PhpKVArray *a = php_varref_mutable_array(&ref);
+                    if (a) {
+                        a->count = 0; a->cursor = 0; /* real parse_str() REPLACES the array's own content */
+                        php_parse_kv_string(qs, a);
+                    }
+                }
+                if (*st->src == ')') st->src++;
+                out[0] = 0;
+                return;
+            }
             char arg_storage[PHP_ARG_MAX][PHP_VAL_MAX];
             char *args[PHP_ARG_MAX];
             int ai;
@@ -3362,12 +3820,30 @@ static void php_eval_term(PhpState *st, char *out, int outcap) {
     for (;;) {
         php_skip_ws(st);
         char c = *st->src;
-        if (c == '*' || c == '/') {
+        if (c == '*' || c == '/' || c == '%') {
+            /* "%" is real PHP's modulo operator at this same precedence
+             * level (alongside "*"/"/") -- previously entirely
+             * UNIMPLEMENTED (not checked for at all in this loop), a
+             * real, high-impact, previously-undiscovered gap: "$n % 2"
+             * silently evaluated to just "$n" itself (the "% 2" text was
+             * simply left unconsumed, dangling for whatever ran next to
+             * deal with) -- confirmed via a direct repro ("$n % 2"
+             * returning 4 instead of 0 for $n=4). A real, common
+             * operator (even/odd checks, alternating-row template
+             * classes, cyclic pagination, hashing). Real PHP modulo
+             * casts both operands to int first (unlike "*"/"/", which
+             * stay floating-point) and is undefined/zero here for a
+             * zero divisor, matching this file's own existing "/"-by-
+             * zero "degrade to 0.0" choice rather than a fatal
+             * DivisionByZeroError. */
             char op = c; st->src++;
             char rhs[PHP_VAL_MAX];
             php_eval_factor(st, rhs, sizeof rhs);
             double a = php_to_num(lhs), b = php_to_num(rhs);
-            double r = (op == '*') ? a * b : (b != 0 ? a / b : 0.0);
+            double r;
+            if (op == '*') r = a * b;
+            else if (op == '/') r = (b != 0 ? a / b : 0.0);
+            else { long ib = (long)b; r = ib != 0 ? (double)((long)a % ib) : 0.0; }
             php_num_to_str(r, lhs, sizeof lhs);
         } else break;
     }
@@ -5828,8 +6304,26 @@ static void php_run_statement(PhpState *st) {
          * real WordPress theme/plugin templates (nav menus, widget
          * lists, block/attribute iteration, ...), not just the Loop. */
         int alt = (c == ':');
-        if (c != '{' && !alt) return;
-        st->src++;
+        /* A bare, single-statement body ("foreach ($a as $v) echo $v;",
+         * no braces) was previously simply UNHANDLED: this whole
+         * function returned immediately without consuming even the one
+         * statement that follows, silently skipping both the loop AND
+         * whatever real code came after it (left for php_run_statements'
+         * own stuck-guard to eat one character at a time). Found this
+         * session via a repro exercising a bare foreach body for
+         * apparently the first time in this project's whole testing
+         * history -- if/while's own bare-body support (see their own
+         * comments) was fixed long ago, foreach's never was. Mirrors
+         * that same "execute exactly one real statement via
+         * php_run_statement() when iterating, php_skip_one_statement()
+         * to consume it inertly once nothing (or nothing more) needs to
+         * run" pattern. */
+        int braced = (c == '{');
+        if (!braced && !alt) {
+            /* bare: body_start is the statement itself, nothing to skip past first */
+        } else {
+            st->src++;
+        }
         const char *body_start = st->src;
         const char *stopkws[1]; stopkws[0] = "endforeach";
         if (src_arr) {
@@ -5849,13 +6343,16 @@ static void php_run_statement(PhpState *st) {
                 if (alt) {
                     php_run_statements_alt(st, stopkws, 1);
                     if (st->returning || g_exiting) return;
-                } else {
+                } else if (braced) {
                     php_run_statements(st);
                     if (st->returning || g_exiting) {
                         st->src = body_start; php_skip_to_brace_close(st);
                         if (*st->src == '}') st->src++;
                         return;
                     }
+                } else {
+                    php_run_statement(st);
+                    if (st->returning || g_exiting) return;
                 }
                 if (st->breaking) { st->breaking = 0; break; }
                 if (st->continuing) st->continuing = 0;
@@ -5871,6 +6368,7 @@ static void php_run_statement(PhpState *st) {
             }
             return;
         }
+        if (!braced) { php_skip_one_statement(st); return; }
         php_skip_to_brace_close(st);
         c = *st->src;
         if (c == '}') st->src++;
@@ -6806,8 +7304,216 @@ static void php_compact_add(PhpState *caller, int id, const char *varname) {
     }
 }
 
+/* Real PHP serialize()/unserialize() -- previously entirely UNIMPLEMENTED
+ * (fell through to this file's generic "unknown function -> ''"
+ * degrade). A real, pervasive gap: maybe_serialize()/maybe_unserialize()
+ * (wp-includes/functions.php) are what EVERY options/postmeta/usermeta
+ * row holding a non-scalar (array or object) value goes through --
+ * confirmed as the direct cause of WP_User_Meta_Session_Tokens (backing
+ * "stay logged in across requests") silently losing its own session
+ * list, since update_user_meta()'s own array-valued "session_tokens"
+ * entry was being maybe_serialize()'d into "" and read back as nothing.
+ * This subset has no real variable TYPE tracking (every value is just a
+ * string, or a magic-prefixed token for an array/object reference -- see
+ * php_arrref_encode/php_objref_encode's own comments) so a scalar's
+ * serialized TYPE tag (i:/d:/s:/b:) is inferred from its own text shape
+ * (an integer-looking string serializes as i:N;, etc) rather than a real
+ * preserved type -- documented, matches this file's usual "good enough
+ * for the real shapes WordPress actually stores, not a from-scratch PHP
+ * VM" scope limit. Recursive, depth-capped at 32 (same "degrade safely
+ * on pathological/adversarial input rather than blow the native stack"
+ * convention every other recursive structure in this file already
+ * follows -- see php_array_deep_copy's own comment). */
+static void php_serialize_append(char *out, int *pos, int cap, const char *s) {
+    int n = (int)strlen(s);
+    if (*pos >= cap) return;
+    if (n > cap - *pos) n = cap - *pos;
+    memcpy(out + *pos, s, (size_t)n);
+    *pos += n;
+    if (*pos < cap) out[*pos] = 0;
+}
+static void php_serialize_value(const char *val, char *out, int *pos, int cap, int depth) {
+    if (depth > 32) { php_serialize_append(out, pos, cap, "N;"); return; }
+    int oid = php_objref_decode(val);
+    int aid = php_arrref_decode(val);
+    if (oid >= 0) {
+        PhpObject *o = &g_objects[oid];
+        char head[160];
+        snprintf(head, sizeof head, "O:%d:\"%s\":%d:{", (int)strlen(o->class_name), o->class_name, o->props.count);
+        php_serialize_append(out, pos, cap, head);
+        int i;
+        for (i = 0; i < o->props.count; i++) {
+            char kh[160];
+            snprintf(kh, sizeof kh, "s:%d:\"%s\";", (int)strlen(o->props.items[i].key), o->props.items[i].key);
+            php_serialize_append(out, pos, cap, kh);
+            php_serialize_value(o->props.items[i].val, out, pos, cap, depth + 1);
+        }
+        php_serialize_append(out, pos, cap, "}");
+    } else if (aid >= 0) {
+        PhpKVArray *a = &g_arrays[aid];
+        char head[32];
+        snprintf(head, sizeof head, "a:%d:{", a->count);
+        php_serialize_append(out, pos, cap, head);
+        int i;
+        for (i = 0; i < a->count; i++) {
+            const char *k = a->items[i].key;
+            char *endp;
+            long kn = strtol(k, &endp, 10);
+            if (k[0] && *endp == 0 && !(k[0] == '0' && k[1] != 0)) {
+                char kh[32]; snprintf(kh, sizeof kh, "i:%ld;", kn);
+                php_serialize_append(out, pos, cap, kh);
+            } else {
+                char kh[160]; snprintf(kh, sizeof kh, "s:%d:\"%s\";", (int)strlen(k), k);
+                php_serialize_append(out, pos, cap, kh);
+            }
+            php_serialize_value(a->items[i].val, out, pos, cap, depth + 1);
+        }
+        php_serialize_append(out, pos, cap, "}");
+    } else {
+        /* Scalar -- infer a type tag from the string's own shape (see
+         * this whole helper's own top comment on why). */
+        if (!val[0]) {
+            php_serialize_append(out, pos, cap, "s:0:\"\";");
+            return;
+        }
+        const char *p = val;
+        if (*p == '-') p++;
+        int all_digit = *p != 0;
+        const char *pp = p;
+        for (; *pp; pp++) if (*pp < '0' || *pp > '9') { all_digit = 0; break; }
+        int clean_int = all_digit && !(p[0] == '0' && p[1] != 0);
+        if (clean_int) {
+            char t[160]; snprintf(t, sizeof t, "i:%s;", val);
+            php_serialize_append(out, pos, cap, t);
+            return;
+        }
+        char *fendp;
+        double fv = strtod(val, &fendp);
+        if (fendp != val && *fendp == 0 && strchr(val, '.')) {
+            char t[192]; snprintf(t, sizeof t, "d:%.17g;", fv);
+            php_serialize_append(out, pos, cap, t);
+            return;
+        }
+        char t[64]; snprintf(t, sizeof t, "s:%d:\"", (int)strlen(val));
+        php_serialize_append(out, pos, cap, t);
+        php_serialize_append(out, pos, cap, val);
+        php_serialize_append(out, pos, cap, "\";");
+    }
+}
+/* Parses exactly one serialized value starting at `s`, writes this
+ * subset's own value representation (a scalar string, or a fresh
+ * arrref-/objref-encoded token) into `out`, and returns a pointer to the
+ * character immediately after the parsed value (so a caller walking an
+ * array/object body can keep calling this for each key/value pair in
+ * turn) -- or NULL on malformed input (this file's usual "degrade
+ * safely" response to bad data, not a crash). */
+static const char *php_unserialize_value(const char *s, char *out, int outcap, int depth) {
+    if (!s || !*s || depth > 32) { out[0] = 0; return NULL; }
+    char tag = s[0];
+    if (tag == 'N' && s[1] == ';') { out[0] = 0; return s + 2; }
+    if (tag == 'b' && s[1] == ':') {
+        int v = s[2] == '1';
+        strncpy(out, v ? "1" : "", outcap - 1); out[outcap - 1] = 0;
+        const char *semi = strchr(s + 2, ';');
+        return semi ? semi + 1 : NULL;
+    }
+    if ((tag == 'i' || tag == 'd') && s[1] == ':') {
+        const char *semi = strchr(s + 2, ';');
+        if (!semi) return NULL;
+        int n = (int)(semi - (s + 2)); if (n >= outcap) n = outcap - 1;
+        memcpy(out, s + 2, (size_t)n); out[n] = 0;
+        return semi + 1;
+    }
+    if (tag == 's' && s[1] == ':') {
+        int len = atoi(s + 2);
+        const char *q = strchr(s + 2, '"');
+        if (!q) return NULL;
+        q++;
+        if (len < 0) len = 0;
+        int n = len; if (n >= outcap) n = outcap - 1;
+        memcpy(out, q, (size_t)n); out[n] = 0;
+        const char *after = q + len;
+        if (after[0] == '"') after++;
+        if (after[0] == ';') after++;
+        return after;
+    }
+    if (tag == 'a' && s[1] == ':') {
+        int count = atoi(s + 2);
+        const char *brace = strchr(s + 2, '{');
+        if (!brace) return NULL;
+        const char *p = brace + 1;
+        int aid = php_array_new();
+        int i;
+        for (i = 0; i < count && p; i++) {
+            char key[128];
+            p = php_unserialize_value(p, key, sizeof key, depth + 1);
+            if (!p) break;
+            char val[PHP_VAL_MAX];
+            p = php_unserialize_value(p, val, sizeof val, depth + 1);
+            if (!p) break;
+            if (aid >= 0) php_kv_set(&g_arrays[aid], key, val);
+        }
+        if (p && *p == '}') p++;
+        if (aid >= 0) php_arrref_encode(aid, out, outcap); else out[0] = 0;
+        return p;
+    }
+    if (tag == 'O' && s[1] == ':') {
+        int nlen = atoi(s + 2);
+        const char *q = strchr(s + 2, '"');
+        if (!q) return NULL;
+        q++;
+        char cname[64];
+        int n = nlen; if (n >= (int)sizeof cname) n = (int)sizeof cname - 1;
+        memcpy(cname, q, (size_t)n); cname[n] = 0;
+        const char *after_name = q + nlen;
+        if (after_name[0] == '"') after_name++;
+        const char *colon2 = strchr(after_name, ':');
+        if (!colon2) return NULL;
+        int count = atoi(colon2 + 1);
+        const char *brace = strchr(colon2, '{');
+        if (!brace) return NULL;
+        const char *p = brace + 1;
+        int oid = php_object_new(cname);
+        int i;
+        for (i = 0; i < count && p; i++) {
+            char key[128];
+            p = php_unserialize_value(p, key, sizeof key, depth + 1);
+            if (!p) break;
+            char val[PHP_VAL_MAX];
+            p = php_unserialize_value(p, val, sizeof val, depth + 1);
+            if (!p) break;
+            if (oid >= 0) php_kv_set(&g_objects[oid].props, key, val);
+        }
+        if (p && *p == '}') p++;
+        if (oid >= 0) php_objref_encode(oid, out, outcap); else out[0] = 0;
+        return p;
+    }
+    out[0] = 0;
+    return NULL;
+}
+
 static void php_call_function(PhpState *caller, const char *name, char **args, int nargs, char *out, int outcap) {
     if (g_suppress_calls > 0) { out[0] = 0; return; } /* short-circuited "&&"/"||" -- see g_suppress_calls's own comment */
+    if (strcmp(name, "serialize") == 0 && nargs >= 1) {
+        int pos = 0;
+        out[0] = 0;
+        php_serialize_value(args[0], out, &pos, outcap, 0);
+        return;
+    }
+    if (strcmp(name, "unserialize") == 0 && nargs >= 1) {
+        php_unserialize_value(args[0], out, outcap, 0);
+        return;
+    }
+    if (strcmp(name, "is_serialized") == 0 && nargs >= 1) {
+        const char *v = args[0];
+        int ok = 0;
+        if (v[0] && v[1] == ':') {
+            char t = v[0];
+            if (t == 'N' || t == 'b' || t == 'i' || t == 'd' || t == 's' || t == 'a' || t == 'O') ok = 1;
+        } else if (strcmp(v, "N;") == 0) ok = 1;
+        strncpy(out, ok ? "1" : "", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
     if (strcmp(name, "header") == 0 && nargs >= 1) {
         /* See PhpState.headers_buf's own comment. Appends the raw header
          * line as-is (real PHP's own header() takes the literal
@@ -6869,6 +7575,56 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
          * own "if (headers_sent()) { ... }" cookie-blocked-detection
          * branch) treats a false return as the normal, expected case. */
         strncpy(out, "", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "ob_start") == 0) {
+        /* See g_ob_depth's own comment for the full design. */
+        if (g_ob_depth < PHP_OB_STACK_MAX) {
+            g_ob_saved_out[g_ob_depth] = caller->out;
+            g_ob_saved_len[g_ob_depth] = caller->out_len;
+            g_ob_saved_cap[g_ob_depth] = caller->out_cap;
+            g_ob_depth++;
+            char *buf = (char *)malloc(PHP_OUT_MAX);
+            if (buf) { buf[0] = 0; caller->out = buf; caller->out_len = 0; caller->out_cap = PHP_OUT_MAX; }
+        }
+        strncpy(out, "1", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "ob_get_contents") == 0) {
+        /* Real PHP returns false if no buffer is active -- this file's
+         * usual "" for a falsy return. */
+        strncpy(out, g_ob_depth > 0 ? caller->out : "", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "ob_get_clean") == 0 || strcmp(name, "ob_end_clean") == 0 || strcmp(name, "ob_end_flush") == 0 || strcmp(name, "ob_get_flush") == 0) {
+        /* "*_clean" discards the captured content into the return value
+         * (ob_get_clean()) or nowhere (ob_end_clean(), real bool return);
+         * "*_flush" instead APPENDS it onto the now-restored parent
+         * buffer (real PHP: sends it "to the browser"/the next buffer
+         * down) before restoring -- ob_get_flush() does both (appends
+         * AND returns it). */
+        if (g_ob_depth > 0) {
+            char *cur = caller->out;
+            int cur_len = caller->out_len;
+            g_ob_depth--;
+            caller->out = g_ob_saved_out[g_ob_depth];
+            caller->out_len = g_ob_saved_len[g_ob_depth];
+            caller->out_cap = g_ob_saved_cap[g_ob_depth];
+            int want_flush = (strcmp(name, "ob_end_flush") == 0 || strcmp(name, "ob_get_flush") == 0);
+            int want_return = (strcmp(name, "ob_get_clean") == 0 || strcmp(name, "ob_get_flush") == 0);
+            if (want_flush && caller->out && caller->out_len < caller->out_cap - 1) {
+                int room = caller->out_cap - caller->out_len - 1;
+                int n = cur_len < room ? cur_len : room;
+                memcpy(caller->out + caller->out_len, cur, (size_t)n);
+                caller->out_len += n;
+                caller->out[caller->out_len] = 0;
+            }
+            if (want_return) { strncpy(out, cur, outcap - 1); out[outcap - 1] = 0; }
+            else { strncpy(out, "1", outcap - 1); out[outcap - 1] = 0; }
+            free(cur);
+        } else {
+            out[0] = 0;
+        }
         return;
     }
     if (strcmp(name, "define") == 0 && nargs >= 2) {
@@ -7145,6 +7901,109 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
         php_invoke_callable(caller, args[0], fwd, fn2, out, outcap);
         return;
     }
+    if (strcmp(name, "intval") == 0 && nargs >= 1) {
+        /* Previously entirely UNIMPLEMENTED -- fell through to this
+         * file's generic "unknown function -> ''" degrade, i.e. always
+         * "" (a real, high-impact bug for any caller doing numeric
+         * comparison/arithmetic on the "converted" result -- confirmed
+         * this session via array_map('intval', $object_ids) inside
+         * WordPress core's own update_meta_cache()). long, not atoi()'s
+         * int, to match this file's own (long)strtol()-based `is_int()`
+         * -- consistent overflow behavior between the two. */
+        long v = strtol(args[0], NULL, 10);
+        snprintf(out, outcap, "%ld", v);
+        return;
+    }
+    if (strcmp(name, "floatval") == 0 || strcmp(name, "doubleval") == 0) {
+        double v = nargs >= 1 ? php_to_num(args[0]) : 0.0;
+        php_num_to_str(v, out, outcap);
+        return;
+    }
+    if (strcmp(name, "strval") == 0) {
+        strncpy(out, nargs >= 1 ? args[0] : "", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "boolval") == 0) {
+        strncpy(out, (nargs >= 1 && php_truthy(args[0])) ? "1" : "", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "array_map") == 0 && nargs >= 2) {
+        /* Previously entirely UNIMPLEMENTED -- fell through to this
+         * file's generic "unknown function -> ''" degrade, which then
+         * count()s as a single scalar (empty string), not an array at
+         * all. One of THE most-used real PHP array builtins in
+         * WordPress core (array_map('intval', ...), array_map(
+         * 'sanitize_text_field', ...), array_map(array($this,'method'),
+         * ...), ...) -- confirmed as a real, severe, high-impact bug
+         * while chasing why session persistence never worked:
+         * update_meta_cache()'s own "$object_ids = array_map('intval',
+         * $object_ids);" silently collapsed a real multi-element id list
+         * down to a single non-element, so wp_cache_get_multiple()
+         * never even looked up the real id, and every subsequent
+         * "was this already cached" check silently treated EVERY
+         * object id as already-cached-and-empty. `args[0]` is the
+         * callable (a plain function name, "Class::method", or an
+         * arrref-encoded "array($obj,'method')"/"array('Class',
+         * 'method')" pair -- same callable shapes php_invoke_callable()
+         * already resolves for call_user_func()), `args[1]` the array
+         * to map (real PHP supports mapping MULTIPLE arrays in
+         * parallel -- not modeled here, a documented, narrower gap;
+         * the single-array form is by far the dominant real shape).
+         * Preserves the original array's own keys, matching real PHP's
+         * own single-array array_map() semantics. */
+        int aid = php_arrref_decode(args[1]);
+        int nid = php_array_new();
+        if (aid >= 0 && nid >= 0) {
+            int i;
+            for (i = 0; i < g_arrays[aid].count; i++) {
+                char one_arg_storage[PHP_VAL_MAX];
+                char *one_arg = one_arg_storage;
+                strncpy(one_arg, g_arrays[aid].items[i].val, PHP_VAL_MAX - 1); one_arg[PHP_VAL_MAX - 1] = 0;
+                char mapped[PHP_VAL_MAX];
+                php_invoke_callable(caller, args[0], &one_arg, 1, mapped, sizeof mapped);
+                php_kv_set(&g_arrays[nid], g_arrays[aid].items[i].key, mapped);
+            }
+        }
+        if (nid >= 0) php_arrref_encode(nid, out, outcap); else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "array_filter") == 0 && nargs >= 1) {
+        /* Previously entirely UNIMPLEMENTED, same "unknown function ->
+         * ''" degrade as array_map() above. Used directly by real
+         * WordPress core's own WP_Session_Tokens::get_sessions() ("
+         * return array_filter($sessions, array($this,
+         * 'is_still_valid'));", gating which sessions are still valid
+         * on EVERY logged-in page load) among many other real call
+         * sites. With no `$callback` (args[1] absent), real PHP keeps
+         * every truthy element -- modeled here too. Re-indexes to
+         * consecutive integer keys ONLY when the source array was
+         * itself plain-integer-indexed from 0 (matching real PHP's own
+         * "preserve original keys" behavior for array_filter(), a
+         * common point of confusion but the real, documented
+         * semantics -- keys are NEVER renumbered by array_filter()
+         * itself). */
+        int aid = php_arrref_decode(args[0]);
+        int nid = php_array_new();
+        if (aid >= 0 && nid >= 0) {
+            int i;
+            for (i = 0; i < g_arrays[aid].count; i++) {
+                int keep;
+                if (nargs >= 2 && args[1][0]) {
+                    char one_arg_storage[PHP_VAL_MAX];
+                    char *one_arg = one_arg_storage;
+                    strncpy(one_arg, g_arrays[aid].items[i].val, PHP_VAL_MAX - 1); one_arg[PHP_VAL_MAX - 1] = 0;
+                    char r[PHP_VAL_MAX];
+                    php_invoke_callable(caller, args[1], &one_arg, 1, r, sizeof r);
+                    keep = php_truthy(r);
+                } else {
+                    keep = php_truthy(g_arrays[aid].items[i].val);
+                }
+                if (keep) php_kv_set(&g_arrays[nid], g_arrays[aid].items[i].key, g_arrays[aid].items[i].val);
+            }
+        }
+        if (nid >= 0) php_arrref_encode(nid, out, outcap); else out[0] = 0;
+        return;
+    }
     if ((strcmp(name, "sprintf") == 0 || strcmp(name, "printf") == 0) && nargs >= 1) {
         char formatted[PHP_VAL_MAX];
         php_sprintf(args[0], args, 1, nargs - 1, formatted, sizeof formatted);
@@ -7259,6 +8118,35 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
         char hex[33];
         php_md5_hex((const unsigned char *)args[0], (unsigned long)strlen(args[0]), hex);
         strncpy(out, hex, outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "hash") == 0 && nargs >= 2) {
+        /* Real PHP's hash() supports many algorithms -- this subset only
+         * has a real MD5 primitive (see php_md5_hex's own comment), same
+         * documented tradeoff as hash_hmac()'s own "ignore $algo, always
+         * use the one real hash this file has" choice. Needed by
+         * WP_Session_Tokens::hash_token() ("return hash('sha256',
+         * $token);", used to verify a session's auth-cookie token on
+         * every logged-in page load) -- previously entirely
+         * unimplemented, silently degrading to "" (falsy), which broke
+         * session-token verification unconditionally regardless of
+         * whether the real token was correct. */
+        int raw = (nargs >= 3) && php_truthy(args[2]);
+        char hex[33];
+        php_md5_hex((const unsigned char *)args[1], (unsigned long)strlen(args[1]), hex);
+        if (raw) {
+            unsigned char rawbytes[16];
+            int i;
+            for (i = 0; i < 16; i++) {
+                unsigned int hi = (unsigned int)regex_hex_digit(hex[i * 2]);
+                unsigned int lo = (unsigned int)regex_hex_digit(hex[i * 2 + 1]);
+                rawbytes[i] = (unsigned char)((hi << 4) | lo);
+            }
+            int n = 16; if (n > outcap - 1) n = outcap - 1;
+            memcpy(out, rawbytes, (size_t)n); out[n] = 0;
+        } else {
+            strncpy(out, hex, outcap - 1); out[outcap - 1] = 0;
+        }
         return;
     }
     if (strcmp(name, "hash_hmac") == 0 && nargs >= 3) {
@@ -7945,11 +8833,361 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
         } else out[0] = 0;
         return;
     }
+    if (strcmp(name, "array_reverse") == 0 && nargs >= 1) {
+        /* Real PHP: `$preserve_keys` (2nd arg) keeps original keys when
+         * true; when false/absent (the default, and by far the more
+         * common real call shape), integer keys are renumbered
+         * 0..n-1 -- string keys are ALWAYS preserved either way. */
+        int aid = php_arrref_decode(args[0]);
+        int preserve = nargs >= 2 && php_truthy(args[1]);
+        int id = php_array_new();
+        if (id >= 0) {
+            if (aid >= 0) {
+                int i, ki = 0;
+                for (i = g_arrays[aid].count - 1; i >= 0; i--) {
+                    const char *k = g_arrays[aid].items[i].key;
+                    char *endp; strtol(k, &endp, 10);
+                    int is_int_key = (k[0] != 0 && *endp == 0);
+                    if (preserve || !is_int_key) php_kv_set(&g_arrays[id], k, g_arrays[aid].items[i].val);
+                    else { char nk[16]; snprintf(nk, sizeof nk, "%d", ki++); php_kv_add(&g_arrays[id], nk, g_arrays[aid].items[i].val); }
+                }
+            }
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "array_sum") == 0 && nargs >= 1) {
+        int aid = php_arrref_decode(args[0]);
+        double sum = 0;
+        if (aid >= 0) { int i; for (i = 0; i < g_arrays[aid].count; i++) sum += php_to_num(g_arrays[aid].items[i].val); }
+        php_num_to_str(sum, out, outcap);
+        return;
+    }
+    if (strcmp(name, "array_product") == 0 && nargs >= 1) {
+        int aid = php_arrref_decode(args[0]);
+        double prod = 1;
+        if (aid >= 0) { int i; for (i = 0; i < g_arrays[aid].count; i++) prod *= php_to_num(g_arrays[aid].items[i].val); }
+        else prod = 0;
+        php_num_to_str(prod, out, outcap);
+        return;
+    }
+    if (strcmp(name, "array_fill") == 0 && nargs >= 3) {
+        int start = atoi(args[0]), count = atoi(args[1]);
+        int id = php_array_new();
+        if (id >= 0) {
+            int i; for (i = 0; i < count; i++) { char k[16]; snprintf(k, sizeof k, "%d", start + i); php_kv_set(&g_arrays[id], k, args[2]); }
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "array_fill_keys") == 0 && nargs >= 2) {
+        int aid = php_arrref_decode(args[0]);
+        int id = php_array_new();
+        if (id >= 0) {
+            if (aid >= 0) { int i; for (i = 0; i < g_arrays[aid].count; i++) php_kv_set(&g_arrays[id], g_arrays[aid].items[i].val, args[1]); }
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "array_combine") == 0 && nargs >= 2) {
+        int kaid = php_arrref_decode(args[0]), vaid = php_arrref_decode(args[1]);
+        int id = php_array_new();
+        if (id >= 0) {
+            if (kaid >= 0 && vaid >= 0) {
+                int n = g_arrays[kaid].count < g_arrays[vaid].count ? g_arrays[kaid].count : g_arrays[vaid].count;
+                int i; for (i = 0; i < n; i++) php_kv_set(&g_arrays[id], g_arrays[kaid].items[i].val, g_arrays[vaid].items[i].val);
+            }
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
+    if ((strcmp(name, "array_diff") == 0 || strcmp(name, "array_diff_key") == 0 || strcmp(name, "array_diff_assoc") == 0) && nargs >= 2) {
+        /* array_diff(): keep items whose VALUE doesn't appear in any
+         * other argument array. array_diff_key(): keep items whose KEY
+         * doesn't appear. array_diff_assoc(): keep items whose key=>value
+         * PAIR doesn't appear (both must match to exclude). */
+        int aid = php_arrref_decode(args[0]);
+        int id = php_array_new();
+        if (id >= 0) {
+            if (aid >= 0) {
+                int i, ai;
+                for (i = 0; i < g_arrays[aid].count; i++) {
+                    int found = 0;
+                    for (ai = 1; ai < nargs && !found; ai++) {
+                        int oaid = php_arrref_decode(args[ai]);
+                        if (oaid < 0) continue;
+                        int j;
+                        for (j = 0; j < g_arrays[oaid].count; j++) {
+                            int key_match = strcmp(g_arrays[oaid].items[j].key, g_arrays[aid].items[i].key) == 0;
+                            int val_match = strcmp(g_arrays[oaid].items[j].val, g_arrays[aid].items[i].val) == 0;
+                            if (strcmp(name, "array_diff") == 0 && val_match) { found = 1; break; }
+                            if (strcmp(name, "array_diff_key") == 0 && key_match) { found = 1; break; }
+                            if (strcmp(name, "array_diff_assoc") == 0 && key_match && val_match) { found = 1; break; }
+                        }
+                    }
+                    if (!found) php_kv_set(&g_arrays[id], g_arrays[aid].items[i].key, g_arrays[aid].items[i].val);
+                }
+            }
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
+    if ((strcmp(name, "array_intersect") == 0 || strcmp(name, "array_intersect_key") == 0 || strcmp(name, "array_intersect_assoc") == 0) && nargs >= 2) {
+        int aid = php_arrref_decode(args[0]);
+        int id = php_array_new();
+        if (id >= 0) {
+            if (aid >= 0) {
+                int i, ai;
+                for (i = 0; i < g_arrays[aid].count; i++) {
+                    int in_all = 1;
+                    for (ai = 1; ai < nargs && in_all; ai++) {
+                        int oaid = php_arrref_decode(args[ai]);
+                        int found = 0;
+                        if (oaid >= 0) {
+                            int j;
+                            for (j = 0; j < g_arrays[oaid].count; j++) {
+                                int key_match = strcmp(g_arrays[oaid].items[j].key, g_arrays[aid].items[i].key) == 0;
+                                int val_match = strcmp(g_arrays[oaid].items[j].val, g_arrays[aid].items[i].val) == 0;
+                                if (strcmp(name, "array_intersect") == 0 && val_match) { found = 1; break; }
+                                if (strcmp(name, "array_intersect_key") == 0 && key_match) { found = 1; break; }
+                                if (strcmp(name, "array_intersect_assoc") == 0 && key_match && val_match) { found = 1; break; }
+                            }
+                        }
+                        if (!found) in_all = 0;
+                    }
+                    if (in_all) php_kv_set(&g_arrays[id], g_arrays[aid].items[i].key, g_arrays[aid].items[i].val);
+                }
+            }
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "array_column") == 0 && nargs >= 2) {
+        /* Real PHP's 3rd $index_key arg (use a column's own value as the
+         * result's key instead of 0..n-1) -- supported when given. Each
+         * row is expected to be an array (real WordPress core's own use,
+         * e.g. pluck-shaped code on $wpdb->get_results(..., ARRAY_A)
+         * rows) OR an object (real PHP also supports this; this subset
+         * reads an object property the same way via g_objects[].props). */
+        int aid = php_arrref_decode(args[0]);
+        int id = php_array_new();
+        if (id >= 0) {
+            if (aid >= 0) {
+                int i;
+                for (i = 0; i < g_arrays[aid].count; i++) {
+                    const char *rowval = g_arrays[aid].items[i].val;
+                    int raid = php_arrref_decode(rowval);
+                    int roid = php_objref_decode(rowval);
+                    char colval[PHP_VAL_MAX] = "";
+                    char idxval[PHP_VAL_MAX] = "";
+                    int has_col = 0, has_idx = (nargs < 3);
+                    if (raid >= 0) {
+                        has_col = php_kv_has(&g_arrays[raid], args[1], colval, sizeof colval);
+                        if (nargs >= 3) has_idx = php_kv_has(&g_arrays[raid], args[2], idxval, sizeof idxval);
+                    } else if (roid >= 0) {
+                        has_col = php_kv_has(&g_objects[roid].props, args[1], colval, sizeof colval);
+                        if (nargs >= 3) has_idx = php_kv_has(&g_objects[roid].props, args[2], idxval, sizeof idxval);
+                    }
+                    if (has_col) {
+                        if (nargs >= 3 && has_idx) php_kv_set(&g_arrays[id], idxval, colval);
+                        else php_kv_add(&g_arrays[id], "", colval);
+                    }
+                }
+            }
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "array_reduce") == 0 && nargs >= 2) {
+        int aid = php_arrref_decode(args[0]);
+        char acc[PHP_VAL_MAX];
+        strncpy(acc, nargs >= 3 ? args[2] : "", sizeof acc - 1); acc[sizeof acc - 1] = 0;
+        if (aid >= 0) {
+            int i;
+            for (i = 0; i < g_arrays[aid].count; i++) {
+                char *cargs[2]; char c0[PHP_VAL_MAX], c1[PHP_VAL_MAX];
+                cargs[0] = c0; cargs[1] = c1;
+                strncpy(c0, acc, sizeof c0 - 1); c0[sizeof c0 - 1] = 0;
+                strncpy(c1, g_arrays[aid].items[i].val, sizeof c1 - 1); c1[sizeof c1 - 1] = 0;
+                php_invoke_callable(caller, args[1], cargs, 2, acc, sizeof acc);
+            }
+        }
+        strncpy(out, acc, outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "array_walk") == 0 && nargs >= 2) {
+        /* No true by-reference callback parameter (this subset's own
+         * documented scope limit -- see array_unshift's own comment on
+         * why a bare read normally snapshots) -- the callback CAN still
+         * observe/use each value, just can't mutate the array through
+         * its own first parameter the way real array_walk() allows;
+         * good enough for the dominant real "read each element, do a
+         * side effect" call shape. */
+        int aid = php_arrref_decode(args[0]);
+        if (aid >= 0) {
+            int i;
+            for (i = 0; i < g_arrays[aid].count; i++) {
+                char *cargs[3]; char c0[PHP_VAL_MAX], c1[128], c2[PHP_VAL_MAX];
+                cargs[0] = c0; cargs[1] = c1; cargs[2] = c2;
+                strncpy(c0, g_arrays[aid].items[i].val, sizeof c0 - 1); c0[sizeof c0 - 1] = 0;
+                strncpy(c1, g_arrays[aid].items[i].key, sizeof c1 - 1); c1[sizeof c1 - 1] = 0;
+                int na = 2;
+                if (nargs >= 3) { strncpy(c2, args[2], sizeof c2 - 1); c2[sizeof c2 - 1] = 0; na = 3; }
+                char r[PHP_VAL_MAX];
+                php_invoke_callable(caller, args[1], cargs, na, r, sizeof r);
+            }
+        }
+        strncpy(out, "1", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "array_count_values") == 0 && nargs >= 1) {
+        int aid = php_arrref_decode(args[0]);
+        int id = php_array_new();
+        if (id >= 0) {
+            if (aid >= 0) {
+                int i;
+                for (i = 0; i < g_arrays[aid].count; i++) {
+                    char cur[PHP_VAL_MAX];
+                    int n = php_kv_has(&g_arrays[id], g_arrays[aid].items[i].val, cur, sizeof cur) ? atoi(cur) : 0;
+                    char nv[16]; snprintf(nv, sizeof nv, "%d", n + 1);
+                    php_kv_set(&g_arrays[id], g_arrays[aid].items[i].val, nv);
+                }
+            }
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "array_is_list") == 0 && nargs >= 1) {
+        int aid = php_arrref_decode(args[0]);
+        int is_list = 1;
+        if (aid >= 0) {
+            int i; for (i = 0; i < g_arrays[aid].count; i++) { char k[16]; snprintf(k, sizeof k, "%d", i); if (strcmp(g_arrays[aid].items[i].key, k) != 0) { is_list = 0; break; } }
+        } else is_list = 0;
+        strncpy(out, is_list ? "1" : "", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if ((strcmp(name, "array_key_first") == 0 || strcmp(name, "array_key_last") == 0) && nargs >= 1) {
+        int aid = php_arrref_decode(args[0]);
+        if (aid >= 0 && g_arrays[aid].count > 0) {
+            int idx = strcmp(name, "array_key_first") == 0 ? 0 : g_arrays[aid].count - 1;
+            strncpy(out, g_arrays[aid].items[idx].key, outcap - 1); out[outcap - 1] = 0;
+        } else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "array_merge_recursive") == 0) {
+        /* A documented, narrower gap: behaves like array_merge() (no
+         * real recursive merging of nested-array values under the same
+         * key) -- true recursive merging is rare enough in real
+         * WordPress core call sites to not be worth the extra
+         * complexity here; this is still strictly more correct than
+         * the old "unknown function -> ''" degrade (which discarded
+         * every argument's data entirely). */
+        int id = php_array_new();
+        if (id >= 0) {
+            int ai;
+            for (ai = 0; ai < nargs; ai++) {
+                int aid = php_arrref_decode(args[ai]);
+                if (aid < 0) continue;
+                int i;
+                for (i = 0; i < g_arrays[aid].count; i++) {
+                    const char *k = g_arrays[aid].items[i].key;
+                    char *endp; strtol(k, &endp, 10);
+                    if (k[0] != 0 && *endp == 0) php_kv_add(&g_arrays[id], k, g_arrays[aid].items[i].val);
+                    else php_kv_set(&g_arrays[id], k, g_arrays[aid].items[i].val);
+                }
+            }
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "range") == 0 && nargs >= 2) {
+        double start = php_to_num(args[0]), end = php_to_num(args[1]);
+        double step = nargs >= 3 ? fabs(php_to_num(args[2])) : 1;
+        if (step <= 0) step = 1;
+        int id = php_array_new();
+        if (id >= 0) {
+            int idx = 0;
+            if (start <= end) { double v; for (v = start; v <= end + 1e-9; v += step) { char k[16]; snprintf(k, sizeof k, "%d", idx++); php_num_to_str(v, out, outcap); php_kv_add(&g_arrays[id], k, out); } }
+            else { double v; for (v = start; v >= end - 1e-9; v -= step) { char k[16]; snprintf(k, sizeof k, "%d", idx++); php_num_to_str(v, out, outcap); php_kv_add(&g_arrays[id], k, out); } }
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "get_object_vars") == 0 && nargs >= 1) {
+        int oid = php_objref_decode(args[0]);
+        int id = php_array_new();
+        if (id >= 0) {
+            if (oid >= 0) { int i; for (i = 0; i < g_objects[oid].props.count; i++) php_kv_set(&g_arrays[id], g_objects[oid].props.items[i].key, g_objects[oid].props.items[i].val); }
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
     if (strcmp(name, "abs") == 0 && nargs >= 1) {
         double v = strtod(args[0], NULL);
         if (v < 0) v = -v;
         if (v == (long)v) snprintf(out, outcap, "%ld", (long)v);
         else snprintf(out, outcap, "%g", v);
+        return;
+    }
+    if (strcmp(name, "round") == 0 && nargs >= 1) {
+        /* Previously entirely UNIMPLEMENTED -- fell through to this
+         * file's own generic "unknown function -> ''" degrade. Found in
+         * this session's own audit of real PHP builtins the vendored
+         * WordPress tree actually calls vs. what this file implements
+         * -- round()/ceil()/floor() are all real, common, previously-
+         * missing math primitives (pagination math, image-dimension
+         * calculations, price/number formatting, ...). */
+        double v = strtod(args[0], NULL);
+        int prec = nargs >= 2 ? atoi(args[1]) : 0;
+        double mult = pow(10.0, prec);
+        double r = (v >= 0) ? floor(v * mult + 0.5) / mult : ceil(v * mult - 0.5) / mult;
+        if (prec <= 0 && r == (long)r) snprintf(out, outcap, "%ld", (long)r);
+        else snprintf(out, outcap, "%.*f", prec > 0 ? prec : 0, r);
+        return;
+    }
+    if (strcmp(name, "ceil") == 0 && nargs >= 1) {
+        double r = ceil(strtod(args[0], NULL));
+        php_num_to_str(r, out, outcap);
+        return;
+    }
+    if (strcmp(name, "floor") == 0 && nargs >= 1) {
+        double r = floor(strtod(args[0], NULL));
+        php_num_to_str(r, out, outcap);
+        return;
+    }
+    if (strcmp(name, "sqrt") == 0 && nargs >= 1) {
+        double v = strtod(args[0], NULL);
+        php_num_to_str(v < 0 ? 0.0 / 0.0 : sqrt(v), out, outcap);
+        return;
+    }
+    if (strcmp(name, "pow") == 0 && nargs >= 2) {
+        double r = pow(strtod(args[0], NULL), strtod(args[1], NULL));
+        php_num_to_str(r, out, outcap);
+        return;
+    }
+    if (strcmp(name, "fmod") == 0 && nargs >= 2) {
+        double r = fmod(strtod(args[0], NULL), strtod(args[1], NULL));
+        php_num_to_str(r, out, outcap);
+        return;
+    }
+    if (strcmp(name, "log") == 0 && nargs >= 1) {
+        double v = strtod(args[0], NULL);
+        double r = (nargs >= 2) ? (log(v) / log(strtod(args[1], NULL))) : log(v);
+        php_num_to_str(r, out, outcap);
+        return;
+    }
+    if (strcmp(name, "log10") == 0 && nargs >= 1) {
+        php_num_to_str(log10(strtod(args[0], NULL)), out, outcap);
+        return;
+    }
+    if (strcmp(name, "pi") == 0) {
+        snprintf(out, outcap, "%.16f", 3.14159265358979323846);
+        return;
+    }
+    if ((strcmp(name, "is_nan") == 0 || strcmp(name, "is_infinite") == 0) && nargs >= 1) {
+        double v = strtod(args[0], NULL);
+        int r = strcmp(name, "is_nan") == 0 ? (v != v) : (v != 0 && v == v && (v * 2 == v) && v != 0);
+        strncpy(out, r ? "1" : "", outcap - 1); out[outcap - 1] = 0;
         return;
     }
     if ((strcmp(name, "min") == 0 || strcmp(name, "max") == 0) && nargs >= 1) {
@@ -7967,6 +9205,112 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
             if ((ismin && v < best) || (!ismin && v > best)) { best = v; beststr = args[i]; }
         }
         strncpy(out, beststr, outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "str_repeat") == 0 && nargs >= 2) {
+        int n = atoi(args[1]);
+        int o = 0, sl = (int)strlen(args[0]);
+        int i;
+        for (i = 0; i < n && o < outcap - 1 - sl; i++) { memcpy(out + o, args[0], (size_t)sl); o += sl; }
+        out[o] = 0;
+        return;
+    }
+    if (strcmp(name, "strrpos") == 0 && nargs >= 2) {
+        const char *hay = args[0], *needle = args[1];
+        int nlen = (int)strlen(needle);
+        if (!nlen) { out[0] = 0; return; }
+        const char *p = hay, *last = NULL;
+        while ((p = strstr(p, needle)) != NULL) { last = p; p++; }
+        if (last) snprintf(out, outcap, "%ld", (long)(last - hay));
+        else out[0] = 0;
+        return;
+    }
+    if ((strcmp(name, "strcasecmp") == 0 || strcmp(name, "strcmp") == 0 || strcmp(name, "strncasecmp") == 0 || strcmp(name, "strncmp") == 0) && nargs >= 2) {
+        int r;
+        if (strcmp(name, "strcmp") == 0) r = strcmp(args[0], args[1]);
+        else if (strcmp(name, "strcasecmp") == 0) {
+            const char *a = args[0], *b = args[1];
+            while (*a && tolower((unsigned char)*a) == tolower((unsigned char)*b)) { a++; b++; }
+            r = tolower((unsigned char)*a) - tolower((unsigned char)*b);
+        } else {
+            int n = nargs >= 3 ? atoi(args[2]) : 0;
+            r = (strcmp(name, "strncmp") == 0) ? strncmp(args[0], args[1], (size_t)n) : strncasecmp(args[0], args[1], (size_t)n);
+        }
+        snprintf(out, outcap, "%d", r < 0 ? -1 : (r > 0 ? 1 : 0));
+        return;
+    }
+    if (strcmp(name, "substr_count") == 0 && nargs >= 2) {
+        const char *p = args[0]; int n = 0, nlen = (int)strlen(args[1]);
+        if (nlen) { while ((p = strstr(p, args[1])) != NULL) { n++; p += nlen; } }
+        snprintf(out, outcap, "%d", n);
+        return;
+    }
+    if (strcmp(name, "strrev") == 0 && nargs >= 1) {
+        int len = (int)strlen(args[0]);
+        int i, n = len < outcap - 1 ? len : outcap - 1;
+        for (i = 0; i < n; i++) out[i] = args[0][len - 1 - i];
+        out[n] = 0;
+        return;
+    }
+    if (strcmp(name, "ucfirst") == 0 && nargs >= 1) {
+        strncpy(out, args[0], outcap - 1); out[outcap - 1] = 0;
+        if (out[0]) out[0] = (char)toupper((unsigned char)out[0]);
+        return;
+    }
+    if (strcmp(name, "lcfirst") == 0 && nargs >= 1) {
+        strncpy(out, args[0], outcap - 1); out[outcap - 1] = 0;
+        if (out[0]) out[0] = (char)tolower((unsigned char)out[0]);
+        return;
+    }
+    if (strcmp(name, "ucwords") == 0 && nargs >= 1) {
+        const char *delims = nargs >= 2 ? args[1] : " \t\r\n\f\v";
+        strncpy(out, args[0], outcap - 1); out[outcap - 1] = 0;
+        int i, start = 1;
+        for (i = 0; out[i]; i++) {
+            if (start) out[i] = (char)toupper((unsigned char)out[i]);
+            start = strchr(delims, out[i]) != NULL;
+        }
+        return;
+    }
+    if (strcmp(name, "str_pad") == 0 && nargs >= 2) {
+        int len = (int)strlen(args[0]);
+        int want = atoi(args[1]);
+        const char *pad = nargs >= 3 && args[2][0] ? args[2] : " ";
+        int padtype = nargs >= 4 ? atoi(args[3]) : 1; /* 0=STR_PAD_LEFT,1=STR_PAD_RIGHT,2=STR_PAD_BOTH */
+        if (want <= len || (int)strlen(pad) == 0) { strncpy(out, args[0], outcap - 1); out[outcap - 1] = 0; return; }
+        int total_pad = want - len;
+        int left_pad = (padtype == 0) ? total_pad : (padtype == 2 ? total_pad / 2 : 0);
+        int right_pad = total_pad - left_pad;
+        int o = 0, plen = (int)strlen(pad), i;
+        for (i = 0; i < left_pad && o < outcap - 1; i++) out[o++] = pad[i % plen];
+        int n = len < outcap - 1 - o ? len : outcap - 1 - o;
+        memcpy(out + o, args[0], (size_t)n); o += n;
+        for (i = 0; i < right_pad && o < outcap - 1; i++) out[o++] = pad[i % plen];
+        out[o] = 0;
+        return;
+    }
+    if (strcmp(name, "wordwrap") == 0 && nargs >= 1) {
+        /* A documented, narrower gap: passes the string through
+         * unchanged rather than really wrapping -- real usage in
+         * WordPress core is almost always for terminal/email output
+         * this project's own scope doesn't render anyway; correct-but-
+         * unwrapped is a safe degrade (no data loss) vs the old
+         * "silently wipe to empty string" default. */
+        strncpy(out, args[0], outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "chunk_split") == 0 && nargs >= 1) {
+        int len = nargs >= 2 ? atoi(args[1]) : 76;
+        const char *end = nargs >= 3 ? args[2] : "\r\n";
+        if (len <= 0) len = 76;
+        int o = 0, elen = (int)strlen(end), i = 0, slen = (int)strlen(args[0]);
+        while (i < slen && o < outcap - 1) {
+            int n = slen - i < len ? slen - i : len;
+            if (n > outcap - 1 - o) n = outcap - 1 - o;
+            memcpy(out + o, args[0] + i, (size_t)n); o += n; i += n;
+            if (o < outcap - 1 - elen) { memcpy(out + o, end, (size_t)elen); o += elen; }
+        }
+        out[o] = 0;
         return;
     }
     if (strcmp(name, "addslashes") == 0 && nargs >= 1) {
@@ -8027,6 +9371,76 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
             if (ch == '<') { in_tag = 1; continue; }
             if (ch == '>') { in_tag = 0; continue; }
             if (!in_tag) out[o++] = ch;
+        }
+        out[o] = 0;
+        return;
+    }
+    if ((strcmp(name, "htmlspecialchars") == 0 || strcmp(name, "htmlentities") == 0) && nargs >= 1) {
+        /* Previously entirely UNIMPLEMENTED -- fell through to this
+         * file's own generic "unknown function -> ''" degrade. The
+         * single highest-impact builtin found in an audit this session
+         * of real PHP builtins the vendored WordPress tree actually
+         * calls vs. what this file implements: real WordPress core's
+         * own esc_html() (wp-includes/formatting.php) -- used to output
+         * essentially every dynamic string on every single real page,
+         * post titles/widget text/menu labels/form values/... -- routes
+         * through _wp_specialchars(), whose own real, final step is
+         * "return htmlspecialchars($text, $quote_style, $charset,
+         * $double_encode);". With htmlspecialchars() always "",
+         * esc_html() on ANY input always returned an empty string,
+         * silently blanking every single value it ever touched across
+         * the whole site -- confirmed via a direct repro. Real PHP's
+         * `$quote_style` selects WHICH quote characters get escaped
+         * (ENT_QUOTES/ENT_COMPAT/ENT_NOQUOTES/...) -- this subset has no
+         * real predefined ENT_* constants at all (nothing pre-registers
+         * them, so an undefined "ENT_QUOTES" bareword just evaluates to
+         * "" via this file's own safe-default constant-lookup fallback),
+         * so rather than try to interpret an unreliable style argument,
+         * this always escapes all five real HTML-special characters
+         * (&, <, >, ", ') -- the modern PHP 8.1+ DEFAULT (ENT_QUOTES |
+         * ENT_SUBSTITUTE | ENT_HTML401) and the overwhelmingly common
+         * real-world intent regardless of which legacy style a caller
+         * asked for. htmlentities() is treated identically (a real,
+         * documented, narrower gap -- real htmlentities() also encodes
+         * non-ASCII/accented characters via named entities, not modeled
+         * here; every REAL WordPress core call site in the audited
+         * source only ever needs the five-character escape). */
+        int o = 0;
+        const char *p;
+        for (p = args[0]; *p && o < outcap - 6; p++) {
+            const char *rep = NULL;
+            switch (*p) {
+                case '&': rep = "&amp;"; break;
+                case '<': rep = "&lt;"; break;
+                case '>': rep = "&gt;"; break;
+                case '"': rep = "&quot;"; break;
+                case '\'': rep = "&#039;"; break;
+                default: break;
+            }
+            if (rep) { int rl = (int)strlen(rep); memcpy(out + o, rep, (size_t)rl); o += rl; }
+            else out[o++] = *p;
+        }
+        out[o] = 0;
+        return;
+    }
+    if ((strcmp(name, "htmlspecialchars_decode") == 0 || strcmp(name, "html_entity_decode") == 0) && nargs >= 1) {
+        /* Reverses the five-character escape above -- previously
+         * entirely UNIMPLEMENTED, same "" degrade. Real html_entity_
+         * decode() also decodes the FULL named/numeric HTML entity set
+         * (&nbsp;, &amp;copy;, &#233;, ...) -- this subset only handles
+         * the same five ENT_QUOTES-shaped entities its own encode side
+         * produces, a real, documented, narrower gap matching the
+         * dominant real "decode what WE encoded" round-trip shape. */
+        int o = 0;
+        const char *p = args[0];
+        while (*p && o < outcap - 1) {
+            if (!strncmp(p, "&amp;", 5)) { out[o++] = '&'; p += 5; }
+            else if (!strncmp(p, "&lt;", 4)) { out[o++] = '<'; p += 4; }
+            else if (!strncmp(p, "&gt;", 4)) { out[o++] = '>'; p += 4; }
+            else if (!strncmp(p, "&quot;", 6)) { out[o++] = '"'; p += 6; }
+            else if (!strncmp(p, "&#039;", 6)) { out[o++] = '\''; p += 6; }
+            else if (!strncmp(p, "&apos;", 6)) { out[o++] = '\''; p += 6; }
+            else { out[o++] = *p; p++; }
         }
         out[o] = 0;
         return;
@@ -8115,7 +9529,10 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
                 "strtolower", "strtoupper", "substr", "strpos", "stripos", "explode",
                 "in_array", "array_merge", "array_keys", "array_values", "abs",
                 "min", "max", "addslashes", "stripslashes", "class_exists", "is_string", "is_array",
-                "is_object", "is_numeric", "is_int", "is_bool", NULL
+                "is_object", "is_numeric", "is_int", "is_bool", "intval", "floatval", "doubleval",
+                "strval", "boolval", "array_map", "array_filter", "serialize", "unserialize",
+                "is_serialized", "hash", "hash_hmac", "hash_hmac_algos", "hash_equals",
+                "base64_encode", "base64_decode", "strip_tags", "time", NULL
             };
             int i;
             for (i = 0; builtins[i]; i++) if (strcmp(args[0], builtins[i]) == 0) { found = 1; break; }
@@ -8157,6 +9574,78 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
          * comparison), silently breaking session persistence across
          * requests. */
         snprintf(out, outcap, "%ld", (long)time(NULL));
+        return;
+    }
+    if ((strcmp(name, "date") == 0 || strcmp(name, "gmdate") == 0) && nargs >= 1) {
+        /* See php_format_date's own comment -- always UTC, no real
+         * per-site timezone support modeled (a documented, real gap;
+         * this file's own scope has no timezone-database access at
+         * all). date() and gmdate() are treated identically for exactly
+         * that reason (no local-vs-UTC distinction exists here). */
+        time_t t = nargs >= 2 ? (time_t)atol(args[1]) : time(NULL);
+        php_format_date(args[0], t, out, outcap);
+        return;
+    }
+    if ((strcmp(name, "mktime") == 0 || strcmp(name, "gmmktime") == 0) && nargs >= 1) {
+        /* function mktime(hour=now,minute=now,second=now,month=now,day=now,year=now) */
+        time_t now = time(NULL);
+        struct tm tmv;
+        gmtime_r(&now, &tmv);
+        if (nargs >= 1) tmv.tm_hour = atoi(args[0]);
+        if (nargs >= 2) tmv.tm_min = atoi(args[1]);
+        if (nargs >= 3) tmv.tm_sec = atoi(args[2]);
+        if (nargs >= 4) tmv.tm_mon = atoi(args[3]) - 1;
+        if (nargs >= 5) tmv.tm_mday = atoi(args[4]);
+        if (nargs >= 6) tmv.tm_year = atoi(args[5]) - 1900;
+        time_t r = timegm(&tmv);
+        snprintf(out, outcap, "%ld", (long)r);
+        return;
+    }
+    if (strcmp(name, "checkdate") == 0 && nargs >= 3) {
+        int m = atoi(args[0]), d = atoi(args[1]), y = atoi(args[2]);
+        static const int dim[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+        int maxd = (m >= 1 && m <= 12) ? dim[m - 1] : 0;
+        if (m == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) maxd = 29;
+        int ok = (m >= 1 && m <= 12 && d >= 1 && d <= maxd && y >= 1 && y <= 32767);
+        strncpy(out, ok ? "1" : "", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "date_default_timezone_set") == 0 || strcmp(name, "date_default_timezone_get") == 0) {
+        /* This subset always operates in UTC (see php_format_date's own
+         * comment) -- accepted and ignored rather than left as an
+         * "unknown function" (real WordPress core's own wp_timezone()/
+         * bootstrap calls this), matching real PHP's own "UTC" default
+         * when nothing else is configured. */
+        strncpy(out, "UTC", outcap - 1); out[outcap - 1] = 0;
+        return;
+    }
+    if (strcmp(name, "strtotime") == 0 && nargs >= 1) {
+        /* Real PHP's strtotime() understands a huge range of formats and
+         * relative expressions ("+1 day", "next monday", ...) -- this
+         * subset covers the dominant real shape stored data actually
+         * uses: ISO-ish "YYYY-MM-DD[ HH:MM:SS]" (exactly what MySQL's
+         * own DATETIME columns produce, which is what mysql2date() --
+         * the function EVERY real post/comment date in WordPress core
+         * passes through -- hands to it) and the bare literal "now".
+         * Previously entirely UNIMPLEMENTED; a real, documented,
+         * narrower gap for anything outside these two shapes (returns
+         * false/"" the same way real strtotime() does for unparseable
+         * input, not a crash). */
+        const char *s = args[0];
+        while (*s == ' ') s++;
+        if (!strcasecmp(s, "now") || !s[0]) { snprintf(out, outcap, "%ld", (long)time(NULL)); return; }
+        int y = 0, mo = 0, d = 0, h = 0, mi = 0, se = 0;
+        int n = sscanf(s, "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &se);
+        if (n < 3) n = sscanf(s, "%d/%d/%d %d:%d:%d", &y, &mo, &d, &h, &mi, &se);
+        if (n >= 3) {
+            struct tm tmv; memset(&tmv, 0, sizeof tmv);
+            tmv.tm_year = y - 1900; tmv.tm_mon = mo - 1; tmv.tm_mday = d;
+            tmv.tm_hour = h; tmv.tm_min = mi; tmv.tm_sec = se;
+            time_t r = timegm(&tmv);
+            snprintf(out, outcap, "%ld", (long)r);
+        } else {
+            out[0] = 0;
+        }
         return;
     }
     if (strcmp(name, "assert") == 0) {
@@ -8402,6 +9891,137 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
         snprintf(out, outcap, "%d", (int)strlen(args[0]));
         return;
     }
+    if (strcmp(name, "basename") == 0 && nargs >= 1) {
+        /* Previously entirely UNIMPLEMENTED -- found in this session's
+         * own audit of real PHP builtins the vendored WordPress tree
+         * actually calls vs. what this file implements (50 real call
+         * sites in the audited source, dirname()'s own long-implemented
+         * sibling). Optional 2nd $suffix arg strips a trailing suffix
+         * (e.g. basename($path, '.php')), matching real PHP. */
+        const char *p = args[0];
+        int len = (int)strlen(p);
+        while (len > 1 && p[len - 1] == '/') len--; /* trailing slashes stripped, matching real basename() */
+        const char *slash = NULL;
+        { int i; for (i = len - 1; i >= 0; i--) if (p[i] == '/') { slash = p + i; break; } }
+        const char *base = slash ? slash + 1 : p;
+        int blen = (int)(p + len - base);
+        if (nargs >= 2) {
+            int suflen = (int)strlen(args[1]);
+            if (suflen > 0 && suflen < blen && strncmp(base + blen - suflen, args[1], (size_t)suflen) == 0) blen -= suflen;
+        }
+        if (blen >= outcap) blen = outcap - 1;
+        memcpy(out, base, (size_t)blen); out[blen] = 0;
+        return;
+    }
+    if (strcmp(name, "pathinfo") == 0 && nargs >= 1) {
+        /* Real PHP's own 2nd $flags arg selects just ONE component
+         * (PATHINFO_DIRNAME/BASENAME/EXTENSION/FILENAME) as a plain
+         * string instead of the full associative array -- this subset
+         * has no real predefined PATHINFO_* constants (same story as
+         * ENT_QUOTES, see htmlspecialchars()'s own comment), so this
+         * always returns the full array; the by-far more common real
+         * WordPress call shape. */
+        const char *p = args[0];
+        const char *slash = strrchr(p, '/');
+        const char *base = slash ? slash + 1 : p;
+        const char *dot = strrchr(base, '.');
+        int id = php_array_new();
+        if (id >= 0) {
+            char dirname[PHP_VAL_MAX];
+            if (slash) { int dl = (int)(slash - p); if (dl == 0) dl = 1; if (dl >= (int)sizeof dirname) dl = (int)sizeof dirname - 1; memcpy(dirname, p, (size_t)dl); dirname[dl] = 0; }
+            else strcpy(dirname, ".");
+            php_kv_set(&g_arrays[id], "dirname", dirname);
+            php_kv_set(&g_arrays[id], "basename", base);
+            if (dot && dot != base) { php_kv_set(&g_arrays[id], "extension", dot + 1); char fn[PHP_VAL_MAX]; int fl = (int)(dot - base); if (fl >= (int)sizeof fn) fl = (int)sizeof fn - 1; memcpy(fn, base, (size_t)fl); fn[fl] = 0; php_kv_set(&g_arrays[id], "filename", fn); }
+            else php_kv_set(&g_arrays[id], "filename", base);
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
+    if ((strcmp(name, "urlencode") == 0 || strcmp(name, "rawurlencode") == 0) && nargs >= 1) {
+        /* urlencode() encodes a space as "+"; rawurlencode() (RFC 3986)
+         * encodes it as "%20" -- the one real difference between them. */
+        int raw = strcmp(name, "rawurlencode") == 0;
+        int o = 0; const char *p;
+        for (p = args[0]; *p && o < outcap - 4; p++) {
+            unsigned char c = (unsigned char)*p;
+            if (isalnum(c) || c == '-' || c == '_' || c == '.' || (raw && c == '~')) out[o++] = (char)c;
+            else if (!raw && c == ' ') out[o++] = '+';
+            else { snprintf(out + o, 4, "%%%02X", c); o += 3; }
+        }
+        out[o] = 0;
+        return;
+    }
+    if ((strcmp(name, "urldecode") == 0 || strcmp(name, "rawurldecode") == 0) && nargs >= 1) {
+        int raw = strcmp(name, "rawurldecode") == 0;
+        int o = 0; const char *p = args[0];
+        while (*p && o < outcap - 1) {
+            if (*p == '%' && regex_hex_digit(p[1]) >= 0 && regex_hex_digit(p[2]) >= 0) {
+                out[o++] = (char)((regex_hex_digit(p[1]) << 4) | regex_hex_digit(p[2])); p += 3;
+            } else if (!raw && *p == '+') { out[o++] = ' '; p++; }
+            else { out[o++] = *p; p++; }
+        }
+        out[o] = 0;
+        return;
+    }
+    if (strcmp(name, "parse_url") == 0 && nargs >= 1) {
+        /* Real PHP's own 2nd $component arg selects just one piece
+         * (PHP_URL_SCHEME/HOST/PORT/...) -- same "no predefined
+         * constants for this shape" story, always returns the full
+         * array. Hand-written parse (scheme://user:pass@host:port/path
+         * ?query#fragment), a real, common, previously-UNIMPLEMENTED
+         * builtin (85 real call sites in the audited source -- the
+         * single most-used missing builtin found in this session's own
+         * audit). */
+        const char *p = args[0];
+        int id = php_array_new();
+        if (id >= 0) {
+            const char *scheme_end = strstr(p, "://");
+            if (scheme_end) {
+                char sc[32]; int sl = (int)(scheme_end - p); if (sl >= (int)sizeof sc) sl = (int)sizeof sc - 1;
+                memcpy(sc, p, (size_t)sl); sc[sl] = 0;
+                php_kv_set(&g_arrays[id], "scheme", sc);
+                p = scheme_end + 3;
+            }
+            const char *frag = strchr(p, '#');
+            if (frag) { php_kv_set(&g_arrays[id], "fragment", frag + 1); }
+            const char *authority_end = frag ? frag : p + strlen(p);
+            const char *query = memchr(p, '?', (size_t)(authority_end - p));
+            if (query) { char qs[PHP_VAL_MAX]; int ql = (int)(authority_end - query - 1); if (ql >= (int)sizeof qs) ql = (int)sizeof qs - 1; if (ql > 0) memcpy(qs, query + 1, (size_t)ql); qs[ql > 0 ? ql : 0] = 0; php_kv_set(&g_arrays[id], "query", qs); authority_end = query; }
+            const char *path_start = memchr(p, '/', (size_t)(authority_end - p));
+            const char *hostport_end = path_start ? path_start : authority_end;
+            if (path_start && path_start < authority_end) { char path[PHP_VAL_MAX]; int pl = (int)(authority_end - path_start); if (pl >= (int)sizeof path) pl = (int)sizeof path - 1; memcpy(path, path_start, (size_t)pl); path[pl] = 0; php_kv_set(&g_arrays[id], "path", path); }
+            const char *at = memchr(p, '@', (size_t)(hostport_end - p));
+            const char *host_start = at ? at + 1 : p;
+            if (at) { char userinfo[128]; int ul = (int)(at - p); if (ul >= (int)sizeof userinfo) ul = (int)sizeof userinfo - 1; memcpy(userinfo, p, (size_t)ul); userinfo[ul] = 0; char *colon = strchr(userinfo, ':'); if (colon) { *colon = 0; php_kv_set(&g_arrays[id], "user", userinfo); php_kv_set(&g_arrays[id], "pass", colon + 1); } else php_kv_set(&g_arrays[id], "user", userinfo); }
+            const char *portcolon = memchr(host_start, ':', (size_t)(hostport_end - host_start));
+            const char *host_end = portcolon ? portcolon : hostport_end;
+            if (host_end > host_start) { char host[256]; int hl = (int)(host_end - host_start); if (hl >= (int)sizeof host) hl = (int)sizeof host - 1; memcpy(host, host_start, (size_t)hl); host[hl] = 0; php_kv_set(&g_arrays[id], "host", host); }
+            if (portcolon) { char port[16]; int pl = (int)(hostport_end - portcolon - 1); if (pl >= (int)sizeof port) pl = (int)sizeof port - 1; if (pl > 0) memcpy(port, portcolon + 1, (size_t)pl); port[pl > 0 ? pl : 0] = 0; if (port[0]) php_kv_set(&g_arrays[id], "port", port); }
+            php_arrref_encode(id, out, outcap);
+        } else out[0] = 0;
+        return;
+    }
+    if (strcmp(name, "http_build_query") == 0 && nargs >= 1) {
+        int aid = php_arrref_decode(args[0]);
+        int o = 0;
+        if (aid >= 0) {
+            int i;
+            for (i = 0; i < g_arrays[aid].count; i++) {
+                if (o > 0 && o < outcap - 1) out[o++] = '&';
+                char enc_k[256], enc_v[PHP_VAL_MAX];
+                char *ka[1]; ka[0] = g_arrays[aid].items[i].key;
+                php_call_function(caller, "urlencode", ka, 1, enc_k, sizeof enc_k);
+                char *va[1]; va[0] = g_arrays[aid].items[i].val;
+                php_call_function(caller, "urlencode", va, 1, enc_v, sizeof enc_v);
+                int n = snprintf(out + o, (size_t)(outcap - o), "%s=%s", enc_k, enc_v);
+                if (n > 0) o += n;
+                if (o >= outcap - 1) break;
+            }
+        }
+        out[o] = 0;
+        return;
+    }
     if (strcmp(name, "dirname") == 0 && nargs >= 1) {
         const char *slash = strrchr(args[0], '/');
         if (slash) {
@@ -8506,6 +10126,81 @@ static void php_call_function(PhpState *caller, const char *name, char **args, i
             }
         }
         free(raw);
+        php_arrref_encode(arr_id, out, outcap);
+        return;
+    }
+    if (strcmp(name, "__db_last_result_as_arrays") == 0) {
+        /* Real wpdb::get_results($query, $output)/get_row(...) support an
+         * ARRAY_A output mode (associative-array rows, not stdClass
+         * objects) -- this project's own class-wpdb.php previously
+         * IGNORED `$output` entirely, always returning the same object
+         * rows __db_query() already built. A real, high-impact bug:
+         * wp-includes/meta.php's own update_meta_cache() (backing EVERY
+         * get_user_meta()/get_post_meta()/etc call) explicitly requests
+         * "$wpdb->get_results(..., ARRAY_A)" then reads
+         * "$metarow[$column]"/"$metarow['meta_key']" -- bracket access on
+         * what was actually still an OBJECT silently read as empty
+         * (php_arrref_decode() returns -1 for an object reference, so
+         * this file's own "$var[key]" read path degrades to ""), so the
+         * entire per-row cache-population loop silently did nothing
+         * useful, which was the direct cause of session persistence
+         * (get_user_meta($uid, 'session_tokens', true)) always coming
+         * back empty even once the row itself was stored and fetched
+         * correctly by the underlying SQL. Re-parses the ALREADY-cached
+         * g_db_last_raw (the same packed result the just-run query()
+         * call populated) into real PhpKVArray rows instead of stdClass
+         * objects -- same packed-format parsing as __db_query() itself,
+         * just building an array per row instead of an object. */
+        int arr_id = php_array_new();
+        if (arr_id < 0) { out[0] = 0; return; }
+        char cols[PHP_KV_MAX][128];
+        int ncols = 0;
+        const char *p = g_db_last_raw;
+        const char *lend = strchr(p, '\n');
+        int llen = lend ? (int)(lend - p) : (int)strlen(p);
+        const char *cp = p, *cend = p + llen;
+        while (cp < cend && ncols < PHP_KV_MAX) {
+            const char *comma = memchr(cp, ',', (size_t)(cend - cp));
+            const char *fend = comma ? comma : cend;
+            int flen = (int)(fend - cp);
+            if (flen >= (int)sizeof cols[0]) flen = (int)sizeof cols[0] - 1;
+            memcpy(cols[ncols], cp, (size_t)flen);
+            cols[ncols][flen] = 0;
+            ncols++;
+            cp = comma ? comma + 1 : cend;
+        }
+        p = lend ? lend + 1 : cend;
+        int rowidx = 0;
+        while (*p) {
+            lend = strchr(p, '\n');
+            llen = lend ? (int)(lend - p) : (int)strlen(p);
+            int row_aid = php_array_new();
+            if (row_aid >= 0) {
+                cp = p; cend = p + llen;
+                int ci = 0;
+                while (ci < ncols) {
+                    const char *tab = memchr(cp, '\t', (size_t)(cend - cp));
+                    const char *fe = tab ? tab : cend;
+                    char fieldbuf[PHP_VAL_MAX];
+                    int flen = (int)(fe - cp);
+                    if (flen >= (int)sizeof fieldbuf) flen = (int)sizeof fieldbuf - 1;
+                    memcpy(fieldbuf, cp, (size_t)flen);
+                    fieldbuf[flen] = 0;
+                    char unesc[PHP_VAL_MAX];
+                    db_unescape_field(fieldbuf, unesc, sizeof unesc);
+                    php_kv_set(&g_arrays[row_aid], cols[ci], unesc);
+                    ci++;
+                    cp = tab ? tab + 1 : cend;
+                }
+                char enc[32], idxbuf[16];
+                php_arrref_encode(row_aid, enc, sizeof enc);
+                snprintf(idxbuf, sizeof idxbuf, "%d", rowidx);
+                php_kv_set(&g_arrays[arr_id], idxbuf, enc);
+                rowidx++;
+            }
+            if (!lend) break;
+            p = lend + 1;
+        }
         php_arrref_encode(arr_id, out, outcap);
         return;
     }
