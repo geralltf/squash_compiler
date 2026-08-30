@@ -5795,6 +5795,25 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 } else {
                     asm_call_direct(a,get_func_label(cg,name));
                 }
+            } else if (cg->prefer_static_calls && codegen_is_sqo_export(cg,name)) {
+                /* sym==NULL: no declaration at all was visible in this TU
+                 * (an "implicit declaration" — see the DIAG_WARNING emitted
+                 * above). Previously this unconditionally fell through to
+                 * emit_linux_libc_call() below, treating every such call as
+                 * an external libc.so.6 symbol no matter what — which is
+                 * wrong the moment a linked-in ".sqo" object genuinely
+                 * exports this exact name (confirmed via SQW/SDL3's
+                 * "SDL_fabsf resolves as an unresolved dynamic import even
+                 * though the .sqo's own export table contains it" bug,
+                 * Makefile.SQW.linux's own comment): with no prototype
+                 * visible, `sym` is NULL, so none of the SYM_IMPORT/SYM_FUNC
+                 * branches above (which already do this exact check) were
+                 * ever reached. Mirrors the identical check already applied
+                 * to the bodyless-SYM_FUNC case a few branches up, and
+                 * matches codegen_arm64.c's a64_emit_linux_extern_call,
+                 * which already funnels this same case through the sqo-
+                 * export check uniformly. */
+                asm_call_static(a,name);
             } else {
                 /* See emit_linux_libc_call's own comment for why this must
                  * go through it rather than a bare symtable_add_import +

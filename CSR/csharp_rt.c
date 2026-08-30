@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* ------------------------------------------------------------------------
  * 1. GC — mark-sweep, non-moving, shadow-root-stack.
@@ -27,6 +28,13 @@ CsObjHeader *csr_hdr_of(void *payload) {
 }
 void *csr_payload_of(CsObjHeader *hdr) {
     return (void *)((unsigned char *)hdr + sizeof(CsObjHeader));
+}
+
+unsigned short csr_type_id_of(void *payload) {
+    CsObjHeader *h;
+    if (!payload) return 0;
+    h = csr_hdr_of(payload);
+    return h->type_id;
 }
 
 static CsTypeLayout *find_layout(unsigned short type_id) {
@@ -488,13 +496,26 @@ int csr_dict_count(CsDict *d) { return d->count; }
  * 4d. Console
  * ------------------------------------------------------------------------ */
 
+/* NOTE: deliberately write(1, ...), NOT fwrite(..., stdout)/fputc(...,
+ * stdout) -- squash's own include/stdio.h shim documents (see its
+ * comments around __squash_fputc_impl) that stdout/stderr here are
+ * lightweight sentinel macros, not real glibc FILE* structures, and that
+ * calling a REAL libc stdio function directly with one of them segfaults;
+ * confirmed this session with a minimal repro (fwrite(buf, 1, n, stdout)
+ * crashing even in a trivial 3-line program). The shim already works
+ * around this internally for fputc/fprintf/vfprintf by redirecting to
+ * write(1/2, ...) for the stdout/stderr case -- csr_console_write_line
+ * does the same thing directly rather than going through fwrite/fputc at
+ * all, since printf("%s", ...) would also silently truncate at an
+ * embedded NUL byte (CsString is a length-prefixed, NUL-safe type) where
+ * write() with an explicit length is not. */
 void csr_console_write_line(CsString *s) {
-    if (s) fwrite(s->data, 1, (unsigned int)s->len, stdout);
-    fputc('\n', stdout);
+    if (s && s->len > 0) write(1, s->data, (unsigned int)s->len);
+    write(1, "\n", 1);
 }
 
 void csr_console_write(CsString *s) {
-    if (s) fwrite(s->data, 1, (unsigned int)s->len, stdout);
+    if (s && s->len > 0) write(1, s->data, (unsigned int)s->len);
 }
 
 /* ------------------------------------------------------------------------

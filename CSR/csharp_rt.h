@@ -71,6 +71,28 @@ typedef struct CsObjHeader {
 CsObjHeader *csr_hdr_of(void *payload);
 void        *csr_payload_of(CsObjHeader *hdr);
 
+/* Returns `payload`'s type_id (0 if payload is NULL). NOTE: this exists
+ * as its own opaque function -- callers (specifically cs_lower.c's
+ * lowering of the C# `is`/`as` operators) must NOT inline
+ * "csr_hdr_of(x)->type_id" directly into a larger expression themselves.
+ * A real squash codegen bug was found this session (the fifth): a
+ * function that returns a pointer via `(T*)((unsigned char*)p - n)`
+ * pointer arithmetic, when its result is immediately dereferenced with
+ * "->field" INLINE inside a larger enclosing expression (e.g. a "!= 0 &&
+ * ...->field == const" comparison), reads back a wrong field value --
+ * but ONLY when the pointed-to struct mixes a pointer-typed field with
+ * plain int fields (confirmed via bisection: an all-int struct of the
+ * same size is unaffected; assigning the call's result to a local
+ * pointer variable FIRST, then dereferencing that variable separately,
+ * is also unaffected) -- exactly CsObjHeader's own shape (gc_next is a
+ * pointer, size/type_id/kind/mark are not). Wrapping the whole
+ * "dereference csr_hdr_of's result" operation inside this ONE function
+ * (whose own body assigns to a local first, then returns a plain int --
+ * not a pointer -- so nothing calling it ever inlines the unsafe
+ * pattern) sidesteps the bug entirely, rather than fixing it in
+ * codegen.c (out of scope here). */
+unsigned short csr_type_id_of(void *payload);
+
 /* Allocate `payload_size` bytes of zero-initialized payload, tagged with
  * `type_id`/`kind`. May trigger a collection first if the heap has grown
  * past its current threshold. Never returns NULL (aborts on real OOM,
