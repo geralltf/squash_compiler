@@ -927,6 +927,22 @@ static int var_struct_size(CodeGen *cg, ASTNode *var_node) {
  * address rather than through a value-holding register. */
 static int struct_copy_size_of(CodeGen *cg, ASTNode *node) {
     if (!node) return 0;
+    if (node->kind==AST_BINARY && node->binary.op && strcmp(node->binary.op,",")==0)
+        /* Comma-expression yielding a struct VALUE -- e.g. the hoisted-
+         * temp/comma-operator technique CS/cs_lower.c uses for "new
+         * StructType(...)" used as an expression: "(Ctor(&tmp, args),
+         * tmp)". The comma operator's own value/type is its RIGHT
+         * operand's (the left is evaluated only for side effects) --
+         * recurse into it. Previously unhandled here (fell through to
+         * "return 0"), which made every whole-struct copy path below
+         * think a comma-expression initializer/argument wasn't a struct
+         * at all, silently falling back to a 4/8-byte scalar copy that
+         * left every byte past the first register's worth as
+         * uninitialized stack garbage -- confirmed via a minimal repro
+         * ("Point p = (junk = 1, __tmp0);" left p.Y uninitialized while
+         * p.X came out correct, matching exactly this "only the first
+         * field survives" shape). */
+        return struct_copy_size_of(cg, node->binary.right);
     if (node->kind==AST_DEREF) return deref_struct_size(cg, node->deref.operand);
     if (node->kind==AST_VAR) return var_struct_size(cg, node);
     if (node->kind==AST_MEMBER) {
@@ -1065,6 +1081,16 @@ static int struct_copy_size_of(CodeGen *cg, ASTNode *node) {
     return 0;
 }
 static void struct_copy_addr_of(CodeGen *cg, ASTNode *node) {
+    if (node->kind==AST_BINARY && node->binary.op && strcmp(node->binary.op,",")==0) {
+        /* See struct_copy_size_of's matching case above -- the comma
+         * operator's VALUE (and therefore its address, for a struct-
+         * typed result) is its right operand's; the left is evaluated
+         * first, for side effects only (e.g. the constructor call that
+         * fills the temp the right operand then names). */
+        codegen_expr(cg, node->binary.left);
+        struct_copy_addr_of(cg, node->binary.right);
+        return;
+    }
     if (node->kind==AST_DEREF) codegen_expr(cg, node->deref.operand);
     else codegen_lvalue(cg, node);
 }
@@ -1083,36 +1109,75 @@ static void struct_copy_addr_of(CodeGen *cg, ASTNode *node) {
  * -- 4 doubles, 32 bytes -- by value), needed for a real Cocoa/AppKit
  * window backend.
  *
- * Only structs/unions BIGGER than 16 bytes are handled here (the real
- * ABI's unconditional "MEMORY class" case: no per-eightbyte INTEGER/SSE
- * register classification needed, just a byte-for-byte copy onto the
- * outgoing stack-argument area at the argument's natural position, never
- * consuming an integer or SSE register slot). Structs of 16 bytes or less
- * (e.g. NSPoint/NSSize) still fall through to the existing, unfixed
- * scalar-only path below -- not needed by anything this build calls yet,
- * and correctly classifying THOSE requires real per-eightbyte SSE/INTEGER
- * inspection this doesn't attempt.
+ * Structs/unions BIGGER than 16 bytes hit the real ABI's unconditional
+ * "MEMORY class" case: no per-eightbyte INTEGER/SSE register
+ * classification needed, just a byte-for-byte copy onto the outgoing
+ * stack-argument area at the argument's natural position, never consuming
+ * an integer or SSE register slot.
+ *
+ * Structs/unions of 9-16 bytes (e.g. Vulkan's VkExtent2D/VkOffset2D/
+ * VkExtent3D, or NSPoint/NSSize) are the real ABI's two-eightbyte case:
+ * classified here as TWO CONSECUTIVE INTEGER registers if two are still
+ * available (falls back to the same whole-struct MEMORY-class stack copy
+ * above if not) -- confirmed broken before this fix via a direct repro
+ * (a 12-byte all-int struct argument, and a 16-byte two-int64 struct
+ * argument, both silently truncated to their first 8 bytes, corrupting
+ * every call site passing one). Documented limitation: this does NOT
+ * implement full per-eightbyte SSE/INTEGER classification -- a struct in
+ * this size range containing any float/double field is still classified
+ * as integer-only here, which is ABI-incorrect for those fields (the real
+ * SysV rule is per-eightbyte: an all-float eightbyte goes in an XMM
+ * register, not a GPR). Every Vulkan struct actually in this size range
+ * used by this codebase so far is integer/handle-only, so this is a real,
+ * working fix for the cases that matter today, not a complete SSE-class
+ * implementation.
+ *
+ * Structs of 8 bytes or less keep using the original, already-correct
+ * single-register scalar path below (confirmed working before this fix).
  *
  * This is deliberately a SEPARATE code path from the original nreg<=6
  * model, entered only when at least one argument actually needs it (see
  * each call site's own "has a large struct arg" check) -- it changes
  * stack-argument LAYOUT relative to the original model (a struct argument
  * shifts where any later stack-bound scalar argument lands), so every
- * existing call with no large-struct argument keeps its original,
- * already-tested codegen completely unchanged. */
+ * existing call with no struct-by-value argument over 8 bytes keeps its
+ * original, already-tested codegen completely unchanged. */
 static void classify_sysv_call_args(CodeGen *cg, ASTNode **args, int argc,
-                                     int *mem_size, int *is_float, int *uses_reg,
+                                     int *mem_size, int *is_float, int *uses_reg, int *is_pair,
                                      int *reg_index, int *scratch_slot, int *stack_slot,
                                      int *out_nreg, int *out_nstack) {
     int ireg=0, freg=0, combined=0, nstack=0;
     int i;
     for (i = 0; i < argc; i++) {
         int sz = struct_copy_size_of(cg, args[i]);
-        mem_size[i] = (sz > 16) ? sz : 0;
-        if (mem_size[i] > 0) {
+        is_pair[i] = 0;
+        if (sz > 16) {
+            mem_size[i] = sz;
             uses_reg[i] = 0;
             is_float[i] = 0;
+        } else if (sz > 8) {
+            /* Two-eightbyte struct (9-16 bytes) -- see this whole block's
+             * own header comment for the integer-class-only scope of this
+             * fix. Needs two CONSECUTIVE integer registers as one unit;
+             * if fewer than two remain, the real ABI puts the whole
+             * struct in memory (never splits it across one register plus
+             * the stack). */
+            if (ireg + 2 <= 6) {
+                mem_size[i] = 0;
+                uses_reg[i] = 1;
+                is_pair[i] = 1;
+                is_float[i] = 0;
+                scratch_slot[i] = combined;
+                reg_index[i] = ireg;
+                ireg += 2;
+                combined += 2;
+            } else {
+                mem_size[i] = sz;
+                uses_reg[i] = 0;
+                is_float[i] = 0;
+            }
         } else {
+            mem_size[i] = 0;
             is_float[i] = codegen_is_float_expr(cg, args[i]);
             if (combined < 6) {
                 uses_reg[i] = 1;
@@ -1132,13 +1197,18 @@ static void classify_sysv_call_args(CodeGen *cg, ASTNode **args, int argc,
     *out_nstack = nstack;
 }
 
-/* Returns 1 if any argument is a struct/union-by-value bigger than 16
- * bytes -- see classify_sysv_call_args's own comment for why that's the
- * trigger for this whole separate code path. */
+/* Returns 1 if any argument is a struct/union-by-value bigger than 8
+ * bytes (the largest size the original single-register scalar path
+ * handles correctly) -- see classify_sysv_call_args's own comment for why
+ * 9 bytes, not 17, is the real trigger for this whole separate code path.
+ * Name kept as-is (not renamed to something like "..._8_byte_struct_arg")
+ * to minimize the diff at both call sites; the 9-16 byte case is no less
+ * "large" than the >16 case from the original scalar path's point of
+ * view -- neither fits in one register. */
 static int call_has_large_struct_arg(CodeGen *cg, ASTNode **args, int argc) {
     int i;
     for (i = 0; i < argc; i++) {
-        if (struct_copy_size_of(cg, args[i]) > 16) return 1;
+        if (struct_copy_size_of(cg, args[i]) > 8) return 1;
     }
     return 0;
 }
@@ -1157,14 +1227,25 @@ static int call_has_large_struct_arg(CodeGen *cg, ASTNode **args, int argc) {
  * expression-width heuristic (float_expr_width) for AST_FUNC_PTR_CALL,
  * matching what each already did before this path existed. */
 static void emit_sysv_struct_call_args(CodeGen *cg, ASTNode **args, int argc,
-                                        int *mem_size, int *is_float, int *uses_reg,
+                                        int *mem_size, int *is_float, int *uses_reg, int *is_pair,
                                         int *reg_index, int *scratch_slot, int *stack_slot,
                                         int reg_scratch_base, Symbol *sym_or_null) {
     Assembler *a = cg->asm_;
     int i, w;
     for (i = 0; i < argc; i++) {
         if (uses_reg[i]) {
-            if (is_float[i]) {
+            if (is_pair[i]) {
+                /* Two-eightbyte struct passed in two consecutive integer
+                 * registers -- copy both 8-byte halves from the struct's
+                 * own address into their two scratch slots (loaded into
+                 * real registers in the second pass below, same as every
+                 * other register-bound argument). */
+                struct_copy_addr_of(cg, args[i]); /* struct's address -> RAX */
+                asm_mov_reg_mem(a, REG_RCX, REG_RAX, 0);
+                asm_mov_mem_reg(a, REG_RSP, reg_scratch_base + scratch_slot[i]*8, REG_RCX);
+                asm_mov_reg_mem(a, REG_RCX, REG_RAX, 8);
+                asm_mov_mem_reg(a, REG_RSP, reg_scratch_base + (scratch_slot[i]+1)*8, REG_RCX);
+            } else if (is_float[i]) {
                 codegen_float_expr(cg, args[i]);
                 asm_movsd_store(a, REG_RSP, reg_scratch_base + scratch_slot[i]*8, 0);
             } else {
@@ -1193,6 +1274,7 @@ static void emit_sysv_struct_call_args(CodeGen *cg, ASTNode **args, int argc,
             if (narrow) asm_cvtsd2ss(a, reg_index[i], reg_index[i]);
         } else {
             asm_mov_reg_mem(a, SC_IREG(reg_index[i]), REG_RSP, reg_scratch_base + scratch_slot[i]*8);
+            if (is_pair[i]) asm_mov_reg_mem(a, SC_IREG(reg_index[i]+1), REG_RSP, reg_scratch_base + (scratch_slot[i]+1)*8);
         }
     }
 #undef SC_IREG
@@ -5578,19 +5660,20 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
             int frame;
             if (call_has_large_struct_arg(cg, n->call.args, argc)) {
                 /* See classify_sysv_call_args's own comment for why this is
-                 * a separate path, only taken when a struct/union-by-value
-                 * argument bigger than 16 bytes is actually present. */
-                int mem_size[64], is_float_a[64], uses_reg[64], reg_index[64], scratch_slot[64], stack_slot[64];
+                 * a separate path, taken whenever a struct/union-by-value
+                 * argument bigger than 8 bytes is present (both the >16-byte
+                 * MEMORY-class case and the 9-16-byte two-register case). */
+                int mem_size[64], is_float_a[64], uses_reg[64], is_pair[64], reg_index[64], scratch_slot[64], stack_slot[64];
                 int nregtotal, nstack;
                 int cargc = argc > 64 ? 64 : argc;
-                classify_sysv_call_args(cg, n->call.args, cargc, mem_size, is_float_a, uses_reg,
+                classify_sysv_call_args(cg, n->call.args, cargc, mem_size, is_float_a, uses_reg, is_pair,
                                          reg_index, scratch_slot, stack_slot, &nregtotal, &nstack);
                 int reg_scratch_base = nstack * 8;
                 frame = reg_scratch_base + nregtotal * 8;
                 frame = (frame + 15) & ~15;
                 if (frame < 16) frame = 16;
                 asm_sub_rsp(a, frame);
-                emit_sysv_struct_call_args(cg, n->call.args, cargc, mem_size, is_float_a, uses_reg,
+                emit_sysv_struct_call_args(cg, n->call.args, cargc, mem_size, is_float_a, uses_reg, is_pair,
                                             reg_index, scratch_slot, stack_slot, reg_scratch_base, sym);
             } else {
             int nreg = argc < 6 ? argc : 6;
@@ -5718,7 +5801,28 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                     } else {
                         emit_linux_libc_call(cg, name, n->call.args, argc);
                     }
-                } else if (cg->prefer_static_calls && codegen_is_sqo_export(cg,name)) {
+                } else if (cg->prefer_static_calls && (cg->sqo_precompile || codegen_is_sqo_export(cg,name))) {
+                    /* Mirrors the identical "-c" precompile fix on the
+                     * SYM_FUNC branch a few cases below (see its own long
+                     * comment) -- this SYM_IMPORT/dll=="extern" branch is
+                     * a DIFFERENT sym->kind for the exact same C source
+                     * shape ("extern <ret> name(...);" with no body), so
+                     * it needs the identical "cg->sqo_precompile" fallback
+                     * or a "-c" precompile of a bodyless "extern" call
+                     * (Phase 6c's own [DllImport]-declared native calls,
+                     * e.g. a C# script's real Vulkan call) falls through
+                     * to emit_linux_libc_call() below instead -- which
+                     * emits a dynamic-import (RELOC_IAT_REL32) relocation
+                     * kind SQW/sqo_loader.c's in-process loader never
+                     * claimed to support (deliberately -- see its own
+                     * header comment: only DATA/WDATA/STATIC_REL32,
+                     * matching what a "-c" script actually needs). Found
+                     * via a direct repro: a `-c`-precompiled C# script
+                     * whose Main() called ANY `[DllImport]` extern
+                     * function (even a trivial "extern int abs(int x);")
+                     * failed to load with "unsupported relocation kind 5"
+                     * -- this affects every DllImport call, not just
+                     * Vulkan-specific ones. */
                     asm_call_static(a,name);
                 } else {
                     emit_linux_libc_call(cg, name, n->call.args, argc);
@@ -5994,7 +6098,10 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                     } else {
                         emit_linux_libc_call(cg, name, n->call.args, argc);
                     }
-                } else if (cg->prefer_static_calls && codegen_is_sqo_export(cg,name)) {
+                } else if (cg->prefer_static_calls && (cg->sqo_precompile || codegen_is_sqo_export(cg,name))) {
+                    /* Mirrors the identical "-c" precompile fix on this
+                     * exact same "dll==\"extern\"" shape a bit earlier in
+                     * this file -- see that occurrence's own long comment. */
                     asm_call_static(a,name);
                 } else {
                     emit_linux_libc_call(cg, name, n->call.args, argc);
@@ -6240,15 +6347,15 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
              * test suite.) */
             if (call_has_large_struct_arg(cg, n->fp_call.args, argc)) {
                 /* See classify_sysv_call_args's own comment for why this is
-                 * a separate path, only taken when a struct/union-by-value
-                 * argument bigger than 16 bytes is actually present — this
-                 * is exactly the case objc_msgSend() needs for e.g.
-                 * -[NSWindow initWithContentRect:styleMask:backing:defer:],
-                 * whose NSRect argument is 4 doubles (32 bytes). */
-                int mem_size[64], is_float_a[64], uses_reg[64], reg_index[64], scratch_slot[64], stack_slot[64];
+                 * a separate path, taken whenever a struct/union-by-value
+                 * argument bigger than 8 bytes is present (both the >16-byte
+                 * MEMORY-class case, e.g. objc_msgSend()'s NSRect argument
+                 * for -[NSWindow initWithContentRect:...], and the 9-16-byte
+                 * two-register case, e.g. Vulkan's VkExtent2D/VkExtent3D). */
+                int mem_size[64], is_float_a[64], uses_reg[64], is_pair[64], reg_index[64], scratch_slot[64], stack_slot[64];
                 int nregtotal, nstack;
                 int cargc = argc > 64 ? 64 : argc;
-                classify_sysv_call_args(cg, n->fp_call.args, cargc, mem_size, is_float_a, uses_reg,
+                classify_sysv_call_args(cg, n->fp_call.args, cargc, mem_size, is_float_a, uses_reg, is_pair,
                                          reg_index, scratch_slot, stack_slot, &nregtotal, &nstack);
                 int reg_scratch_base = nstack * 8;
                 int fnptr_off = reg_scratch_base + nregtotal * 8;
@@ -6258,7 +6365,7 @@ void codegen_expr(CodeGen *cg, ASTNode *n) {
                 asm_sub_rsp(a, frame);
                 codegen_expr(cg, n->fp_call.func_expr);
                 asm_mov_mem_reg(a, REG_RSP, fnptr_off, REG_RAX); /* save fn ptr */
-                emit_sysv_struct_call_args(cg, n->fp_call.args, cargc, mem_size, is_float_a, uses_reg,
+                emit_sysv_struct_call_args(cg, n->fp_call.args, cargc, mem_size, is_float_a, uses_reg, is_pair,
                                             reg_index, scratch_slot, stack_slot, reg_scratch_base, NULL);
                 asm_mov_reg_mem(a, REG_RAX, REG_RSP, fnptr_off); /* reload fn ptr */
                 asm_call_reg(a, REG_RAX);
@@ -7944,13 +8051,86 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
     cg->sym->next_offset = !cg->is_64bit ? 0
         : (cg->is_linux ? -(SQ_SYSV_CALLEE_SAVE_WORDS*8) : -64);
 
-    /* Register params in symbol table with correct 32-bit byte offsets */
+    /* Register params in symbol table with correct 32-bit byte offsets.
+     *
+     * `reg_slot`/`stack_word` (Linux SysV 64-bit only) replace the plain
+     * "idx == declared parameter position" model with real by-value
+     * struct-parameter awareness -- see classify_sysv_call_args's own
+     * header comment (this function's mirror-image counterpart on the
+     * CALLEE side) for the full story: a struct/union parameter over 8
+     * bytes was previously placed at the SAME single stack slot a plain
+     * scalar would get, silently losing everything past its first 8
+     * bytes (confirmed via a direct repro: a 4-int, 16-byte struct
+     * parameter came back with its 3rd/4th fields garbage even though
+     * the CALLER-side fix alone was already in place). For a function
+     * with no struct parameter over 8 bytes, `reg_slot`/`stack_word`
+     * track `i` exactly -- zero behavior change for every existing,
+     * already-tested function signature. */
     { int param_byte_off=0;
+      int reg_slot=0, stack_word=0;
       for (int i=0;i<n->func.paramc;i++) {
         ASTNode *pr=n->func.params[i];
-        if (pr->param.name)
-            symtable_define_param(cg->sym,pr->param.name,pr->param.type,i,param_byte_off);
         int psz=typeinfo_size(pr->param.type,cg->sym->is_64bit);
+        /* NOTE: struct-size CLASSIFICATION below deliberately uses
+         * sizeof_type_sym() (which resolves a typedef'd struct/union name
+         * to its real size via the symbol table), NOT the plain `psz`
+         * computed above -- typeinfo_size() (ast.c) has no symbol-table
+         * access at all and returns a hardcoded 4 for any name it doesn't
+         * recognize, which is EVERY struct/union/typedef name. Using
+         * `psz` here would make this whole struct-parameter fix silently
+         * never trigger (confirmed: it didn't, on the first attempt at
+         * this fix). `psz`/`param_byte_off` themselves are left as-is,
+         * still using the old (less accurate) typeinfo_size() call, since
+         * they only feed the 32-bit-target byte-offset path -- out of
+         * scope for this fix (Linux 64-bit only, matching every other
+         * struct-by-value fix this session), not worth the added risk of
+         * changing untested 32-bit behavior. */
+        int real_sz = sizeof_type_sym(pr->param.type, cg->sym->is_64bit, cg->sym);
+        int is_struct_gt8 = (cg->is_64bit && cg->is_linux && real_sz>8);
+        if (is_struct_gt8 && real_sz<=16 && reg_slot+2<=6) {
+            /* Two-eightbyte struct, fits in two consecutive integer
+             * registers -- see the matching prologue-spill loop below for
+             * where those two registers actually get written.
+             *
+             * NOTE: the struct's declared BASE offset is slot `reg_slot+1`
+             * (idx=reg_slot+1 -> offset -(N+reg_slot+2)*8), not `reg_slot`
+             * -- stack offsets are NEGATIVE and DECREASE as idx increases,
+             * but a struct's byte-0 field must live at the LOWER of its
+             * two slot addresses so that byte-8 (base+8) lands exactly on
+             * the OTHER slot's (higher, less-negative) address. Getting
+             * this backwards was a real, confirmed bug (byte 8-15 read
+             * from the wrong slot, one 8-byte word away from where the
+             * second register was actually spilled). Passing idx=
+             * reg_slot+1 also makes symtable_define_param()'s own
+             * "-(N+idx+2)*8" reservation formula correctly cover BOTH
+             * 8-byte slots already -- no separate manual reservation
+             * needed here (unlike the first, buggy version of this fix). */
+            if (pr->param.name) {
+                symtable_define_param(cg->sym,pr->param.name,pr->param.type,reg_slot+1,param_byte_off);
+            }
+            reg_slot += 2;
+        } else if (is_struct_gt8) {
+            /* >16 bytes (always the real ABI's unconditional MEMORY
+             * class, matching classify_sysv_call_args's caller-side
+             * handling exactly), OR a 9-16 byte struct that doesn't fit
+             * the remaining integer registers (real SysV never splits an
+             * aggregate across register+stack -- the whole thing goes to
+             * memory instead). Either way this consumes NO integer/float
+             * register slot at all, only stack-argument words -- its
+             * value already lives in the caller's outgoing stack-argument
+             * area, read directly at this offset with no spill needed
+             * (see the prologue-spill loop below, which correctly skips
+             * this case for exactly that reason). */
+            if (pr->param.name)
+                symtable_define_param(cg->sym,pr->param.name,pr->param.type,6+stack_word,param_byte_off);
+            stack_word += (real_sz+7)/8;
+        } else {
+            if (pr->param.name) {
+                int idx = (cg->is_64bit && cg->is_linux) ? (reg_slot<6 ? reg_slot : 6+stack_word) : i;
+                symtable_define_param(cg->sym,pr->param.name,pr->param.type,idx,param_byte_off);
+            }
+            if (cg->is_64bit && cg->is_linux) { if (reg_slot<6) reg_slot++; else stack_word++; }
+        }
         param_byte_off += (psz>4?psz:4);
       }
     }
@@ -7992,16 +8172,49 @@ void codegen_func(CodeGen *cg, ASTNode *n) {
 #define PR_REG(k) ((k)==0?REG_RDI:(k)==1?REG_RSI:(k)==2?REG_RDX:(k)==3?REG_RCX:(k)==4?REG_R8:REG_R9)
             int int_cnt = 0; int flt_cnt = 0;
             int max_named = n->func.paramc<6?n->func.paramc:6;
-            for (int i=0;i<max_named;i++) {
+            /* `reg_slot` mirrors the registration loop above exactly (see
+             * its own comment) -- for a function with no struct parameter
+             * over 8 bytes this loop behaves identically to the old plain
+             * "for i in 0..max_named" version (reg_slot tracks i exactly),
+             * so every existing, already-tested signature is unaffected.
+             * Stops as soon as no register slots remain, rather than after
+             * a fixed `max_named` param count, since a struct-pair now
+             * consumes two slots for one parameter. */
+            { int reg_slot = 0;
+              for (int i=0;i<n->func.paramc && reg_slot<6;i++) {
                 ASTNode *pr=n->func.params[i];
-                int is_float_param = pr->param.type && typeinfo_is_float(pr->param.type);
-                if (is_float_param) {
-                    asm_movsd_store(a, REG_RBP, -(SQ_SYSV_CALLEE_SAVE_WORDS+i+1)*8, flt_cnt);
-                    flt_cnt++;
+                /* See the registration loop's own comment on why this is
+                 * sizeof_type_sym(), not the plain typeinfo_size() call
+                 * used for `psz` elsewhere in this function -- the latter
+                 * can't resolve a struct/union/typedef name at all. */
+                int real_sz = sizeof_type_sym(pr->param.type, cg->sym->is_64bit, cg->sym);
+                if (real_sz>8 && real_sz<=16) {
+                    if (reg_slot+2>6) break; /* doesn't fit -- see registration loop: goes to memory instead, no spill needed */
+                    /* Struct base = slot reg_slot+1 (offset -(N+reg_slot+2)*8,
+                     * matching the registration loop's idx=reg_slot+1); base+8
+                     * = slot reg_slot (offset -(N+reg_slot+1)*8) -- see that
+                     * loop's comment for why the base is the LOWER-address
+                     * slot, not the first one processed. First eightbyte
+                     * (int_cnt, struct byte 0) goes to the base; second
+                     * eightbyte (int_cnt+1, struct byte 8) goes to base+8. */
+                    asm_mov_mem_reg(a,REG_RBP,-(SQ_SYSV_CALLEE_SAVE_WORDS+reg_slot+2)*8,PR_REG(int_cnt));
+                    asm_mov_mem_reg(a,REG_RBP,-(SQ_SYSV_CALLEE_SAVE_WORDS+reg_slot+1)*8,PR_REG(int_cnt+1));
+                    int_cnt += 2;
+                    reg_slot += 2;
+                } else if (real_sz>16) {
+                    continue; /* MEMORY-class struct: no register consumed, nothing to spill -- read straight from its stack-argument offset */
                 } else {
-                    asm_mov_mem_reg(a,REG_RBP,-(SQ_SYSV_CALLEE_SAVE_WORDS+i+1)*8,PR_REG(int_cnt));
-                    int_cnt++;
+                    int is_float_param = pr->param.type && typeinfo_is_float(pr->param.type);
+                    if (is_float_param) {
+                        asm_movsd_store(a, REG_RBP, -(SQ_SYSV_CALLEE_SAVE_WORDS+reg_slot+1)*8, flt_cnt);
+                        flt_cnt++;
+                    } else {
+                        asm_mov_mem_reg(a,REG_RBP,-(SQ_SYSV_CALLEE_SAVE_WORDS+reg_slot+1)*8,PR_REG(int_cnt));
+                        int_cnt++;
+                    }
+                    reg_slot++;
                 }
+              }
             }
             /* Variadic: also spill any remaining incoming INTEGER argument
              * registers (up to SysV's 6-integer-register limit) that

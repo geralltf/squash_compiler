@@ -16,6 +16,8 @@
 #include "winlinker.h"
 #include "objfile.h"
 #include "diag.h"
+#include "CS/cs_parser.h"
+#include "CS/cs_lower.h"
 #if defined(__OpenBSD__)
 #include <dirent.h>
 #endif
@@ -59,6 +61,56 @@ static char *read_file(const char *path) {
     /* normalize line endings: strip \r so CRLF->LF and bare CR->nothing */
     { int _ri=0, _wi=0; while (buf[_ri]) { if (buf[_ri]!='\r') buf[_wi++]=buf[_ri]; _ri++; } buf[_wi]='\0'; }
     return buf;
+}
+
+/* True if `path` ends in ".cs" (case-sensitive, matching every other
+ * extension check in this codebase — e.g. the ".sqo" check in main()'s
+ * own arg-parsing loop above). */
+static int is_csharp_source_path(const char *path) {
+    size_t n = strlen(path);
+    return n > 3 && strcmp(path + n - 3, ".cs") == 0;
+}
+
+/* Phase 4 of the plan (/home/squash/.claude/plans/nested-finding-walrus.md):
+ * ".cs" integration. Reads `path`, runs it through the C# lexer/parser
+ * (CS/cs_parser.c) and the lowering pass (CS/cs_lower.c), and returns the
+ * generated C SOURCE TEXT — the caller (main(), right where it would
+ * otherwise call read_file() on a ".c" file) treats this exactly like any
+ * other C translation unit from here on: same preprocess/lex/parse/
+ * codegen pipeline, completely unmodified. See cs_lower.h's own header
+ * comment for why text generation (not hand-built ASTNode trees) is the
+ * chosen mechanism, and for the current, honest scope of what a ".cs"
+ * file can contain (non-generic classes; no LINQ/exceptions/closures/
+ * arrays yet — each reports a clear lowering error, never silent wrong
+ * codegen). Exits(1) with diagnostics on a parse or lowering error,
+ * matching read_file()'s own "can't proceed, so don't return" convention
+ * for a fatal, whole-compile-aborting condition. */
+static char *lower_csharp_file(const char *path) {
+    char *cs_src = read_file(path);
+    CsParser p;
+    CsNode *unit;
+    CsLowerResult r;
+
+    cs_parser_init(&p, cs_src);
+    unit = cs_parse_unit(&p);
+    if (p.error_count > 0) {
+        diag_emit(DIAG_ERROR, -1, NULL, NULL,
+                  "%s: %d C# syntax error%s -- no %s written",
+                  path, p.error_count, p.error_count == 1 ? "" : "s",
+                  "output");
+        exit(1);
+    }
+    r = cs_lower_unit(unit, "csharp_rt.h");
+    csast_free(unit);
+    cs_parser_free(&p);
+    free(cs_src);
+    if (!r.ok) {
+        diag_emit(DIAG_ERROR, -1, NULL, NULL,
+                  "%s: %d C# lowering error%s (unsupported construct(s) -- see messages above) -- no output written",
+                  path, r.error_count, r.error_count == 1 ? "" : "s");
+        exit(1);
+    }
+    return r.text;
 }
 
 static int find_func_offset(Assembler *a, const char *name) {
@@ -335,8 +387,40 @@ int main(int argc, char **argv) {
            is_arm64?"arm64":(is_64bit?"64-bit":"32-bit"),
            is_macos?"macos":(is_openbsd?"openbsd":(is_linux?"linux":"windows")));
 
-    /* Stage 1: Read + preprocess */
-    char *raw=read_file(src_path);
+    /* Stage 1: Read + preprocess. A ".cs" source is lowered to C text
+     * first (see lower_csharp_file()'s own comment) -- everything from
+     * here on is the exact same pipeline a hand-written .c file goes
+     * through, unmodified. The lowered text always needs csharp_rt.h
+     * (CSR/) on the include path and, at final link time, a target-
+     * tagged CSR/csharp_rt.*.sqo (a .sqo is tagged to one exact
+     * is_64bit/is_linux/is_arm64 combination -- see objfile.h -- so
+     * -arm64/-windows/-macos each need their OWN precompiled runtime
+     * object; built once via "make -f Makefile.linux csharp_rt_<target>"
+     * -- checked here, not built on the fly: recursively invoking this
+     * same compile pipeline for a completely different translation unit
+     * mid-compile would mean re-entering CodeGen/Assembler global state
+     * this process is already using for the current compile, which is a
+     * real, avoidable risk this integration doesn't need to take). */
+    int is_csharp = is_csharp_source_path(src_path);
+    char rt_sqo_path[128];
+    if (is_csharp) {
+        const char *tag = is_arm64 ? "linux_arm64" : (is_macos ? "macos64" : (is_openbsd ? "openbsd64" : (is_linux ? "linux64" : (is_64bit ? "win64" : "win32"))));
+        snprintf(rt_sqo_path, sizeof rt_sqo_path, "CSR/csharp_rt.%s.sqo", tag);
+        if (n_inc < 32) include_dirs[n_inc++] = "CSR";
+        FILE *rtf = fopen(rt_sqo_path, "rb");
+        if (!rtf) {
+            diag_emit(DIAG_ERROR, -1, NULL, NULL,
+                      "%s not found -- build the C# runtime for this target first, e.g. \"squash -c %s %s CSR/csharp_rt.c -o %s\"",
+                      rt_sqo_path,
+                      is_arm64 ? "-arm64" : (is_64bit ? "-64" : "-32"),
+                      is_macos ? "-macos" : (is_openbsd ? "-openbsd" : (is_linux ? "-linux" : "-windows")),
+                      rt_sqo_path);
+            return 1;
+        }
+        fclose(rtf);
+        if (n_obj < 64) obj_flags[n_obj++] = rt_sqo_path;
+    }
+    char *raw = is_csharp ? lower_csharp_file(src_path) : read_file(src_path);
     include_dirs[n_inc]=NULL;
     char *src=preprocess(raw,src_path,include_dirs,n_inc,is_linux);
     free(raw);

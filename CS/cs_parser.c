@@ -792,12 +792,19 @@ static void parse_param_list(CsParser *p, CsNode ***out_params, int *out_n) {
     while (!is_punct(p, ")") && !is_eof(p)) {
         int line = p->cur->line;
         CsType *t; char *name; CsNode *def = 0;
-        if (is_kw(p, "out") || is_kw(p, "ref") || is_kw(p, "params")) advance(p); /* modifiers parsed, not tracked */
+        int is_out_ref = 0;
+        /* "params" (variadic) has no by-reference meaning -- only "out"/
+         * "ref" set is_out_ref (see cs_ast.h's own comment on why this is
+         * tracked now, unlike before: a [DllImport] extern parameter
+         * needs it for correct native marshaling). */
+        if (is_kw(p, "out") || is_kw(p, "ref")) { is_out_ref = 1; advance(p); }
+        else if (is_kw(p, "params")) advance(p); /* modifier parsed, not tracked */
         t = parse_type(p);
         name = expect_ident(p);
         if (is_punct(p, "=")) { advance(p); def = parse_assignment(p); }
         if (n >= cap) { cap = cap ? cap * 2 : 4; params = (CsNode **)realloc(params, sizeof(CsNode *) * (unsigned int)cap); }
         params[n++] = csnode_param(t, name, def, line);
+        params[n-1]->param.is_out_ref = is_out_ref;
         free(name);
         if (is_punct(p, ",")) { advance(p); continue; }
         break;
@@ -1136,6 +1143,43 @@ static void skip_attributes(CsParser *p) {
     }
 }
 
+/* Same as skip_attributes(), but specifically recognizes a single
+ * "[DllImport("libname")]" attribute (Phase 6c: P/Invoke-style native
+ * declarations, matching .NET's own DllImport spelling for familiarity)
+ * among the attribute list and returns its captured library-name string
+ * argument (malloc'd, caller frees), or NULL if no DllImport attribute
+ * was present. Every other attribute (DllImport or not) is still parsed
+ * and discarded exactly like skip_attributes() -- only the one string
+ * argument of a bare "DllImport(...)" attribute is captured, not a full
+ * attribute-argument grammar (named arguments like "EntryPoint=..." are
+ * accepted syntactically -- parse_arg_list handles them like ordinary
+ * call arguments -- but not interpreted; see cs_ast.h's own comment on
+ * dllimport_name for why the string isn't currently used to pick a
+ * specific library). */
+static char *skip_attributes_capture_dllimport(CsParser *p) {
+    char *lib = 0;
+    while (is_punct(p, "[")) {
+        int depth = 0;
+        int first = 1;
+        do {
+            if (is_punct(p, "[")) { depth++; advance(p); first = 0; continue; }
+            if (is_punct(p, "]")) { depth--; advance(p); continue; }
+            if (first == 0 && depth == 1 && !lib && is_ident_tok(p) && strcmp(p->cur->text, "DllImport") == 0) {
+                advance(p);
+                if (is_punct(p, "(")) {
+                    int argc; CsNode **args = parse_arg_list(p, &argc);
+                    if (argc > 0 && args[0] && args[0]->kind == CS_LIT_STRING)
+                        lib = cs_strdup(args[0]->lit_string.value);
+                    { int i; for (i = 0; i < argc; i++) csast_free(args[i]); free(args); }
+                }
+                continue;
+            }
+            advance(p);
+        } while (depth > 0 && !is_eof(p));
+    }
+    return lib;
+}
+
 /* ---- class/struct/interface members ---- */
 
 static CsNode *parse_class_member(CsParser *p, const char *class_name) {
@@ -1145,7 +1189,7 @@ static CsNode *parse_class_member(CsParser *p, const char *class_name) {
     char *name;
     CsTok *pk = 0;
     int is_ctor;
-    skip_attributes(p);
+    char *dllimport_lib = skip_attributes_capture_dllimport(p);
     line = p->cur->line;
     is_static = parse_modifiers(p);
 
@@ -1162,12 +1206,14 @@ static CsNode *parse_class_member(CsParser *p, const char *class_name) {
             if (is_punct(p, "(")) { int argc; CsNode **args = parse_arg_list(p, &argc); int i; for (i=0;i<argc;i++) csast_free(args[i]); free(args); }
         }
         body = parse_block(p);
+        free(dllimport_lib); /* DllImport on a constructor isn't a supported shape -- discarded, same as any other unrecognized attribute */
         { CsNode *n = csnode_ctor_decl(cname, params, n_params, body, line); free(cname); return n; }
     }
 
     if (!looks_like_type_start(p)) {
         perror_at(p, "expected a member declaration, got '%s'", p->cur->text ? p->cur->text : "<eof>");
         recover_to_stmt_end(p);
+        free(dllimport_lib);
         return csnode_block(0, 0, line);
     }
     type = parse_type(p);
@@ -1180,6 +1226,7 @@ static CsNode *parse_class_member(CsParser *p, const char *class_name) {
         parse_where_clauses(p, tps, n_tps);
         if (is_punct(p, "{")) body = parse_block(p);
         else expect_punct(p, ";");
+        free(dllimport_lib); /* a generic method as a DllImport target isn't a supported shape -- discarded */
         { CsNode *n = csnode_method_decl(type, name, tps, n_tps, params, n_params, body, is_static, line); free(name); return n; }
     }
     if (is_punct(p, "(")) {
@@ -1187,10 +1234,23 @@ static CsNode *parse_class_member(CsParser *p, const char *class_name) {
         parse_param_list(p, &params, &n_params);
         if (is_punct(p, "{")) body = parse_block(p);
         else expect_punct(p, ";");
-        { CsNode *n = csnode_method_decl(type, name, 0, 0, params, n_params, body, is_static, line); free(name); return n; }
+        { CsNode *n = csnode_method_decl(type, name, 0, 0, params, n_params, body, is_static, line);
+          /* Phase 6c: "[DllImport("lib")] static extern <ret> Name(...);"
+           * -- the method's own NAME is the real native symbol (matching
+           * .NET's own default EntryPoint-defaults-to-method-name rule);
+           * dllimport_name just needs to be non-NULL for cs_lower.c to
+           * route calls straight to it instead of "Class__Name". Stash
+           * the captured library string there too (informational -- see
+           * cs_ast.h's own comment on why it isn't used to pick a
+           * specific .so) so it survives past this function; if no
+           * DllImport attribute was present this is simply NULL and the
+           * method lowers exactly as before. */
+          n->method_decl.dllimport_name = dllimport_lib;
+          free(name); return n; }
     }
     if (is_punct(p, "{")) {
         int has_setter = 0;
+        free(dllimport_lib); /* a property isn't a supported DllImport target -- discarded */
         advance(p);
         if (is_kw(p, "get")) { advance(p); if (is_punct(p, "=>")) { advance(p); csast_free(parse_expr(p)); } expect_punct(p, ";"); }
         if (is_kw(p, "set")) { has_setter = 1; advance(p); if (is_punct(p, "=>")) { advance(p); csast_free(parse_expr(p)); } expect_punct(p, ";"); }
@@ -1203,12 +1263,14 @@ static CsNode *parse_class_member(CsParser *p, const char *class_name) {
         e = parse_expr(p);
         expect_punct(p, ";");
         csast_free(e);
+        free(dllimport_lib); /* a property isn't a supported DllImport target -- discarded */
         { CsNode *n = csnode_property_decl(type, name, is_static, 0, line); free(name); return n; }
     }
     {
         CsNode *init = 0;
         if (is_punct(p, "=")) { advance(p); init = parse_assignment(p); }
         expect_punct(p, ";");
+        free(dllimport_lib); /* a field isn't a supported DllImport target -- discarded */
         { CsNode *n = csnode_field_decl(type, name, init, is_static, line); free(name); return n; }
     }
 }

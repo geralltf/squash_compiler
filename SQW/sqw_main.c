@@ -60,6 +60,28 @@
 #include "img_decode_gif.c"
 #include "img_decode_jpeg.c"
 #include "image_cache.c"
+/* C# scripting (Phase 5 real slice -- see sqw_run_csharp_script()'s own
+ * comment below): the in-process ".sqo" loader plus a host symbol table
+ * of every CSR/csharp_rt.h function a compiled C# script can call.
+ * CSR/csharp_rt.c is #included directly here (same single-TU convention
+ * every other SQW dependency above already uses) so its functions live
+ * in THIS process, at real, known addresses sqo_host_syms_csharp_rt()
+ * can hand to the loader.
+ *
+ * sqo_loader.c's own ".sqo" reading is reimplemented locally as
+ * sqo_read_objfile() (see sqo_loader.c's own comment right above it)
+ * instead of #including the REAL objfile.c -- that file's objfile_read()
+ * needs diag_emit() (diag.c) and my_strdup() (ast.c), which would drag
+ * squash's entire compiler-internals AST module (ast_print, typeinfo_*,
+ * dozens of functions with nothing to do with SQW) into the browser
+ * binary for the sake of two small helper calls. objfile.h's own binary
+ * format (the struct definition, pulled in via sqo_loader.h) is a
+ * simple, stable, documented layout -- reimplementing just the read path
+ * against it here is a small, low-risk amount of duplication next to
+ * that alternative. */
+#include "sqo_loader.c"
+#include "sqo_host_syms.c"
+#include "../CSR/csharp_rt.c"
 
 #ifdef __linux__
 /* squash_init_private_bootstrap()/SQW_GetWindowX11Display()/
@@ -282,6 +304,132 @@ typedef struct {
     char *text;
 } SqwModuleScript;
 
+/* <script type="text/csharp"> -- collected separately from ordinary
+   script_buf/modules[] text, same reasoning as SqwModuleScript above:
+   each is a self-contained C# program, not something that can be
+   concatenated with JS text or parsed by js_run_script()/js_run_module()
+   at all. See sqw_run_csharp_script()'s own comment (right below) for
+   how these actually get executed -- this first integration compiles
+   each one via a real "squash" subprocess and runs the result once at
+   page load, surfacing its Console.WriteLine/Write output the same way
+   js_native_console_log() surfaces console.log (see that function's own
+   comment): no in-process DOM-event dispatch yet (that needs a real
+   runtime .sqo loader inside SQW, tracked as a documented follow-up in
+   the plan at /home/squash/.claude/plans/nested-finding-walrus.md's
+   Phase 5 notes -- this is a first, real, working slice of it, not the
+   complete design). */
+#define SQW_MAX_CSHARP_SCRIPTS 16
+typedef struct {
+    char id[192];
+    char *text;
+} SqwCsharpScript;
+
+/* squash's own include/stdlib.h shim doesn't declare system() -- hand-
+ * declared here rather than widening the shim (out of scope for this
+ * integration), matching this project's own established pattern for a
+ * missing libc declaration (e.g. setjmp/longjmp in CSR/csharp_rt.h,
+ * strtoll in CS/cs_lexer.c). Verified this session that squash-compiled
+ * code calling it works correctly. Still needed for the COMPILE step
+ * below (see this function's own comment on why compiling stays a real
+ * subprocess even though running is now in-process). */
+extern int system(const char *command);
+
+/* Compiles `cs_text` (one whole ".cs" program -- a real, current
+ * limitation: unlike JS's script_buf concatenation, each <script
+ * type="text/csharp"> block is its own independent compile, so two such
+ * blocks on one page do NOT share classes/state the way real C# static
+ * fields might imply -- documented, not silently wrong) via a real
+ * "squash -c" subprocess (see compiler.c's own ".cs" handling --
+ * lower_csharp_file()/is_csharp_source_path() -- this is the exact same
+ * "squash foo.cs -c -o foo.sqo" path any user would invoke by hand, just
+ * shelled out to rather than reusing in-process: recompiling THIS
+ * process's own CodeGen/Assembler global state mid-render for a wholly
+ * different translation unit would be a real, avoidable risk).
+ *
+ * RUNNING the result, unlike compiling it, IS now in-process: the
+ * compiled ".sqo" is loaded directly into SQW's own memory via
+ * sqo_loader_load() (SQW/sqo_loader.c) and its "main" export (cs_lower.c
+ * always emits a real `int main(void) { <MainClass>__Main(); return 0;
+ * }` wrapper, present in the export table even for a "-c" precompile --
+ * see cs_lower.c's own comment on why this is simpler than tracking the
+ * C# class name at the SQW level) is called as a genuine, real function
+ * pointer in this process. This is the actual novel Phase 5 capability
+ * (see /home/squash/.claude/plans/nested-finding-walrus.md): previous
+ * sessions' version of this function ran a full subprocess and captured
+ * its stdout with an "SQW/cs console:" prefix; now Console.WriteLine's
+ * real csr_console_write_line() (CSR/csharp_rt.c, linked directly into
+ * SQW -- see this file's own top-of-block #include comment) writes to
+ * SQW's OWN stdout directly, the same as any other in-process code would
+ * -- there is no longer a subprocess boundary to prefix output across.
+ * Real DOM-event wiring (binding a loaded script's own exported methods
+ * to click/input/etc, the way js_engine.c's dispatch works) is not yet
+ * implemented -- this still only calls the script's top-level entry
+ * point once, at page load, like a classic top-level script; that's the
+ * next remaining piece, not this one. A compile, load, or symbol-lookup
+ * failure is logged and otherwise swallowed (same "log and keep going,
+ * never blank the page" convention sqw_load_script_src() documents for a
+ * broken script src). `id` is used only for diagnostic messages (the
+ * script's resolved src URL, or an auto-generated "inline-csharp#N" id
+ * for an inline block, mirroring SqwModuleScript's own `id` convention). */
+static void sqw_run_csharp_script(const char *cs_text, const char *id) {
+    char src_path[256];
+    char sqo_path[256];
+    char cmd[1024];
+    FILE *f;
+    static int g_csharp_run_counter = 0;
+    SqoLoaded loaded;
+    SqoHostSymbol host_syms[SQO_HOST_SYMS_COUNT + SQO_HOST_SYMS_VULKAN_COUNT];
+    int n_host_syms, n_rt_syms;
+    int (*main_fn)(void);
+
+    snprintf(src_path, sizeof src_path, "/tmp/sqw_cs_%d_%d.cs", (int)getpid(), g_csharp_run_counter);
+    snprintf(sqo_path, sizeof sqo_path, "/tmp/sqw_cs_%d_%d.sqo", (int)getpid(), g_csharp_run_counter);
+    g_csharp_run_counter++;
+
+    f = fopen(src_path, "w");
+    if (!f) { fprintf(stderr, "SQW: C# script '%s': could not create temp file %s\n", id, src_path); fflush(stderr); return; }
+    fputs(cs_text, f);
+    fclose(f);
+
+    snprintf(cmd, sizeof cmd, "./squash -c -linux -64 %s -o %s >/tmp/sqw_cs_compile.log 2>&1", src_path, sqo_path);
+    if (system(cmd) != 0) {
+        fprintf(stderr, "SQW: C# script '%s' failed to compile -- see /tmp/sqw_cs_compile.log\n", id);
+        fflush(stderr);
+        remove(src_path);
+        return;
+    }
+
+    /* Phase 6c: a C# script's [DllImport("vulkan")]-declared calls need
+     * the real Vulkan host symbols too (SQW/sqo_host_syms.c's
+     * sqo_host_syms_vulkan()) -- not wiring this in here left every such
+     * call unresolved at load time even though the compile step itself
+     * succeeds (a script can DECLARE and CALL a real Vulkan function, but
+     * without these entries sqo_loader_load() would fail with "unresolved
+     * function symbol"). SQW already links real libvulkan.so.1 directly
+     * (SQW/vk_context.c), so these are the same real functions, not a
+     * separate/stub table. */
+    n_rt_syms = sqo_host_syms_csharp_rt(host_syms);
+    n_host_syms = n_rt_syms + sqo_host_syms_vulkan(host_syms + n_rt_syms);
+    if (!sqo_loader_load(sqo_path, host_syms, n_host_syms, &loaded)) {
+        fprintf(stderr, "SQW: C# script '%s' compiled but failed to load in-process\n", id);
+        fflush(stderr);
+        remove(src_path); remove(sqo_path);
+        return;
+    }
+
+    main_fn = (int (*)(void))sqo_loader_get_symbol(&loaded, "main");
+    if (!main_fn) {
+        fprintf(stderr, "SQW: C# script '%s': loaded but has no 'main' export\n", id);
+        fflush(stderr);
+    } else {
+        main_fn();
+    }
+
+    sqo_loader_free(&loaded);
+    remove(src_path);
+    remove(sqo_path);
+}
+
 /* Blocking network fetch for one <script src="..."> URL -- see
    sqw_apply_css()'s own comment on why a plain (non-async/non-defer)
    <script src> blocking the rest of page load until it arrives is
@@ -392,6 +540,12 @@ static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, 
     SqwModuleScript modules[SQW_MAX_MODULE_SCRIPTS];
     int module_count = 0;
 
+    /* <script type="text/csharp"> -- see SqwCsharpScript's own comment
+       above for why these are collected separately, same reasoning as
+       the `modules` array right above. */
+    SqwCsharpScript cs_scripts[SQW_MAX_CSHARP_SCRIPTS];
+    int cs_script_count = 0;
+
     int cap = 64, top = 0;
     DomNode **stack = (DomNode **)malloc((size_t)cap * sizeof(DomNode *));
     int *next_child = (int *)malloc((size_t)cap * sizeof(int));
@@ -424,6 +578,7 @@ static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, 
                 const char *src = dom_get_attr(child, "src");
                 const char *type = dom_get_attr(child, "type");
                 int is_module = type && !strcmp(type, "module");
+                int is_csharp = type && !strcmp(type, "text/csharp");
                 char *text = 0;
                 if (src && src[0]) {
                     text = sqw_load_script_src(src, dir, base_url);
@@ -445,7 +600,17 @@ static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, 
                     }
                     if (inline_len > 0) text = strdup(inline_buf);
                 }
-                if (is_module) {
+                if (is_csharp) {
+                    if (text && cs_script_count < SQW_MAX_CSHARP_SCRIPTS) {
+                        SqwCsharpScript *m = &cs_scripts[cs_script_count];
+                        if (src && src[0]) { strncpy(m->id, src, sizeof m->id - 1); m->id[sizeof m->id - 1] = 0; }
+                        else snprintf(m->id, sizeof m->id, "inline-csharp#%d", cs_script_count);
+                        m->text = text;
+                        cs_script_count++;
+                        text = 0; /* ownership moved into cs_scripts[] */
+                    }
+                    free(text);
+                } else if (is_module) {
                     if (text && module_count < SQW_MAX_MODULE_SCRIPTS) {
                         SqwModuleScript *m = &modules[module_count];
                         if (src && src[0]) { strncpy(m->id, src, sizeof m->id - 1); m->id[sizeof m->id - 1] = 0; }
@@ -517,6 +682,19 @@ static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, 
         for (i = 0; i < module_count; i++) {
             js_run_module(g_current_js_interp, modules[i].text, modules[i].id);
             free(modules[i].text);
+        }
+    }
+
+    /* Every <script type="text/csharp"> also runs once, after JS --
+       see sqw_run_csharp_script()'s own comment for exactly what "runs"
+       means in this first integration (a real squash-compiled subprocess,
+       output surfaced like console.log; no in-process DOM-event dispatch
+       yet). */
+    {
+        int i;
+        for (i = 0; i < cs_script_count; i++) {
+            sqw_run_csharp_script(cs_scripts[i].text, cs_scripts[i].id);
+            free(cs_scripts[i].text);
         }
     }
 

@@ -108,6 +108,60 @@ int main(int argc, char **argv) {
             "  }\n"
             "}\n";
         lower_one(src, out_path);
+    } else if (strcmp(which, "4") == 0) {
+        /* List<T> -- construction, Add, Count, indexing (get+set), foreach, RemoveAt/Clear */
+        const char *src =
+            "class Program {\n"
+            "  static void Main() {\n"
+            "    List<int> nums = new List<int>();\n"
+            "    nums.Add(10);\n"
+            "    nums.Add(20);\n"
+            "    nums.Add(30);\n"
+            "    if (nums.Count == 3) { Console.WriteLine(\"count-ok\"); }\n"
+            "    int second = nums[1];\n"
+            "    if (second == 20) { Console.WriteLine(\"index-get-ok\"); }\n"
+            "    nums[1] = 99;\n"
+            "    if (nums[1] == 99) { Console.WriteLine(\"index-set-ok\"); }\n"
+            "    int total = 0;\n"
+            "    foreach (int n in nums) { total = total + n; }\n"
+            "    if (total == 139) { Console.WriteLine(\"foreach-ok\"); }\n"
+            "    nums.RemoveAt(0);\n"
+            "    if (nums.Count == 2) { Console.WriteLine(\"removeat-ok\"); }\n"
+            "    nums.Clear();\n"
+            "    if (nums.Count == 0) { Console.WriteLine(\"clear-ok\"); }\n"
+            "    List<string> names = new List<string>();\n"
+            "    names.Add(\"alice\");\n"
+            "    names.Add(\"bob\");\n"
+            "    string joined = \"\";\n"
+            "    foreach (string s in names) { joined = joined + s + \",\"; }\n"
+            "    Console.WriteLine(joined);\n"
+            "  }\n"
+            "}\n";
+        lower_one(src, out_path);
+    } else if (strcmp(which, "5") == 0) {
+        /* Phase 6b: real value-type struct -- ctor, instance method,
+         * value-copy independence (mutating a copy must not affect the
+         * original). */
+        const char *src =
+            "struct Point {\n"
+            "  public int X;\n"
+            "  public int Y;\n"
+            "  public Point(int x, int y) { X = x; Y = y; }\n"
+            "  public int Sum() { return X + Y; }\n"
+            "}\n"
+            "class Program {\n"
+            "  static void Main() {\n"
+            "    Point p = new Point(3, 4);\n"
+            "    int s = p.Sum();\n"
+            "    if (s == 7) { Console.WriteLine(\"sum-ok\"); }\n"
+            "    Point q = p;\n"
+            "    q.X = 999;\n"
+            "    int px = p.X;\n"
+            "    int qx = q.X;\n"
+            "    if (px == 3 && qx == 999) { Console.WriteLine(\"copy-independence-ok\"); }\n"
+            "  }\n"
+            "}\n";
+        lower_one(src, out_path);
     } else {
         fprintf(stderr, "unknown fixture '%s'\n", which);
         return 1;

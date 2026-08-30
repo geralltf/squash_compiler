@@ -33,4 +33,8 @@
 #include "objfile.c"
 #include "implib.c"
 #include "diag.c"
+#include "CS/cs_ast.c"
+#include "CS/cs_lexer.c"
+#include "CS/cs_parser.c"
+#include "CS/cs_lower.c"
 #include "compiler.c"

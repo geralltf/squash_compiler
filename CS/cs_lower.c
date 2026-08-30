@@ -113,6 +113,12 @@ static const char *primitive_c_type(const char *csname) {
     if (!strcmp(csname, "void")) return "void";
     if (!strcmp(csname, "object")) return "void*";
     if (!strcmp(csname, "string")) return "CsString*";
+    /* Phase 6c: opaque native handles for P/Invoke declarations --
+     * IntPtr/nint are C#'s own spellings for "an opaque native pointer-
+     * sized value", exactly what a bodyless native function taking e.g. a
+     * VkInstance dispatchable handle needs. */
+    if (!strcmp(csname, "IntPtr")) return "void*";
+    if (!strcmp(csname, "nint")) return "void*";
     return 0;
 }
 
@@ -126,15 +132,37 @@ static char *lower_type_str(CsType *t, ClassRegistry *reg, int line) {
     const char *prim;
     if (!t) { lower_error(line, "internal: NULL type in lower_type_str"); return cs_strdup("void*"); }
     if (t->array_rank > 0) { lower_error(line, "arrays are not supported yet (type '%s') -- tracked follow-up, see cs_lower.h", t->name); return cs_strdup("void*"); }
-    if (t->n_type_args > 0) { lower_error(line, "generic types are not supported yet ('%s<...>') -- tracked follow-up, see cs_lower.h", t->name); return cs_strdup("void*"); }
+    /* List<T> -> CsList* (generic-erased, matching CSR/csharp_rt.h's own
+     * CsList design -- NOT per-instantiation monomorphized structs; T only
+     * drives sizeof()/temp-variable typing at each use site, see
+     * type_is_list()/mc_new_temp()). Every other generic shape (
+     * Dictionary<K,V>, a user-defined generic class) is still out of
+     * scope, reported below. */
+    if (t->n_type_args > 0) {
+        if (strcmp(t->name, "List") == 0 && t->n_type_args == 1) return cs_strdup("CsList*");
+        lower_error(line, "generic types other than List<T> are not supported yet ('%s<...>') -- tracked follow-up, see cs_lower.h", t->name);
+        return cs_strdup("void*");
+    }
     prim = primitive_c_type(t->name);
     if (prim) return cs_strdup(prim);
     {
         CsNode *cls = reg_find_class(reg, t->name);
         if (cls) {
-            char buf[256];
-            snprintf(buf, sizeof buf, "%s*", t->name);
-            return cs_strdup(buf);
+            /* Real C# value-vs-reference-type distinction, Phase 6b: a
+             * `struct` (CS_STRUCT_DECL) is a plain C struct VALUE -- no
+             * pointer, no GC header, matching real C# semantics AND
+             * enabling native interop (a native function expecting a
+             * flat VkExtent2D-shaped value can't be handed a GC pointer).
+             * `class` (CS_CLASS_DECL) keeps the existing GC-heap-pointer
+             * behavior. Before this phase both kinds were lowered
+             * identically (always a pointer) -- see cs_lower.h's Phase 6
+             * plan notes. */
+            if (cls->kind == CS_STRUCT_DECL) return cs_strdup(t->name);
+            {
+                char buf[256];
+                snprintf(buf, sizeof buf, "%s*", t->name);
+                return cs_strdup(buf);
+            }
         }
     }
     lower_error(line, "unknown type '%s'", t->name);
@@ -143,12 +171,43 @@ static char *lower_type_str(CsType *t, ClassRegistry *reg, int line) {
 
 /* ---- per-method local-variable static-type tracking (see cs_lower.h) ---- */
 typedef struct { char *name; CsType *type; } LocalVarInfo;
+/* One compiler-generated temporary, needed wherever C# code needs a real
+ * addressable lvalue that plain C expression syntax can't materialize
+ * inline (squash's C parser accepts neither C99 compound literals nor
+ * GNU statement-expressions -- both confirmed unsupported this session)
+ * -- e.g. `list.Add(5)` lowers to `(__tmp0 = 5, csr_list_add(list,
+ * &__tmp0))` via the C comma operator, where `__tmp0` must be a real,
+ * already-declared local. Declared once per generated function, hoisted
+ * to the very top of its body (see lower_class_methods()) -- C doesn't
+ * care that a local is declared before it's textually used later in the
+ * same block, only that it's declared somewhere in an enclosing scope
+ * before the first REFERENCE, which "top of function" always satisfies. */
+typedef struct { char *name; char *ctype; } ExtraTemp;
 typedef struct {
     LocalVarInfo *locals; int n_locals; int cap_locals;
     CsNode *class_decl;     /* enclosing class, or NULL for a free function (not used yet) */
     int is_instance;        /* 1 = has a real `this` */
     ClassRegistry *reg;
+    ExtraTemp *extra_temps; int n_extra_temps; int cap_extra_temps;
+    int temp_counter;
 } MethodCtx;
+
+/* Registers a new hoisted temp of C type `ctype` (e.g. "int", "CsString*")
+ * and returns its freshly generated name (owned by the caller -- copy
+ * into generated text, then free it; the ExtraTemp registration itself
+ * keeps its own copy for the declaration emitted later). */
+static char *mc_new_temp(MethodCtx *mc, const char *ctype) {
+    char buf[32];
+    snprintf(buf, sizeof buf, "__tmp%d", mc->temp_counter++);
+    if (mc->n_extra_temps >= mc->cap_extra_temps) {
+        mc->cap_extra_temps = mc->cap_extra_temps ? mc->cap_extra_temps * 2 : 8;
+        mc->extra_temps = (ExtraTemp *)realloc(mc->extra_temps, sizeof(ExtraTemp) * (unsigned int)mc->cap_extra_temps);
+    }
+    mc->extra_temps[mc->n_extra_temps].name = cs_strdup(buf);
+    mc->extra_temps[mc->n_extra_temps].ctype = cs_strdup(ctype);
+    mc->n_extra_temps++;
+    return cs_strdup(buf);
+}
 
 static void mc_add_local(MethodCtx *mc, const char *name, CsType *type) {
     if (mc->n_locals >= mc->cap_locals) { mc->cap_locals = mc->cap_locals ? mc->cap_locals * 2 : 8; mc->locals = (LocalVarInfo *)realloc(mc->locals, sizeof(LocalVarInfo) * (unsigned int)mc->cap_locals); }
@@ -159,6 +218,49 @@ static void mc_add_local(MethodCtx *mc, const char *name, CsType *type) {
 static CsType *mc_lookup_local(MethodCtx *mc, const char *name) {
     int i;
     for (i = mc->n_locals - 1; i >= 0; i--) if (strcmp(mc->locals[i].name, name) == 0) return mc->locals[i].type;
+    return 0;
+}
+
+/* Same best-effort resolution as infer_class_type() below, but returns
+ * the raw CsType* (not resolved down to a class decl) -- used to detect
+ * a List<T> receiver (or any other generic-shaped type) where
+ * infer_class_type() would come back NULL (reg_find_class() only knows
+ * about concrete, non-generic user classes). The returned CsType is
+ * BORROWED (owned by whatever local/field/type-arg it came from) --
+ * callers must not free it. */
+static CsNode *infer_class_type(CsNode *e, MethodCtx *mc);
+static CsType *infer_full_type(CsNode *e, MethodCtx *mc) {
+    if (!e) return 0;
+    if (e->kind == CS_THIS) return 0; /* `this`'s own type isn't tracked as a CsType anywhere -- callers needing it use infer_class_type instead */
+    if (e->kind == CS_IDENT) {
+        CsType *t = mc_lookup_local(mc, e->ident.name);
+        if (t) return t;
+        if (mc->class_decl) {
+            CsNode *f = class_find_field(mc->class_decl, e->ident.name);
+            if (f) return f->kind == CS_FIELD_DECL ? f->field_decl.type : f->property_decl.type;
+        }
+        return 0;
+    }
+    if (e->kind == CS_MEMBER) {
+        CsNode *owner = infer_class_type(e->member.obj, mc);
+        if (owner) {
+            CsNode *f = class_find_field(owner, e->member.name);
+            if (f) return f->kind == CS_FIELD_DECL ? f->field_decl.type : f->property_decl.type;
+        }
+        return 0;
+    }
+    if (e->kind == CS_NEW_OBJECT) return e->new_object.type;
+    if (e->kind == CS_CAST) return e->cast.type;
+    return 0;
+}
+
+/* True if `t` is a closed List<T> instantiation; `*out_elem` (borrowed)
+ * is set to T itself. */
+static int type_is_list(CsType *t, CsType **out_elem) {
+    if (t && strcmp(t->name, "List") == 0 && t->n_type_args == 1 && t->array_rank == 0) {
+        *out_elem = t->type_args[0];
+        return 1;
+    }
     return 0;
 }
 
@@ -211,6 +313,27 @@ static void escape_c_string(const char *s, StrBuf *out) {
     sb_append(out, "\"");
 }
 
+/* Best-effort "is `e` string-typed?" check, used to decide whether a C#
+ * '+' should lower to cs_string_concat() instead of raw C '+' (adding two
+ * CsString* pointers would silently compile as pointer arithmetic --
+ * wrong, and no diagnostic would ever catch it). NOT real type inference
+ * (see cs_lower.h's scope note): literals and locals/fields resolve via
+ * infer_full_type(); a '+' chain propagates through itself so "a + b + c"
+ * (parsed as "(a + b) + c") correctly treats the inner sum as
+ * string-typed too if either of ITS operands was; a call's return type
+ * isn't tracked at all, so `SomeMethod() + "x"` is a real, documented gap
+ * (the call side is silently treated as already-CsString*, matching
+ * lower_expr_as_string's own fallback below). */
+static int expr_is_string(CsNode *e, MethodCtx *mc) {
+    CsType *t;
+    if (!e) return 0;
+    if (e->kind == CS_LIT_STRING || e->kind == CS_LIT_INTERP_STRING) return 1;
+    if (e->kind == CS_BINARY && strcmp(e->binary.op, "+") == 0) return expr_is_string(e->binary.left, mc) || expr_is_string(e->binary.right, mc);
+    if (e->kind == CS_CAST) return e->cast.type && strcmp(e->cast.type->name, "string") == 0;
+    t = infer_full_type(e, mc);
+    return t && t->n_type_args == 0 && t->array_rank == 0 && strcmp(t->name, "string") == 0;
+}
+
 /* Lowers `e` as an expression that must produce a CsString* -- used for
  * string-interpolation slots and Console.WriteLine/Write arguments. Not
  * real type inference (see cs_lower.h): a literal is handled precisely;
@@ -232,6 +355,24 @@ static void lower_expr_as_string(CsNode *e, MethodCtx *mc, StrBuf *out) {
     lower_expr(e, mc, out); /* assume already CsString* */
 }
 
+/* Emits a call's arguments against a resolved callee `m`, prefixing "&"
+ * onto any argument whose corresponding declared parameter is "out"/
+ * "ref" -- real P/Invoke's own by-reference marshaling rule (see
+ * lower_class_methods' own comment on the matching [DllImport]
+ * declaration side: only meaningful for DllImport methods today, since
+ * ordinary C# methods don't implement "out"/"ref" parameter-passing at
+ * all yet). `m` may be NULL (ordinary, non-DllImport calls never need
+ * this), in which case every argument lowers plain, unprefixed. */
+static void lower_call_args(CsNode *e, CsNode *m, MethodCtx *mc, StrBuf *out, int first_arg_needs_comma) {
+    int i;
+    for (i = 0; i < e->call.argc; i++) {
+        int is_out_ref = m && i < m->method_decl.n_params && m->method_decl.params[i]->param.is_out_ref;
+        if (i > 0 || first_arg_needs_comma) sb_append(out, ", ");
+        if (is_out_ref) sb_append(out, "&");
+        lower_expr(e->call.args[i], mc, out);
+    }
+}
+
 static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
     CsNode *callee = e->call.callee;
     int i;
@@ -250,14 +391,57 @@ static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
             sb_append(out, "((void)0)");
             return;
         }
+        {
+            CsType *list_t = infer_full_type(obj, mc);
+            CsType *elem;
+            if (type_is_list(list_t, &elem)) {
+                if (strcmp(mname, "Add") == 0 && e->call.argc == 1) {
+                    char *ct = lower_type_str(elem, mc->reg, e->line);
+                    char *tmp = mc_new_temp(mc, ct);
+                    sb_appendf(out, "(%s = ", tmp);
+                    lower_expr(e->call.args[0], mc, out);
+                    sb_append(out, ", csr_list_add(");
+                    lower_expr(obj, mc, out);
+                    sb_appendf(out, ", &%s))", tmp);
+                    free(ct); free(tmp);
+                    return;
+                }
+                if (strcmp(mname, "RemoveAt") == 0 && e->call.argc == 1) {
+                    sb_append(out, "csr_list_remove_at(");
+                    lower_expr(obj, mc, out);
+                    sb_append(out, ", ");
+                    lower_expr(e->call.args[0], mc, out);
+                    sb_append(out, ")");
+                    return;
+                }
+                if (strcmp(mname, "Clear") == 0 && e->call.argc == 0) {
+                    sb_append(out, "csr_list_clear(");
+                    lower_expr(obj, mc, out);
+                    sb_append(out, ")");
+                    return;
+                }
+                lower_error(e->line, "unsupported List<T> method '%s'", mname);
+                sb_append(out, "((void)0)");
+                return;
+            }
+        }
         /* Static-class-qualified call: Obj is a known class name, not a local variable. */
         if (obj->kind == CS_IDENT && !mc_lookup_local(mc, obj->ident.name)) {
             CsNode *cls = reg_find_class(mc->reg, obj->ident.name);
             if (cls) {
                 CsNode *m = class_find_method(cls, mname);
                 if (m && m->method_decl.is_static) {
-                    sb_appendf(out, "%s__%s(", cls->class_decl.name, mname);
-                    for (i = 0; i < e->call.argc; i++) { if (i) sb_append(out, ", "); lower_expr(e->call.args[i], mc, out); }
+                    /* Phase 6c: a [DllImport] method calls straight
+                     * through to its real native name, not the usual
+                     * "Class__Method" mangling -- see lower_class_methods'
+                     * own comment on the matching declaration side. */
+                    if (m->method_decl.dllimport_name) {
+                        sb_appendf(out, "%s(", mname);
+                        lower_call_args(e, m, mc, out, 0);
+                    } else {
+                        sb_appendf(out, "%s__%s(", cls->class_decl.name, mname);
+                        for (i = 0; i < e->call.argc; i++) { if (i) sb_append(out, ", "); lower_expr(e->call.args[i], mc, out); }
+                    }
                     sb_append(out, ")");
                     return;
                 }
@@ -273,6 +457,12 @@ static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
             m = class_find_method(owner, mname);
             if (!m) { lower_error(e->line, "'%s' has no method '%s'", owner->class_decl.name, mname); sb_append(out, "((void)0)"); return; }
             sb_appendf(out, "%s__%s(", owner->class_decl.name, mname);
+            /* Struct-typed receivers lower to plain C values (see
+             * lower_type_str's own comment), but every instance method's
+             * "this" is still a pointer -- take its address here, same as
+             * ordinary C# "ref this" semantics. Class-typed receivers are
+             * already GC pointers, passed as-is. */
+            if (owner->kind == CS_STRUCT_DECL) sb_append(out, "&");
             lower_expr(obj, mc, out);
             for (i = 0; i < e->call.argc; i++) { sb_append(out, ", "); lower_expr(e->call.args[i], mc, out); }
             sb_append(out, ")");
@@ -283,9 +473,14 @@ static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
         const char *name = callee->ident.name;
         CsNode *m = mc->class_decl ? class_find_method(mc->class_decl, name) : 0;
         if (m) {
-            sb_appendf(out, "%s__%s(", mc->class_decl->class_decl.name, name);
-            if (!m->method_decl.is_static) { sb_append(out, "this"); if (e->call.argc) sb_append(out, ", "); }
-            for (i = 0; i < e->call.argc; i++) { if (i) sb_append(out, ", "); lower_expr(e->call.args[i], mc, out); }
+            if (m->method_decl.dllimport_name) {
+                sb_appendf(out, "%s(", name);
+                lower_call_args(e, m, mc, out, 0);
+            } else {
+                sb_appendf(out, "%s__%s(", mc->class_decl->class_decl.name, name);
+                if (!m->method_decl.is_static) { sb_append(out, "this"); if (e->call.argc) sb_append(out, ", "); }
+                for (i = 0; i < e->call.argc; i++) { if (i) sb_append(out, ", "); lower_expr(e->call.args[i], mc, out); }
+            }
             sb_append(out, ")");
             return;
         }
@@ -342,6 +537,26 @@ static void lower_expr(CsNode *e, MethodCtx *mc, StrBuf *out) {
     case CS_ASSIGN: {
         const char *op = e->assign.op;
         if (strcmp(op, "?\?=") == 0) { lower_error(e->line, "the null-coalescing-assignment operator is not supported yet"); sb_append(out, "((void)0)"); return; }
+        if (e->assign.lhs->kind == CS_INDEX) {
+            CsType *list_t = infer_full_type(e->assign.lhs->index_.obj, mc);
+            CsType *elem;
+            if (type_is_list(list_t, &elem)) {
+                if (strcmp(op, "=") != 0) { lower_error(e->line, "compound assignment to a List<T> element is not supported yet, only '='"); sb_append(out, "((void)0)"); return; }
+                {
+                    char *ct = lower_type_str(elem, mc->reg, e->line);
+                    char *tmp = mc_new_temp(mc, ct);
+                    sb_appendf(out, "(%s = ", tmp);
+                    lower_expr(e->assign.rhs, mc, out);
+                    sb_append(out, ", csr_list_set(");
+                    lower_expr(e->assign.lhs->index_.obj, mc, out);
+                    sb_append(out, ", ");
+                    lower_expr(e->assign.lhs->index_.index, mc, out);
+                    sb_appendf(out, ", &%s))", tmp);
+                    free(ct); free(tmp);
+                    return;
+                }
+            }
+        }
         sb_append(out, "(");
         lower_expr(e->assign.lhs, mc, out);
         sb_appendf(out, " %s ", op);
@@ -385,6 +600,14 @@ static void lower_expr(CsNode *e, MethodCtx *mc, StrBuf *out) {
             }
             return;
         }
+        if (strcmp(e->binary.op, "+") == 0 && (expr_is_string(e->binary.left, mc) || expr_is_string(e->binary.right, mc))) {
+            sb_append(out, "cs_string_concat(");
+            lower_expr_as_string(e->binary.left, mc, out);
+            sb_append(out, ", ");
+            lower_expr_as_string(e->binary.right, mc, out);
+            sb_append(out, ")");
+            return;
+        }
         sb_append(out, "(");
         lower_expr(e->binary.left, mc, out);
         sb_appendf(out, " %s ", e->binary.op);
@@ -409,27 +632,88 @@ static void lower_expr(CsNode *e, MethodCtx *mc, StrBuf *out) {
     case CS_CALL: lower_call(e, mc, out); return;
     case CS_MEMBER: {
         CsNode *owner;
-        if (e->member.obj->kind == CS_IDENT && strcmp(e->member.obj->ident.name, "string") != 0) {
-            CsType *t = mc_lookup_local(mc, e->member.obj->ident.name);
-            (void)t;
+        CsType *full_t = infer_full_type(e->member.obj, mc);
+        CsType *elem;
+        if (type_is_list(full_t, &elem) && strcmp(e->member.name, "Count") == 0) {
+            sb_append(out, "csr_list_count(");
+            lower_expr(e->member.obj, mc, out);
+            sb_append(out, ")");
+            return;
+        }
+        if (full_t && strcmp(full_t->name, "string") == 0 && strcmp(e->member.name, "Length") == 0) {
+            sb_append(out, "(");
+            lower_expr(e->member.obj, mc, out);
+            sb_append(out, ")->len");
+            return;
         }
         owner = infer_class_type(e->member.obj, mc);
         if (owner) {
             CsNode *f = class_find_field(owner, e->member.name);
-            if (f) { sb_append(out, "("); lower_expr(e->member.obj, mc, out); sb_appendf(out, ")->%s", e->member.name); return; }
+            if (f) {
+                /* Struct-typed objects lower to plain C VALUES (see
+                 * lower_type_str's own comment), so field access is
+                 * "." -- class-typed objects are still GC pointers, so
+                 * "->" as before. */
+                const char *op = (owner->kind == CS_STRUCT_DECL) ? "." : "->";
+                sb_append(out, "(");
+                lower_expr(e->member.obj, mc, out);
+                sb_appendf(out, ")%s%s", op, e->member.name);
+                return;
+            }
         }
         lower_error(e->line, "cannot resolve member access '.%s'", e->member.name);
         sb_append(out, "0");
         return;
     }
-    case CS_INDEX:
-        lower_error(e->line, "indexing/arrays are not supported yet -- tracked follow-up, see cs_lower.h");
+    case CS_INDEX: {
+        CsType *list_t = infer_full_type(e->index_.obj, mc);
+        CsType *elem;
+        if (type_is_list(list_t, &elem)) {
+            char *ct = lower_type_str(elem, mc->reg, e->line);
+            char *tmp = mc_new_temp(mc, ct);
+            sb_appendf(out, "(csr_list_get(");
+            lower_expr(e->index_.obj, mc, out);
+            sb_append(out, ", ");
+            lower_expr(e->index_.index, mc, out);
+            sb_appendf(out, ", &%s), %s)", tmp, tmp);
+            free(ct); free(tmp);
+            return;
+        }
+        lower_error(e->line, "indexing/arrays are not supported yet outside List<T> -- tracked follow-up, see cs_lower.h");
         sb_append(out, "0");
         return;
+    }
     case CS_NEW_OBJECT: {
-        CsNode *cls = reg_find_class(mc->reg, e->new_object.type->name);
+        CsNode *cls;
+        CsType *elem;
         int i;
+        if (type_is_list(e->new_object.type, &elem)) {
+            char *ct = lower_type_str(elem, mc->reg, e->line);
+            sb_appendf(out, "csr_list_new((int)sizeof(%s), 4)", ct);
+            free(ct);
+            return;
+        }
+        cls = reg_find_class(mc->reg, e->new_object.type->name);
         if (!cls) { lower_error(e->line, "unknown type '%s' in 'new'", e->new_object.type->name); sb_append(out, "0"); return; }
+        if (cls->kind == CS_STRUCT_DECL) {
+            /* Value-type construction: no GC allocation -- the ctor now
+             * takes the struct's address as an explicit first parameter
+             * and fills it in place (see lower_class_methods()'s own
+             * comment on the struct-ctor signature). "new StructType(...)"
+             * used as an EXPRESSION needs a real addressable temporary to
+             * hand the ctor a pointer to -- same hoisted-temp/comma-
+             * operator technique already established for List<T>.Add()
+             * etc (see MethodCtx.extra_temps' own comment): the whole
+             * expression evaluates to the temp itself afterward, which is
+             * a real struct VALUE usable anywhere (assignment, a further
+             * function argument, ...). */
+            char *tmp = mc_new_temp(mc, cls->class_decl.name);
+            sb_appendf(out, "(%s__ctor(&%s", cls->class_decl.name, tmp);
+            for (i = 0; i < e->new_object.argc; i++) { sb_append(out, ", "); lower_expr(e->new_object.args[i], mc, out); }
+            sb_appendf(out, "), %s)", tmp);
+            free(tmp);
+            return;
+        }
         sb_appendf(out, "%s__ctor(", cls->class_decl.name);
         for (i = 0; i < e->new_object.argc; i++) { if (i) sb_append(out, ", "); lower_expr(e->new_object.args[i], mc, out); }
         sb_append(out, ")");
@@ -515,9 +799,36 @@ static void lower_stmt(CsNode *s, MethodCtx *mc, StrBuf *out, int indent) {
         sb_append(out, ")\n");
         lower_stmt(s->for_.body, mc, out, indent);
         return;
-    case CS_FOREACH:
-        lower_error(s->line, "foreach is not supported yet (tied to array/List support) -- tracked follow-up, see cs_lower.h");
+    case CS_FOREACH: {
+        CsType *coll_t = infer_full_type(s->foreach_.collection, mc);
+        CsType *elem;
+        if (!type_is_list(coll_t, &elem)) {
+            lower_error(s->line, "foreach is only supported over a List<T> right now (not arrays or other IEnumerable<T>) -- tracked follow-up, see cs_lower.h");
+            return;
+        }
+        {
+            char *ct = lower_type_str(s->foreach_.elem_type ? s->foreach_.elem_type : elem, mc->reg, s->line);
+            int id = mc->temp_counter++;
+            ind(out, indent); sb_appendf(out, "{\n");
+            ind(out, indent + 1); sb_appendf(out, "CsList *__iter%d = ", id);
+            lower_expr(s->foreach_.collection, mc, out);
+            sb_append(out, ";\n");
+            ind(out, indent + 1); sb_appendf(out, "int __n%d = csr_list_count(__iter%d);\n", id, id);
+            ind(out, indent + 1); sb_appendf(out, "int __idx%d;\n", id);
+            ind(out, indent + 1); sb_appendf(out, "for (__idx%d = 0; __idx%d < __n%d; __idx%d = __idx%d + 1) {\n", id, id, id, id, id);
+            ind(out, indent + 2); sb_appendf(out, "%s %s;\n", ct, s->foreach_.var_name);
+            ind(out, indent + 2); sb_appendf(out, "csr_list_get(__iter%d, __idx%d, &%s);\n", id, id, s->foreach_.var_name);
+            {
+                CsType *loop_var_type = s->foreach_.elem_type ? s->foreach_.elem_type : elem;
+                mc_add_local(mc, s->foreach_.var_name, loop_var_type);
+            }
+            lower_stmt(s->foreach_.body, mc, out, indent + 2);
+            ind(out, indent + 1); sb_append(out, "}\n");
+            ind(out, indent); sb_append(out, "}\n");
+            free(ct);
+        }
         return;
+    }
     case CS_WHILE:
         ind(out, indent); sb_append(out, "while (");
         lower_expr(s->while_.cond, mc, out);
@@ -659,38 +970,119 @@ static void lower_class_methods(CsNode *cls, ClassRegistry *reg, StrBuf *out) {
 
     {
         CsNode *ctor = class_find_ctor(cls);
-        MethodCtx mc; memset(&mc, 0, sizeof mc); mc.reg = reg; mc.class_decl = cls; mc.is_instance = 1;
-        sb_appendf(out, "%s *%s__ctor", cls->class_decl.name, cls->class_decl.name);
-        if (ctor) lower_method_params(ctor, 1, reg, &mc, out, 0, 0);
-        else sb_append(out, "(void)");
-        sb_append(out, " {\n");
-        sb_appendf(out, "    %s *this = (%s*)csr_gc_alloc(sizeof(%s), %d, CS_KIND_OBJECT);\n",
-                   cls->class_decl.name, cls->class_decl.name, cls->class_decl.name, reg_type_id(reg, cls));
-        lower_field_initializers(cls, &mc, out);
+        MethodCtx mc; StrBuf body; int k;
+        int is_struct = (cls->kind == CS_STRUCT_DECL);
+        memset(&mc, 0, sizeof mc); mc.reg = reg; mc.class_decl = cls; mc.is_instance = 1;
+        if (is_struct) {
+            /* Value-type ctor: "this" is an explicit, caller-owned
+             * (address-of-a-real-storage-location, typically a hoisted
+             * temp -- see CS_NEW_OBJECT's own comment) OUT parameter, not
+             * a GC allocation -- lower_method_params(need_this=1) already
+             * emits it as the first parameter (same as any instance
+             * method), so no separate "%s *this = csr_gc_alloc(...)" line
+             * is needed here at all. Zeroed first (memset), matching real
+             * C#'s "every struct field is implicitly zero before the
+             * ctor body runs" rule, before field initializers/ctor body
+             * (which may not touch every field) run. */
+            sb_appendf(out, "void %s__ctor", cls->class_decl.name);
+            lower_method_params(ctor ? ctor : 0, 1, reg, &mc, out, 1, cls->class_decl.name);
+            sb_append(out, " {\n");
+            sb_appendf(out, "    memset(this, 0, sizeof(*this));\n");
+        } else {
+            sb_appendf(out, "%s *%s__ctor", cls->class_decl.name, cls->class_decl.name);
+            if (ctor) lower_method_params(ctor, 1, reg, &mc, out, 0, 0);
+            else sb_append(out, "(void)");
+            sb_append(out, " {\n");
+            sb_appendf(out, "    %s *this = (%s*)csr_gc_alloc(sizeof(%s), %d, CS_KIND_OBJECT);\n",
+                       cls->class_decl.name, cls->class_decl.name, cls->class_decl.name, reg_type_id(reg, cls));
+        }
+        /* body lowered into a scratch buffer FIRST so mc.extra_temps (see
+         * ExtraTemp's own comment) is fully populated before we know what
+         * hoisted temp declarations to emit -- they go right after the
+         * "this = csr_gc_alloc(...)"/"memset(this, ...)" line above,
+         * before anything that might reference them. */
+        sb_init(&body);
+        lower_field_initializers(cls, &mc, &body);
         if (ctor) {
             int j;
-            for (j = 0; j < ctor->ctor_decl.body->block.n_stmts; j++) lower_stmt(ctor->ctor_decl.body->block.stmts[j], &mc, out, 1);
+            for (j = 0; j < ctor->ctor_decl.body->block.n_stmts; j++) lower_stmt(ctor->ctor_decl.body->block.stmts[j], &mc, &body, 1);
         }
-        sb_append(out, "    return this;\n}\n\n");
+        for (k = 0; k < mc.n_extra_temps; k++) sb_appendf(out, "    %s %s;\n", mc.extra_temps[k].ctype, mc.extra_temps[k].name);
+        sb_append(out, body.data);
+        free(body.data);
+        if (is_struct) sb_append(out, "}\n\n");
+        else sb_append(out, "    return this;\n}\n\n");
     }
 
     for (i = 0; i < cls->class_decl.n_members; i++) {
         CsNode *m = cls->class_decl.members[i];
         if (m->kind != CS_METHOD_DECL) continue;
         {
-            MethodCtx mc; char *rt;
+            MethodCtx mc; char *rt; StrBuf body; int k;
             memset(&mc, 0, sizeof mc); mc.reg = reg; mc.class_decl = cls; mc.is_instance = !m->method_decl.is_static;
             if (m->method_decl.n_type_params > 0) { lower_error(m->line, "generic methods are not supported yet ('%s')", m->method_decl.name); continue; }
+            if (m->method_decl.dllimport_name) {
+                /* Phase 6c: "[DllImport("lib")] static extern <ret>
+                 * Name(...);" -- declares a REAL native symbol (the
+                 * method's own C# name, matching .NET's own default
+                 * EntryPoint-defaults-to-method-name rule), not a mangled
+                 * "Class__Method" function -- every call to this method
+                 * (see lower_call's matching dllimport_name check) routes
+                 * straight to it by that real name. This emits only the
+                 * "extern <ret> <name>(<types>);" declaration itself --
+                 * compiling with "-c" turns this bodyless call into a
+                 * RELOC_STATIC_REL32 relocation resolved by NAME at load
+                 * time (see SQW/sqo_loader.c's host symbol table), the
+                 * same existing mechanism every CSR/csharp_rt.h call
+                 * already uses -- no new loader machinery needed, just
+                 * more host-symbol-table entries (e.g.
+                 * SQW/sqo_host_syms.c's sqo_host_syms_vulkan()). */
+                rt = lower_type_str(m->method_decl.ret_type, reg, m->line);
+                sb_appendf(out, "extern %s %s(", rt, m->method_decl.name);
+                free(rt);
+                /* "out"/"ref" parameters marshal as a real pointer to the
+                 * caller's storage (real P/Invoke's own rule -- e.g.
+                 * Vulkan's "vkEnumerateInstanceVersion(uint32_t
+                 * *pApiVersion)" needs a real uint32_t*, not a uint32_t
+                 * value copy); every call to this method (see
+                 * lower_call's own dllimport_name handling below) passes
+                 * "&argexpr" for these positions to match. Not routed
+                 * through lower_method_params() -- that helper's
+                 * pointer-vs-value choice is driven entirely by the C#
+                 * TYPE (struct vs class vs primitive), which has no
+                 * concept of "out"/"ref"; simpler to lower this one,
+                 * DllImport-specific shape directly here than to thread a
+                 * new parameter through every other lower_method_params
+                 * call site. */
+                {
+                    int j; int wrote_any = 0;
+                    for (j = 0; j < m->method_decl.n_params; j++) {
+                        CsNode *pr = m->method_decl.params[j];
+                        char *ct = lower_type_str(pr->param.type, reg, pr->line);
+                        if (wrote_any) sb_append(out, ", ");
+                        sb_appendf(out, "%s %s%s", ct, pr->param.is_out_ref ? "*" : "", pr->param.name);
+                        free(ct);
+                        wrote_any = 1;
+                    }
+                    if (!wrote_any) sb_append(out, "void");
+                }
+                sb_append(out, ");\n\n");
+                continue;
+            }
             rt = lower_type_str(m->method_decl.ret_type, reg, m->line);
             sb_appendf(out, "%s %s__%s", rt, cls->class_decl.name, m->method_decl.name);
             free(rt);
             lower_method_params(m, 0, reg, &mc, out, mc.is_instance, cls->class_decl.name);
             if (!m->method_decl.body) { sb_append(out, ";\n\n"); continue; }
             sb_append(out, " {\n");
+            sb_init(&body);
             {
                 int j;
-                for (j = 0; j < m->method_decl.body->block.n_stmts; j++) lower_stmt(m->method_decl.body->block.stmts[j], &mc, out, 1);
+                for (j = 0; j < m->method_decl.body->block.n_stmts; j++) lower_stmt(m->method_decl.body->block.stmts[j], &mc, &body, 1);
             }
+            for (k = 0; k < mc.n_extra_temps; k++) sb_appendf(out, "    %s %s;\n", mc.extra_temps[k].ctype, mc.extra_temps[k].name);
+            sb_append(out, body.data);
+            free(body.data);
             sb_append(out, "}\n\n");
         }
     }

@@ -140,9 +140,34 @@ struct CsNode {
             CsNode   **params;      int n_params;
             CsNode    *body;        /* NULL = abstract/interface method */
             int        is_static;
+            /* Phase 6c: "[DllImport("...")] static extern <ret> Name(...);"
+             * -- NULL for every ordinary method. When set, this method has
+             * no body (bodyless extern, same as any other body==NULL
+             * method) but ALSO lowers to a direct call to a REAL native
+             * symbol of this exact name (e.g. "vkCreateInstance"), not the
+             * usual "Class__Method" mangling -- see cs_lower.c's own
+             * comment at its use site. Only the DllImport string argument
+             * is captured; the library name itself is accepted but not
+             * used to pick a specific .so (see cs_parser.c's own comment
+             * on why -- sqo_loader resolves everything through one flat
+             * host symbol table today). */
+            char      *dllimport_name;
         } method_decl;
         struct { char *name; CsNode **params; int n_params; CsNode *body; } ctor_decl;
-        struct { CsType *type; char *name; CsNode *default_value; } param;
+        /* is_out_ref: 1 if this parameter was declared "out"/"ref" -- for
+         * an ordinary C# method these are still just parsed and otherwise
+         * unimplemented (see cs_parser.c's own comment: real by-reference
+         * parameter-passing for ordinary methods is out of scope). Only
+         * used so far for a [DllImport] extern declaration's OWN
+         * parameters (Phase 6c), where it matters a lot: real P/Invoke
+         * marshals an "out"/"ref" parameter as a pointer to the caller's
+         * storage automatically (e.g. Vulkan's own
+         * "vkEnumerateInstanceVersion(uint32_t *pApiVersion)" -- an
+         * "out uint apiVersion" C# parameter needs to become a REAL
+         * uint32_t* argument, not a value copy), which cs_lower.c
+         * implements for DllImport methods specifically -- see its own
+         * use site. */
+        struct { CsType *type; char *name; CsNode *default_value; int is_out_ref; } param;
         struct { char *name; CsConstraint *constraints; int n_constraints; } type_param;
     };
 };

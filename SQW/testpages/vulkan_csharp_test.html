@@ -1,0 +1,38 @@
+<html><body>
+<div id="msg">C# script has not run yet</div>
+<p>This page's inline C# script below declares a real Vulkan API function
+via <code>[DllImport("vulkan")]</code> and calls it. SQW compiles the
+script with squash and loads it in-process (SQW/sqo_loader.c); the
+Vulkan call goes straight to the real, linked libvulkan.so.1 (see
+SQW/sqo_host_syms.c's sqo_host_syms_vulkan()) -- not a stub. Its
+Console.WriteLine output appears on SQW's own stdout/console, since
+in-process DOM mutation from a C# script isn't wired up yet (SQW's C#
+scripting only runs once at page load today, like a classic top-level
+script -- see the plan's own Phase 5 notes).</p>
+<script type="text/csharp">
+class Program {
+    [DllImport("vulkan")]
+    static extern int vkEnumerateInstanceVersion(out uint apiVersion);
+
+    static void Main() {
+        uint version;
+        int result = vkEnumerateInstanceVersion(out version);
+        Console.WriteLine("vkEnumerateInstanceVersion called from C# via DllImport");
+        Console.WriteLine(result);
+
+        int major = (int)(version >> 22);
+        int minor = (int)((version >> 12) & 1023);
+        int patch = (int)(version & 4095);
+        Console.WriteLine(major);
+        Console.WriteLine(minor);
+        Console.WriteLine(patch);
+
+        if (result == 0) {
+            Console.WriteLine("VK_SUCCESS -- real Vulkan driver responded to a C# script's native call");
+        } else {
+            Console.WriteLine("vkEnumerateInstanceVersion returned a non-zero VkResult");
+        }
+    }
+}
+</script>
+</body></html>

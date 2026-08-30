@@ -252,7 +252,7 @@ MANIFEST="$WORKDIR/manifest.txt"
 } > "$MANIFEST"
 
 echo "--- Generation 0 (gcc bootstrap) ---"
-UNITY_FILES="assembler.c ast.c codegen.c arm64_asm.c codegen_arm64.c lexer.c parser_new4.c pe_builder.c elf_builder.c macho_builder.c symtable.c linker.c winlinker.c objfile.c implib.c diag.c compiler.c"
+UNITY_FILES="assembler.c ast.c codegen.c arm64_asm.c codegen_arm64.c lexer.c parser_new4.c pe_builder.c elf_builder.c macho_builder.c symtable.c linker.c winlinker.c objfile.c implib.c diag.c CS/cs_ast.c CS/cs_lexer.c CS/cs_parser.c CS/cs_lower.c compiler.c"
 if ! gcc -o "$GEN0" $UNITY_FILES -I. -w 2>"$WORKDIR/gen0_build.log"; then
     echo "FATAL: gcc itself failed to build gen0 -- cannot proceed."
     cat "$WORKDIR/gen0_build.log"

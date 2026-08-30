@@ -9,7 +9,13 @@ CFLAGS=-I. -Wall -pedantic
 LDFLAGS=
 DEPS =
 HEADERS =
-OBJ = compiler.o assembler.o ast.o codegen.o arm64_asm.o codegen_arm64.o lexer.o parser_new4.o pe_builder.o elf_builder.o macho_builder.o symtable.o linker.o winlinker.o objfile.o implib.o diag.o
+# CS/*.o: the C# frontend (lexer/parser/AST/lowering-to-C-text), wired
+# into compiler.c's own main() so "squash foo.cs -o foo" lowers foo.cs to
+# C source text in-process and feeds it through the rest of the normal,
+# completely unmodified C pipeline below (preprocess/lex/parse/codegen) —
+# see compiler.c's own comment at its .cs detection site, and the plan at
+# /home/squash/.claude/plans/nested-finding-walrus.md (Phase 4).
+OBJ = compiler.o assembler.o ast.o codegen.o arm64_asm.o codegen_arm64.o lexer.o parser_new4.o pe_builder.o elf_builder.o macho_builder.o symtable.o linker.o winlinker.o objfile.o implib.o diag.o CS/cs_ast.o CS/cs_lexer.o CS/cs_parser.o CS/cs_lower.o
 
 %.o: %.c $(DEPS)
 	$(CC) -c -o $@ $< $(CFLAGS)
