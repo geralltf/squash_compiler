@@ -580,9 +580,45 @@ static void lower_call_args(CsNode *e, CsNode *m, MethodCtx *mc, StrBuf *out, in
     int i;
     for (i = 0; i < e->call.argc; i++) {
         int is_out_ref = m && i < m->method_decl.n_params && m->method_decl.params[i]->param.is_out_ref;
+        CsNode *arg = e->call.args[i];
         if (i > 0 || first_arg_needs_comma) sb_append(out, ", ");
         if (is_out_ref) sb_append(out, "&");
-        lower_expr(e->call.args[i], mc, out);
+        /* A bare INTEGER-literal argument (e.g. "-1" in a call like
+         * "AddQuad(..., -1, -1, -1, ...)") passed to a float/double-
+         * typed parameter hits the same real squash codegen bug the
+         * CS_LIT_DOUBLE %g-formatting fix (this file's own comment on
+         * that fix has the full repro/explanation) worked around for
+         * whole-number FLOAT literals -- an integer literal lowers to
+         * a plain "-1LL" C token no matter what the callee expects, so
+         * squash's own C parser tokenizes it as AST_NUMBER (int), not
+         * AST_FLOAT, and the call-argument classification (XMM vs
+         * integer register) goes by the literal's own C syntax, not
+         * the callee's declared parameter type -- landing the value in
+         * the wrong register class. Fixed by coercing an int-literal
+         * argument into the same guaranteed-decimal-point C token the
+         * double-literal fix already produces (int, unlike double,
+         * loses no precision converting through), whenever the
+         * resolved callee's own parameter type is float/double. */
+        if (is_out_ref == 0 && m && i < m->method_decl.n_params) {
+            CsType *pt = m->method_decl.params[i]->param.type;
+            int is_float_param = pt && (!strcmp(pt->name, "float") || !strcmp(pt->name, "double"));
+            if (is_float_param && arg->kind == CS_LIT_INT) {
+                sb_appendf(out, "%lld.0", arg->lit_int.value);
+                continue;
+            }
+            /* "-1" (and "+1") parse as CS_UNARY wrapping a CS_LIT_INT, not
+             * a folded negative literal -- the same coercion applies one
+             * level down, otherwise a call like "AddQuad(-1, -1, ...)"
+             * (exactly the shape BuildCube's own corner coordinates use)
+             * still hits the bug this fix exists for. */
+            if (is_float_param && arg->kind == CS_UNARY && arg->unary.operand &&
+                arg->unary.operand->kind == CS_LIT_INT &&
+                (!strcmp(arg->unary.op, "-") || !strcmp(arg->unary.op, "+"))) {
+                sb_appendf(out, "(%s%lld.0)", arg->unary.op, arg->unary.operand->lit_int.value);
+                continue;
+            }
+        }
+        lower_expr(arg, mc, out);
     }
 }
 
@@ -653,7 +689,7 @@ static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
                         lower_call_args(e, m, mc, out, 0);
                     } else {
                         sb_appendf(out, "%s__%s(", cls->class_decl.name, mname);
-                        for (i = 0; i < e->call.argc; i++) { if (i) sb_append(out, ", "); lower_expr(e->call.args[i], mc, out); }
+                        lower_call_args(e, m, mc, out, 0);
                     }
                     sb_append(out, ")");
                     return;
@@ -681,7 +717,7 @@ static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
                 lower_expr(obj, mc, out);
                 sb_appendf(out, "))->%s(", mname);
                 lower_expr(obj, mc, out);
-                for (i = 0; i < e->call.argc; i++) { sb_append(out, ", "); lower_expr(e->call.args[i], mc, out); }
+                lower_call_args(e, im, mc, out, 1);
                 sb_append(out, ")");
                 return;
             }
@@ -700,7 +736,7 @@ static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
              * already GC pointers, passed as-is. */
             if (owner->kind == CS_STRUCT_DECL) sb_append(out, "&");
             lower_expr(obj, mc, out);
-            for (i = 0; i < e->call.argc; i++) { sb_append(out, ", "); lower_expr(e->call.args[i], mc, out); }
+            lower_call_args(e, m, mc, out, 1);
             sb_append(out, ")");
             return;
         }
@@ -715,7 +751,7 @@ static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
             } else {
                 sb_appendf(out, "%s__%s(", mc->class_decl->class_decl.name, name);
                 if (!m->method_decl.is_static) { sb_append(out, "this"); if (e->call.argc) sb_append(out, ", "); }
-                for (i = 0; i < e->call.argc; i++) { if (i) sb_append(out, ", "); lower_expr(e->call.args[i], mc, out); }
+                lower_call_args(e, m, mc, out, 0);
             }
             sb_append(out, ")");
             return;

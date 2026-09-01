@@ -404,6 +404,20 @@ class Geom {
     }
 
     public static void BuildRevolve(List<PointRY> profile, int nSeg, float r, float g, float b, List<Vertex> outV, List<ushort> outI) {
+        /* Base offset into outV/outI, captured BEFORE adding this piece's
+         * own vertices -- outV/outI are SHARED across multiple Build*
+         * calls (a teapot's body + lid + spout + handle all append into
+         * the same lists), so every index generated below must be
+         * shifted by however many vertices already existed. Without this,
+         * every piece after the first computes indices starting from 0
+         * again, silently referencing the FIRST piece's own vertices
+         * instead of its own -- a real bug (not a squash compiler bug):
+         * confirmed via debug output that produced a visually correct
+         * vertex/index COUNT but a teapot that rendered as just a plain
+         * round body (the lid/spout/handle triangles were drawing
+         * degenerate reuses of body vertices, contributing no visible
+         * distinct geometry). */
+        ushort baseIdx = (ushort)outV.Count;
         int nProf = profile.Count;
         int ring = 0;
         while (ring <= nSeg) {
@@ -449,10 +463,10 @@ class Geom {
         while (seg < nSeg) {
             int p2 = 0;
             while (p2 < nProf - 1) {
-                ushort i0 = (ushort)(seg * nProf + p2);
-                ushort i1 = (ushort)(seg * nProf + p2 + 1);
-                ushort i2 = (ushort)((seg + 1) * nProf + p2 + 1);
-                ushort i3 = (ushort)((seg + 1) * nProf + p2);
+                ushort i0 = (ushort)(baseIdx + seg * nProf + p2);
+                ushort i1 = (ushort)(baseIdx + seg * nProf + p2 + 1);
+                ushort i2 = (ushort)(baseIdx + (seg + 1) * nProf + p2 + 1);
+                ushort i3 = (ushort)(baseIdx + (seg + 1) * nProf + p2);
                 outI.Add(i0); outI.Add(i1); outI.Add(i2);
                 outI.Add(i0); outI.Add(i2); outI.Add(i3);
                 p2 = p2 + 1;
@@ -462,6 +476,9 @@ class Geom {
     }
 
     public static void BuildTube(List<PointXYZ> path, List<float> taper, int ringSeg, float r, float g, float b, List<Vertex> outV, List<ushort> outI) {
+        /* See BuildRevolve's own comment on why this base offset is
+         * required -- outV/outI are shared across multiple pieces. */
+        ushort baseIdx = (ushort)outV.Count;
         int nPath = path.Count;
         int i = 0;
         while (i < nPath) {
@@ -518,10 +535,10 @@ class Geom {
         while (ring < nPath - 1) {
             int k = 0;
             while (k < ringSeg) {
-                ushort i0 = (ushort)(ring * ringStride + k);
-                ushort i1 = (ushort)(ring * ringStride + k + 1);
-                ushort i2 = (ushort)((ring + 1) * ringStride + k + 1);
-                ushort i3 = (ushort)((ring + 1) * ringStride + k);
+                ushort i0 = (ushort)(baseIdx + ring * ringStride + k);
+                ushort i1 = (ushort)(baseIdx + ring * ringStride + k + 1);
+                ushort i2 = (ushort)(baseIdx + (ring + 1) * ringStride + k + 1);
+                ushort i3 = (ushort)(baseIdx + (ring + 1) * ringStride + k);
                 outI.Add(i0); outI.Add(i1); outI.Add(i2);
                 outI.Add(i0); outI.Add(i2); outI.Add(i3);
                 k = k + 1;
@@ -622,51 +639,63 @@ class Models {
 class Shaders {
     public static List<uint> LoadVertSpirv() {
         List<uint> w = new List<uint>();
-        w.Add(119734787u); w.Add(65536u); w.Add(524299u); w.Add(42u); w.Add(0u); w.Add(131089u); w.Add(1u); w.Add(393227u);
+        w.Add(119734787u); w.Add(65536u); w.Add(524299u); w.Add(54u); w.Add(0u); w.Add(131089u); w.Add(1u); w.Add(393227u);
         w.Add(1u); w.Add(1280527431u); w.Add(1685353262u); w.Add(808793134u); w.Add(0u); w.Add(196622u); w.Add(0u); w.Add(1u);
         w.Add(720911u); w.Add(0u); w.Add(4u); w.Add(1852399981u); w.Add(0u); w.Add(13u); w.Add(25u); w.Add(36u);
-        w.Add(37u); w.Add(39u); w.Add(40u); w.Add(196611u); w.Add(2u); w.Add(450u); w.Add(262149u); w.Add(4u);
+        w.Add(48u); w.Add(51u); w.Add(52u); w.Add(196611u); w.Add(2u); w.Add(450u); w.Add(262149u); w.Add(4u);
         w.Add(1852399981u); w.Add(0u); w.Add(393221u); w.Add(11u); w.Add(1348430951u); w.Add(1700164197u); w.Add(2019914866u); w.Add(0u);
         w.Add(393222u); w.Add(11u); w.Add(0u); w.Add(1348430951u); w.Add(1953067887u); w.Add(7237481u); w.Add(458758u); w.Add(11u);
         w.Add(1u); w.Add(1348430951u); w.Add(1953393007u); w.Add(1702521171u); w.Add(0u); w.Add(458758u); w.Add(11u); w.Add(2u);
         w.Add(1130327143u); w.Add(1148217708u); w.Add(1635021673u); w.Add(6644590u); w.Add(458758u); w.Add(11u); w.Add(3u); w.Add(1130327143u);
         w.Add(1147956341u); w.Add(1635021673u); w.Add(6644590u); w.Add(196613u); w.Add(13u); w.Add(0u); w.Add(196613u); w.Add(17u);
-        w.Add(17232u); w.Add(262150u); w.Add(17u); w.Add(0u); w.Add(7370349u); w.Add(196613u); w.Add(19u); w.Add(25456u);
-        w.Add(262149u); w.Add(25u); w.Add(1867542121u); w.Add(115u); w.Add(327685u); w.Add(36u); w.Add(1316255087u); w.Add(1634562671u);
-        w.Add(108u); w.Add(327685u); w.Add(37u); w.Add(1867411049u); w.Add(1818324338u); w.Add(0u); w.Add(327685u); w.Add(39u);
-        w.Add(1131705711u); w.Add(1919904879u); w.Add(0u); w.Add(262149u); w.Add(40u); w.Add(1866690153u); w.Add(7499628u); w.Add(196679u);
-        w.Add(11u); w.Add(2u); w.Add(327752u); w.Add(11u); w.Add(0u); w.Add(11u); w.Add(0u); w.Add(327752u);
-        w.Add(11u); w.Add(1u); w.Add(11u); w.Add(1u); w.Add(327752u); w.Add(11u); w.Add(2u); w.Add(11u);
-        w.Add(3u); w.Add(327752u); w.Add(11u); w.Add(3u); w.Add(11u); w.Add(4u); w.Add(196679u); w.Add(17u);
-        w.Add(2u); w.Add(262216u); w.Add(17u); w.Add(0u); w.Add(5u); w.Add(327752u); w.Add(17u); w.Add(0u);
-        w.Add(7u); w.Add(16u); w.Add(327752u); w.Add(17u); w.Add(0u); w.Add(35u); w.Add(0u); w.Add(262215u);
-        w.Add(25u); w.Add(30u); w.Add(0u); w.Add(262215u); w.Add(36u); w.Add(30u); w.Add(0u); w.Add(262215u);
-        w.Add(37u); w.Add(30u); w.Add(1u); w.Add(262215u); w.Add(39u); w.Add(30u); w.Add(1u); w.Add(262215u);
-        w.Add(40u); w.Add(30u); w.Add(2u); w.Add(131091u); w.Add(2u); w.Add(196641u); w.Add(3u); w.Add(2u);
-        w.Add(196630u); w.Add(6u); w.Add(32u); w.Add(262167u); w.Add(7u); w.Add(6u); w.Add(4u); w.Add(262165u);
-        w.Add(8u); w.Add(32u); w.Add(0u); w.Add(262187u); w.Add(8u); w.Add(9u); w.Add(1u); w.Add(262172u);
-        w.Add(10u); w.Add(6u); w.Add(9u); w.Add(393246u); w.Add(11u); w.Add(7u); w.Add(6u); w.Add(10u);
-        w.Add(10u); w.Add(262176u); w.Add(12u); w.Add(3u); w.Add(11u); w.Add(262203u); w.Add(12u); w.Add(13u);
-        w.Add(3u); w.Add(262165u); w.Add(14u); w.Add(32u); w.Add(1u); w.Add(262187u); w.Add(14u); w.Add(15u);
-        w.Add(0u); w.Add(262168u); w.Add(16u); w.Add(7u); w.Add(4u); w.Add(196638u); w.Add(17u); w.Add(16u);
-        w.Add(262176u); w.Add(18u); w.Add(9u); w.Add(17u); w.Add(262203u); w.Add(18u); w.Add(19u); w.Add(9u);
-        w.Add(262176u); w.Add(20u); w.Add(9u); w.Add(16u); w.Add(262167u); w.Add(23u); w.Add(6u); w.Add(3u);
-        w.Add(262176u); w.Add(24u); w.Add(1u); w.Add(23u); w.Add(262203u); w.Add(24u); w.Add(25u); w.Add(1u);
-        w.Add(262187u); w.Add(6u); w.Add(27u); w.Add(1065353216u); w.Add(262176u); w.Add(33u); w.Add(3u); w.Add(7u);
-        w.Add(262176u); w.Add(35u); w.Add(3u); w.Add(23u); w.Add(262203u); w.Add(35u); w.Add(36u); w.Add(3u);
-        w.Add(262203u); w.Add(24u); w.Add(37u); w.Add(1u); w.Add(262203u); w.Add(35u); w.Add(39u); w.Add(3u);
-        w.Add(262203u); w.Add(24u); w.Add(40u); w.Add(1u); w.Add(327734u); w.Add(2u); w.Add(4u); w.Add(0u);
-        w.Add(3u); w.Add(131320u); w.Add(5u); w.Add(327745u); w.Add(20u); w.Add(21u); w.Add(19u); w.Add(15u);
-        w.Add(262205u); w.Add(16u); w.Add(22u); w.Add(21u); w.Add(262205u); w.Add(23u); w.Add(26u); w.Add(25u);
-        w.Add(327761u); w.Add(6u); w.Add(28u); w.Add(26u); w.Add(0u); w.Add(327761u); w.Add(6u); w.Add(29u);
-        w.Add(26u); w.Add(1u); w.Add(327761u); w.Add(6u); w.Add(30u); w.Add(26u); w.Add(2u); w.Add(458832u);
-        w.Add(7u); w.Add(31u); w.Add(28u); w.Add(29u); w.Add(30u); w.Add(27u); w.Add(327825u); w.Add(7u);
-        w.Add(32u); w.Add(22u); w.Add(31u); w.Add(327745u); w.Add(33u); w.Add(34u); w.Add(13u); w.Add(15u);
-        w.Add(196670u); w.Add(34u); w.Add(32u); w.Add(262205u); w.Add(23u); w.Add(38u); w.Add(37u); w.Add(196670u);
-        w.Add(36u); w.Add(38u); w.Add(262205u); w.Add(23u); w.Add(41u); w.Add(40u); w.Add(196670u); w.Add(39u);
-        w.Add(41u); w.Add(65789u); w.Add(65592u);
+        w.Add(17232u); w.Add(262150u); w.Add(17u); w.Add(0u); w.Add(7370349u); w.Add(327686u); w.Add(17u); w.Add(1u);
+        w.Add(1701080941u); w.Add(108u); w.Add(196613u); w.Add(19u); w.Add(25456u); w.Add(262149u); w.Add(25u); w.Add(1867542121u);
+        w.Add(115u); w.Add(327685u); w.Add(36u); w.Add(1316255087u); w.Add(1634562671u); w.Add(108u); w.Add(327685u); w.Add(48u);
+        w.Add(1867411049u); w.Add(1818324338u); w.Add(0u); w.Add(327685u); w.Add(51u); w.Add(1131705711u); w.Add(1919904879u); w.Add(0u);
+        w.Add(262149u); w.Add(52u); w.Add(1866690153u); w.Add(7499628u); w.Add(196679u); w.Add(11u); w.Add(2u); w.Add(327752u);
+        w.Add(11u); w.Add(0u); w.Add(11u); w.Add(0u); w.Add(327752u); w.Add(11u); w.Add(1u); w.Add(11u);
+        w.Add(1u); w.Add(327752u); w.Add(11u); w.Add(2u); w.Add(11u); w.Add(3u); w.Add(327752u); w.Add(11u);
+        w.Add(3u); w.Add(11u); w.Add(4u); w.Add(196679u); w.Add(17u); w.Add(2u); w.Add(262216u); w.Add(17u);
+        w.Add(0u); w.Add(5u); w.Add(327752u); w.Add(17u); w.Add(0u); w.Add(7u); w.Add(16u); w.Add(327752u);
+        w.Add(17u); w.Add(0u); w.Add(35u); w.Add(0u); w.Add(262216u); w.Add(17u); w.Add(1u); w.Add(5u);
+        w.Add(327752u); w.Add(17u); w.Add(1u); w.Add(7u); w.Add(16u); w.Add(327752u); w.Add(17u); w.Add(1u);
+        w.Add(35u); w.Add(64u); w.Add(262215u); w.Add(25u); w.Add(30u); w.Add(0u); w.Add(262215u); w.Add(36u);
+        w.Add(30u); w.Add(0u); w.Add(262215u); w.Add(48u); w.Add(30u); w.Add(1u); w.Add(262215u); w.Add(51u);
+        w.Add(30u); w.Add(1u); w.Add(262215u); w.Add(52u); w.Add(30u); w.Add(2u); w.Add(131091u); w.Add(2u);
+        w.Add(196641u); w.Add(3u); w.Add(2u); w.Add(196630u); w.Add(6u); w.Add(32u); w.Add(262167u); w.Add(7u);
+        w.Add(6u); w.Add(4u); w.Add(262165u); w.Add(8u); w.Add(32u); w.Add(0u); w.Add(262187u); w.Add(8u);
+        w.Add(9u); w.Add(1u); w.Add(262172u); w.Add(10u); w.Add(6u); w.Add(9u); w.Add(393246u); w.Add(11u);
+        w.Add(7u); w.Add(6u); w.Add(10u); w.Add(10u); w.Add(262176u); w.Add(12u); w.Add(3u); w.Add(11u);
+        w.Add(262203u); w.Add(12u); w.Add(13u); w.Add(3u); w.Add(262165u); w.Add(14u); w.Add(32u); w.Add(1u);
+        w.Add(262187u); w.Add(14u); w.Add(15u); w.Add(0u); w.Add(262168u); w.Add(16u); w.Add(7u); w.Add(4u);
+        w.Add(262174u); w.Add(17u); w.Add(16u); w.Add(16u); w.Add(262176u); w.Add(18u); w.Add(9u); w.Add(17u);
+        w.Add(262203u); w.Add(18u); w.Add(19u); w.Add(9u); w.Add(262176u); w.Add(20u); w.Add(9u); w.Add(16u);
+        w.Add(262167u); w.Add(23u); w.Add(6u); w.Add(3u); w.Add(262176u); w.Add(24u); w.Add(1u); w.Add(23u);
+        w.Add(262203u); w.Add(24u); w.Add(25u); w.Add(1u); w.Add(262187u); w.Add(6u); w.Add(27u); w.Add(1065353216u);
+        w.Add(262176u); w.Add(33u); w.Add(3u); w.Add(7u); w.Add(262176u); w.Add(35u); w.Add(3u); w.Add(23u);
+        w.Add(262203u); w.Add(35u); w.Add(36u); w.Add(3u); w.Add(262187u); w.Add(14u); w.Add(37u); w.Add(1u);
+        w.Add(262168u); w.Add(40u); w.Add(23u); w.Add(3u); w.Add(262203u); w.Add(24u); w.Add(48u); w.Add(1u);
+        w.Add(262203u); w.Add(35u); w.Add(51u); w.Add(3u); w.Add(262203u); w.Add(24u); w.Add(52u); w.Add(1u);
+        w.Add(327734u); w.Add(2u); w.Add(4u); w.Add(0u); w.Add(3u); w.Add(131320u); w.Add(5u); w.Add(327745u);
+        w.Add(20u); w.Add(21u); w.Add(19u); w.Add(15u); w.Add(262205u); w.Add(16u); w.Add(22u); w.Add(21u);
+        w.Add(262205u); w.Add(23u); w.Add(26u); w.Add(25u); w.Add(327761u); w.Add(6u); w.Add(28u); w.Add(26u);
+        w.Add(0u); w.Add(327761u); w.Add(6u); w.Add(29u); w.Add(26u); w.Add(1u); w.Add(327761u); w.Add(6u);
+        w.Add(30u); w.Add(26u); w.Add(2u); w.Add(458832u); w.Add(7u); w.Add(31u); w.Add(28u); w.Add(29u);
+        w.Add(30u); w.Add(27u); w.Add(327825u); w.Add(7u); w.Add(32u); w.Add(22u); w.Add(31u); w.Add(327745u);
+        w.Add(33u); w.Add(34u); w.Add(13u); w.Add(15u); w.Add(196670u); w.Add(34u); w.Add(32u); w.Add(327745u);
+        w.Add(20u); w.Add(38u); w.Add(19u); w.Add(37u); w.Add(262205u); w.Add(16u); w.Add(39u); w.Add(38u);
+        w.Add(327761u); w.Add(7u); w.Add(41u); w.Add(39u); w.Add(0u); w.Add(524367u); w.Add(23u); w.Add(42u);
+        w.Add(41u); w.Add(41u); w.Add(0u); w.Add(1u); w.Add(2u); w.Add(327761u); w.Add(7u); w.Add(43u);
+        w.Add(39u); w.Add(1u); w.Add(524367u); w.Add(23u); w.Add(44u); w.Add(43u); w.Add(43u); w.Add(0u);
+        w.Add(1u); w.Add(2u); w.Add(327761u); w.Add(7u); w.Add(45u); w.Add(39u); w.Add(2u); w.Add(524367u);
+        w.Add(23u); w.Add(46u); w.Add(45u); w.Add(45u); w.Add(0u); w.Add(1u); w.Add(2u); w.Add(393296u);
+        w.Add(40u); w.Add(47u); w.Add(42u); w.Add(44u); w.Add(46u); w.Add(262205u); w.Add(23u); w.Add(49u);
+        w.Add(48u); w.Add(327825u); w.Add(23u); w.Add(50u); w.Add(47u); w.Add(49u); w.Add(196670u); w.Add(36u);
+        w.Add(50u); w.Add(262205u); w.Add(23u); w.Add(53u); w.Add(52u); w.Add(196670u); w.Add(51u); w.Add(53u);
+        w.Add(65789u); w.Add(65592u);
         return w;
     }
+
 
     public static List<uint> LoadFragSpirv() {
         List<uint> w = new List<uint>();
@@ -682,10 +711,10 @@ class Shaders {
         w.Add(131091u); w.Add(2u); w.Add(196641u); w.Add(3u); w.Add(2u); w.Add(196630u); w.Add(6u); w.Add(32u);
         w.Add(262167u); w.Add(7u); w.Add(6u); w.Add(3u); w.Add(262176u); w.Add(8u); w.Add(7u); w.Add(7u);
         w.Add(262176u); w.Add(10u); w.Add(1u); w.Add(7u); w.Add(262203u); w.Add(10u); w.Add(11u); w.Add(1u);
-        w.Add(262187u); w.Add(6u); w.Add(15u); w.Add(1054680699u); w.Add(262187u); w.Add(6u); w.Add(16u); w.Add(1063069307u);
-        w.Add(262187u); w.Add(6u); w.Add(17u); w.Add(1048883376u); w.Add(393260u); w.Add(7u); w.Add(18u); w.Add(15u);
+        w.Add(262187u); w.Add(6u); w.Add(15u); w.Add(1054414443u); w.Add(262187u); w.Add(6u); w.Add(16u); w.Add(1062803051u);
+        w.Add(262187u); w.Add(6u); w.Add(17u); w.Add(1050857680u); w.Add(393260u); w.Add(7u); w.Add(18u); w.Add(15u);
         w.Add(16u); w.Add(17u); w.Add(262176u); w.Add(19u); w.Add(7u); w.Add(6u); w.Add(262187u); w.Add(6u);
-        w.Add(24u); w.Add(1041865114u); w.Add(262167u); w.Add(26u); w.Add(6u); w.Add(4u); w.Add(262176u); w.Add(27u);
+        w.Add(24u); w.Add(1048576000u); w.Add(262167u); w.Add(26u); w.Add(6u); w.Add(4u); w.Add(262176u); w.Add(27u);
         w.Add(3u); w.Add(26u); w.Add(262203u); w.Add(27u); w.Add(28u); w.Add(3u); w.Add(262203u); w.Add(10u);
         w.Add(29u); w.Add(1u); w.Add(262187u); w.Add(6u); w.Add(33u); w.Add(1065353216u); w.Add(327734u); w.Add(2u);
         w.Add(4u); w.Add(0u); w.Add(3u); w.Add(131320u); w.Add(5u); w.Add(262203u); w.Add(8u); w.Add(9u);
@@ -702,6 +731,7 @@ class Shaders {
         w.Add(35u); w.Add(36u); w.Add(33u); w.Add(196670u); w.Add(28u); w.Add(37u); w.Add(65789u); w.Add(65592u);
         return w;
     }
+
 
     public static IntPtr CreateShaderModule(IntPtr device, List<uint> words) {
         VkShaderModuleCreateInfo ci = new VkShaderModuleCreateInfo();
@@ -902,7 +932,7 @@ class Program {
         VkPushConstantRange rng = new VkPushConstantRange();
         rng.stageFlags = 1u;
         rng.offset = 0u;
-        rng.size = 64u;
+        rng.size = 128u;
         pcr.Add(rng);
 
         VkPipelineLayoutCreateInfo plci = new VkPipelineLayoutCreateInfo();
@@ -954,6 +984,7 @@ class Program {
         Native.vkCmdBindVertexBuffers(cmd, 0u, 1u, ref vb, ref voff);
         Native.vkCmdBindIndexBuffer(cmd, ib, 0UL, 0u);
         Native.vkCmdPushConstants(cmd, pipelineLayout, 1u, 0u, 64u, Native.csr_list_data(mvp));
+        Native.vkCmdPushConstants(cmd, pipelineLayout, 1u, 64u, 64u, Native.csr_list_data(rot));
         Native.vkCmdDrawIndexed(cmd, icount, 1u, 0u, 0, 0u);
     }
 
