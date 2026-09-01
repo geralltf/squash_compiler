@@ -9534,6 +9534,39 @@ void codegen_float_expr(CodeGen *cg, ASTNode *n) {
         const char *op = n->binary.op;
         int is_cmp = (!strcmp(op,"==")||!strcmp(op,"!=")||!strcmp(op,"<")||
                       !strcmp(op,"<=")||!strcmp(op,">")||!strcmp(op,">="));
+        /* Comma operator: "eval both, result is right" -- codegen_expr()'s
+         * own AST_BINARY case already gets this right (see its own,
+         * correct "comma: eval both, result is right" comment), but this
+         * FLOAT-typed sibling had no comma case at all: falling through
+         * to the arithmetic dance below with no "+"/"-"/"*"/"/ " match,
+         * it silently left XMM0 holding the LEFT operand's (converted)
+         * value -- the right operand was computed into XMM1 and then
+         * simply discarded. Confirmed via a minimal repro: "double a =
+         * (dummy = 2, f);" (f a float local holding 7.5) read back 2.0,
+         * the left operand's own value, not the right's -- while the
+         * identical shape with plain ints ("int a = (dummy = 2, f);")
+         * was already correct (codegen_expr()'s own comma case has no
+         * such bug), which is why this stayed hidden until a float/double
+         * List<T> element read (cs_lower.c's own "(csr_list_get(...,
+         * &tmp), tmp)" pattern, proven safe for int/string elements)
+         * exposed it for List<float>/List<double>. Left operand is
+         * evaluated via plain codegen_expr() for its side effects only
+         * (its VALUE is never the comma's result, so no float conversion
+         * is needed even if it happens to be float-typed itself). */
+        if (!strcmp(op,",")) {
+            codegen_expr(cg, n->binary.left);
+            if (codegen_is_float_expr(cg, n->binary.right))
+                codegen_float_expr(cg, n->binary.right);
+            else {
+                codegen_expr(cg, n->binary.right);
+                if (cg->is_64bit) asm_cvtsi2sd(a, 0, REG_RAX);
+                else {
+                    asm_sub_rsp(a,4); asm_mov_mem_reg(a,REG_ESP,0,REG_EAX);
+                    asm_fild_mem32(a,REG_ESP,0); asm_add_rsp(a,4);
+                }
+            }
+            break;
+        }
         if (cg->is_64bit) {
             /* eval lhs->XMM0, spill to stack; eval rhs->XMM0/int, move to XMM1; pop lhs->XMM0 */
             /* If operand is not float, evaluate as int then convert */

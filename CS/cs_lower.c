@@ -113,20 +113,46 @@ static int class_implements(CsNode *cls, const char *iface_name, ClassRegistry *
     return 0;
 }
 
-static CsNode *class_find_field(CsNode *cls, const char *name) {
+/* Basic single-inheritance field lookup: checks `cls`'s own members
+ * first, then (if not found, and `reg` is non-NULL) walks up through
+ * "base_class_name" as long as it resolves to another registered CLASS
+ * (not an interface -- see class_implements()'s own comment on the same
+ * name-ambiguity cs_parser.c can't resolve at parse time; reg_find_class
+ * simply returns NULL for a name that's really an interface, so this
+ * recursion naturally never crosses into interface territory). `reg`
+ * may be NULL at call sites that only ever look up a field on a class
+ * known to have no base (kept optional rather than threading it through
+ * every caller for no benefit there). This is real, working field
+ * INHERITANCE (a derived class's struct doesn't redeclare inherited
+ * fields -- lower_struct_decl() emits them for real, see its own
+ * comment) -- still no virtual dispatch, method overriding, or multiple
+ * inheritance, matching this pass's overall "single inheritance, no
+ * override resolution" scope. */
+static CsNode *class_find_field(CsNode *cls, const char *name, ClassRegistry *reg) {
     int i;
     for (i = 0; i < cls->class_decl.n_members; i++) {
         CsNode *m = cls->class_decl.members[i];
         if (m->kind == CS_FIELD_DECL && strcmp(m->field_decl.name, name) == 0) return m;
         if (m->kind == CS_PROPERTY_DECL && strcmp(m->property_decl.name, name) == 0) return m;
     }
+    if (reg && cls->class_decl.base_class_name) {
+        CsNode *base = reg_find_class(reg, cls->class_decl.base_class_name);
+        if (base && base != cls) return class_find_field(base, name, reg);
+    }
     return 0;
 }
-static CsNode *class_find_method(CsNode *cls, const char *name) {
+/* Same inheritance walk as class_find_field() above, for methods -- a
+ * derived class calling/using a base class's own method it doesn't
+ * itself redeclare resolves to the base's real function. */
+static CsNode *class_find_method(CsNode *cls, const char *name, ClassRegistry *reg) {
     int i;
     for (i = 0; i < cls->class_decl.n_members; i++) {
         CsNode *m = cls->class_decl.members[i];
         if (m->kind == CS_METHOD_DECL && strcmp(m->method_decl.name, name) == 0) return m;
+    }
+    if (reg && cls->class_decl.base_class_name) {
+        CsNode *base = reg_find_class(reg, cls->class_decl.base_class_name);
+        if (base && base != cls) return class_find_method(base, name, reg);
     }
     return 0;
 }
@@ -286,7 +312,7 @@ static CsType *infer_full_type(CsNode *e, MethodCtx *mc) {
         CsType *t = mc_lookup_local(mc, e->ident.name);
         if (t) return t;
         if (mc->class_decl) {
-            CsNode *f = class_find_field(mc->class_decl, e->ident.name);
+            CsNode *f = class_find_field(mc->class_decl, e->ident.name, mc->reg);
             if (f) return f->kind == CS_FIELD_DECL ? f->field_decl.type : f->property_decl.type;
         }
         return 0;
@@ -294,7 +320,7 @@ static CsType *infer_full_type(CsNode *e, MethodCtx *mc) {
     if (e->kind == CS_MEMBER) {
         CsNode *owner = infer_class_type(e->member.obj, mc);
         if (owner) {
-            CsNode *f = class_find_field(owner, e->member.name);
+            CsNode *f = class_find_field(owner, e->member.name, mc->reg);
             if (f) return f->kind == CS_FIELD_DECL ? f->field_decl.type : f->property_decl.type;
         }
         return 0;
@@ -325,7 +351,7 @@ static CsNode *infer_class_type(CsNode *e, MethodCtx *mc) {
         CsType *t = mc_lookup_local(mc, e->ident.name);
         if (t && t->n_type_args == 0 && t->array_rank == 0) return reg_find_class(mc->reg, t->name);
         if (!t && mc->class_decl) {
-            CsNode *f = class_find_field(mc->class_decl, e->ident.name);
+            CsNode *f = class_find_field(mc->class_decl, e->ident.name, mc->reg);
             if (f) {
                 CsType *ft = f->kind == CS_FIELD_DECL ? f->field_decl.type : f->property_decl.type;
                 if (ft && ft->n_type_args == 0 && ft->array_rank == 0) return reg_find_class(mc->reg, ft->name);
@@ -336,7 +362,7 @@ static CsNode *infer_class_type(CsNode *e, MethodCtx *mc) {
     if (e->kind == CS_MEMBER) {
         CsNode *owner = infer_class_type(e->member.obj, mc);
         if (owner) {
-            CsNode *f = class_find_field(owner, e->member.name);
+            CsNode *f = class_find_field(owner, e->member.name, mc->reg);
             if (f) {
                 CsType *ft = f->kind == CS_FIELD_DECL ? f->field_decl.type : f->property_decl.type;
                 if (ft && ft->n_type_args == 0 && ft->array_rank == 0) return reg_find_class(mc->reg, ft->name);
@@ -364,7 +390,7 @@ static CsNode *infer_interface_type(CsNode *e, MethodCtx *mc) {
         CsType *t = mc_lookup_local(mc, e->ident.name);
         if (t && t->n_type_args == 0 && t->array_rank == 0) return reg_find_interface(mc->reg, t->name);
         if (!t && mc->class_decl) {
-            CsNode *f = class_find_field(mc->class_decl, e->ident.name);
+            CsNode *f = class_find_field(mc->class_decl, e->ident.name, mc->reg);
             if (f) {
                 CsType *ft = f->kind == CS_FIELD_DECL ? f->field_decl.type : f->property_decl.type;
                 if (ft && ft->n_type_args == 0 && ft->array_rank == 0) return reg_find_interface(mc->reg, ft->name);
@@ -374,6 +400,116 @@ static CsNode *infer_interface_type(CsNode *e, MethodCtx *mc) {
     }
     if (e->kind == CS_CAST) return reg_find_interface(mc->reg, e->cast.type->name);
     return 0;
+}
+
+/* ---- LINQ method-chain desugaring (eager, inline loops -- NOT full
+ * deferred-execution query-provider machinery, matching cs_lower.h's own
+ * scope note) ----
+ *
+ * A recognized chain is "<source>.Where(p1).Where(p2)....<Terminal>()"
+ * over a List<T>-typed source, where every ".Where(pred)" stage's
+ * predicate is ANDed together into one combined filter condition (real
+ * LINQ streams element-by-element through each stage lazily; fusing every
+ * Where into one pass over the source produces the identical observable
+ * result for pure predicates, which is all a lambda body can express in
+ * this scope anyway -- no side-effecting predicates, matching every other
+ * "best-effort, not full semantics" limitation already documented
+ * throughout this file). The terminal is exactly one of:
+ *   ToList()/no terminal at all (a bare "...Where(...)" chain used as a
+ *     value is itself List<T>-typed, same as real LINQ's IEnumerable<T>)
+ *   Count(), Sum(), First(), FirstOrDefault() -- no extra predicate
+ *   Any(pred), All(pred) -- their OWN extra predicate, evaluated only on
+ *     elements that already passed every ".Where(...)" filter
+ * "Select" (needs inferring a NEW element type from an arbitrary lambda
+ * body -- real type inference this pass deliberately doesn't have) and
+ * "OrderBy"/"OrderByDescending" (needs a real sort, not a single filter
+ * pass) are explicitly recognized-but-unsupported here, reported as a
+ * clean, specific error rather than falling through to a generic "unknown
+ * method" one. */
+typedef struct {
+    CsNode *source;                 /* the real List<T> source expression */
+    CsNode *filters[16]; int n_filters; /* ANDed .Where(...) predicates */
+    const char *terminal;           /* "Count"/"Sum"/"First"/"FirstOrDefault"/"Any"/"All"/"ToList" */
+    CsNode *terminal_pred;          /* Any/All's own extra predicate, or NULL */
+    CsType *elem_type;               /* source's element type (borrowed) */
+} LinqChain;
+
+/* Peels off a chain of ".Where(pred)" calls, collecting each predicate
+ * lambda into filters[] (*n_filters) and returning the expression
+ * underneath them all -- or NULL if `e` itself isn't a ".Where(...)"
+ * call (the base case: `e` IS the real source, unchanged). */
+static CsNode *linq_peel_where_chain(CsNode *e, CsNode **filters, int *n_filters, int filters_cap) {
+    CsNode *obj, *deeper, *source;
+    if (e->kind != CS_CALL || e->call.callee->kind != CS_MEMBER) return 0;
+    if (strcmp(e->call.callee->member.name, "Where") != 0 || e->call.argc != 1) return 0;
+    obj = e->call.callee->member.obj;
+    deeper = linq_peel_where_chain(obj, filters, n_filters, filters_cap);
+    source = deeper ? deeper : obj;
+    if (*n_filters < filters_cap) filters[(*n_filters)++] = e->call.args[0];
+    return source;
+}
+
+/* Recognizes `e` as a supported LINQ chain shape and fills `out`.
+ * Returns 1 on success, 0 if `e` isn't a LINQ chain at all (an ordinary
+ * call -- caller falls back to its normal method-call handling), or -1
+ * if `e` names a RECOGNIZED-but-unsupported LINQ method ("Select"/
+ * "OrderBy"/"OrderByDescending") -- caller should report that specific
+ * gap rather than silently mishandling it as an unrelated method call. */
+static int linq_recognize_chain(CsNode *e, MethodCtx *mc, LinqChain *out) {
+    CsNode *callee, *obj; const char *mname;
+    CsType *elem;
+    if (!e || e->kind != CS_CALL || e->call.callee->kind != CS_MEMBER) return 0;
+    callee = e->call.callee; mname = callee->member.name; obj = callee->member.obj;
+    memset(out, 0, sizeof *out);
+    if (!strcmp(mname, "Select") || !strcmp(mname, "OrderBy") || !strcmp(mname, "OrderByDescending")) return -1;
+    if (!strcmp(mname, "Where")) {
+        out->source = linq_peel_where_chain(e, out->filters, &out->n_filters, 16);
+        if (!out->source) return 0;
+        out->terminal = "ToList";
+    } else if (!strcmp(mname,"Count") || !strcmp(mname,"Sum") || !strcmp(mname,"First") ||
+               !strcmp(mname,"FirstOrDefault") || !strcmp(mname,"ToList")) {
+        if (e->call.argc != 0) return 0;
+        out->source = linq_peel_where_chain(obj, out->filters, &out->n_filters, 16);
+        if (!out->source) out->source = obj;
+        out->terminal = mname;
+    } else if (!strcmp(mname,"Any") || !strcmp(mname,"All")) {
+        if (e->call.argc != 1) return 0;
+        out->source = linq_peel_where_chain(obj, out->filters, &out->n_filters, 16);
+        if (!out->source) out->source = obj;
+        out->terminal = mname;
+        out->terminal_pred = e->call.args[0];
+    } else {
+        return 0;
+    }
+    {
+        CsType *st = infer_full_type(out->source, mc);
+        if (!type_is_list(st, &elem)) return 0;
+        out->elem_type = elem;
+    }
+    return 1;
+}
+
+/* The chain's own C# result type: List<T> for "ToList" (also what a
+ * bare "...Where(...)" chain used as a value resolves to), int for
+ * Count, int-or-double (matching the source element's own family) for
+ * Sum, the element type itself for First/FirstOrDefault, bool for Any/
+ * All. Used both to declare a "var"-inferred local's real type and to
+ * pick the accumulator's own C type in lower_linq_chain_into() below. */
+static CsType *linq_result_cstype(LinqChain *ch) {
+    if (!strcmp(ch->terminal, "ToList")) {
+        CsType *lt = cstype_new("List");
+        lt->type_args = (CsType **)malloc(sizeof(CsType *));
+        lt->type_args[0] = ch->elem_type;
+        lt->n_type_args = 1;
+        return lt;
+    }
+    if (!strcmp(ch->terminal, "Count")) return cstype_new("int");
+    if (!strcmp(ch->terminal, "Sum")) {
+        const char *p = primitive_c_type(ch->elem_type->name);
+        return cstype_new((p && (!strcmp(p, "double") || !strcmp(p, "float"))) ? "double" : "int");
+    }
+    if (!strcmp(ch->terminal, "First") || !strcmp(ch->terminal, "FirstOrDefault")) return ch->elem_type;
+    return cstype_new("bool"); /* Any/All */
 }
 
 static void lower_expr(CsNode *e, MethodCtx *mc, StrBuf *out);
@@ -506,7 +642,7 @@ static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
         if (obj->kind == CS_IDENT && !mc_lookup_local(mc, obj->ident.name)) {
             CsNode *cls = reg_find_class(mc->reg, obj->ident.name);
             if (cls) {
-                CsNode *m = class_find_method(cls, mname);
+                CsNode *m = class_find_method(cls, mname, mc->reg);
                 if (m && m->method_decl.is_static) {
                     /* Phase 6c: a [DllImport] method calls straight
                      * through to its real native name, not the usual
@@ -539,7 +675,7 @@ static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
              * and fall into the "cannot resolve receiver type" error. */
             CsNode *iface = infer_interface_type(obj, mc);
             if (iface) {
-                CsNode *im = class_find_method(iface, mname);
+                CsNode *im = class_find_method(iface, mname, mc->reg);
                 if (!im) { lower_error(e->line, "'%s' has no method '%s'", iface->class_decl.name, mname); sb_append(out, "((void)0)"); return; }
                 sb_appendf(out, "csr_vtable_for_%s(csr_type_id_of(", iface->class_decl.name);
                 lower_expr(obj, mc, out);
@@ -554,7 +690,7 @@ static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
             CsNode *owner = infer_class_type(obj, mc);
             CsNode *m;
             if (!owner) { lower_error(e->line, "cannot resolve receiver type for call to '.%s(...)' (no local type inference for this expression shape)", mname); sb_append(out, "((void)0)"); return; }
-            m = class_find_method(owner, mname);
+            m = class_find_method(owner, mname, mc->reg);
             if (!m) { lower_error(e->line, "'%s' has no method '%s'", owner->class_decl.name, mname); sb_append(out, "((void)0)"); return; }
             sb_appendf(out, "%s__%s(", owner->class_decl.name, mname);
             /* Struct-typed receivers lower to plain C values (see
@@ -571,7 +707,7 @@ static void lower_call(CsNode *e, MethodCtx *mc, StrBuf *out) {
     }
     if (callee->kind == CS_IDENT) {
         const char *name = callee->ident.name;
-        CsNode *m = mc->class_decl ? class_find_method(mc->class_decl, name) : 0;
+        CsNode *m = mc->class_decl ? class_find_method(mc->class_decl, name, mc->reg) : 0;
         if (m) {
             if (m->method_decl.dllimport_name) {
                 sb_appendf(out, "%s(", name);
@@ -596,7 +732,36 @@ static void lower_expr(CsNode *e, MethodCtx *mc, StrBuf *out) {
     if (!e) return;
     switch (e->kind) {
     case CS_LIT_INT: sb_appendf(out, "%lldLL", e->lit_int.value); return;
-    case CS_LIT_DOUBLE: sb_appendf(out, "%g", e->lit_double.value); return;
+    case CS_LIT_DOUBLE: {
+        /* "%g" alone drops the decimal point for a whole-number value
+         * (1.0 -> "1") -- squash's own C lexer/parser then tokenizes
+         * that as a plain INTEGER literal (AST_NUMBER), not a floating-
+         * point one (AST_FLOAT), which a real, confirmed squash codegen
+         * bug distinguishes: codegen_is_float_expr() returns 1 for
+         * AST_FLOAT but 0 for AST_NUMBER, so a call-argument slot that
+         * should route through an XMM register (because the CALLEE's
+         * own parameter is float/double) gets classified as an integer
+         * argument instead purely from the literal's own C syntax,
+         * landing in the wrong register class and reading back garbage
+         * in the callee. Confirmed via a minimal repro: a plain C
+         * "check(1, 2)" call into "float check(float a, float b)"
+         * (bare int literals, no cast) returns garbage under squash,
+         * while "check(1.0f, 2.0f)" is correct -- this is what every
+         * whole-number C# double/float literal (0.0f, 1.0f, -3.5f's
+         * "-3" part is fine but plain "5.0f" was not, etc.) lowered to
+         * before this fix. Guarantee the emitted C token always looks
+         * like a float: append ".0" whenever "%.17g" (enough digits to
+         * round-trip a double exactly) didn't already produce a '.',
+         * 'e'/'E', "inf", or "nan". */
+        char buf[64];
+        snprintf(buf, sizeof buf, "%.17g", e->lit_double.value);
+        if (!strpbrk(buf, ".eEnN")) {
+            size_t blen = strlen(buf);
+            if (blen + 3 < sizeof buf) { buf[blen] = '.'; buf[blen+1] = '0'; buf[blen+2] = 0; }
+        }
+        sb_appendf(out, "%s", buf);
+        return;
+    }
     case CS_LIT_STRING: sb_append(out, "cs_string_new("); escape_c_string(e->lit_string.value, out); sb_append(out, ")"); return;
     case CS_LIT_BOOL: sb_append(out, e->lit_bool.value ? "1" : "0"); return;
     case CS_LIT_NULL: sb_append(out, "0"); return;
@@ -622,7 +787,7 @@ static void lower_expr(CsNode *e, MethodCtx *mc, StrBuf *out) {
     case CS_IDENT: {
         if (mc_lookup_local(mc, e->ident.name)) { sb_append(out, e->ident.name); return; }
         if (mc->class_decl) {
-            CsNode *f = class_find_field(mc->class_decl, e->ident.name);
+            CsNode *f = class_find_field(mc->class_decl, e->ident.name, mc->reg);
             if (f) {
                 if (mc->is_instance) sb_appendf(out, "this->%s", e->ident.name);
                 else sb_appendf(out, "%s__%s", mc->class_decl->class_decl.name, e->ident.name);
@@ -645,7 +810,7 @@ static void lower_expr(CsNode *e, MethodCtx *mc, StrBuf *out) {
                  * (CS_CALL) -- lower_call() handles that shape itself,
                  * directly, without going through lower_expr on the
                  * callee node at all. */
-                CsNode *m = class_find_method(mc->class_decl, e->ident.name);
+                CsNode *m = class_find_method(mc->class_decl, e->ident.name, mc->reg);
                 if (m && m->method_decl.is_static) {
                     if (m->method_decl.dllimport_name) sb_append(out, e->ident.name);
                     else sb_appendf(out, "%s__%s", mc->class_decl->class_decl.name, e->ident.name);
@@ -782,7 +947,7 @@ static void lower_expr(CsNode *e, MethodCtx *mc, StrBuf *out) {
         if (e->member.obj->kind == CS_IDENT && !mc_lookup_local(mc, e->member.obj->ident.name)) {
             CsNode *cls = reg_find_class(mc->reg, e->member.obj->ident.name);
             if (cls) {
-                CsNode *m = class_find_method(cls, e->member.name);
+                CsNode *m = class_find_method(cls, e->member.name, mc->reg);
                 if (m && m->method_decl.is_static) {
                     if (m->method_decl.dllimport_name) sb_append(out, e->member.name);
                     else sb_appendf(out, "%s__%s", cls->class_decl.name, e->member.name);
@@ -792,7 +957,7 @@ static void lower_expr(CsNode *e, MethodCtx *mc, StrBuf *out) {
         }
         owner = infer_class_type(e->member.obj, mc);
         if (owner) {
-            CsNode *f = class_find_field(owner, e->member.name);
+            CsNode *f = class_find_field(owner, e->member.name, mc->reg);
             if (f) {
                 /* Struct-typed objects lower to plain C VALUES (see
                  * lower_type_str's own comment), so field access is
@@ -890,12 +1055,111 @@ static void lower_stmt(CsNode *s, MethodCtx *mc, StrBuf *out, int indent);
 
 static void ind(StrBuf *out, int n) { int i; for (i = 0; i < n; i++) sb_append(out, "    "); }
 
+/* Emits the real loop (see LinqChain's own header comment for exactly
+ * what shape of chain this handles) that computes `ch` into the
+ * ALREADY-DECLARED destination named `dest_name` -- callers declare
+ * dest_name themselves first (its own C type comes from
+ * linq_result_cstype()), this only ever ASSIGNS into it, never declares
+ * it, so it works identically whether dest_name is a fresh local var-decl
+ * or an existing one being reassigned. A self-contained "{ ... }" block
+ * (own loop index/count/element locals), same shape as CS_FOREACH's own
+ * lowering right below. */
+static void lower_linq_chain_into(LinqChain *ch, MethodCtx *mc, StrBuf *out, int indent, const char *dest_name) {
+    char *elem_ct = lower_type_str(ch->elem_type, mc->reg, 0);
+    int id = mc->temp_counter++;
+    char ebuf[32];
+    /* Distinct predicate parameter names actually used across every
+     * ".Where(...)" filter plus Any/All's own extra predicate -- each
+     * gets exactly ONE "T name = __eN;" copy emitted per iteration (never
+     * more than one per distinct name, or a repeated name like the
+     * common "x" convention used by every filter would redeclare the
+     * same C local twice -- a real compile error). */
+    char *seen_names[16]; int n_seen = 0;
+    int fi;
+    snprintf(ebuf, sizeof ebuf, "__e%d", id);
+
+    ind(out, indent); sb_append(out, "{\n");
+    ind(out, indent + 1); sb_appendf(out, "CsList *__src%d = ", id);
+    lower_expr(ch->source, mc, out);
+    sb_append(out, ";\n");
+    ind(out, indent + 1); sb_appendf(out, "int __n%d = csr_list_count(__src%d);\n", id, id);
+    ind(out, indent + 1); sb_appendf(out, "int __i%d;\n", id);
+
+    if (!strcmp(ch->terminal, "ToList")) { ind(out, indent + 1); sb_appendf(out, "%s = csr_list_new((int)sizeof(%s), 4);\n", dest_name, elem_ct); }
+    else if (!strcmp(ch->terminal, "Count")) { ind(out, indent + 1); sb_appendf(out, "%s = 0;\n", dest_name); }
+    else if (!strcmp(ch->terminal, "Sum")) { ind(out, indent + 1); sb_appendf(out, "%s = 0;\n", dest_name); }
+    else if (!strcmp(ch->terminal, "First") || !strcmp(ch->terminal, "FirstOrDefault")) { ind(out, indent + 1); sb_appendf(out, "memset(&%s, 0, sizeof(%s));\n", dest_name, dest_name); }
+    else if (!strcmp(ch->terminal, "Any")) { ind(out, indent + 1); sb_appendf(out, "%s = 0;\n", dest_name); }
+    else if (!strcmp(ch->terminal, "All")) { ind(out, indent + 1); sb_appendf(out, "%s = 1;\n", dest_name); }
+
+    ind(out, indent + 1); sb_appendf(out, "for (__i%d = 0; __i%d < __n%d; __i%d = __i%d + 1) {\n", id, id, id, id, id);
+    ind(out, indent + 2); sb_appendf(out, "%s %s;\n", elem_ct, ebuf);
+    ind(out, indent + 2); sb_appendf(out, "csr_list_get(__src%d, __i%d, &%s);\n", id, id, ebuf);
+
+    for (fi = 0; fi < ch->n_filters; fi++) {
+        CsNode *lam = ch->filters[fi];
+        int already;
+        if (lam->kind != CS_LAMBDA || lam->lambda.n_params != 1 || !lam->lambda.body_is_expr) {
+            lower_error(lam->line, "LINQ predicates must be a single-parameter expression lambda ('x => expr') -- block-bodied or multi-parameter lambdas are not supported yet");
+            continue;
+        }
+        already = 0;
+        { int k; for (k = 0; k < n_seen; k++) if (!strcmp(seen_names[k], lam->lambda.param_names[0])) already = 1; }
+        if (!already) {
+            ind(out, indent + 2); sb_appendf(out, "%s %s = %s;\n", elem_ct, lam->lambda.param_names[0], ebuf);
+            mc_add_local(mc, lam->lambda.param_names[0], ch->elem_type);
+            if (n_seen < 16) seen_names[n_seen++] = lam->lambda.param_names[0];
+        }
+    }
+    if (ch->terminal_pred && ch->terminal_pred->kind == CS_LAMBDA && ch->terminal_pred->lambda.n_params == 1 && ch->terminal_pred->lambda.body_is_expr) {
+        int already = 0;
+        int k; for (k = 0; k < n_seen; k++) if (!strcmp(seen_names[k], ch->terminal_pred->lambda.param_names[0])) already = 1;
+        if (!already) {
+            ind(out, indent + 2); sb_appendf(out, "%s %s = %s;\n", elem_ct, ch->terminal_pred->lambda.param_names[0], ebuf);
+            mc_add_local(mc, ch->terminal_pred->lambda.param_names[0], ch->elem_type);
+        }
+    } else if (ch->terminal_pred) {
+        lower_error(ch->terminal_pred->line, "LINQ predicates must be a single-parameter expression lambda ('x => expr') -- block-bodied or multi-parameter lambdas are not supported yet");
+    }
+
+    ind(out, indent + 2); sb_append(out, "if (");
+    if (ch->n_filters == 0) sb_append(out, "1");
+    else {
+        for (fi = 0; fi < ch->n_filters; fi++) {
+            if (fi) sb_append(out, " && ");
+            sb_append(out, "(");
+            lower_expr(ch->filters[fi]->lambda.body, mc, out);
+            sb_append(out, ")");
+        }
+    }
+    if (!strcmp(ch->terminal, "Any") && ch->terminal_pred) { sb_append(out, " && ("); lower_expr(ch->terminal_pred->lambda.body, mc, out); sb_append(out, ")"); }
+    if (!strcmp(ch->terminal, "All") && ch->terminal_pred) { sb_append(out, " && !("); lower_expr(ch->terminal_pred->lambda.body, mc, out); sb_append(out, ")"); }
+    sb_append(out, ") {\n");
+
+    if (!strcmp(ch->terminal, "ToList")) { ind(out, indent + 3); sb_appendf(out, "csr_list_add(%s, &%s);\n", dest_name, ebuf); }
+    else if (!strcmp(ch->terminal, "Count")) { ind(out, indent + 3); sb_appendf(out, "%s = %s + 1;\n", dest_name, dest_name); }
+    else if (!strcmp(ch->terminal, "Sum")) { ind(out, indent + 3); sb_appendf(out, "%s = %s + %s;\n", dest_name, dest_name, ebuf); }
+    else if (!strcmp(ch->terminal, "First") || !strcmp(ch->terminal, "FirstOrDefault")) { ind(out, indent + 3); sb_appendf(out, "%s = %s;\n", dest_name, ebuf); ind(out, indent + 3); sb_append(out, "break;\n"); }
+    else if (!strcmp(ch->terminal, "Any")) { ind(out, indent + 3); sb_appendf(out, "%s = 1;\n", dest_name); ind(out, indent + 3); sb_append(out, "break;\n"); }
+    else if (!strcmp(ch->terminal, "All")) { ind(out, indent + 3); sb_appendf(out, "%s = 0;\n", dest_name); ind(out, indent + 3); sb_append(out, "break;\n"); }
+
+    ind(out, indent + 2); sb_append(out, "}\n");
+    ind(out, indent + 1); sb_append(out, "}\n");
+    ind(out, indent); sb_append(out, "}\n");
+    free(elem_ct);
+}
+
 static void lower_local_var_decl(CsNode *s, MethodCtx *mc, StrBuf *out, int indent, int with_semicolon) {
     CsType *resolved = s->local_var_decl.type;
     char *ct;
+    LinqChain ch;
+    int linq_rc = (with_semicolon && s->local_var_decl.init) ? linq_recognize_chain(s->local_var_decl.init, mc, &ch) : 0;
+    int is_linq = (linq_rc == 1);
+    if (linq_rc == -1) lower_error(s->local_var_decl.init->line, "'%s' is a recognized LINQ method but is not supported yet (needs a new element type or a real sort) -- tracked follow-up, see cs_lower.h", ch.terminal);
     ind(out, indent);
     if (s->local_var_decl.is_var) {
         if (!s->local_var_decl.init) { lower_error(s->line, "'var %s' needs an initializer", s->local_var_decl.name); sb_append(out, "void *"); sb_append(out, s->local_var_decl.name); }
+        else if (is_linq) resolved = linq_result_cstype(&ch);
         else if (s->local_var_decl.init->kind == CS_NEW_OBJECT) resolved = s->local_var_decl.init->new_object.type;
         else if (s->local_var_decl.init->kind == CS_LIT_INT) resolved = cstype_new("int");
         else if (s->local_var_decl.init->kind == CS_LIT_DOUBLE) resolved = cstype_new("double");
@@ -908,6 +1172,11 @@ static void lower_local_var_decl(CsNode *s, MethodCtx *mc, StrBuf *out, int inde
         sb_appendf(out, "%s %s", ct, s->local_var_decl.name);
         free(ct);
         mc_add_local(mc, s->local_var_decl.name, resolved);
+    }
+    if (is_linq) {
+        sb_append(out, ";\n");
+        lower_linq_chain_into(&ch, mc, out, indent, s->local_var_decl.name);
+        return;
     }
     if (s->local_var_decl.init) { sb_append(out, " = "); lower_expr(s->local_var_decl.init, mc, out); }
     if (with_semicolon) sb_append(out, ";\n");
@@ -1011,20 +1280,153 @@ static void lower_stmt(CsNode *s, MethodCtx *mc, StrBuf *out, int indent) {
         if (s->return_.expr) { sb_append(out, " "); lower_expr(s->return_.expr, mc, out); }
         sb_append(out, ";\n");
         return;
-    case CS_TRY:
-        lower_error(s->line, "try/catch/finally is not supported yet -- tracked follow-up, see cs_lower.h");
+    case CS_TRY: {
+        /* Broadly the pattern CSR/csharp_rt.h's own header comment
+         * (right above csr_try_push()) documents -- setjmp()/csr_try_
+         * push() establish the frame, csr_throw()'s longjmp back into it
+         * is what makes the "else" branch below the exception path --
+         * with ONE real correction to that documented template, found
+         * via a direct nested-try/finally/catch repro: csr_throw()/csr_
+         * rethrow() (CSR/csharp_rt.c) ALREADY pop the frame they're
+         * jumping into (`g_ex_top = frame->prev;`) before the longjmp,
+         * specifically so a NESTED throw from inside the handler that's
+         * about to run skips past it to the next enclosing frame. The
+         * documented template calls csr_try_pop() again as the first
+         * thing in the "else" branch regardless -- harmless for a single,
+         * non-nested try (the stack was already empty/at the right level,
+         * so the extra pop is a no-op), but for a NESTED try it double-
+         * pops: the OUTER frame gets removed a level too early, so a
+         * csr_rethrow() from the inner frame's own "no catch matched"
+         * path can no longer find it ("unhandled exception" abort even
+         * though a real, correctly-matching outer catch exists -- exactly
+         * confirmed this way). Fixed here by simply NOT re-popping in the
+         * exceptional branch -- only the NORMAL (setjmp()==0) path still
+         * needs an explicit csr_try_pop(), since no throw happened there
+         * to have already done it. A `finally` block is lowered up to
+         * three times (once per exit edge: normal, each matched catch,
+         * and the final rethrow path) -- correct (real code, not shared),
+         * but a diagnostic inside a `finally` body is correspondingly
+         * reported once per copy; a real, accepted duplication, not a new
+         * class of bug (this lowering pass already emits some other
+         * constructs, e.g. a `for` loop's condition, by re-invoking
+         * lower_expr more than once on the identical AST node elsewhere
+         * in this file). */
+        int id = mc->temp_counter++;
+        int i;
+        ind(out, indent); sb_appendf(out, "CsExFrame __f%d;\n", id);
+        ind(out, indent); sb_appendf(out, "csr_try_push(&__f%d);\n", id);
+        ind(out, indent); sb_appendf(out, "if (setjmp(__f%d.buf) == 0) {\n", id);
+        lower_stmt(s->try_.try_block, mc, out, indent + 1);
+        ind(out, indent + 1); sb_append(out, "csr_try_pop();\n");
+        if (s->try_.finally_block) lower_stmt(s->try_.finally_block, mc, out, indent + 1);
+        ind(out, indent); sb_append(out, "} else {\n");
+        if (s->try_.n_catches == 0) {
+            /* A bare try/finally, no catch clauses at all: the finally
+             * still runs on the exceptional path, then the exception
+             * re-raises into the next enclosing frame -- there is
+             * nothing here that could "handle" it. */
+            if (s->try_.finally_block) lower_stmt(s->try_.finally_block, mc, out, indent + 1);
+            ind(out, indent + 1); sb_append(out, "csr_rethrow();\n");
+        } else {
+            for (i = 0; i < s->try_.n_catches; i++) {
+                CsNode *c = s->try_.catches[i];
+                /* ex_type resolving to a real registered class means a
+                 * specific-exception-type catch (matched by real type
+                 * id, base-type-inclusive via csr_exception_matches());
+                 * NULL ex_type ("catch {}") OR a name that isn't a known
+                 * class (e.g. "catch (Exception e)" -- "Exception" is
+                 * real C#'s own root type, never itself a class this
+                 * lowering pass defines) is a catch-ALL, matching
+                 * unconditionally. */
+                CsNode *exc = c->catch_clause.ex_type ? reg_find_class(mc->reg, c->catch_clause.ex_type->name) : 0;
+                ind(out, indent + 1);
+                sb_append(out, i == 0 ? "if (" : "} else if (");
+                if (exc) sb_appendf(out, "csr_exception_matches(%d)", reg_type_id(mc->reg, exc));
+                else sb_append(out, "1");
+                sb_append(out, ") {\n");
+                if (c->catch_clause.var_name) {
+                    char *ct = exc ? lower_type_str(c->catch_clause.ex_type, mc->reg, c->line) : cs_strdup("void*");
+                    ind(out, indent + 2); sb_appendf(out, "%s %s = (%s)csr_current_exception();\n", ct, c->catch_clause.var_name, ct);
+                    mc_add_local(mc, c->catch_clause.var_name, exc ? c->catch_clause.ex_type : 0);
+                    free(ct);
+                }
+                lower_stmt(c->catch_clause.body, mc, out, indent + 2);
+                if (s->try_.finally_block) lower_stmt(s->try_.finally_block, mc, out, indent + 2);
+            }
+            ind(out, indent + 1); sb_append(out, "} else {\n");
+            if (s->try_.finally_block) lower_stmt(s->try_.finally_block, mc, out, indent + 2);
+            ind(out, indent + 2); sb_append(out, "csr_rethrow();\n");
+            ind(out, indent + 1); sb_append(out, "}\n");
+        }
+        ind(out, indent); sb_append(out, "}\n");
         return;
-    case CS_THROW:
-        lower_error(s->line, "throw is not supported yet -- tracked follow-up, see cs_lower.h");
+    }
+    case CS_THROW: {
+        if (s->throw_.expr) {
+            /* Hoisted so the thrown expression is evaluated exactly
+             * once -- csr_throw() needs both the object itself AND its
+             * type id (via csr_type_id_of()), and re-lowering the same
+             * AST node twice would re-evaluate (and, for "throw new
+             * Foo(...);", re-CONSTRUCT) it a second time. */
+            char *tmp = mc_new_temp(mc, "void*");
+            ind(out, indent); sb_appendf(out, "%s = ", tmp); lower_expr(s->throw_.expr, mc, out); sb_append(out, ";\n");
+            ind(out, indent); sb_appendf(out, "csr_throw(%s, csr_type_id_of(%s));\n", tmp, tmp);
+            free(tmp);
+        } else {
+            /* Bare "throw;" -- re-raise the currently-in-flight
+             * exception (only valid inside a catch/finally body, same
+             * as real C#; not checked here -- an out-of-context bare
+             * "throw;" lowers to a csr_rethrow() call that simply has
+             * nothing valid to read at runtime, matching this pass's
+             * general "trust the input is valid C#" posture elsewhere). */
+            ind(out, indent); sb_append(out, "csr_rethrow();\n");
+        }
         return;
+    }
     case CS_LOCAL_VAR_DECL:
         lower_local_var_decl(s, mc, out, indent, 1);
         return;
-    case CS_EXPR_STMT:
+    case CS_EXPR_STMT: {
+        CsNode *ex = s->expr_stmt.expr;
+        LinqChain ch;
+        /* "existingList = nums.Where(...).ToList();" -- an assignment to
+         * an already-declared simple identifier is the other common
+         * statement-level LINQ shape besides a fresh local-var-decl (see
+         * lower_local_var_decl's own handling of that one) -- supported
+         * here for the exact same reason: the loop this needs is a real
+         * multi-statement block, which only works at STATEMENT level
+         * (squash's C parser has no statement-expression extension, see
+         * MethodCtx's own ExtraTemp comment), so a LINQ chain can never
+         * be lowered as an arbitrary embedded sub-expression the way
+         * List<T>.Add()'s single-expression comma-operator trick can. A
+         * non-identifier lvalue (a field, an array element, ...) falls
+         * through to the ordinary path below and gets whatever error
+         * lower_call's normal method-call resolution reports for an
+         * unrecognized "Where"/"Count"/etc receiver. */
+        if (ex->kind == CS_ASSIGN && !strcmp(ex->assign.op, "=") && ex->assign.lhs->kind == CS_IDENT &&
+            linq_recognize_chain(ex->assign.rhs, mc, &ch) == 1) {
+            lower_linq_chain_into(&ch, mc, out, indent, ex->assign.lhs->ident.name);
+            return;
+        }
+        /* A bare "nums.Where(...).Count();" statement, its result
+         * discarded -- unusual (a predicate/terminal without side
+         * effects has no other purpose), but supported for completeness
+         * via the same hoisted-temp convention used everywhere else in
+         * this file for a value nothing ever reads back. */
+        if (linq_recognize_chain(ex, mc, &ch) == 1) {
+            CsType *rt = linq_result_cstype(&ch);
+            char *rct = lower_type_str(rt, mc->reg, s->line);
+            char *tmp = mc_new_temp(mc, rct);
+            free(rct);
+            lower_linq_chain_into(&ch, mc, out, indent, tmp);
+            free(tmp);
+            return;
+        }
         ind(out, indent);
-        lower_expr(s->expr_stmt.expr, mc, out);
+        lower_expr(ex, mc, out);
         sb_append(out, ";\n");
         return;
+    }
     default:
         lower_error(s->line, "internal: unhandled statement kind %d in lower_stmt", (int)s->kind);
         return;
@@ -1033,10 +1435,23 @@ static void lower_stmt(CsNode *s, MethodCtx *mc, StrBuf *out, int indent) {
 
 /* ---- class/member lowering ---- */
 
-static void lower_struct_decl(CsNode *cls, ClassRegistry *reg, StrBuf *out) {
+/* Emits `cls`'s own (non-static) fields into a struct body-in-progress,
+ * having FIRST recursed into its base class (if "base_class_name"
+ * resolves to another registered class -- see class_implements()'s own
+ * comment on why that name might really be an interface instead, safely
+ * a no-op recursion base case here since reg_find_class just returns
+ * NULL for one) so inherited fields land at the FRONT of the derived
+ * struct, before its own -- real, working single-inheritance field
+ * layout (see class_find_field()'s own comment: this is what makes its
+ * inheritance walk correspond to something that actually exists in the
+ * generated C struct, not just a lookup that resolves to a field with
+ * nowhere real to live). */
+static void emit_class_fields(CsNode *cls, ClassRegistry *reg, StrBuf *out, int *n_fields) {
     int i;
-    int n_fields = 0;
-    sb_appendf(out, "typedef struct %s {\n", cls->class_decl.name);
+    if (cls->class_decl.base_class_name) {
+        CsNode *base = reg_find_class(reg, cls->class_decl.base_class_name);
+        if (base && base != cls) emit_class_fields(base, reg, out, n_fields);
+    }
     for (i = 0; i < cls->class_decl.n_members; i++) {
         CsNode *m = cls->class_decl.members[i];
         CsType *ft = 0; const char *fname = 0; int is_static = 0;
@@ -1046,9 +1461,15 @@ static void lower_struct_decl(CsNode *cls, ClassRegistry *reg, StrBuf *out) {
             char *ct = lower_type_str(ft, reg, m->line);
             sb_appendf(out, "    %s %s;\n", ct, fname);
             free(ct);
-            n_fields++;
+            (*n_fields)++;
         }
     }
+}
+
+static void lower_struct_decl(CsNode *cls, ClassRegistry *reg, StrBuf *out) {
+    int n_fields = 0;
+    sb_appendf(out, "typedef struct %s {\n", cls->class_decl.name);
+    emit_class_fields(cls, reg, out, &n_fields);
     /* A class with only methods/static members (e.g. "class Program {
      * static void Main() ... }") has no instance fields at all -- a
      * zero-sized C struct is invalid, so give it one placeholder field.
@@ -1173,7 +1594,7 @@ static void lower_interface_impls(ClassRegistry *reg, StrBuf *out) {
                 CsNode *im = iface->class_decl.members[j];
                 CsNode *cm; char *rt; int k;
                 if (im->kind != CS_METHOD_DECL) continue;
-                cm = class_find_method(cls, im->method_decl.name);
+                cm = class_find_method(cls, im->method_decl.name, reg);
                 if (!cm || cm->method_decl.n_params != im->method_decl.n_params) {
                     lower_error(cls->line, "'%s' does not implement '%s.%s' (interface method missing or wrong parameter count)",
                                 cls->class_decl.name, iface->class_decl.name, im->method_decl.name);
@@ -1224,6 +1645,38 @@ static void lower_interface_dispatch(ClassRegistry *reg, StrBuf *out) {
     }
 }
 
+/* try/catch: emits "csr_register_exception_base(derived_id, base_id);"
+ * for every user-defined class whose "base_class_name" resolves to
+ * ANOTHER user-defined class (a real exception hierarchy, e.g. "class
+ * NotFoundException : AppException { ... }") -- needed so
+ * "catch (AppException e)" also catches a THROWN NotFoundException
+ * (real C# catch matching is by-base-type, not exact-type). Reuses the
+ * exact same "base_class_name might really be an interface name, cs_
+ * parser.c can't tell at parse time" ambiguity class_implements()
+ * already resolves for Phase 6e (see its own comment) -- here the
+ * OTHER resolution of that same ambiguity: base_class_name naming a
+ * real CLASS (not an interface) is a genuine base-class relationship,
+ * which this lowering pass otherwise still doesn't implement at all
+ * (no inherited fields/methods) except for this one purpose: threading
+ * the type_id hierarchy through to CSR/csharp_rt.h's own
+ * csr_register_exception_base() (see its header comment for exactly
+ * how csr_exception_matches() uses this). Emitted as real function
+ * calls inside main() (cs_lower_unit's own call site), not a "static
+ * const" table the way Phase 6e's vtables are -- registration is a
+ * genuine RUNTIME call, not compile-time-constant data. */
+static void lower_exception_base_registrations(ClassRegistry *reg, StrBuf *out, int indent) {
+    int i;
+    for (i = 0; i < reg->n_classes; i++) {
+        CsNode *cls = reg->classes[i];
+        CsNode *base;
+        if (!cls->class_decl.base_class_name) continue;
+        base = reg_find_class(reg, cls->class_decl.base_class_name);
+        if (!base || base == cls) continue;
+        ind(out, indent);
+        sb_appendf(out, "csr_register_exception_base(%d, %d);\n", reg_type_id(reg, cls), reg_type_id(reg, base));
+    }
+}
+
 static void lower_static_fields(CsNode *cls, ClassRegistry *reg, StrBuf *out) {
     int i;
     for (i = 0; i < cls->class_decl.n_members; i++) {
@@ -1244,7 +1697,14 @@ static void lower_static_fields(CsNode *cls, ClassRegistry *reg, StrBuf *out) {
 
 static void lower_method_params(CsNode *method_or_ctor, int is_ctor, ClassRegistry *reg, MethodCtx *mc, StrBuf *out, int need_this, const char *this_type) {
     CsNode **params; int n_params; int i; int wrote_any = 0;
-    if (is_ctor) { params = method_or_ctor->ctor_decl.params; n_params = method_or_ctor->ctor_decl.n_params; }
+    /* method_or_ctor==NULL (a class/struct with no explicit ctor at
+     * all) -- zero params, regardless of `is_ctor`; callers pass NULL
+     * freely rather than each having to special-case "no ctor" before
+     * ever reaching here (confirmed as a real, previously-unexercised
+     * NULL-deref otherwise: every struct fixture up to this point
+     * happened to always declare an explicit ctor). */
+    if (!method_or_ctor) { params = 0; n_params = 0; }
+    else if (is_ctor) { params = method_or_ctor->ctor_decl.params; n_params = method_or_ctor->ctor_decl.n_params; }
     else { params = method_or_ctor->method_decl.params; n_params = method_or_ctor->method_decl.n_params; }
     sb_append(out, "(");
     if (need_this) { sb_appendf(out, "%s *this", this_type); wrote_any = 1; }
@@ -1280,38 +1740,41 @@ static void lower_class_methods(CsNode *cls, ClassRegistry *reg, StrBuf *out) {
 
     {
         CsNode *ctor = class_find_ctor(cls);
+        CsNode *base = cls->class_decl.base_class_name ? reg_find_class(reg, cls->class_decl.base_class_name) : 0;
         MethodCtx mc; StrBuf body; int k;
         int is_struct = (cls->kind == CS_STRUCT_DECL);
+        if (base == cls) base = 0;
         memset(&mc, 0, sizeof mc); mc.reg = reg; mc.class_decl = cls; mc.is_instance = 1;
-        if (is_struct) {
-            /* Value-type ctor: "this" is an explicit, caller-owned
-             * (address-of-a-real-storage-location, typically a hoisted
-             * temp -- see CS_NEW_OBJECT's own comment) OUT parameter, not
-             * a GC allocation -- lower_method_params(need_this=1) already
-             * emits it as the first parameter (same as any instance
-             * method), so no separate "%s *this = csr_gc_alloc(...)" line
-             * is needed here at all. Zeroed first (memset), matching real
-             * C#'s "every struct field is implicitly zero before the
-             * ctor body runs" rule, before field initializers/ctor body
-             * (which may not touch every field) run. */
-            sb_appendf(out, "void %s__ctor", cls->class_decl.name);
-            lower_method_params(ctor ? ctor : 0, 1, reg, &mc, out, 1, cls->class_decl.name);
-            sb_append(out, " {\n");
-            sb_appendf(out, "    memset(this, 0, sizeof(*this));\n");
-        } else {
-            sb_appendf(out, "%s *%s__ctor", cls->class_decl.name, cls->class_decl.name);
-            if (ctor) lower_method_params(ctor, 1, reg, &mc, out, 0, 0);
-            else sb_append(out, "(void)");
-            sb_append(out, " {\n");
-            sb_appendf(out, "    %s *this = (%s*)csr_gc_alloc(sizeof(%s), %d, CS_KIND_OBJECT);\n",
-                       cls->class_decl.name, cls->class_decl.name, cls->class_decl.name, reg_type_id(reg, cls));
-        }
+
+        /* "<Class>__init(<Class> *this, <ctor params>)" -- this class's
+         * own field-initializer + ctor-body logic, on an ALREADY-
+         * allocated/zeroed "this" (need_this=1 always here, even for a
+         * class -- unlike __ctor below, __init never allocates anything
+         * itself). Shared by this class's own __ctor below AND by any
+         * DERIVED class's own __init (see the "base" handling there):
+         * this is what makes "class B : A { public B(int x) : base(x)
+         * {...} }" actually run A's field initializers/ctor body for a B
+         * instance, instead of the base(...) call being silently
+         * discarded the way it used to be -- real single-inheritance
+         * constructor chaining (still no virtual dispatch/overriding). */
+        sb_appendf(out, "void %s__init", cls->class_decl.name);
+        lower_method_params(ctor, ctor ? 1 : 0, reg, &mc, out, 1, cls->class_decl.name);
+        sb_append(out, " {\n");
         /* body lowered into a scratch buffer FIRST so mc.extra_temps (see
          * ExtraTemp's own comment) is fully populated before we know what
          * hoisted temp declarations to emit -- they go right after the
-         * "this = csr_gc_alloc(...)"/"memset(this, ...)" line above,
-         * before anything that might reference them. */
+         * opening brace, before anything that might reference them. */
         sb_init(&body);
+        if (base) {
+            /* Real C#: the base class's parameterless ctor runs
+             * implicitly when the derived ctor has no explicit
+             * "base(...)" -- covered here too (ctor->ctor_decl.n_base_args
+             * is simply 0 in that case, so this call passes none). */
+            int j;
+            sb_appendf(&body, "    %s__init((%s*)this", base->class_decl.name, base->class_decl.name);
+            if (ctor) for (j = 0; j < ctor->ctor_decl.n_base_args; j++) { sb_append(&body, ", "); lower_expr(ctor->ctor_decl.base_args[j], &mc, &body); }
+            sb_append(&body, ");\n");
+        }
         lower_field_initializers(cls, &mc, &body);
         if (ctor) {
             int j;
@@ -1320,8 +1783,40 @@ static void lower_class_methods(CsNode *cls, ClassRegistry *reg, StrBuf *out) {
         for (k = 0; k < mc.n_extra_temps; k++) sb_appendf(out, "    %s %s;\n", mc.extra_temps[k].ctype, mc.extra_temps[k].name);
         sb_append(out, body.data);
         free(body.data);
-        if (is_struct) sb_append(out, "}\n\n");
-        else sb_append(out, "    return this;\n}\n\n");
+        sb_append(out, "}\n\n");
+
+        /* "<Class>__ctor(<ctor params>)" -- allocates (class: real
+         * csr_gc_alloc) or zero-inits (struct: this is an OUT parameter
+         * the caller already owns storage for, see CS_NEW_OBJECT's own
+         * comment on the hoisted-temp/comma-operator technique that
+         * needs it), then delegates everything else to __init above by
+         * forwarding the same argument values through by name -- no
+         * expression lowering happens in this function's own body at
+         * all, so a fresh, throwaway MethodCtx (only used for
+         * lower_method_params' own local-registration side effect, never
+         * read back) is enough here, unlike __init above. */
+        {
+            MethodCtx mc2; int j;
+            memset(&mc2, 0, sizeof mc2); mc2.reg = reg; mc2.class_decl = cls; mc2.is_instance = 1;
+            if (is_struct) {
+                sb_appendf(out, "void %s__ctor", cls->class_decl.name);
+                lower_method_params(ctor, ctor ? 1 : 0, reg, &mc2, out, 1, cls->class_decl.name);
+                sb_append(out, " {\n    memset(this, 0, sizeof(*this));\n");
+                sb_appendf(out, "    %s__init(this", cls->class_decl.name);
+            } else {
+                sb_appendf(out, "%s *%s__ctor", cls->class_decl.name, cls->class_decl.name);
+                if (ctor) lower_method_params(ctor, 1, reg, &mc2, out, 0, 0);
+                else sb_append(out, "(void)");
+                sb_append(out, " {\n");
+                sb_appendf(out, "    %s *this = (%s*)csr_gc_alloc(sizeof(%s), %d, CS_KIND_OBJECT);\n",
+                           cls->class_decl.name, cls->class_decl.name, cls->class_decl.name, reg_type_id(reg, cls));
+                sb_appendf(out, "    %s__init(this", cls->class_decl.name);
+            }
+            if (ctor) for (j = 0; j < ctor->ctor_decl.n_params; j++) sb_appendf(out, ", %s", ctor->ctor_decl.params[j]->param.name);
+            sb_append(out, ");\n");
+            if (is_struct) sb_append(out, "}\n\n");
+            else sb_append(out, "    return this;\n}\n\n");
+        }
     }
 
     for (i = 0; i < cls->class_decl.n_members; i++) {
@@ -1403,7 +1898,7 @@ static void lower_class_methods(CsNode *cls, ClassRegistry *reg, StrBuf *out) {
 static CsNode *find_main(ClassRegistry *reg, CsNode **out_class) {
     int i;
     for (i = 0; i < reg->n_classes; i++) {
-        CsNode *m = class_find_method(reg->classes[i], "Main");
+        CsNode *m = class_find_method(reg->classes[i], "Main", reg);
         if (m && m->method_decl.is_static) { *out_class = reg->classes[i]; return m; }
     }
     return 0;
@@ -1444,7 +1939,9 @@ CsLowerResult cs_lower_unit(CsNode *unit, const char *runtime_header) {
     if (!main_method) {
         lower_error(unit->line, "no 'static void Main()' (or static Main with a return value) found in the program");
     } else {
-        sb_appendf(&out, "int main(void) {\n    %s__Main();\n    return 0;\n}\n", main_class->class_decl.name);
+        sb_append(&out, "int main(void) {\n");
+        lower_exception_base_registrations(&reg, &out, 1);
+        sb_appendf(&out, "    %s__Main();\n    return 0;\n}\n", main_class->class_decl.name);
     }
 
     res.text = out.data;

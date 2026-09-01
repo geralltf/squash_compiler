@@ -74,6 +74,13 @@ typedef enum VkStructureType {
     VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO = 22,
     VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO = 23,
     VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO = 24,
+    /* Phase 7: added alongside VkPipelineDepthStencilStateCreateInfo
+     * itself (this whole enum's other entries are left exactly as they
+     * already were, including any of their OWN inaccuracies relative to
+     * the real Vulkan spec -- SQW's existing pipelines already work
+     * against real hardware with those values as-is; not this session's
+     * job to relitigate, only to add what's genuinely missing). */
+    VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO = 25,
     VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO = 26,
     VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO = 30,
     VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO = 39,
@@ -109,7 +116,11 @@ typedef enum VkFormat {
     VK_FORMAT_R32G32B32_SFLOAT = 106,
     VK_FORMAT_R32G32B32A32_SFLOAT = 109,
     VK_FORMAT_B8G8R8A8_UNORM = 44,
-    VK_FORMAT_B8G8R8A8_SRGB = 50
+    VK_FORMAT_B8G8R8A8_SRGB = 50,
+    /* Phase 7: real depth-buffer format, universally supported for the
+     * depth-stencil-attachment usage on every real Vulkan implementation
+     * (part of the spec's own mandatory format support). */
+    VK_FORMAT_D32_SFLOAT = 126
 } VkFormat;
 
 /* VkBlendFactor / VkBlendOp: VkPipelineColorBlendAttachmentState's
@@ -127,8 +138,24 @@ typedef enum VkFormat {
 typedef enum VkImageLayout {
     VK_IMAGE_LAYOUT_UNDEFINED = 0,
     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL = 2,
+    VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL = 3,
     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR = 1000001002
 } VkImageLayout;
+
+/* Phase 7: real depth-testing constants, needed alongside
+ * VK_FORMAT_D32_SFLOAT/VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+ * above for a real depth attachment + depth-tested graphics pipeline --
+ * this shim previously only ever needed the color-attachment-only
+ * subset SQW's own 2D renderers use. VkCompareOp is a plain uint32_t
+ * struct field (not a named enum type), matching this file's own
+ * existing convention for every other enum-typed struct field (see
+ * VkBlendFactor/VkBlendOp above). */
+#define VK_IMAGE_ASPECT_DEPTH_BIT 0x2
+#define VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT 0x20
+#define VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT 0x100
+#define VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT 0x400
+#define VK_COMPARE_OP_LESS 1
+#define VK_COMPARE_OP_ALWAYS 7
 
 typedef enum VkSharingMode { VK_SHARING_MODE_EXCLUSIVE = 0, VK_SHARING_MODE_CONCURRENT = 1 } VkSharingMode;
 typedef enum VkPresentModeKHR {
@@ -451,6 +478,29 @@ typedef struct VkPipelineMultisampleStateCreateInfo {
     VkBool32 alphaToOneEnable;
 } VkPipelineMultisampleStateCreateInfo;
 
+/* Phase 7: real depth testing for a 3D pipeline (SQW's own 2D pipelines
+ * never needed this -- VkGraphicsPipelineCreateInfo's own
+ * "pDepthStencilState" field stayed a plain "const void*" until now,
+ * see that struct's own definition below; a real 3D pipeline instead
+ * points it at one of these). */
+typedef struct VkStencilOpState {
+    uint32_t failOp, passOp, depthFailOp, compareOp;
+    uint32_t compareMask, writeMask, reference;
+} VkStencilOpState;
+
+typedef struct VkPipelineDepthStencilStateCreateInfo {
+    VkStructureType sType;
+    const void *pNext;
+    VkFlags flags;
+    VkBool32 depthTestEnable;
+    VkBool32 depthWriteEnable;
+    uint32_t depthCompareOp; /* VkCompareOp */
+    VkBool32 depthBoundsTestEnable;
+    VkBool32 stencilTestEnable;
+    VkStencilOpState front, back;
+    float minDepthBounds, maxDepthBounds;
+} VkPipelineDepthStencilStateCreateInfo;
+
 typedef struct VkPipelineColorBlendAttachmentState {
     VkBool32 blendEnable;
     uint32_t srcColorBlendFactor, dstColorBlendFactor, colorBlendOp;
@@ -596,7 +646,8 @@ typedef struct VkCommandBufferBeginInfo {
 } VkCommandBufferBeginInfo;
 
 typedef union VkClearColorValue { float float32[4]; int32_t int32[4]; uint32_t uint32[4]; } VkClearColorValue;
-typedef union VkClearValue { VkClearColorValue color; } VkClearValue;
+typedef struct VkClearDepthStencilValue { float depth; uint32_t stencil; } VkClearDepthStencilValue;
+typedef union VkClearValue { VkClearColorValue color; VkClearDepthStencilValue depthStencil; } VkClearValue;
 
 typedef struct VkRenderPassBeginInfo {
     VkStructureType sType;
@@ -727,6 +778,18 @@ void WINAPI vkCmdSetViewport(VkCommandBuffer commandBuffer, uint32_t firstViewpo
 void WINAPI vkCmdSetScissor(VkCommandBuffer commandBuffer, uint32_t firstScissor, uint32_t scissorCount, const VkRect2D *pScissors);
 void WINAPI vkCmdPushConstants(VkCommandBuffer commandBuffer, VkPipelineLayout layout, VkFlags stageFlags, uint32_t offset, uint32_t size, const void *pValues);
 void WINAPI vkCmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance);
+/* Phase 7: indexed drawing -- SQW's own 2D renderers never needed an
+ * index buffer (each quad's 6 vertices are just written out directly,
+ * see renderer_vk.c), but real 3D mesh geometry (shared vertices across
+ * triangles) does. VkIndexType is a plain uint32_t struct-adjacent
+ * parameter here (not a named enum type), matching this file's own
+ * convention for a Vulkan enum that's never embedded in a struct field
+ * (compare VkPipelineBindPoint, which IS a named enum since it's used as
+ * a struct field type elsewhere). */
+#define VK_INDEX_TYPE_UINT16 0
+#define VK_INDEX_TYPE_UINT32 1
+void WINAPI vkCmdBindIndexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset, uint32_t indexType);
+void WINAPI vkCmdDrawIndexed(VkCommandBuffer commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance);
 VkResult WINAPI vkCreateSemaphore(VkDevice device, const VkSemaphoreCreateInfo *pCreateInfo, const void *pAllocator, VkSemaphore *pSemaphore);
 void WINAPI vkDestroySemaphore(VkDevice device, VkSemaphore semaphore, const void *pAllocator);
 VkResult WINAPI vkCreateFence(VkDevice device, const VkFenceCreateInfo *pCreateInfo, const void *pAllocator, VkFence *pFence);

@@ -173,10 +173,23 @@ typedef struct CsExFrame {
  *   csr_try_push(&__f);
  *   if (setjmp(__f.buf) == 0) {
  *       A;
- *       csr_try_pop();
+ *       csr_try_pop();              // still on the stack -- no throw happened, remove it now
  *       C;                          // finally, normal-exit copy
  *   } else {
- *       csr_try_pop();
+ *       // NO csr_try_pop() here -- csr_throw()/csr_rethrow() already
+ *       // popped this exact frame (g_ex_top = frame->prev) BEFORE the
+ *       // longjmp that lands here, precisely so a nested throw from
+ *       // inside B/C below skips past it to the next enclosing frame.
+ *       // Popping again here is a no-op for a single, non-nested try
+ *       // (the stack was already empty/at the right level) but DOUBLE-
+ *       // POPS for a nested one -- the outer frame gets removed a level
+ *       // too early, so a csr_rethrow() from an inner frame's own "no
+ *       // catch matched" path can no longer find it, aborting as an
+ *       // "unhandled exception" even though a real, correctly-matching
+ *       // outer catch exists. Confirmed via a direct nested-try repro
+ *       // (CS/cs_lower.c's own CS_TRY lowering originally included this
+ *       // exact extra pop, copied from what used to be documented here,
+ *       // before the repro caught it).
  *       if (csr_exception_matches(T_typeid)) {
  *           e = csr_current_exception();
  *           B;
@@ -273,6 +286,25 @@ void    csr_list_remove_at(CsList *list, int index);
 void    csr_list_clear(CsList *list);
 int     csr_list_count(CsList *list);
 CsList *csr_list_copy(CsList *list);   /* shallow element-blob copy, fresh backing array */
+
+/* Phase 7: a real, contiguous pointer to `list`'s own backing store --
+ * the "no C# arrays yet" escape hatch a native call needing a real
+ * "array of N structs" argument (e.g. Vulkan's own
+ * VkGraphicsPipelineCreateInfo.pStages) uses instead: build the elements
+ * with an ordinary List<T> (already fully working) and pass
+ * csr_list_data(list) as the pointer argument, `list.Count` (already
+ * exposed, see CS_MEMBER's own ".Count" special case in cs_lower.c) as
+ * the count. The returned pointer is valid only as long as no further
+ * csr_list_add()/csr_list_remove_at() call has resized `list` since --
+ * same aliasing rule any C code taking a raw pointer into a growable
+ * array already has to follow, not a new one this function introduces. */
+void *csr_list_data(CsList *list);
+
+/* Phase 7: a real, NUL-terminated `const char *` into a CsString's own
+ * `data` field -- the equivalent escape hatch to csr_list_data() above,
+ * for a native call needing a raw C string (e.g. Vulkan's own
+ * VkPipelineShaderStageCreateInfo.pName, "main") instead of a CsString*. */
+void *csr_string_data(CsString *s);
 
 /* ---- 4c. CsDict (string-keyed, generic-erased by value size) ----------
  * MVP scope: string keys only (Dictionary<string,T>), open addressing

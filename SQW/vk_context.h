@@ -37,6 +37,22 @@ typedef struct {
     VkImageView      swapViews[SQW_MAX_SWAP_IMAGES];
     VkFramebuffer    framebuffers[SQW_MAX_SWAP_IMAGES];
 
+    /* Phase 7: a real depth attachment, added for a Vulkan-driven 3D
+     * scene (SQW's own 2D quad/glyph/image renderers never needed one --
+     * they're all drawn with depth test/write disabled, painter's-
+     * algorithm submission order, which stays correct here since none of
+     * them ever write to this attachment). Swapchain-extent-dependent
+     * (one depth image per resize, matching the color images -- NOT one
+     * per swap image, since nothing needs to read back a stale depth
+     * buffer from a previous frame the way a color image is presented),
+     * so this lives in create_swapchain_and_deps()/destroy_swapchain_
+     * and_deps() alongside the swapchain itself, not as a fixed startup-
+     * only resource. */
+    VkFormat         depthFormat;
+    VkImage          depthImage;
+    VkDeviceMemory   depthMemory;
+    VkImageView      depthView;
+
     VkRenderPass     renderPass;
     VkCommandPool    commandPool;
     VkCommandBuffer  cmdBufs[SQW_MAX_SWAP_IMAGES];

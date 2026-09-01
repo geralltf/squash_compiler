@@ -172,6 +172,17 @@ typedef struct DomNode {
     void *js_onchange;
     void *js_onkeydown;
 
+    /* Phase 7: this element's own C# click handler -- a REAL, raw C-ABI
+     * function pointer (a loaded C# script's static method, Phase 6d's
+     * "static method as a function pointer value" mechanism), NOT a
+     * JSObject* like js_onclick above -- there's no interpreter/function-
+     * object layer in between here, the pointer is directly callable.
+     * Set via the "SqwRegisterClickHandler(string elementId, IntPtr fn)"
+     * host symbol (SQW/sqo_host_syms.c), dispatched by sqw_main.c's own
+     * click-handling code alongside js_onclick's own ancestor-walk. NULL
+     * (the default) if none. Signature: "void (*)(void)". */
+    void *native_onclick;
+
     /* Text styling -- font_size/text_align/line_height/font_weight_bold
      * are real CSS-inherited properties (unlike most fields above, which
      * only ever come from a rule/inline-style directly targeting the

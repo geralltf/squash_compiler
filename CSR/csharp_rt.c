@@ -413,6 +413,9 @@ CsList *csr_list_copy(CsList *list) {
     return out;
 }
 
+void *csr_list_data(CsList *list) { return list->data; }
+void *csr_string_data(CsString *s) { return s->data; }
+
 /* ------------------------------------------------------------------------
  * 4c. CsDict (string-keyed)
  * ------------------------------------------------------------------------ */

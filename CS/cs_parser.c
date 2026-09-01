@@ -1198,16 +1198,37 @@ static CsNode *parse_class_member(CsParser *p, const char *class_name) {
     is_ctor = is_ctor && pk && pk->kind == CS_TOK_PUNCT && strcmp(pk->text, "(") == 0;
     if (is_ctor) {
         CsNode **params; int n_params; CsNode *body;
+        CsNode **base_args = 0; int n_base_args = 0;
         char *cname = expect_ident(p);
         parse_param_list(p, &params, &n_params);
-        if (is_punct(p, ":")) { /* ": base(...)" / ": this(...)" constructor initializer -- parsed, discarded */
+        if (is_punct(p, ":")) {
+            /* ": base(args)" -- captured for real now (cs_lower.c runs
+             * the base class's own field initializers/ctor body via a
+             * generated "<Base>__init(this, args...)" helper, see its
+             * own comment) so a derived exception/class ctor's base(...)
+             * call actually does something instead of being silently
+             * discarded. ": this(args)" (same-class constructor
+             * overload chaining) is a separate feature -- still just
+             * parsed and discarded, since this pass only supports one
+             * constructor per class at all (see lower_class_methods'
+             * "constructor overload resolution is not supported yet"
+             * check), so there is no second same-class ctor to chain
+             * into in the first place. */
+            int is_base;
             advance(p);
+            is_base = is_kw(p, "base");
             if (is_kw(p, "base") || is_kw(p, "this")) advance(p);
-            if (is_punct(p, "(")) { int argc; CsNode **args = parse_arg_list(p, &argc); int i; for (i=0;i<argc;i++) csast_free(args[i]); free(args); }
+            if (is_punct(p, "(")) {
+                int argc; CsNode **args = parse_arg_list(p, &argc);
+                if (is_base) { base_args = args; n_base_args = argc; }
+                else { int i; for (i=0;i<argc;i++) csast_free(args[i]); free(args); }
+            }
         }
         body = parse_block(p);
         free(dllimport_lib); /* DllImport on a constructor isn't a supported shape -- discarded, same as any other unrecognized attribute */
-        { CsNode *n = csnode_ctor_decl(cname, params, n_params, body, line); free(cname); return n; }
+        { CsNode *n = csnode_ctor_decl(cname, params, n_params, body, line); free(cname);
+          n->ctor_decl.base_args = base_args; n->ctor_decl.n_base_args = n_base_args;
+          return n; }
     }
 
     if (!looks_like_type_start(p)) {

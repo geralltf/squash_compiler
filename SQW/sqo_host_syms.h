@@ -14,26 +14,35 @@
  * of runtime symbol table for a plain built-in .c file). Returns the
  * number of entries written into `out` (caller supplies a big-enough
  * array -- see SQO_HOST_SYMS_COUNT). */
-#define SQO_HOST_SYMS_COUNT 64
+#define SQO_HOST_SYMS_COUNT 65
 
 int sqo_host_syms_csharp_rt(SqoHostSymbol *out);
 
-/* Phase 6c: a small, hand-picked subset of real Vulkan entry points, by
- * real in-process address (SQW already links libvulkan.so.1 directly for
- * its own renderer, SQW/vk_context.c -- these are the SAME real
- * functions, not a stub/shim), for a `[DllImport("vulkan")]`-declared C#
- * method to call. Scoped to cover one real end-to-end smoke test
- * (vkEnumerateInstanceVersion -- just a pointer-to-uint32 out-param, no
- * struct marshaling needed) plus enough of the instance/device-
- * enumeration surface to be a genuinely useful starting point
- * (vkCreateInstance/vkDestroyInstance/vkEnumeratePhysicalDevices) --
- * NOT all ~200+ Vulkan entry points (a full auto-generated table parsed
- * from vulkan_core.h is a reasonable follow-up once real scripts need
- * more of the API; this is trivially extensible by adding more SYM()
- * lines to sqo_host_syms_vulkan()'s own definition, same pattern as
- * sqo_host_syms_csharp_rt() above). */
-#define SQO_HOST_SYMS_VULKAN_COUNT 8
+/* Phase 6c (instance/device enumeration) + Phase 7 (real graphics
+ * pipeline creation/recording -- shader modules, pipeline layout/
+ * pipeline, buffers, memory, and the vkCmd* calls needed to bind and
+ * draw): a hand-picked subset of real Vulkan entry points, by real
+ * in-process address (SQW already links libvulkan.so.1 directly for its
+ * own renderer, SQW/vk_context.c -- these are the SAME real functions,
+ * not a stub/shim), for a `[DllImport("vulkan")]`-declared C# method to
+ * call -- NOT all ~200+ Vulkan entry points (a full auto-generated table
+ * parsed from vulkan_core.h is a reasonable follow-up once real scripts
+ * need more of the API; this is trivially extensible by adding more
+ * VKSYM() lines to sqo_host_syms_vulkan()'s own definition, same pattern
+ * as sqo_host_syms_csharp_rt() above). Vulkan OBJECTS a script needs
+ * (device, physical device, render pass, command pool, queue) come from
+ * a SEPARATE table, SQW/sqw_main.c's own sqo_host_syms_app() -- SQW's
+ * real, already-initialized ones, not created fresh by the script. */
+#define SQO_HOST_SYMS_VULKAN_COUNT 27
 
 int sqo_host_syms_vulkan(SqoHostSymbol *out);
+
+/* Phase 7c: libm/libc functions procedural geometry and buffer upload
+ * need (sinf/cosf/sqrtf/tanf, memcpy) -- see sqo_host_syms_libc()'s own
+ * comment in sqo_host_syms.c for why these go through trampolines like
+ * sqo_host_syms_vulkan()'s own entries, not direct addresses. */
+#define SQO_HOST_SYMS_LIBC_COUNT 5
+
+int sqo_host_syms_libc(SqoHostSymbol *out);
 
 #endif /* SQO_HOST_SYMS_H */

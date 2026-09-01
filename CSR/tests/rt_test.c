@@ -76,7 +76,10 @@ static void test_exceptions(void) {
         csr_try_pop();
         trace("finally-normal;"); /* not reached: throwing_inner always throws */
     } else {
-        csr_try_pop();
+        /* No csr_try_pop() here -- csr_throw() already popped this
+         * frame before its longjmp landed here (see csharp_rt.h's own
+         * corrected template comment above csr_try_push()'s
+         * declaration). */
         if (csr_exception_matches(TYPE_MY_EX)) {
             CsString *msg = (CsString *)csr_current_exception();
             trace("caught:");
@@ -108,11 +111,46 @@ static void test_exception_base_matching(void) {
         if (setjmp(frame.buf) == 0) {
             csr_throw((void *)cs_string_new("bad-arg"), 200);
         } else {
-            csr_try_pop();
+            /* No csr_try_pop() here either -- see test_exceptions()'s own
+             * comment. */
             matched_as_base = csr_exception_matches(TYPE_BASE_EX);
         }
         CHECK(matched_as_base, "exceptions: catch(BaseException) matches a thrown derived type");
     }
+}
+
+/* Regression guard for a real bug found this session (in CS/cs_lower.c's
+ * first CS_TRY lowering, copied from what used to be documented in
+ * csharp_rt.h's own template comment): an inner try/finally with NO
+ * catch of its own must re-raise into the OUTER frame via csr_rethrow(),
+ * and the outer frame must still be reachable to catch it -- exactly the
+ * shape a redundant csr_try_pop() in the exceptional branch breaks (it
+ * double-pops, since csr_throw()/csr_rethrow() already popped the
+ * frame they jump into before the longjmp), even though the exact same
+ * mistake is invisible in every OTHER test in this file (a single,
+ * non-nested try, where the extra pop is a harmless no-op). */
+static void test_nested_try_finally_rethrow(void) {
+    int outer_finally_ran = 0, inner_finally_ran = 0, caught = 0;
+    CsExFrame outer;
+    csr_try_push(&outer);
+    if (setjmp(outer.buf) == 0) {
+        CsExFrame inner;
+        csr_try_push(&inner);
+        if (setjmp(inner.buf) == 0) {
+            csr_throw((void *)cs_string_new("nested-boom"), TYPE_MY_EX);
+            csr_try_pop();
+        } else {
+            inner_finally_ran = 1;
+            csr_rethrow();
+        }
+        csr_try_pop();
+    } else {
+        if (csr_exception_matches(TYPE_MY_EX)) caught = 1;
+    }
+    outer_finally_ran = 1;
+    CHECK(inner_finally_ran, "nested try: inner finally ran before rethrow");
+    CHECK(caught, "nested try: outer catch still reachable after inner rethrow (regression guard)");
+    CHECK(outer_finally_ran, "nested try: control returns normally after the outer catch handles it");
 }
 
 /* ---- Delegates/closures ---- */
@@ -229,6 +267,7 @@ int main(void) {
     test_gc_basic();
     test_exceptions();
     test_exception_base_matching();
+    test_nested_try_finally_rethrow();
     test_delegates();
     test_list();
     test_dict();

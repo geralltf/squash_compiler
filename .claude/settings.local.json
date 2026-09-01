@@ -24,7 +24,14 @@
       "Bash(sed -i '1i #include <stdlib.h>' /tmp/dbg.c)",
       "Bash(gcc -Wall -o /tmp/dbg /tmp/dbg.c SQS/db_engine.c -I.)",
       "Bash(/tmp/dbg)",
-      "Bash(./squash -linux -64 -I. SQS/tests/db_engine_test.c SQS/db_engine.c -o /tmp/db_engine_test_sq)"
+      "Bash(./squash -linux -64 -I. SQS/tests/db_engine_test.c SQS/db_engine.c -o /tmp/db_engine_test_sq)",
+      "Bash(./squash)",
+      "Bash(mkdir -p /tmp/phase6a)",
+      "Bash(gcc -O0 -o /tmp/phase6a/argtest_gcc /tmp/phase6a/argtest.c)",
+      "Bash(/tmp/phase6a/argtest_gcc)",
+      "Bash(./squash -linux -64 /tmp/phase6a/argtest.c -o /tmp/phase6a/argtest_sq)",
+      "Bash(stdbuf -o0 /tmp/phase6a/argtest_sq)",
+      "Bash(make -f Makefile.SQW.linux SQW/SQW)"
     ]
   }
 }

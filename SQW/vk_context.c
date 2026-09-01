@@ -96,13 +96,62 @@ static int create_swapchain_and_deps(SqwVkContext *vk, uint32_t width, uint32_t 
         if (vr != VK_SUCCESS) { fprintf(stderr, "sqw_vk: vkCreateImageView[%u] failed vr=%d\n", i, (int)vr); fflush(stdout); return 0; }
     }
 
+    /* --- Depth image (one per resize, shared by every swap image this
+     * frame -- see SqwVkContext's own field comment for why this isn't
+     * per-swap-image like the color views). --- */
+    {
+        VkImageCreateInfo imgInfo;
+        memset(&imgInfo, 0, sizeof(imgInfo));
+        imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imgInfo.imageType = VK_IMAGE_TYPE_2D;
+        imgInfo.format = vk->depthFormat;
+        imgInfo.extent.width = vk->extent.width;
+        imgInfo.extent.height = vk->extent.height;
+        imgInfo.extent.depth = 1;
+        imgInfo.mipLevels = 1;
+        imgInfo.arrayLayers = 1;
+        imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imgInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        vr = vkCreateImage(vk->device, &imgInfo, NULL, &vk->depthImage);
+        if (vr != VK_SUCCESS) { fprintf(stderr, "sqw_vk: depth vkCreateImage failed vr=%d\n", (int)vr); fflush(stdout); return 0; }
+
+        VkMemoryRequirements memReq;
+        vkGetImageMemoryRequirements(vk->device, vk->depthImage, &memReq);
+        VkMemoryAllocateInfo allocInfo;
+        memset(&allocInfo, 0, sizeof(allocInfo));
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReq.size;
+        allocInfo.memoryTypeIndex = sqw_vk_find_memory_type(vk, memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        vr = vkAllocateMemory(vk->device, &allocInfo, NULL, &vk->depthMemory);
+        if (vr != VK_SUCCESS) { fprintf(stderr, "sqw_vk: depth vkAllocateMemory failed vr=%d\n", (int)vr); fflush(stdout); return 0; }
+        vkBindImageMemory(vk->device, vk->depthImage, vk->depthMemory, 0);
+
+        VkImageViewCreateInfo ivInfo;
+        memset(&ivInfo, 0, sizeof(ivInfo));
+        ivInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        ivInfo.image = vk->depthImage;
+        ivInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        ivInfo.format = vk->depthFormat;
+        ivInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        ivInfo.subresourceRange.levelCount = 1;
+        ivInfo.subresourceRange.layerCount = 1;
+        vr = vkCreateImageView(vk->device, &ivInfo, NULL, &vk->depthView);
+        if (vr != VK_SUCCESS) { fprintf(stderr, "sqw_vk: depth vkCreateImageView failed vr=%d\n", (int)vr); fflush(stdout); return 0; }
+    }
+
     for (i = 0; i < vk->swapImageCount; i++) {
+        VkImageView attachments[2];
         VkFramebufferCreateInfo fbInfo;
+        attachments[0] = vk->swapViews[i];
+        attachments[1] = vk->depthView;
         memset(&fbInfo, 0, sizeof(fbInfo));
         fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         fbInfo.renderPass = vk->renderPass;
-        fbInfo.attachmentCount = 1;
-        fbInfo.pAttachments = &vk->swapViews[i];
+        fbInfo.attachmentCount = 2;
+        fbInfo.pAttachments = attachments;
         fbInfo.width = vk->extent.width;
         fbInfo.height = vk->extent.height;
         fbInfo.layers = 1;
@@ -124,6 +173,10 @@ static void destroy_swapchain_and_deps(SqwVkContext *vk) {
         vk->framebuffers[i] = 0;
         vk->swapViews[i] = 0;
     }
+    vkDestroyImageView(vk->device, vk->depthView, NULL);
+    vkDestroyImage(vk->device, vk->depthImage, NULL);
+    vkFreeMemory(vk->device, vk->depthMemory, NULL);
+    vk->depthView = 0; vk->depthImage = 0; vk->depthMemory = 0;
     vkDestroySwapchainKHR(vk->device, vk->swapchain, NULL);
     vk->swapchain = 0;
 }
@@ -625,26 +678,55 @@ int sqw_vk_context_init(SqwVkContext *vk, HINSTANCE hinstance, HWND hwnd, uint32
     colorRef.attachment = 0;
     colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+    /* Phase 7: depth attachment -- see SqwVkContext's own field comment.
+     * VK_FORMAT_D32_SFLOAT is universally supported for the depth-
+     * stencil-attachment usage on every real Vulkan implementation (part
+     * of the spec's own mandatory format support, unlike some
+     * depth+stencil combined formats), so no format-support query is
+     * needed here, matching this whole function's existing "don't over-
+     * engineer for capabilities every real target already has" style. */
+    vk->depthFormat = VK_FORMAT_D32_SFLOAT;
+
+    VkAttachmentDescription depthAttach;
+    memset(&depthAttach, 0, sizeof(depthAttach));
+    depthAttach.format = vk->depthFormat;
+    depthAttach.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttach.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttach.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttach.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttach.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttach.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttach.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthRef;
+    depthRef.attachment = 1;
+    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentDescription attachments[2];
+    attachments[0] = colorAttach;
+    attachments[1] = depthAttach;
+
     VkSubpassDescription subpass;
     memset(&subpass, 0, sizeof(subpass));
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
 
     VkSubpassDependency dep;
     memset(&dep, 0, sizeof(dep));
     dep.srcSubpass = VK_SUBPASS_EXTERNAL;
     dep.dstSubpass = 0;
-    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dep.srcAccessMask = 0;
-    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     VkRenderPassCreateInfo rpInfo;
     memset(&rpInfo, 0, sizeof(rpInfo));
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rpInfo.attachmentCount = 1;
-    rpInfo.pAttachments = &colorAttach;
+    rpInfo.attachmentCount = 2;
+    rpInfo.pAttachments = attachments;
     rpInfo.subpassCount = 1;
     rpInfo.pSubpasses = &subpass;
     rpInfo.dependencyCount = 1;
@@ -716,12 +798,13 @@ VkCommandBuffer sqw_vk_begin_frame(SqwVkContext *vk, float r, float g, float b, 
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    VkClearValue clearValue;
-    memset(&clearValue, 0, sizeof(clearValue));
-    clearValue.color.float32[0] = r;
-    clearValue.color.float32[1] = g;
-    clearValue.color.float32[2] = b;
-    clearValue.color.float32[3] = a;
+    VkClearValue clearValues[2];
+    memset(&clearValues, 0, sizeof(clearValues));
+    clearValues[0].color.float32[0] = r;
+    clearValues[0].color.float32[1] = g;
+    clearValues[0].color.float32[2] = b;
+    clearValues[0].color.float32[3] = a;
+    clearValues[1].depthStencil.depth = 1.0f;   /* farthest -- see depthAttach's own comment in sqw_vk_context_init */
 
     VkRenderPassBeginInfo rpBegin;
     memset(&rpBegin, 0, sizeof(rpBegin));
@@ -730,8 +813,8 @@ VkCommandBuffer sqw_vk_begin_frame(SqwVkContext *vk, float r, float g, float b, 
     rpBegin.framebuffer = vk->framebuffers[imageIndex];
     rpBegin.renderArea.offset.x = 0; rpBegin.renderArea.offset.y = 0;
     rpBegin.renderArea.extent = vk->extent;
-    rpBegin.clearValueCount = 1;
-    rpBegin.pClearValues = &clearValue;
+    rpBegin.clearValueCount = 2;
+    rpBegin.pClearValues = clearValues;
 
     vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 

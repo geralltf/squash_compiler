@@ -570,6 +570,8 @@ void csast_free(CsNode *n) {
         free(n->ctor_decl.name);
         for (i = 0; i < n->ctor_decl.n_params; i++) csast_free(n->ctor_decl.params[i]);
         free(n->ctor_decl.params);
+        for (i = 0; i < n->ctor_decl.n_base_args; i++) csast_free(n->ctor_decl.base_args[i]);
+        free(n->ctor_decl.base_args);
         csast_free(n->ctor_decl.body);
         break;
     case CS_PARAM: cstype_free(n->param.type); free(n->param.name); csast_free(n->param.default_value); break;

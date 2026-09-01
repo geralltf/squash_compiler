@@ -153,7 +153,19 @@ struct CsNode {
              * host symbol table today). */
             char      *dllimport_name;
         } method_decl;
-        struct { char *name; CsNode **params; int n_params; CsNode *body; } ctor_decl;
+        struct {
+            char *name; CsNode **params; int n_params; CsNode *body;
+            /* ": base(args)" constructor initializer -- NULL/0 if this
+             * ctor has none (either no initializer at all, or a ": this
+             * (...)" same-class chain, still not implemented -- see
+             * cs_parser.c's own comment at the capture site). Lets
+             * cs_lower.c actually run the base class's own field
+             * initializers/ctor body (via a generated "<Base>__init(
+             * this, args...)" helper -- see lower_class_methods' own
+             * comment) instead of the base(...) call being silently
+             * discarded, as it used to be. */
+            CsNode **base_args; int n_base_args;
+        } ctor_decl;
         /* is_out_ref: 1 if this parameter was declared "out"/"ref" -- for
          * an ordinary C# method these are still just parsed and otherwise
          * unimplemented (see cs_parser.c's own comment: real by-reference

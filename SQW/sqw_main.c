@@ -228,6 +228,44 @@ static int g_current_css_sheet_valid = 0;
  * "nothing to call" state). */
 static JSInterp *g_current_js_interp = 0;
 
+/* Phase 7: loaded C# (and raw-C) scripts, kept alive for the WHOLE page's
+ * lifetime instead of being freed the instant their own Main()/main()
+ * returns once (the previous behavior -- see sqw_run_csharp_script()'s
+ * own comment for exactly what changed and why: a script that registers
+ * a per-frame render callback or a click handler hands out a real
+ * function pointer into its own mmap'd code, which must stay valid for
+ * every later frame/click, not just the one call that registered it).
+ * Same "static, page-lifetime, torn down at the top of the NEXT
+ * sqw_apply_css() call" rationale as g_current_js_interp above -- see
+ * that teardown site for where these get freed on navigation/reload. */
+/* 32 = SQW_MAX_CSHARP_SCRIPTS(16) + SQW_MAX_C_SCRIPTS(16) -- those two
+ * #defines live further down (next to SqwCsharpScript/SqwCScript, closer
+ * to where they're actually used for the per-page collection arrays),
+ * after this point in the file, so spelled out as a literal here rather
+ * than forward-referencing them. */
+#define SQW_MAX_PERSISTENT_SCRIPTS 32
+static SqoLoaded g_persistent_scripts[SQW_MAX_PERSISTENT_SCRIPTS];
+static int g_persistent_script_count = 0;
+
+/* Phase 7: set by "SqwSetElementText" (a native click handler mutating
+ * the DOM -- see that function's own comment) and checked right after
+ * calling a DomNode::native_onclick handler, the same role js_dispatch_
+ * click()'s own "relayout" out-param plays for a JS onclick handler --
+ * signals that a relayout is needed before the rest of this frame's
+ * click handling touches st->boxes/target_node (both stale after one). */
+static int g_native_dom_mutated = 0;
+
+/* Phase 7: the live SqwAppState, allocated once in main() -- see its own
+ * (much later, next to the SqwAppState typedef itself) comment for the
+ * full rationale. Declared here, this early, as a pointer to the
+ * forward-declared, still-INCOMPLETE "struct SqwAppState" tag -- a plain
+ * pointer needs no more than that, and sqw_apply_css() (which reads this
+ * variable, to clear a previous page's stale render callback) is itself
+ * defined before SqwAppState's own full typedef body appears later in
+ * this file. */
+struct SqwAppState;
+static struct SqwAppState *g_current_app_state = 0;
+
 /* Pending fetch() calls issued by JS (see js_engine.h's own fetch-hook
  * comment) -- a small fixed-slot table, same convention/rationale as
  * g_current_js_interp above. Each slot pairs a real background
@@ -344,6 +382,25 @@ typedef struct {
  * subprocess even though running is now in-process). */
 extern int system(const char *command);
 
+/* Phase 7: SQW-app-specific host symbols (SqwRegisterRenderCallback,
+ * SqwRegisterClickHandler, SqwSetElementText) -- the real definition
+ * lives further down (SQW_HOST_SYMS_APP_COUNT and its own trampolines,
+ * right after find_by_id()/SqwAppState are both available, which this
+ * point in the file is too early for), forward-declared here so sqw_run_
+ * csharp_script()/sqw_run_c_script() right below can build the full
+ * host-symbol table a script needs without needing to move either
+ * function down past those definitions. Returns the number of entries
+ * written into `out` (same convention as sqo_host_syms_csharp_rt()/
+ * sqo_host_syms_vulkan()). */
+#define SQW_HOST_SYMS_APP_COUNT 12
+static int sqw_host_syms_app(SqoHostSymbol *out);
+/* Clears g_current_app_state's cs_render_callback (0 if no app state
+ * exists yet) -- a plain function, not a direct field write, for the
+ * same "full SqwAppState body not in scope yet at every call site"
+ * reason sqw_host_syms_app() right above is forward-declared instead of
+ * defined here; real definition next to SqwAppState's own typedef. */
+static void sqw_clear_render_callback(void);
+
 /* Compiles `cs_text` (one whole ".cs" program -- a real, current
  * limitation: unlike JS's script_buf concatenation, each <script
  * type="text/csharp"> block is its own independent compile, so two such
@@ -388,8 +445,9 @@ static void sqw_run_csharp_script(const char *cs_text, const char *id) {
     FILE *f;
     static int g_csharp_run_counter = 0;
     SqoLoaded loaded;
-    SqoHostSymbol host_syms[SQO_HOST_SYMS_COUNT + SQO_HOST_SYMS_VULKAN_COUNT];
-    int n_host_syms, n_rt_syms;
+    SqoHostSymbol host_syms[SQO_HOST_SYMS_COUNT + SQO_HOST_SYMS_VULKAN_COUNT + SQO_HOST_SYMS_LIBC_COUNT + SQW_HOST_SYMS_APP_COUNT];
+    int n_host_syms, n_rt_syms, n_vk_syms, n_libc_syms;
+    int off_libc, off_app;
     int (*main_fn)(void);
 
     snprintf(src_path, sizeof src_path, "/tmp/sqw_cs_%d_%d.cs", (int)getpid(), g_csharp_run_counter);
@@ -417,9 +475,25 @@ static void sqw_run_csharp_script(const char *cs_text, const char *id) {
      * without these entries sqo_loader_load() would fail with "unresolved
      * function symbol"). SQW already links real libvulkan.so.1 directly
      * (SQW/vk_context.c), so these are the same real functions, not a
-     * separate/stub table. */
+     * separate/stub table. Phase 7 adds a third table, sqw_host_syms_app()
+     * (this file, further down), for SQW-specific calls (registering a
+     * render callback/click handler, mutating DOM text). */
+    /* Each offset is hoisted into its own local BEFORE being added to
+     * "host_syms" -- a real squash codegen bug (found this session):
+     * "ptr + int_local_a + int_local_b" (two chained additions inline in
+     * a function-call ARGUMENT expression) corrupts the callee's writes
+     * once there are 3+ such chained calls sharing the same buffer,
+     * confirmed via a minimal repro completely unrelated to Vulkan/C#
+     * (three trivial functions filling a shared struct array the same
+     * way this table-building code does). Splitting each "a + b + c"
+     * into a plain local ("off = a + b; f(ptr + off);") avoids the bad
+     * codegen path entirely -- verified via the same repro. */
     n_rt_syms = sqo_host_syms_csharp_rt(host_syms);
-    n_host_syms = n_rt_syms + sqo_host_syms_vulkan(host_syms + n_rt_syms);
+    n_vk_syms = sqo_host_syms_vulkan(host_syms + n_rt_syms);
+    off_libc = n_rt_syms + n_vk_syms;
+    n_libc_syms = sqo_host_syms_libc(host_syms + off_libc);
+    off_app = off_libc + n_libc_syms;
+    n_host_syms = off_app + sqw_host_syms_app(host_syms + off_app);
     if (!sqo_loader_load(sqo_path, host_syms, n_host_syms, &loaded)) {
         fprintf(stderr, "SQW: C# script '%s' compiled but failed to load in-process\n", id);
         fflush(stderr);
@@ -435,7 +509,19 @@ static void sqw_run_csharp_script(const char *cs_text, const char *id) {
         main_fn();
     }
 
-    sqo_loader_free(&loaded);
+    /* Phase 7: kept alive for the whole page (not freed here anymore) --
+     * see g_persistent_scripts' own comment for why. Falls back to
+     * freeing immediately only if the fixed-size keep-alive table is
+     * somehow already full (SQW_MAX_PERSISTENT_SCRIPTS scripts on one
+     * page), matching this project's "generous but bounded, documented"
+     * convention elsewhere rather than growing it unboundedly. */
+    if (g_persistent_script_count < SQW_MAX_PERSISTENT_SCRIPTS) {
+        g_persistent_scripts[g_persistent_script_count++] = loaded;
+    } else {
+        fprintf(stderr, "SQW: C# script '%s': persistent-script table full, freeing immediately (any registered callback/click handler will dangle)\n", id);
+        fflush(stderr);
+        sqo_loader_free(&loaded);
+    }
     remove(src_path);
     remove(sqo_path);
 }
@@ -464,8 +550,9 @@ static void sqw_run_c_script(const char *c_text, const char *id) {
     FILE *f;
     static int g_c_run_counter = 0;
     SqoLoaded loaded;
-    SqoHostSymbol host_syms[SQO_HOST_SYMS_COUNT + SQO_HOST_SYMS_VULKAN_COUNT];
-    int n_host_syms, n_rt_syms;
+    SqoHostSymbol host_syms[SQO_HOST_SYMS_COUNT + SQO_HOST_SYMS_VULKAN_COUNT + SQO_HOST_SYMS_LIBC_COUNT + SQW_HOST_SYMS_APP_COUNT];
+    int n_host_syms, n_rt_syms, n_vk_syms, n_libc_syms;
+    int off_libc, off_app;
     int (*main_fn)(void);
 
     snprintf(src_path, sizeof src_path, "/tmp/sqw_c_%d_%d.c", (int)getpid(), g_c_run_counter);
@@ -485,8 +572,22 @@ static void sqw_run_c_script(const char *c_text, const char *id) {
         return;
     }
 
+    /* Each offset is hoisted into its own local BEFORE being added to
+     * "host_syms" -- a real squash codegen bug (found this session):
+     * "ptr + int_local_a + int_local_b" (two chained additions inline in
+     * a function-call ARGUMENT expression) corrupts the callee's writes
+     * once there are 3+ such chained calls sharing the same buffer,
+     * confirmed via a minimal repro completely unrelated to Vulkan/C#
+     * (three trivial functions filling a shared struct array the same
+     * way this table-building code does). Splitting each "a + b + c"
+     * into a plain local ("off = a + b; f(ptr + off);") avoids the bad
+     * codegen path entirely -- verified via the same repro. */
     n_rt_syms = sqo_host_syms_csharp_rt(host_syms);
-    n_host_syms = n_rt_syms + sqo_host_syms_vulkan(host_syms + n_rt_syms);
+    n_vk_syms = sqo_host_syms_vulkan(host_syms + n_rt_syms);
+    off_libc = n_rt_syms + n_vk_syms;
+    n_libc_syms = sqo_host_syms_libc(host_syms + off_libc);
+    off_app = off_libc + n_libc_syms;
+    n_host_syms = off_app + sqw_host_syms_app(host_syms + off_app);
     if (!sqo_loader_load(sqo_path, host_syms, n_host_syms, &loaded)) {
         fprintf(stderr, "SQW: C script '%s' compiled but failed to load in-process\n", id);
         fflush(stderr);
@@ -502,7 +603,15 @@ static void sqw_run_c_script(const char *c_text, const char *id) {
         main_fn();
     }
 
-    sqo_loader_free(&loaded);
+    /* Phase 7: same page-lifetime keep-alive as sqw_run_csharp_script()
+     * above -- see g_persistent_scripts' own comment. */
+    if (g_persistent_script_count < SQW_MAX_PERSISTENT_SCRIPTS) {
+        g_persistent_scripts[g_persistent_script_count++] = loaded;
+    } else {
+        fprintf(stderr, "SQW: C script '%s': persistent-script table full, freeing immediately (any registered callback/click handler will dangle)\n", id);
+        fflush(stderr);
+        sqo_loader_free(&loaded);
+    }
     remove(src_path);
     remove(sqo_path);
 }
@@ -764,6 +873,21 @@ static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, 
     if (g_current_js_interp) js_interp_free(g_current_js_interp);
     g_current_js_interp = js_run_script(script_buf, root, 0);
     free(script_buf);
+
+    /* Phase 7: tear down the PREVIOUS page's kept-alive C#/C scripts here
+     * (same navigation/reload timing as js_interp_free() right above),
+     * not at the end of sqw_run_csharp_script()/sqw_run_c_script() --
+     * see g_persistent_scripts' own comment for why they need to survive
+     * past that point in the first place. Also clears the render
+     * callback a previous page's script may have registered -- a stale
+     * one would otherwise keep calling into now-unmapped code the
+     * instant this navigation's first frame draws. */
+    {
+        int _i;
+        for (_i = 0; _i < g_persistent_script_count; _i++) sqo_loader_free(&g_persistent_scripts[_i]);
+        g_persistent_script_count = 0;
+    }
+    sqw_clear_render_callback();
 
     /* Every <script type="module"> runs AFTER the page's ordinary script,
        in document order -- see js_run_module()'s own comment on why
@@ -1652,7 +1776,7 @@ static void sqw_draw_loading_bar(SqwVkContext *vk, SqwRenderer *renderer, VkComm
  * correctly. Splitting main()'s body into the several SqwAppState-taking
  * functions below (each with a far smaller, non-overlapping live-local set
  * of its own) fixes it. */
-typedef struct {
+typedef struct SqwAppState {
     SDL_Window *window;
     SqwVkContext *vk;
     SqwRenderer *renderer;
@@ -1707,7 +1831,150 @@ typedef struct {
      * See sqw_debug_screenshot()'s own comment for why this exists. */
     int test_screenshot_frame;
     char test_screenshot_path[SQW_PATH_MAX];
+
+    /* Phase 7: a loaded C# script's own per-frame 3D render hook,
+     * registered via the "SqwRegisterRenderCallback" host symbol (see
+     * sqo_host_syms.c) -- a real C-ABI function pointer (a C# static
+     * method, Phase 6d's own "static method as a function pointer value"
+     * mechanism), called from sqw_draw_frame() every frame, right after
+     * the render pass begins and before any of SQW's own 2D drawing, so
+     * it can record 3D draw calls into the SAME live VkCommandBuffer
+     * (matching every other renderer's own recording pattern -- see
+     * renderer_vk.c/text_renderer_vk.c/image_renderer_vk.c). NULL (the
+     * default) means no script has registered one -- skipped that frame,
+     * same "NULL is also this variable's own valid 'nothing to call'
+     * state" convention as g_current_js_interp. Signature:
+     * "void (*)(void *cmd, float viewportW, float viewportH)". */
+    void *cs_render_callback;
 } SqwAppState;
+
+/* Phase 7: the live SqwAppState (see its own struct comment) allocated
+ * once in main(), set right after that allocation -- needed so a C#
+ * script's own [DllImport]-declared native calls (registering the render
+ * callback above, reaching SQW's own already-created Vulkan device/
+ * render-pass/etc, registering a click handler) can reach it from deep,
+ * unrelated call sites (sqo_host_syms.c's own trampolines), the exact
+ * same "needs to be reachable outside its creating function's own call
+ * chain" rationale as g_current_js_interp has. NULL only before main()
+ * finishes its own setup -- impossible for any of the host-symbol
+ * trampolines that read it to observe, since none of them are reachable
+ * before a page (and therefore a C# script) has loaded.
+ *
+ * The actual variable is declared much earlier in this file (near
+ * g_persistent_scripts) as "struct SqwAppState *", using a forward-
+ * declared opaque tag -- sqw_apply_css() (which needs to read it) is
+ * itself defined before this typedef's own full body, so the variable
+ * has to exist before that point too; a plain pointer to an incomplete
+ * type is fine there (nothing dereferences it until well after the full
+ * definition above is in scope). This comment stays here, next to the
+ * struct it actually documents. */
+
+static void sqw_clear_render_callback(void) {
+    if (g_current_app_state) g_current_app_state->cs_render_callback = 0;
+}
+
+/* Phase 7: the three SQW-app-specific native entry points a loaded C#
+ * (or raw-C) script's [DllImport("sqw")] declarations resolve against --
+ * see sqo_host_syms_app()'s own comment right below for how these get
+ * registered, and DomNode::native_onclick / SqwAppState::cs_render_
+ * callback for how sqw_main.c's own click-handling/sqw_draw_frame() use
+ * whatever a script hands these. */
+
+/* "SqwRegisterRenderCallback(IntPtr fn)" -- fn is a C# static method
+ * used as a bare value (Phase 6d's own function-pointer mechanism), real
+ * and callable the instant this returns. */
+static void sqw_native_register_render_callback(void *fn) {
+    if (g_current_app_state) g_current_app_state->cs_render_callback = fn;
+}
+
+/* "SqwRegisterClickHandler(string elementId, IntPtr fn)" -- elementId is
+ * a real C# string (CsString*, see CSR/csharp_rt.h's own layout: a
+ * length-prefixed, NUL-terminated byte buffer, so ->data is already a
+ * plain, real "const char*"), resolved via the same find_by_id() every
+ * "#fragment" anchor/JS getElementById() lookup already uses. */
+static void sqw_native_register_click_handler(CsString *elementId, void *fn) {
+    DomNode *n;
+    if (!g_current_app_state || !g_current_app_state->root || !elementId) return;
+    n = find_by_id(g_current_app_state->root, elementId->data);
+    if (n) n->native_onclick = fn;
+}
+
+/* "SqwSetElementText(string elementId, string text)" -- reuses js_engine.c's
+ * own js_dom_set_text_content() (the exact function JS's own "el.textContent
+ * = ..." setter calls), then sets g_native_dom_mutated so sqw_main.c's own
+ * click-handling code (which called into whatever native_onclick handler
+ * is calling this) knows to relayout before touching anything else this
+ * frame -- the same role js_dispatch_click()'s own "relayout" out-param
+ * plays for a JS handler that mutates the DOM. */
+static void sqw_native_set_element_text(CsString *elementId, CsString *text) {
+    DomNode *n;
+    if (!g_current_app_state || !g_current_app_state->root || !elementId || !text) return;
+    n = find_by_id(g_current_app_state->root, elementId->data);
+    if (!n) return;
+    js_dom_set_text_content(n, text->data);
+    g_native_dom_mutated = 1;
+}
+
+/* SQW-object accessors: let a script build its OWN pipeline/buffers
+ * against SQW's REAL, already-initialized Vulkan device/render-pass/etc
+ * (SqwVkContext, SQW/vk_context.h) instead of creating a redundant
+ * second VkInstance/VkDevice -- the key architectural difference from
+ * Phase 6c's earlier Vulkan work (which treated a C# script as a fully
+ * standalone Vulkan app with no window of its own). Every VkXxx handle
+ * type is already an opaque pointer (VK_DEFINE_HANDLE(), vulkan_core.h),
+ * so a plain (void*) cast is exactly what a C# "IntPtr" return needs. */
+static void *sqw_native_get_device(void) { return g_current_app_state ? (void *)g_current_app_state->vk->device : 0; }
+static void *sqw_native_get_physical_device(void) { return g_current_app_state ? (void *)g_current_app_state->vk->phys : 0; }
+static void *sqw_native_get_render_pass(void) { return g_current_app_state ? (void *)g_current_app_state->vk->renderPass : 0; }
+static void *sqw_native_get_command_pool(void) { return g_current_app_state ? (void *)g_current_app_state->vk->commandPool : 0; }
+static void *sqw_native_get_queue(void) { return g_current_app_state ? (void *)g_current_app_state->vk->queue : 0; }
+static unsigned int sqw_native_get_queue_family(void) { return g_current_app_state ? g_current_app_state->vk->queueFamily : 0; }
+static void sqw_native_get_extent(unsigned int *outW, unsigned int *outH) {
+    if (g_current_app_state) { *outW = g_current_app_state->vk->extent.width; *outH = g_current_app_state->vk->extent.height; }
+    else { *outW = 0; *outH = 0; }
+}
+/* Real VkPhysicalDeviceMemoryProperties*, for a script's own memory-type
+ * search (mirrors sqw_vk_find_memory_type()'s own logic, SQW/vk_context.c)
+ * -- returned as an opaque pointer rather than exposing a second, C#-side
+ * "find memory type" native call, since the struct's own layout (a fixed
+ * array of typed entries) is simple enough for the script to walk itself
+ * once it has a real VkPhysicalDeviceMemoryProperties mirror struct. */
+static void *sqw_native_get_mem_props(void) { return g_current_app_state ? (void *)&g_current_app_state->vk->memProps : 0; }
+
+/* "SqwFindMemoryType(uint typeBits, uint properties) -> int" -- resolves
+ * a real Vulkan memory-type index for a script's own vkAllocateMemory
+ * call, by delegating to sqw_vk_find_memory_type() (SQW/vk_context.c,
+ * the exact function SQW's own texture-upload code already uses)
+ * instead of exposing the raw VkPhysicalDeviceMemoryProperties struct to
+ * C# at all -- that struct embeds two FIXED-SIZE arrays
+ * (memoryTypes[32]/memoryHeaps[16]), which this C# frontend has no way
+ * to declare or index into (no array support yet, see cs_lower.h's own
+ * scope note) -- doing the search natively sidesteps that entirely. */
+static int sqw_native_find_memory_type(unsigned int typeBits, unsigned int properties) {
+    if (!g_current_app_state) return 0;
+    return (int)sqw_vk_find_memory_type(g_current_app_state->vk, typeBits, properties);
+}
+
+#define SQW_APP_SYM(realname, tramp) do { out[n].name = #realname; out[n].addr = (void *)tramp; n++; } while (0)
+
+static int sqw_host_syms_app(SqoHostSymbol *out) {
+    int n = 0;
+    SQW_APP_SYM(SqwRegisterRenderCallback, sqw_native_register_render_callback);
+    SQW_APP_SYM(SqwRegisterClickHandler, sqw_native_register_click_handler);
+    SQW_APP_SYM(SqwSetElementText, sqw_native_set_element_text);
+    SQW_APP_SYM(SqwGetDevice, sqw_native_get_device);
+    SQW_APP_SYM(SqwGetPhysicalDevice, sqw_native_get_physical_device);
+    SQW_APP_SYM(SqwGetRenderPass, sqw_native_get_render_pass);
+    SQW_APP_SYM(SqwGetCommandPool, sqw_native_get_command_pool);
+    SQW_APP_SYM(SqwGetQueue, sqw_native_get_queue);
+    SQW_APP_SYM(SqwGetQueueFamily, sqw_native_get_queue_family);
+    SQW_APP_SYM(SqwGetExtent, sqw_native_get_extent);
+    SQW_APP_SYM(SqwGetMemoryProperties, sqw_native_get_mem_props);
+    SQW_APP_SYM(SqwFindMemoryType, sqw_native_find_memory_type);
+    return n;
+}
+
+#undef SQW_APP_SYM
 
 /* Test-only synthetic input hook (SQW_TEST_CLICK_X/Y and friends): pushes
  * real SDL events through SDL_PushEvent() -- not a shortcut that bypasses
@@ -2042,6 +2309,31 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
                             int relayout = 0;
                             js_dispatch_click(g_current_js_interp, oc_node, &relayout);
                             if (relayout) {
+                                layout_list_free(&st->boxes);
+                                layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes);
+                                return;
+                            }
+                        }
+                    }
+                    /* Phase 7: same ancestor-walk/dispatch shape as the JS
+                     * onclick handling right above, for a C# script's own
+                     * "SqwRegisterClickHandler"-registered native_onclick
+                     * (see DomNode's own field comment) -- a real, raw C
+                     * function pointer, called directly (no interpreter/
+                     * function-object layer to go through). A handler
+                     * that calls "SqwSetElementText" sets
+                     * g_native_dom_mutated (see that function's own
+                     * comment in sqo_host_syms.c), checked here the same
+                     * way js_dispatch_click's own "relayout" out-param is
+                     * checked above. */
+                    {
+                        DomNode *nc_node = target_node;
+                        while (nc_node && !nc_node->native_onclick) nc_node = nc_node->parent;
+                        if (nc_node) {
+                            void (*handler)(void) = (void (*)(void))nc_node->native_onclick;
+                            g_native_dom_mutated = 0;
+                            handler();
+                            if (g_native_dom_mutated) {
                                 layout_list_free(&st->boxes);
                                 layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes);
                                 return;
@@ -2482,6 +2774,20 @@ static void sqw_draw_frame(SqwAppState *st) {
     uint32_t imageIndex = 0;
     VkCommandBuffer cmd = sqw_vk_begin_frame(st->vk, 0.95f, 0.95f, 0.95f, 1.0f, &imageIndex);
     if (!cmd) return;
+
+    /* Phase 7: a loaded C# script's own per-frame 3D render callback (see
+     * SqwAppState::cs_render_callback's own comment) -- recorded FIRST,
+     * before any of SQW's own 2D drawing below, into the SAME live
+     * command buffer/render pass: no render-pass changes needed for a 3D
+     * scene to render "behind" the 2D DOM/CSS page, submission order
+     * within one subpass is all real depth ordering needs here (the new
+     * depth attachment, SqwVkContext's own field, only matters for
+     * self-occlusion WITHIN the 3D scene itself). */
+    if (st->cs_render_callback) {
+        void (*render_fn)(void *, float, float) = (void (*)(void *, float, float))st->cs_render_callback;
+        render_fn((void *)cmd, st->viewport_w, st->viewport_h);
+    }
+
     /* "scroll_y - SQW_TOOLBAR_H" (not raw scroll_y): both draw calls
      * compute each box's screen Y as "box.y - scroll_y", so passing a
      * SMALLER effective scroll value shifts every drawn box DOWN by
@@ -2555,6 +2861,7 @@ int main(void) {
     SqwAppState *st = (SqwAppState *)malloc(sizeof(SqwAppState));
     memset(st, 0, sizeof(*st));
     st->window = window;
+    g_current_app_state = st;
 
     /* Textual startup-progress reporting for the Vulkan/renderer bring-up
      * phase -- the ONLY place these steps' progress can be shown at all:

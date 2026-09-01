@@ -195,6 +195,128 @@ int main(int argc, char **argv) {
             "  }\n"
             "}\n";
         lower_one(src, out_path);
+    } else if (strcmp(which, "7") == 0) {
+        /* LINQ method-chain desugaring -- Where/Count/Sum/First/
+         * FirstOrDefault/Any/All/ToList, chained Where stages fused into
+         * one filter pass, and Any/All's own extra predicate combined
+         * with the prior Where filters (not just tested in isolation --
+         * "chained-all-ok" specifically exercises Where(...).All(...),
+         * which needs the "does every element passing the filters ALSO
+         * satisfy All's own predicate" semantics, not a plain AND). */
+        const char *src =
+            "class Program {\n"
+            "  static void Main() {\n"
+            "    List<int> nums = new List<int>();\n"
+            "    nums.Add(1); nums.Add(2); nums.Add(3);\n"
+            "    nums.Add(4); nums.Add(5); nums.Add(6);\n"
+            "    List<int> evens = nums.Where(x => x % 2 == 0).ToList();\n"
+            "    int evensCount = evens.Count;\n"
+            "    if (evensCount == 3) { Console.WriteLine(\"where-tolist-ok\"); }\n"
+            "    int cnt = nums.Where(x => x > 2).Count();\n"
+            "    if (cnt == 4) { Console.WriteLine(\"count-ok\"); }\n"
+            "    int sum = nums.Where(x => x % 2 == 0).Sum();\n"
+            "    if (sum == 12) { Console.WriteLine(\"sum-ok\"); }\n"
+            "    int first = nums.Where(x => x > 3).First();\n"
+            "    if (first == 4) { Console.WriteLine(\"first-ok\"); }\n"
+            "    int fod = nums.Where(x => x > 100).FirstOrDefault();\n"
+            "    if (fod == 0) { Console.WriteLine(\"firstordefault-ok\"); }\n"
+            "    bool anyBig = nums.Any(x => x > 5);\n"
+            "    if (anyBig) { Console.WriteLine(\"any-ok\"); }\n"
+            "    bool allPos = nums.All(x => x > 0);\n"
+            "    if (allPos) { Console.WriteLine(\"all-ok\"); }\n"
+            "    bool allBig = nums.Where(x => x > 2).All(x => x > 10);\n"
+            "    if (!allBig) { Console.WriteLine(\"chained-all-ok\"); }\n"
+            "  }\n"
+            "}\n";
+        lower_one(src, out_path);
+    } else if (strcmp(which, "8") == 0) {
+        /* try/catch/finally + a real single-inheritance exception
+         * hierarchy: field/ctor inheritance (NotFoundException's own
+         * ctor chains into AppException's via "base(code)", which must
+         * actually set the inherited Code field, not just discard the
+         * call), catch-by-base-type (a thrown NotFoundException caught
+         * as "AppException"), a NESTED try/finally whose own rethrow
+         * must still reach the OUTER catch (this exact shape caught a
+         * real double-pop bug in the CS_TRY lowering this session --
+         * see its own comment), and a catch-all ("catch {}"). */
+        const char *src =
+            "class AppException {\n"
+            "  public int Code;\n"
+            "  public AppException(int code) { Code = code; }\n"
+            "}\n"
+            "class NotFoundException : AppException {\n"
+            "  public NotFoundException(int code) : base(code) { }\n"
+            "}\n"
+            "class Program {\n"
+            "  static void Main() {\n"
+            "    int result = 0;\n"
+            "    try {\n"
+            "      result = 1;\n"
+            "      throw new NotFoundException(404);\n"
+            "    } catch (NotFoundException e) {\n"
+            "      int eCode = e.Code;\n"
+            "      if (eCode == 404) { result = 2; }\n"
+            "    } finally {\n"
+            "      result = result + 10;\n"
+            "    }\n"
+            "    if (result == 12) { Console.WriteLine(\"catch-and-finally-ok\"); }\n"
+            "    int result2 = 0;\n"
+            "    try {\n"
+            "      throw new NotFoundException(500);\n"
+            "    } catch (AppException e) {\n"
+            "      result2 = e.Code;\n"
+            "    }\n"
+            "    if (result2 == 500) { Console.WriteLine(\"catch-by-base-type-ok\"); }\n"
+            "    int result3 = 0;\n"
+            "    try {\n"
+            "      try {\n"
+            "        throw new AppException(7);\n"
+            "      } finally {\n"
+            "        result3 = result3 + 1;\n"
+            "      }\n"
+            "    } catch (AppException e) {\n"
+            "      result3 = result3 + e.Code;\n"
+            "    }\n"
+            "    if (result3 == 8) { Console.WriteLine(\"nested-rethrow-ok\"); }\n"
+            "    bool caught = false;\n"
+            "    try {\n"
+            "      throw new AppException(1);\n"
+            "    } catch {\n"
+            "      caught = true;\n"
+            "    }\n"
+            "    if (caught) { Console.WriteLine(\"catchall-ok\"); }\n"
+            "  }\n"
+            "}\n";
+        lower_one(src, out_path);
+    } else if (strcmp(which, "9") == 0) {
+        /* Phase 7b: a struct passed BY POINTER (via "ref") to a
+         * [DllImport]-declared native call -- previously implemented but
+         * never actually exercised against a real native call (only a
+         * scalar "out uint" had been proven, in the Vulkan smoke test).
+         * Real end-to-end verification (native function fills the
+         * struct, C# reads it back) lives in SQW/tests -- see the
+         * plan's own Phase 7b notes -- this fixture is just the gcc-vs-
+         * squash lowering-correctness half. */
+        const char *src =
+            "struct MyExtent2D {\n"
+            "  public int Width;\n"
+            "  public int Height;\n"
+            "}\n"
+            "class Program {\n"
+            "  [DllImport(\"harness\")]\n"
+            "  static extern void NativeFillExtent(ref MyExtent2D e);\n"
+            "  static void Main() {\n"
+            "    MyExtent2D ext;\n"
+            "    ext.Width = 0;\n"
+            "    ext.Height = 0;\n"
+            "    NativeFillExtent(ref ext);\n"
+            "    int w = ext.Width;\n"
+            "    int h = ext.Height;\n"
+            "    Console.WriteLine(w);\n"
+            "    Console.WriteLine(h);\n"
+            "  }\n"
+            "}\n";
+        lower_one(src, out_path);
     } else {
         fprintf(stderr, "unknown fixture '%s'\n", which);
         return 1;
