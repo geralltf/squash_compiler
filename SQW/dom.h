@@ -6,7 +6,11 @@
  * doesn't accept "sizeof node->img_url" as an array-size expression, so a
  * plain named constant is used for both DomNode::img_url's own size and
  * that function's local resolve buffer, instead. */
-#define SQW_IMG_URL_MAX 384
+/* Was 384 -- bumped alongside HTML_MAX_ATTR_LEN/SQW_IMAGE_URL_MAX/
+ * SQW_NET_URL_MAX/SQW_PATH_MAX (see HTML_MAX_ATTR_LEN's own comment) so
+ * a real page's own long src, once no longer truncated at the HTML-
+ * lexing stage, doesn't just get re-truncated one step later here. */
+#define SQW_IMG_URL_MAX 2048
 
 typedef struct {
     char name[HTML_MAX_ATTR_LEN];

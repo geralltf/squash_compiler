@@ -9,7 +9,9 @@
  * image_renderer_vk.h's SQW_IMAGE_MAX_TEXTURES (one descriptor set per
  * entry here that reaches UPLOADED). */
 #define SQW_IMAGE_CACHE_MAX 128
-#define SQW_IMAGE_URL_MAX 384
+/* See SQW_IMG_URL_MAX's own comment (dom.h) -- kept equal to it, same
+ * URLs flow through both. */
+#define SQW_IMAGE_URL_MAX 2048
 
 /* Page-image cache: fetch (net_client.c) -> decode (img_decode_png.c and
  * friends) -> upload (sqw_vk_create_texture_rgba8, vk_context.c) pipeline

@@ -1,10 +1,10 @@
 squash self-hosting verification manifest
-git_commit=d095b1db7d1816f0530492ff51a183614961221a
-git_describe=d095b1d-dirty
+git_commit=0b8ed1648de159ea7ac3f556deeba489bbe1abc5
+git_describe=0b8ed16-dirty
 git_branch=main
 platform=Linux x86_64 kernel=7.0.0-30-generic
 bootstrap_cc=gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
-timestamp=2026-09-01T10:57:34Z
+timestamp=2026-09-05T06:36:51Z
 rounds_requested=2
 target_platform=linux
 gen0_sha256=740d39c836826c0201bd176ec1234edbcaab5434d7d88f4405656c85712414e3

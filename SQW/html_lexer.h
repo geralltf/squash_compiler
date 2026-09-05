@@ -7,7 +7,19 @@
 
 #define HTML_MAX_ATTRS 16
 #define HTML_MAX_TAG_LEN 32
-#define HTML_MAX_ATTR_LEN 64
+/* Was 64 -- a real, confirmed bug found rendering a real page
+ * (https://en.wikipedia.org/wiki/Main_Page): every attribute VALUE
+ * (href, src, class, style, ...) silently truncated at 64 characters,
+ * corrupting essentially every image src and most internal links on any
+ * real modern page (this project's own hand-written test pages never
+ * had an attribute value anywhere near that long, so this went
+ * unnoticed until now). The longest real attribute values on that exact
+ * page ran to ~330 characters (an href with a long percent-encoded
+ * non-Latin title, and a src with URL-encoded parentheses + a UTM query
+ * string) -- 1024 gives real headroom above that without the unbounded
+ * risk a "just make it huge" size would carry for a fixed per-attribute
+ * buffer (HTML_MAX_ATTRS of these exist per tag). */
+#define HTML_MAX_ATTR_LEN 1024
 
 typedef enum {
     HTML_TOK_EOF = 0,

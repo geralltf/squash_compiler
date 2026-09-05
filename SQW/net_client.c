@@ -111,6 +111,100 @@ static long sqw_net_parse_content_length(const char *buf, const char *hdr_end) {
     return -1;
 }
 
+/* Parses the numeric status code out of a response's own first line
+ * ("HTTP/1.1 301 Moved Permanently" -> 301). `buf` is already known to
+ * start with "HTTP/" (checked by the caller before this is ever called).
+ * Returns -1 if the line is malformed/the code isn't there. */
+static int sqw_net_parse_status_code(const char *buf) {
+    const char *p = buf;
+    while (*p && *p != ' ') p++;      /* skip "HTTP/1.1" */
+    while (*p == ' ') p++;
+    int val = 0; int saw_digit = 0;
+    while (*p >= '0' && *p <= '9') { val = val * 10 + (*p - '0'); p++; saw_digit = 1; }
+    return saw_digit ? val : -1;
+}
+
+/* Case-insensitive search for a "<name>: <value>" header within the
+ * header block [buf, hdr_end) -- same line-scanning shape as
+ * sqw_net_parse_content_length() above, generalized to any header name
+ * and a string value (trimmed, NUL-terminated into `out`) instead of a
+ * parsed integer. Used for "Location:" (redirect-following, below) --
+ * kept general rather than a Location-specific copy in case a later
+ * pass needs another header (e.g. Set-Cookie) read the same way.
+ * Returns 1 if found (and fits in `outsz`), 0 otherwise. */
+static int sqw_net_find_header(const char *buf, const char *hdr_end, const char *name, char *out, size_t outsz) {
+    const char *p = buf;
+    long name_len = (long)strlen(name);
+    while (p < hdr_end) {
+        const char *line_end = p;
+        while (line_end < hdr_end - 1 && !(line_end[0] == '\r' && line_end[1] == '\n')) line_end++;
+        if (line_end - p >= name_len) {
+            long i; int match = 1;
+            for (i = 0; i < name_len; i++) {
+                char c = p[i];
+                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                if (c != name[i]) { match = 0; break; }
+            }
+            if (match) {
+                const char *v = p + name_len;
+                while (v < line_end && (*v == ' ' || *v == '\t')) v++;
+                long vlen = (long)(line_end - v);
+                while (vlen > 0 && (v[vlen - 1] == ' ' || v[vlen - 1] == '\t' || v[vlen - 1] == '\r')) vlen--;
+                if ((size_t)vlen + 1 > outsz) return 0;
+                memcpy(out, v, (size_t)vlen);
+                out[vlen] = 0;
+                return 1;
+            }
+        }
+        p = line_end + 2;
+    }
+    return 0;
+}
+
+/* Resolves a "Location:" header value against the URL it was received
+ * for -- a real server's redirect target is COMMONLY a full absolute URL
+ * (Wikipedia's own "https://en.wikipedia.org" -> 301 with
+ * "Location: https://en.wikipedia.org/wiki/Main_Page" is exactly this
+ * shape) but the HTTP spec also allows a scheme-relative ("//host/path")
+ * or absolute-path ("/path") value, both real and seen in the wild.
+ * Deliberately does NOT handle a plain relative path ("path" or
+ * "../path", no leading "/") -- rare for a redirect specifically (as
+ * opposed to an ordinary in-page link, which sqw_resolve_url()-equivalent
+ * logic elsewhere already handles) and not worth the extra path-joining
+ * complexity for this pass; falls back to treating it as already-
+ * absolute, which will simply fail to parse/connect and end the fetch
+ * the same honest way an unresolvable URL always has, not a crash or
+ * infinite loop. */
+static void sqw_net_resolve_redirect_url(const char *base_url, const char *location, char *out, size_t outsz) {
+    if (strncmp(location, "http://", 7) == 0 || strncmp(location, "https://", 8) == 0) {
+        strncpy(out, location, outsz - 1);
+        out[outsz - 1] = 0;
+        return;
+    }
+    if (location[0] == '/' && location[1] == '/') {
+        /* scheme-relative "//host/path" -- reuse base_url's own scheme */
+        int base_is_https = strncmp(base_url, "https://", 8) == 0;
+        snprintf(out, outsz, "%s:%s", base_is_https ? "https" : "http", location);
+        return;
+    }
+    if (location[0] == '/') {
+        /* absolute-path "/wiki/Main_Page" -- reuse base_url's own scheme+host */
+        int is_https = 0, port = 0;
+        char host[SQW_NET_HOST_MAX], dummy_path[SQW_NET_PATH_MAX];
+        if (sqw_net_parse_url(base_url, &is_https, host, &port, dummy_path)) {
+            const char *scheme = is_https ? "https" : "http";
+            if ((is_https && port == 443) || (!is_https && port == 80)) {
+                snprintf(out, outsz, "%s://%s%s", scheme, host, location);
+            } else {
+                snprintf(out, outsz, "%s://%s:%d%s", scheme, host, port, location);
+            }
+            return;
+        }
+    }
+    strncpy(out, location, outsz - 1);
+    out[outsz - 1] = 0;
+}
+
 /* Blocking connect + request + read-to-EOF, run entirely on the
  * background thread sqw_net_fetch_async_ex() spawns -- never touches
  * DOM/layout state, only writes into the heap SqwNetResult the main
@@ -118,12 +212,26 @@ static long sqw_net_parse_content_length(const char *buf, const char *hdr_end) {
 static void *sqw_net_worker(void *arg) {
     SqwNetFetchArgs *fa = (SqwNetFetchArgs *)arg;
     SqwNetResult *r = fa->result;
-    int is_https = 0, port = 80;
-    char host[SQW_NET_HOST_MAX], path[SQW_NET_PATH_MAX];
-    int parsed = sqw_net_parse_url(fa->url, &is_https, host, &port, path);
     int success = 0;
     char *body = NULL;
     long body_len = 0;
+
+    /* Real sites redirect a bare-domain request (see SQW_NET_MAX_REDIRECTS'
+     * own comment) -- `current_url` is re-pointed at the "Location:"
+     * target and the whole connect/request/read sequence below re-runs
+     * against it, up to SQW_NET_MAX_REDIRECTS hops, whenever the response
+     * is a real 301/302/303/307/308 with a Location header. */
+    char current_url[SQW_NET_URL_MAX];
+    strncpy(current_url, fa->url, sizeof current_url - 1);
+    current_url[sizeof current_url - 1] = 0;
+
+    int redirect_iter;
+    for (redirect_iter = 0; redirect_iter < SQW_NET_MAX_REDIRECTS; redirect_iter++) {
+    int is_https = 0, port = 80;
+    char host[SQW_NET_HOST_MAX], path[SQW_NET_PATH_MAX];
+    int parsed = sqw_net_parse_url(current_url, &is_https, host, &port, path);
+    int got_redirect = 0;
+    char redirect_to[SQW_NET_URL_MAX];
 
     /* `host` is kept as the URL's OWN host string for the rest of this
      * function -- the real hostname (e.g. "www.wikipedia.org") if the URL
@@ -309,13 +417,21 @@ static void *sqw_net_worker(void *arg) {
                     int looks_like_http = (len >= 5) && strncmp(buf, "HTTP/", 5) == 0;
                     char *hdr_end = (!too_big && looks_like_http) ? strstr(buf, "\r\n\r\n") : NULL;
                     if (hdr_end) {
-                        char *b = hdr_end + 4;
-                        long blen = len - (long)(b - buf);
-                        body = (char *)malloc((size_t)blen + 1);
-                        memcpy(body, b, (size_t)blen);
-                        body[blen] = 0;
-                        body_len = blen;
-                        success = 1;
+                        int status = sqw_net_parse_status_code(buf);
+                        char location[SQW_NET_URL_MAX];
+                        if ((status == 301 || status == 302 || status == 303 || status == 307 || status == 308) &&
+                            sqw_net_find_header(buf, hdr_end, "location:", location, sizeof location)) {
+                            sqw_net_resolve_redirect_url(current_url, location, redirect_to, sizeof redirect_to);
+                            got_redirect = 1;
+                        } else {
+                            char *b = hdr_end + 4;
+                            long blen = len - (long)(b - buf);
+                            body = (char *)malloc((size_t)blen + 1);
+                            memcpy(body, b, (size_t)blen);
+                            body[blen] = 0;
+                            body_len = blen;
+                            success = 1;
+                        }
                     }
                     free(buf);
                 }
@@ -328,10 +444,28 @@ static void *sqw_net_worker(void *arg) {
         }
     }
 
+    if (got_redirect) {
+        strncpy(current_url, redirect_to, sizeof current_url - 1);
+        current_url[sizeof current_url - 1] = 0;
+        /* Reset the loading-bar progress fields for the NEW request --
+         * otherwise a stale Content-Length/bytes-received from the
+         * (empty-bodied, discarded) redirect response would leak into
+         * the real fetch's own progress display. */
+        pthread_mutex_lock(&r->mutex);
+        r->content_length = -1;
+        r->bytes_received = 0;
+        pthread_mutex_unlock(&r->mutex);
+        continue;
+    }
+    break;
+    } /* redirect_iter loop */
+
     pthread_mutex_lock(&r->mutex);
     r->success = success;
     r->body = body;
     r->body_len = body_len;
+    strncpy(r->final_url, current_url, sizeof r->final_url - 1);
+    r->final_url[sizeof r->final_url - 1] = 0;
     r->ready = 1;
     /* If the main thread abandoned this fetch while it was still in
      * flight (see SqwNetResult's own "abandoned" field comment and
@@ -367,6 +501,8 @@ SqwNetResult *sqw_net_fetch_async_ex(const char *url, const char *method, const 
     r->abandoned = 0;
     r->content_length = -1;
     r->bytes_received = 0;
+    strncpy(r->final_url, url, sizeof r->final_url - 1);
+    r->final_url[sizeof r->final_url - 1] = 0;
 
     SqwNetFetchArgs *fa = (SqwNetFetchArgs *)malloc(sizeof(SqwNetFetchArgs));
     fa->result = r;

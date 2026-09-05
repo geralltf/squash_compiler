@@ -107,7 +107,13 @@ extern void *SQW_GetWindowHWND(SDL_Window *window);
 
 #define SQW_VIEWPORT_W 1024.0f
 #define SQW_VIEWPORT_H 768.0f
-#define SQW_PATH_MAX 512
+/* Was 512 -- see SQW/html_lexer.h's HTML_MAX_ATTR_LEN comment for the
+ * real page/URL-length bug that motivated this whole round of buffer
+ * bumps. This one specifically needs headroom beyond a single URL's own
+ * max (SQW_NET_URL_MAX) since it also holds a base_url+href
+ * concatenation (sqw_go_navigate() et al) before that's re-parsed down
+ * to a real absolute URL. */
+#define SQW_PATH_MAX 2048
 
 static const char *SQW_INITIAL_PAGE = "SQW/testpages/index.html";
 
@@ -952,6 +958,42 @@ static void sqw_resolve_image_urls(DomNode *node, const char *dir, const char *b
             if (strncmp(src, "http://", 7) == 0 || strncmp(src, "https://", 8) == 0) {
                 strncpy(resolved, src, sizeof resolved - 1);
                 resolved[sizeof resolved - 1] = 0;
+            } else if (src[0] == '/' && src[1] == '/') {
+                /* Protocol-relative "//host/path" -- a real, common URL
+                 * shape (Wikipedia's own <img> src attributes use it
+                 * throughout) that's already absolute apart from the
+                 * scheme; naively concatenating base_url + src (the
+                 * plain "else" branch below) produces a mangled
+                 * "https:////host/path" -- confirmed as a real bug that
+                 * broke every one of that real page's own images.
+                 * Reuses base_url's own scheme (http/https), same as a
+                 * real browser does for this exact case. */
+                int base_is_https = base_url && strncmp(base_url, "https://", 8) == 0;
+                snprintf(resolved, sizeof resolved, "%s:%s", base_is_https ? "https" : "http", src);
+            } else if (src[0] == '/' && base_url && base_url[0]) {
+                /* Absolute-path ("/static/images/...", "/w/resources/...")
+                 * -- resolved against base_url's own SCHEME+HOST, not
+                 * base_url verbatim (which is trimmed to the page's own
+                 * DIRECTORY, e.g. ".../wiki/") -- the plain "else"
+                 * concatenation below produces a doubled-up
+                 * ".../wiki//static/..." for exactly this shape,
+                 * confirmed as a real bug affecting a large fraction of
+                 * a real fetched page's own images (its site-wide
+                 * chrome -- logos, footer icons -- consistently uses
+                 * absolute-path src, unlike its article thumbnails,
+                 * which use protocol-relative). base_url is itself a
+                 * valid "scheme://host/..." prefix, so it can be
+                 * re-parsed directly for the scheme+host. */
+                int b_is_https = 0, b_port = 0;
+                char b_host[SQW_NET_HOST_MAX], b_dummy_path[SQW_NET_PATH_MAX];
+                if (sqw_net_parse_url(base_url, &b_is_https, b_host, &b_port, b_dummy_path)) {
+                    const char *scheme = b_is_https ? "https" : "http";
+                    if ((b_is_https && b_port == 443) || (!b_is_https && b_port == 80)) {
+                        snprintf(resolved, sizeof resolved, "%s://%s%s", scheme, b_host, src);
+                    } else {
+                        snprintf(resolved, sizeof resolved, "%s://%s:%d%s", scheme, b_host, b_port, src);
+                    }
+                }
             } else if (base_url && base_url[0]) {
                 snprintf(resolved, sizeof resolved, "%s%s", base_url, src);
             }
@@ -1538,6 +1580,33 @@ static void submit_form(DomNode *form, SqwHistoryStack *hist, char *current_url,
     full_url[0] = 0;
     if (action && (strncmp(action, "http://", 7) == 0 || strncmp(action, "https://", 8) == 0)) {
         strncpy(full_url, action, sizeof full_url - 1); full_url[sizeof full_url - 1] = 0;
+    } else if (action && action[0] == '/' && current_base_url[0]) {
+        /* Absolute-path ("/w/index.php", the real, common shape a real
+         * site's own search/edit forms use) or protocol-relative
+         * ("//host/path") action -- resolved against current_url's own
+         * SCHEME+HOST, not current_base_url (trimmed to the page's own
+         * DIRECTORY, e.g. ".../wiki/") -- same bug, same fix, as the
+         * anchor-href and <img src> resolvers already got (see their own
+         * comments): naively concatenating current_base_url + an
+         * already-absolute-path action produces a doubled-up
+         * ".../wiki//w/index.php", confirmed as the actual reason a real
+         * page's own search form submission (Special:Search) silently
+         * fetched the wrong URL instead of updating the page with search
+         * results. */
+        int b_is_https = 0, b_port = 0;
+        char b_host[SQW_NET_HOST_MAX], b_dummy_path[SQW_NET_PATH_MAX];
+        if (sqw_net_parse_url(current_url, &b_is_https, b_host, &b_port, b_dummy_path)) {
+            const char *scheme = b_is_https ? "https" : "http";
+            if (action[1] == '/') {
+                snprintf(full_url, sizeof full_url, "%s:%s", scheme, action);
+            } else if ((b_is_https && b_port == 443) || (!b_is_https && b_port == 80)) {
+                snprintf(full_url, sizeof full_url, "%s://%s%s", scheme, b_host, action);
+            } else {
+                snprintf(full_url, sizeof full_url, "%s://%s:%d%s", scheme, b_host, b_port, action);
+            }
+        } else {
+            snprintf(full_url, sizeof full_url, "%s%s", current_base_url, action);
+        }
     } else if (action && action[0] && current_base_url[0]) {
         snprintf(full_url, sizeof full_url, "%s%s", current_base_url, action);
     } else if (action && action[0]) {
@@ -2399,6 +2468,44 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
                             strncpy(st->pending_fetch_url, href, sizeof st->pending_fetch_url - 1);
                             st->pending_fetch_url[sizeof st->pending_fetch_url - 1] = 0;
                             st->pending_fetch = sqw_net_fetch_async(href);
+                        } else if (href[0] == '/' && st->current_base_url[0]) {
+                            /* Absolute-path ("/wiki/Some_Page", by far the
+                             * most common real-world link shape -- every
+                             * internal Wikipedia link uses it) or
+                             * protocol-relative ("//host/path") href on a
+                             * page reached over the network -- resolved
+                             * against current_url's own SCHEME+HOST, not
+                             * current_base_url (which is trimmed to the
+                             * page's own DIRECTORY, e.g. ".../wiki/" --
+                             * naively concatenating that with an
+                             * already-absolute-path href produces a
+                             * doubled-up ".../wiki//wiki/Some_Page",
+                             * confirmed as a real bug that broke every
+                             * internal link on a real fetched page).
+                             * Falls through to the plain-relative branch
+                             * below if current_url doesn't parse (should
+                             * never happen for a page that was itself
+                             * fetched over the network, but never crashes
+                             * either way). */
+                            int base_is_https = 0, base_port = 0;
+                            char base_host[SQW_NET_HOST_MAX], base_dummy_path[SQW_NET_PATH_MAX];
+                            if (sqw_net_parse_url(st->current_url, &base_is_https, base_host, &base_port, base_dummy_path)) {
+                                char full_url[SQW_PATH_MAX];
+                                const char *scheme = base_is_https ? "https" : "http";
+                                if (href[1] == '/') {
+                                    snprintf(full_url, sizeof full_url, "%s:%s", scheme, href);
+                                } else if ((base_is_https && base_port == 443) || (!base_is_https && base_port == 80)) {
+                                    snprintf(full_url, sizeof full_url, "%s://%s%s", scheme, base_host, href);
+                                } else {
+                                    snprintf(full_url, sizeof full_url, "%s://%s:%d%s", scheme, base_host, base_port, href);
+                                }
+                                if (st->pending_fetch) sqw_net_result_abandon(st->pending_fetch);
+                                sqw_history_push(st->hist, st->current_url);
+                                fprintf(stderr, "SQW: fetching %s ...\n", full_url); fflush(stdout);
+                                strncpy(st->pending_fetch_url, full_url, sizeof st->pending_fetch_url - 1);
+                                st->pending_fetch_url[sizeof st->pending_fetch_url - 1] = 0;
+                                st->pending_fetch = sqw_net_fetch_async(full_url);
+                            }
                         } else if (href[0] && st->current_base_url[0]) {
                             /* A plain relative href on a page that was
                              * itself reached over the network resolves
@@ -2624,13 +2731,22 @@ static void sqw_check_pending_fetch(SqwAppState *st) {
     int fetch_ready = st->pending_fetch->ready;
     int fetch_success = st->pending_fetch->success;
     char *fetch_body = st->pending_fetch->body;
+    char fetch_final_url[SQW_PATH_MAX];
+    strncpy(fetch_final_url, st->pending_fetch->final_url, sizeof fetch_final_url - 1);
+    fetch_final_url[sizeof fetch_final_url - 1] = 0;
     st->fetch_content_length = st->pending_fetch->content_length;
     st->fetch_bytes_received = st->pending_fetch->bytes_received;
     pthread_mutex_unlock(&st->pending_fetch->mutex);
     if (!fetch_ready) return;
     if (fetch_success) {
-        sqw_navigate_to_html(fetch_body, st->pending_fetch_url, &st->root, &st->boxes, st->current_dir, st->current_base_url, st->viewport_w, st->viewport_h);
-        strncpy(st->url_bar_text, st->pending_fetch_url, sizeof st->url_bar_text - 1); st->url_bar_text[sizeof st->url_bar_text - 1] = 0;
+        /* `fetch_final_url` (the URL the body actually came from, after
+         * any redirects sqw_net_worker() followed), NOT
+         * st->pending_fetch_url (the URL originally requested) -- see
+         * SqwNetResult::final_url's own comment for why this matters: a
+         * relative/protocol-relative href or img src on the fetched page
+         * must resolve against wherever the response actually landed. */
+        sqw_navigate_to_html(fetch_body, fetch_final_url, &st->root, &st->boxes, st->current_dir, st->current_base_url, st->viewport_w, st->viewport_h);
+        strncpy(st->url_bar_text, fetch_final_url, sizeof st->url_bar_text - 1); st->url_bar_text[sizeof st->url_bar_text - 1] = 0;
         /* current_url tracks whatever page is ACTUALLY loaded, so it's
          * only updated here on a successful fetch, not when the fetch was
          * merely requested (that's where the Back-button history push
@@ -2638,7 +2754,7 @@ static void sqw_check_pending_fetch(SqwAppState *st) {
          * sites) -- a failed fetch leaves current_url (and the Back stack)
          * exactly as they were, so Back still correctly retreats to
          * wherever the user actually was. */
-        strncpy(st->current_url, st->pending_fetch_url, sizeof st->current_url - 1); st->current_url[sizeof st->current_url - 1] = 0;
+        strncpy(st->current_url, fetch_final_url, sizeof st->current_url - 1); st->current_url[sizeof st->current_url - 1] = 0;
         st->scroll_x = 0.0f; st->scroll_y = 0.0f;
         st->hover_node = NULL; st->active_node = NULL; st->focused_input = NULL; /* old DOM is gone */
     } else {

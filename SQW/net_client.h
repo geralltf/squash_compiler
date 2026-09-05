@@ -14,8 +14,13 @@
 #define SQW_NET_CLIENT_H
 
 #define SQW_NET_HOST_MAX 128
-#define SQW_NET_PATH_MAX 256
-#define SQW_NET_URL_MAX 384
+/* Was 256 -- see HTML_MAX_ATTR_LEN's own comment (SQW/html_lexer.h) for
+ * the real page/real URL length that motivated this whole round of
+ * buffer bumps; a URL's path+query alone can exceed 256 on a real site
+ * (query-string-heavy resource URLs especially). */
+#define SQW_NET_PATH_MAX 1024
+/* Was 384 -- see above. */
+#define SQW_NET_URL_MAX 1280
 #define SQW_NET_METHOD_MAX 16
 /* Hard cap on a single response's total size (headers + body). Without
  * this, a malicious or just-misbehaving server that never closes its
@@ -27,6 +32,17 @@
  * actually received). 32MB is generous for this project's own local test
  * pages while still being far short of "attacker can OOM the process". */
 #define SQW_NET_MAX_RESPONSE (32L * 1024 * 1024)
+
+/* Real sites almost never respond to a bare domain request directly --
+ * e.g. "https://en.wikipedia.org" answers with a real HTTP 301 to
+ * "https://en.wikipedia.org/wiki/Main_Page", an empty body, and a
+ * "Location:" header (confirmed via a real fetch during this project's
+ * own testing: without redirect-following, SQW rendered a completely
+ * blank page for that exact URL -- the empty 301 body, not a fetch
+ * failure). sqw_net_worker() now follows 301/302/303/307/308 responses
+ * automatically, up to this many hops, matching every real browser's own
+ * "don't loop forever on a misconfigured redirect chain" backstop. */
+#define SQW_NET_MAX_REDIRECTS 10
 
 typedef struct {
     pthread_mutex_t mutex;
@@ -46,6 +62,19 @@ typedef struct {
      * only (header bytes don't count), same units as content_length. */
     long content_length;
     long bytes_received;
+    /* The URL the body actually came from -- may differ from the URL the
+     * caller originally requested whenever sqw_net_worker() followed one
+     * or more redirects (see SQW_NET_MAX_REDIRECTS' own comment). The
+     * caller needs this, not the original request URL, to resolve any
+     * relative (or protocol-relative "//host/path") href/src on the
+     * fetched page correctly -- e.g. "https://en.wikipedia.org" 301s to
+     * "https://en.wikipedia.org/wiki/Main_Page"; a relative image src on
+     * that page must resolve against "/wiki/", not against the
+     * bare-domain URL the fetch was originally requested with (confirmed
+     * as a real bug: without this, every protocol-relative image src on
+     * that exact real page resolved to a mangled "https:////..." URL and
+     * failed to load). Set once, right before `ready` is set. */
+    char final_url[SQW_NET_URL_MAX];
     /* Set by sqw_net_result_abandon() when the main thread starts a NEW
      * fetch while this one is still in flight (a fast Go-button/anchor
      * click, or -- confirmed as a REAL, reproducible crash during this
