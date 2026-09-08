@@ -17,6 +17,7 @@
 #include "img_decode_png.h"
 #include "img_decode_gif.h"
 #include "img_decode_jpeg.h"
+#include "svg_render.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -167,6 +168,34 @@ int sqw_image_cache_poll(void) {
                         frames[0].delay_cs = 0;
                         frame_count = 1;
                         ok = 1;
+                    }
+                } else {
+                    /* SVG has no fixed magic bytes (it's plain XML text) --
+                     * sniff for a "<svg" tag within a generous prefix window
+                     * instead, tolerating a leading BOM/whitespace/XML
+                     * declaration/comments the way every real SVG-serving
+                     * site's output does (confirmed against real fetched
+                     * Wikipedia SVGs during this feature's development). */
+                    long scan_len = body_len < 512 ? body_len : 512;
+                    long si;
+                    int looks_like_svg = 0;
+                    for (si = 0; si + 4 <= scan_len; si++) {
+                        if (body[si] == '<' && (body[si+1] == 's' || body[si+1] == 'S') &&
+                            (body[si+2] == 'v' || body[si+2] == 'V') && (body[si+3] == 'g' || body[si+3] == 'G')) {
+                            looks_like_svg = 1;
+                            break;
+                        }
+                    }
+                    if (looks_like_svg) {
+                        unsigned char *rgba = NULL;
+                        if (sqw_svg_decode((const unsigned char *)body, body_len, &rgba, &w, &h)) {
+                            frames = (SqwImgFrame *)malloc(sizeof(SqwImgFrame));
+                            memset(frames, 0, sizeof(SqwImgFrame));
+                            frames[0].pixels = rgba;
+                            frames[0].delay_cs = 0;
+                            frame_count = 1;
+                            ok = 1;
+                        }
                     }
                 }
             }

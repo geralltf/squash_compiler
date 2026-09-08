@@ -1,0 +1,57 @@
+<html>
+<body>
+<p>SVG test page -- covers svg_render.c's supported shapes/features plus a
+set of edge cases (malformed/truncated/empty documents, missing viewBox,
+oversized declared canvas, deep nesting) that must degrade safely rather
+than crash, and two real-world SVGs fetched from Wikipedia for a
+non-synthetic sanity check.</p>
+
+<h3>Real-world SVGs</h3>
+<p>Wikipedia puzzle-globe icon (gradients, many path pieces):</p>
+<img src="/svg_tests/wiki_puzzle_globe.svg" style="width:100px;height:100px;border:1px solid #999">
+<p>Wikibooks logo (nested paths, flat fills):</p>
+<img src="/svg_tests/wikibooks_logo.svg" style="width:150px;height:150px;border:1px solid #999">
+
+<h3>Shape coverage</h3>
+<p>Donut via nonzero-winding fill-rule (path arcs, real hole):</p>
+<img src="/svg_tests/case_donut.svg" style="width:80px;height:80px;border:1px solid #999">
+<p>Nested &lt;g&gt; transform composition (translate + scale + rotate):</p>
+<img src="/svg_tests/case_nested_groups.svg" style="width:100px;height:100px;border:1px solid #999">
+<p>Stroke-only shape (fill="none"):</p>
+<img src="/svg_tests/case_stroke_only.svg" style="width:60px;height:60px;border:1px solid #999">
+<p>Polygon:</p>
+<img src="/svg_tests/case_polygon.svg" style="width:60px;height:60px;border:1px solid #999">
+<p>rgba() alpha blending + currentColor:</p>
+<img src="/svg_tests/case_currentcolor_rgba.svg" style="width:60px;height:60px;border:1px solid #999">
+<p>style="" attribute overriding a presentation attribute (fill/opacity):</p>
+<img src="/svg_tests/case_style_override.svg" style="width:60px;height:60px;border:1px solid #999">
+
+<h3>Sizing edge cases</h3>
+<p>No viewBox, width/height only:</p>
+<img src="/svg_tests/case_no_viewbox.svg" style="width:60px;height:60px;border:1px solid #999">
+<p>viewBox only, no width/height:</p>
+<img src="/svg_tests/case_viewbox_only.svg" style="width:80px;height:80px;border:1px solid #999">
+<p>Percentage width/height ("100%"):</p>
+<img src="/svg_tests/case_percent_dims.svg" style="width:80px;height:80px;border:1px solid #999">
+<p>Oversized declared canvas (999999x999999, must cap to a sane max):</p>
+<img src="/svg_tests/case_huge_dims.svg" style="width:80px;height:80px;border:1px solid #999">
+
+<h3>Robustness -- must degrade safely, not crash or hang</h3>
+<p>Zero-radius circle (drawn on top of a rect, should draw nothing extra):</p>
+<img src="/svg_tests/case_zero_radius.svg" style="width:40px;height:40px;border:1px solid #999">
+<p>Empty path data ("d=\"\"") alongside a normal rect:</p>
+<img src="/svg_tests/case_empty_path.svg" style="width:40px;height:40px;border:1px solid #999">
+<p>Malformed attribute (unterminated quote):</p>
+<img src="/svg_tests/case_malformed.svg" style="width:40px;height:40px;border:1px solid #999">
+<p>Self-closing empty group before real content:</p>
+<img src="/svg_tests/case_selfclosing_group.svg" style="width:40px;height:40px;border:1px solid #999">
+<p>100-level-deep &lt;g&gt; nesting (past the internal stack cap):</p>
+<img src="/svg_tests/case_deep_nest.svg" style="width:80px;height:80px;border:1px solid #999">
+<p>Truncated document (cut off mid-attribute, no closing tags at all):</p>
+<img src="/svg_tests/case_truncated.svg" style="width:40px;height:40px;border:1px solid #999">
+<p>Empty file (zero bytes -- should fail to decode cleanly, no image shown):</p>
+<img src="/svg_tests/case_empty_file.svg" style="width:40px;height:40px;border:1px solid #999">
+
+<p>End of SVG test page.</p>
+</body>
+</html>

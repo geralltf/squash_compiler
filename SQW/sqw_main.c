@@ -59,6 +59,7 @@
 #include "img_decode_png.c"
 #include "img_decode_gif.c"
 #include "img_decode_jpeg.c"
+#include "svg_render.c"
 #include "image_cache.c"
 /* C# scripting (Phase 5 real slice -- see sqw_run_csharp_script()'s own
  * comment below): the in-process ".sqo" loader plus a host symbol table
