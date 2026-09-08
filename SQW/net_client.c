@@ -340,19 +340,38 @@ static void *sqw_net_worker(void *arg) {
                      * with no reference to the window/viewport state in
                      * any way, so there is no code path by which a resize
                      * could change what gets sent here, deliberately. */
-                    char req[512];
+                    /* Real request-line/header size varies a lot in
+                     * practice -- a real, sourced-from-a-real-site bug
+                     * confirmed this the hard way: MediaWiki's own
+                     * load.php combines many CSS modules into one long
+                     * query string (400-800+ bytes), which a fixed 512-
+                     * byte stack buffer can't hold. snprintf()'s return
+                     * value is the length it WOULD have written if
+                     * unbounded, not the truncated length actually
+                     * stored -- using that as the send() length past a
+                     * too-small fixed buffer sent garbage stack memory
+                     * as part of the request, corrupting/truncating the
+                     * Host header and path and making the server reject
+                     * or hang on the request. Sized generously (path can
+                     * be up to SQW_NET_PATH_MAX, host up to
+                     * SQW_NET_HOST_MAX, plus headers/UA/method) and
+                     * heap-allocated so no fixed cap can be exceeded. */
+                    int req_cap = SQW_NET_PATH_MAX + SQW_NET_HOST_MAX + SQW_NET_METHOD_MAX + 512;
+                    char *req = (char *)malloc((size_t)req_cap);
                     int rl;
                     if (fa->body && fa->body_len > 0) {
-                        rl = snprintf(req, sizeof req,
+                        rl = snprintf(req, (size_t)req_cap,
                             "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: " SQW_USER_AGENT
                             "\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n",
                             fa->method, path, host, fa->body_len);
                     } else {
-                        rl = snprintf(req, sizeof req,
+                        rl = snprintf(req, (size_t)req_cap,
                             "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: " SQW_USER_AGENT "\r\nConnection: close\r\n\r\n",
                             fa->method, path, host);
                     }
+                    if (rl > req_cap - 1) rl = req_cap - 1;
                     if (is_https) SSL_write(ssl, req, rl); else send(fd, req, (unsigned long)rl, 0);
+                    free(req);
                     if (fa->body && fa->body_len > 0) {
                         if (is_https) SSL_write(ssl, fa->body, (int)fa->body_len);
                         else send(fd, fa->body, (unsigned long)fa->body_len, 0);

@@ -227,6 +227,13 @@ void sqw_renderer_draw(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cmd,
          * by sqw_main.c's own draw pass, a background box here would just
          * paint over/behind it). */
         if (b->kind == SQW_BOX_TEXT || b->kind == SQW_BOX_A || b->kind == SQW_BOX_SPAN) continue;
+        /* A box with border-radius/box-shadow/transform is drawn entirely
+         * by draw_layout_styled() (sqw_main.c) instead, via a real
+         * per-box shader pass -- see styled_renderer_vk.h's own top
+         * comment. Skipped here so this pass's own flat, square-cornered
+         * fill doesn't paint underneath (and show through at) the rounded
+         * corners that pass draws on top of. */
+        if (b->node && (b->node->css_border_radius > 0.0f || b->node->css_has_box_shadow || b->node->css_has_transform)) continue;
         /* Layout boxes live in CONTENT space (unaffected by scrolling --
          * see layout.h); subtract the current scroll offset here, once,
          * right at the point of converting to screen-space NDC, so

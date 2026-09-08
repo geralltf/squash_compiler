@@ -1,0 +1,15 @@
+<html>
+<head>
+<style>
+.clip { width: 60px; height: 60px; overflow: hidden; border: 2px solid black; }
+.noclip { width: 60px; height: 60px; border: 2px solid black; }
+</style>
+</head>
+<body>
+<p>overflow:hidden -- a 100x100 image inside a 60x60 clipped box (should show only the top-left 60x60 corner of the image, not the whole thing):</p>
+<div class="clip"><img src="/svg_tests/wiki_puzzle_globe.svg" style="width:100px;height:100px;"></div>
+<p>Same image, same box size, but NO overflow:hidden (should show the full 100x100 image spilling out of the 60x60 box):</p>
+<div class="noclip"><img src="/svg_tests/wiki_puzzle_globe.svg" style="width:100px;height:100px;"></div>
+<p>end of overflow test page</p>
+</body>
+</html>

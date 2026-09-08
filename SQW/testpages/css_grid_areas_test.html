@@ -1,0 +1,24 @@
+<html>
+<head>
+<style>
+.container {
+  display: grid;
+  grid-template-columns: 150px minmax(0,1fr);
+  grid-template-areas: "sidebar content" "footer footer";
+  column-gap: 20px;
+}
+.sidebar { grid-area: sidebar; background-color: teal; padding: 40px 0; }
+.content { grid-area: content; background-color: orange; padding: 20px 0; }
+.footer { grid-area: footer; background-color: crimson; padding: 10px 0; }
+</style>
+</head>
+<body>
+<p>grid-template-areas test: sidebar (teal, 150px wide, 200px tall) should sit LEFT of content (goldenrod), footer (crimson) spans full width below both.</p>
+<div class="container">
+<div class="content">Main content area</div>
+<div class="sidebar">Sidebar</div>
+<div class="footer">Footer</div>
+</div>
+<p>end of grid-areas test</p>
+</body>
+</html>

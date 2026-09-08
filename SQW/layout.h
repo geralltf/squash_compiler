@@ -56,6 +56,43 @@ typedef struct {
      * was wrapped into. Meaningless (left at whatever the last write left
      * it) for a non-text-rendering box kind. */
     float text_scale;
+    /* Effective paint-order key (real CSS z-index, approximated): 0 for
+     * every box by default (paints in DOM/original order, unchanged from
+     * before this field existed), inherited down from the nearest
+     * ancestor with an explicit CSS "z-index" -- so a positioned
+     * container's whole subtree (its own box, its children's boxes) moves
+     * together as one unit, not just the container itself. layout_compute()
+     * stable-sorts the final box list by this key (ascending) once, right
+     * before returning, so every draw pass in sqw_main.c (which each just
+     * walk boxes->boxes[] in array order) naturally paints
+     * lower-z content first and higher-z content on top, with no per-pass
+     * changes needed. This is a real approximation, not full CSS stacking-
+     * context semantics (no separate stacking contexts per positioned
+     * ancestor, no auto vs explicit distinction) -- but it's exactly what
+     * the common real-world cases (a dropdown/tooltip/sticky header that
+     * must paint above everything else) need. */
+    int z_key;
+    /* Real CSS overflow:hidden clipping, approximated (see css.c's own
+     * top-of-file scope comment): 0 = not clipped by anything (the vast
+     * majority of boxes on any real page, unchanged from before this
+     * field existed). When 1, clip_x/y/w/h (content-space, same
+     * convention as x/y/w/h above -- scroll is subtracted at draw time,
+     * not here) is the nearest overflow:hidden ancestor's own box rect;
+     * sqw_main.c's per-box draw passes that issue one real draw call PER
+     * box (images/background-images/the styled-rect pass) set a real
+     * Vulkan scissor to this rect before drawing, clamped against the
+     * viewport. NOT applied to renderer_vk.c's own batched flat-box-fill
+     * pass, or to text (sqw_text_renderer_flush() batches every glyph on
+     * the page into ONE draw call, same "one big draw call" reasoning) --
+     * scissor is per-draw-call state, and neither of those passes issues
+     * one draw call per box (see sqw_draw_frame()'s own comment). If an
+     * overflow:hidden container has no explicit CSS height, clip_h is set
+     * to a very large sentinel (vertical clipping isn't resolvable before
+     * the container's own children finish laying out -- see
+     * layout_compute()'s own comment at the push site) rather than
+     * silently clipping to the wrong, still-unknown height. */
+    int has_clip;
+    float clip_x, clip_y, clip_w, clip_h;
 } LayoutBox;
 
 typedef struct {

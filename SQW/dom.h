@@ -212,6 +212,72 @@ typedef struct DomNode {
     /* opacity is NOT an inherited property in real CSS (a child's own
      * opacity is independent of its parent's) -- defaults to 1.0. */
     float css_opacity;
+
+    /* Appended here, after every other css_* field (never inserted
+     * mid-struct) -- see css_font_size's own comment just above for why:
+     * a real, confirmed squash codegen bug corrupts reads of fields that
+     * sit between css_has_bg and css_flex_direction on a DomNode-sized
+     * struct. None of these four are inherited in real CSS either, same
+     * as opacity. */
+    /* 0 = unset (anchors fall back to their own hardcoded default
+     * underline, see sqw_main.c's anchor draw code), 1 = none, 2 =
+     * underline, 3 = line-through. */
+    int css_text_decoration;
+    int css_has_z_index; int css_z_index;
+    /* overflow:hidden / overflow-x:hidden / overflow-y:hidden -- clips
+     * this element's own children to its own box via a Vulkan scissor
+     * rect around this box's draw calls (see sqw_draw_frame()'s own
+     * comment on where this is applied). Clipping is only applied to the
+     * draw passes that issue one real draw call PER box (images/
+     * background-images/the styled-rect pass below) -- NOT to
+     * renderer_vk.c's batched flat box fill (one vkCmdDraw for every
+     * plain box on the page) or to text (sqw_text_renderer_flush()
+     * batches every glyph on the page into one draw call too): scissor is
+     * per-DRAW-CALL state, and neither of those is one draw call per
+     * box. */
+    int css_overflow_hidden;
+
+    /* border-radius, box-shadow, and transform -- rendered via a real
+     * hand-written GLSL shader (styled_renderer_vk.h/.c), not a CPU-side
+     * approximation. Scope cut, same "recover more than we lose"
+     * tradeoff as elsewhere in this engine: all three apply ONLY to an
+     * element's own background-fill rect (border-box) -- background-
+     * IMAGE is not clipped to a rounded radius, borders are not curved to
+     * follow it, and "transform" moves only this one rect, not the
+     * element's border/content/children (a full implementation would
+     * need to transform every draw call for the whole subtree, a much
+     * larger change than this pass's shader-focused scope). Still a real,
+     * visible, individually testable feature for each property, just not
+     * full CSS box-model integration. */
+    float css_border_radius;
+    int css_has_box_shadow;
+    float css_shadow_r, css_shadow_g, css_shadow_b, css_shadow_a;
+    float css_shadow_dx, css_shadow_dy, css_shadow_blur, css_shadow_spread;
+    /* 2D affine (a,b / c,d column-major 2x2 + e,f translate -- same
+     * convention as SVG's own "matrix(a,b,c,d,e,f)" and svg_render.c's
+     * internal SvgMat, deliberately, even though this is a separate,
+     * independent parser/implementation -- not shared code, just a
+     * consistent convention within this codebase). Applied around the
+     * box's own center (real CSS's default transform-origin: 50% 50%). */
+    int css_has_transform;
+    float css_transform[6];
+
+    /* Real CSS Grid "grid-template-areas" + child "grid-area" -- what
+     * actually places Wikipedia's own sidebar beside its article content
+     * (confirmed via its real fetched CSS: ".mw-page-container-inner{
+     * grid-template-areas:'siteNotice siteNotice' 'columnStart
+     * pageContent' 'footer footer'}", ".vector-column-start{grid-area:
+     * columnStart}", ".mw-content-container{grid-area:pageContent}") --
+     * NOT float, which this engine doesn't implement at all (see css.c's
+     * own top comment): a real investigation into how Wikipedia's own
+     * layout actually works found named-area CSS Grid, not float, is the
+     * mechanism modern sites use for this. Raw, unparsed strings --
+     * layout.c parses css_grid_template_areas into a 2D area-name grid at
+     * layout time (same "resolved against real content, not stored pre-
+     * parsed" reasoning as css_grid_template_columns above). Both empty
+     * if unset. */
+    char css_grid_template_areas[256];
+    char css_grid_area[32];
 } DomNode;
 
 DomNode *dom_parse(const char *html);

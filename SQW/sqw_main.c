@@ -55,6 +55,7 @@
 #include "renderer_vk.c"
 #include "text_renderer_vk.c"
 #include "image_renderer_vk.c"
+#include "styled_renderer_vk.c"
 #include "net_client.c"
 #include "img_decode_png.c"
 #include "img_decode_gif.c"
@@ -699,6 +700,13 @@ static char *sqw_load_script_src(const char *src, const char *dir, const char *b
     return 0;
 }
 
+/* Forward-declared -- real definition (and its own full comment) is
+ * further down, near sqw_resolve_image_urls() which was its original
+ * only caller; sqw_apply_css() below now also needs it (for <link
+ * rel="stylesheet" href="..."> resolution) and runs EARLIER in the file
+ * than that definition. */
+static void sqw_resolve_url(const char *src, const char *base_url, char *out, int outsz);
+
 static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, float viewport_w) {
     if (g_current_css_sheet_valid) css_stylesheet_free(&g_current_css_sheet);
     css_stylesheet_init(&g_current_css_sheet);
@@ -758,6 +766,47 @@ static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, 
                 for (i = 0; i < child->child_count; i++) {
                     DomNode *tc = child->children[i];
                     if (dom_is_text(tc)) css_parse_into(&g_current_css_sheet, tc->text);
+                }
+            } else if (strcmp(child->tag, "link") == 0) {
+                /* <link rel="stylesheet" href="..."> -- a REAL external
+                 * stylesheet, fetched (blocking, same
+                 * sqw_fetch_script_blocking() helper <script src=...>
+                 * already uses -- generic despite its name, just an
+                 * async-fetch-then-spin-wait-for-ready wrapper) and fed
+                 * into the SAME CssStylesheet <style> blocks parse into,
+                 * in real cascade (document) order. This used to be
+                 * deliberately skipped entirely (see this function's own
+                 * former top comment) -- confirmed, while investigating
+                 * why a real fetched page didn't look at all like the
+                 * real site, that this was the actual root cause: modern
+                 * real-world sites (Wikipedia very much included) put
+                 * nearly ALL of their actual CSS in external files, not
+                 * inline <style> blocks, so skipping <link> meant almost
+                 * none of a real site's own visual design ever reached
+                 * this engine at all -- what rendered was overwhelmingly
+                 * just this project's own per-tag placeholder colors
+                 * (renderer_vk.c's box_color()) and default block-stacking
+                 * layout, not the real page. */
+                const char *rel = dom_get_attr(child, "rel");
+                const char *href = dom_get_attr(child, "href");
+                if (rel && href && href[0] && strstr(rel, "stylesheet")) {
+                    char resolved[SQW_IMG_URL_MAX];
+                    sqw_resolve_url(href, base_url, resolved, (int)sizeof resolved);
+                    if (resolved[0]) {
+                        char *css_text = sqw_fetch_script_blocking(resolved);
+                        if (css_text) {
+                            css_parse_into(&g_current_css_sheet, css_text);
+                            free(css_text);
+                        }
+                    } else if (dir) {
+                        char full_path[SQW_PATH_MAX];
+                        snprintf(full_path, sizeof full_path, "%s%s", dir, href);
+                        char *css_text = sqw_read_file(full_path);
+                        if (css_text) {
+                            css_parse_into(&g_current_css_sheet, css_text);
+                            free(css_text);
+                        }
+                    }
                 }
             } else if (strcmp(child->tag, "script") == 0) {
                 /* "src=" -- a real external script, fetched (network) or
@@ -949,58 +998,135 @@ static void sqw_apply_css(DomNode *root, const char *dir, const char *base_url, 
  * placeholder box forever), since this project's image pipeline only ever
  * fetches over HTTP(S) (net_client.c has no local-file read path), matching
  * the scope of the feature as requested. */
+/* Resolves one possibly-relative URL string (`src`) against `base_url`
+ * (the fetched page's own network origin) into `out`, applying the exact
+ * same rules real browsers do for absolute/protocol-relative/absolute-
+ * path/plain-relative src values -- factored out of
+ * sqw_resolve_image_urls() (which originally had this logic inline, for
+ * <img src> only) so the identical, already-battle-tested resolution can
+ * also be reused for CSS "background-image: url(...)" (css_bg_image_url,
+ * see dom.h's own comment on why that field is meant to share this exact
+ * pipeline). `out` is left empty if `src` is empty or unresolvable, same
+ * as the original inline version. */
+/* Decodes the small, common set of real HTML character references found
+ * in real-world attribute values -- &amp; &lt; &gt; &quot; &#39;/&apos;,
+ * plus numeric &#NN;/&#xHH; (only for codepoints <128, written back as a
+ * single ASCII byte -- a real, deliberate scope cut: a numeric reference
+ * for a non-ASCII codepoint would need real UTF-8 encoding of the result,
+ * not attempted here since this function only ever feeds resolved bytes
+ * back into URL logic, which only cares about ASCII delimiters/values
+ * anyway). Found necessary via direct testing against a real fetched
+ * Wikipedia page: EVERY one of its own "<link rel=stylesheet href=...>"
+ * URLs spells its query-string separators as "&amp;" (the only fully
+ * correct way to write a literal "&" inside an HTML attribute value,
+ * confirmed via the real page's own source) -- left undecoded, the whole
+ * query string after the first "&amp;" became part of a single garbled
+ * parameter value, and MediaWiki's own server -- unlike the thumbnail
+ * image server, which happens to silently ignore unrecognized extra
+ * params -- responded with a small JSON error instead of real CSS,
+ * meaning this project's own newly-added external-stylesheet fetching
+ * (see this function's own top comment) silently never worked for
+ * Wikipedia's own MAIN stylesheet bundle at all. Any entity this function
+ * doesn't recognize is copied through completely unchanged (starting
+ * "&" and all) -- the same safe-degrade convention as every other parser
+ * in this project, not a hard failure. */
+static void html_decode_entities(const char *src, char *out, int outsz) {
+    int n = 0;
+    const char *p = src;
+    while (*p && n < outsz - 1) {
+        if (*p == '&') {
+            if (!strncmp(p, "&amp;", 5)) { out[n++] = '&'; p += 5; continue; }
+            if (!strncmp(p, "&lt;", 4)) { out[n++] = '<'; p += 4; continue; }
+            if (!strncmp(p, "&gt;", 4)) { out[n++] = '>'; p += 4; continue; }
+            if (!strncmp(p, "&quot;", 6)) { out[n++] = '"'; p += 6; continue; }
+            if (!strncmp(p, "&apos;", 6)) { out[n++] = '\''; p += 6; continue; }
+            if (!strncmp(p, "&#39;", 5)) { out[n++] = '\''; p += 5; continue; }
+            if (p[1] == '#' && (p[2] == 'x' || p[2] == 'X')) {
+                char *endp;
+                long code = strtol(p + 3, &endp, 16);
+                if (*endp == ';' && code > 0 && code < 128) { out[n++] = (char)code; p = endp + 1; continue; }
+            } else if (p[1] == '#') {
+                char *endp;
+                long code = strtol(p + 2, &endp, 10);
+                if (*endp == ';' && code > 0 && code < 128) { out[n++] = (char)code; p = endp + 1; continue; }
+            }
+        }
+        out[n++] = *p++;
+    }
+    out[n] = 0;
+}
+
+static void sqw_resolve_url(const char *src_raw, const char *base_url, char *out, int outsz) {
+    out[0] = 0;
+    if (!src_raw || !src_raw[0]) return;
+    char src_buf[SQW_IMG_URL_MAX];
+    html_decode_entities(src_raw, src_buf, (int)sizeof src_buf);
+    const char *src = src_buf;
+    if (strncmp(src, "http://", 7) == 0 || strncmp(src, "https://", 8) == 0) {
+        strncpy(out, src, (size_t)outsz - 1);
+        out[outsz - 1] = 0;
+    } else if (src[0] == '/' && src[1] == '/') {
+        /* Protocol-relative "//host/path" -- a real, common URL shape
+         * (Wikipedia's own <img> src attributes use it throughout) that's
+         * already absolute apart from the scheme; naively concatenating
+         * base_url + src (the plain "else" branch below) produces a
+         * mangled "https:////host/path" -- confirmed as a real bug that
+         * broke every one of that real page's own images. Reuses
+         * base_url's own scheme (http/https), same as a real browser does
+         * for this exact case. */
+        int base_is_https = base_url && strncmp(base_url, "https://", 8) == 0;
+        snprintf(out, (size_t)outsz, "%s:%s", base_is_https ? "https" : "http", src);
+    } else if (src[0] == '/' && base_url && base_url[0]) {
+        /* Absolute-path ("/static/images/...", "/w/resources/...") --
+         * resolved against base_url's own SCHEME+HOST, not base_url
+         * verbatim (which is trimmed to the page's own DIRECTORY, e.g.
+         * ".../wiki/") -- the plain "else" concatenation below produces a
+         * doubled-up ".../wiki//static/..." for exactly this shape,
+         * confirmed as a real bug affecting a large fraction of a real
+         * fetched page's own images (its site-wide chrome -- logos,
+         * footer icons -- consistently uses absolute-path src, unlike its
+         * article thumbnails, which use protocol-relative). base_url is
+         * itself a valid "scheme://host/..." prefix, so it can be
+         * re-parsed directly for the scheme+host. */
+        int b_is_https = 0, b_port = 0;
+        char b_host[SQW_NET_HOST_MAX], b_dummy_path[SQW_NET_PATH_MAX];
+        if (sqw_net_parse_url(base_url, &b_is_https, b_host, &b_port, b_dummy_path)) {
+            const char *scheme = b_is_https ? "https" : "http";
+            if ((b_is_https && b_port == 443) || (!b_is_https && b_port == 80)) {
+                snprintf(out, (size_t)outsz, "%s://%s%s", scheme, b_host, src);
+            } else {
+                snprintf(out, (size_t)outsz, "%s://%s:%d%s", scheme, b_host, b_port, src);
+            }
+        }
+    } else if (base_url && base_url[0]) {
+        snprintf(out, (size_t)outsz, "%s%s", base_url, src);
+    }
+}
+
 static void sqw_resolve_image_urls(DomNode *node, const char *dir, const char *base_url) {
     (void)dir;
-    if (!dom_is_text(node) && strcmp(node->tag, "img") == 0) {
-        const char *src = dom_get_attr(node, "src");
-        if (src && src[0]) {
+    if (!dom_is_text(node)) {
+        if (strcmp(node->tag, "img") == 0) {
+            const char *src = dom_get_attr(node, "src");
             char resolved[SQW_IMG_URL_MAX];
-            resolved[0] = 0;
-            if (strncmp(src, "http://", 7) == 0 || strncmp(src, "https://", 8) == 0) {
-                strncpy(resolved, src, sizeof resolved - 1);
-                resolved[sizeof resolved - 1] = 0;
-            } else if (src[0] == '/' && src[1] == '/') {
-                /* Protocol-relative "//host/path" -- a real, common URL
-                 * shape (Wikipedia's own <img> src attributes use it
-                 * throughout) that's already absolute apart from the
-                 * scheme; naively concatenating base_url + src (the
-                 * plain "else" branch below) produces a mangled
-                 * "https:////host/path" -- confirmed as a real bug that
-                 * broke every one of that real page's own images.
-                 * Reuses base_url's own scheme (http/https), same as a
-                 * real browser does for this exact case. */
-                int base_is_https = base_url && strncmp(base_url, "https://", 8) == 0;
-                snprintf(resolved, sizeof resolved, "%s:%s", base_is_https ? "https" : "http", src);
-            } else if (src[0] == '/' && base_url && base_url[0]) {
-                /* Absolute-path ("/static/images/...", "/w/resources/...")
-                 * -- resolved against base_url's own SCHEME+HOST, not
-                 * base_url verbatim (which is trimmed to the page's own
-                 * DIRECTORY, e.g. ".../wiki/") -- the plain "else"
-                 * concatenation below produces a doubled-up
-                 * ".../wiki//static/..." for exactly this shape,
-                 * confirmed as a real bug affecting a large fraction of
-                 * a real fetched page's own images (its site-wide
-                 * chrome -- logos, footer icons -- consistently uses
-                 * absolute-path src, unlike its article thumbnails,
-                 * which use protocol-relative). base_url is itself a
-                 * valid "scheme://host/..." prefix, so it can be
-                 * re-parsed directly for the scheme+host. */
-                int b_is_https = 0, b_port = 0;
-                char b_host[SQW_NET_HOST_MAX], b_dummy_path[SQW_NET_PATH_MAX];
-                if (sqw_net_parse_url(base_url, &b_is_https, b_host, &b_port, b_dummy_path)) {
-                    const char *scheme = b_is_https ? "https" : "http";
-                    if ((b_is_https && b_port == 443) || (!b_is_https && b_port == 80)) {
-                        snprintf(resolved, sizeof resolved, "%s://%s%s", scheme, b_host, src);
-                    } else {
-                        snprintf(resolved, sizeof resolved, "%s://%s:%d%s", scheme, b_host, b_port, src);
-                    }
-                }
-            } else if (base_url && base_url[0]) {
-                snprintf(resolved, sizeof resolved, "%s%s", base_url, src);
-            }
+            sqw_resolve_url(src, base_url, resolved, (int)sizeof resolved);
             strncpy(node->img_url, resolved, sizeof node->img_url - 1);
             node->img_url[sizeof node->img_url - 1] = 0;
             if (node->img_url[0]) sqw_image_cache_request(node->img_url);
+        }
+        /* css_bg_image_url holds the RAW url() text right now (written by
+         * css_apply_decl() during the css_apply() pass, which always runs
+         * before this function -- see sqw_apply_css()'s own call order) --
+         * resolved and overwritten in place with the same rules as <img
+         * src> above, then fed into the same by-URL image cache. Checked
+         * on every element, not just <img>, matching real CSS's own
+         * background-image (any element can have one). */
+        if (node->css_bg_image_url[0]) {
+            char resolved[SQW_IMG_URL_MAX];
+            sqw_resolve_url(node->css_bg_image_url, base_url, resolved, (int)sizeof resolved);
+            strncpy(node->css_bg_image_url, resolved, sizeof node->css_bg_image_url - 1);
+            node->css_bg_image_url[sizeof node->css_bg_image_url - 1] = 0;
+            if (node->css_bg_image_url[0]) sqw_image_cache_request(node->css_bg_image_url);
         }
     }
     int i;
@@ -1114,22 +1240,37 @@ static void sqw_go_navigate(const char *url_text, int push_history, SqwHistorySt
     }
 }
 
-/* Concatenates `node`'s DIRECT text-node children (no descent -- matches
- * layout.c's direct_text_width(), which sized the box this labels) into
- * `buf`. Used at draw time for <a>/<span>/<button>, none of which get
- * their own SQW_BOX_TEXT run from layout_compute() (they're laid out as
- * one opaque inline box, see layout.c's kind_for_tag comment). Returns
- * the number of characters written (not counting the NUL). */
+/* Concatenates `node`'s text -- descending into nested ELEMENT children
+ * too, not just direct text-node children, matching layout.c's
+ * direct_text_width() (which sized the box this labels -- see its own
+ * comment for why: real-world markup very commonly wraps a link/button's
+ * actual label in an inner <span>, e.g. real Wikipedia's own
+ * "<a><span>Main page</span></a>" sidebar links, which have NO direct
+ * text child of <a> at all). Used at draw time for <a>/<span>/<button>,
+ * none of which get their own SQW_BOX_TEXT run from layout_compute()
+ * (they're laid out as one opaque inline box, see layout.c's
+ * kind_for_tag comment). Returns the number of characters written (not
+ * counting the NUL). */
 static int concat_direct_text(const DomNode *node, char *buf, int bufcap) {
     int i, n = 0;
     for (i = 0; i < node->child_count && n < bufcap - 1; i++) {
         const DomNode *c = node->children[i];
-        if (!dom_is_text(c)) continue;
-        int len = (int)strlen(c->text);
-        int room = bufcap - 1 - n;
-        if (len > room) len = room;
-        memcpy(buf + n, c->text, len);
-        n += len;
+        if (dom_is_text(c)) {
+            int len = (int)strlen(c->text);
+            int room = bufcap - 1 - n;
+            if (len > room) len = room;
+            memcpy(buf + n, c->text, len);
+            n += len;
+        } else if (!html_tag_is_raw_text(c->tag)) {
+            /* Excludes "script"/"style"/"textarea" -- see
+             * direct_text_width()'s own comment (layout.c) for the real
+             * regression this guards against: a templatestyles <style>
+             * block's raw CSS text nested inside an otherwise-empty
+             * wrapper <span> (real Wikipedia markup) would otherwise get
+             * "concatenated" as if it were the span's own visible label
+             * and rendered as literal CSS text on the page. */
+            n += concat_direct_text(c, buf + n, bufcap - n);
+        }
     }
     buf[n] = 0;
     return n;
@@ -1157,6 +1298,41 @@ static void anchor_color(const DomNode *a, float *r, float *g, float *b) {
  * the image cache, see image_cache.h's own top comment on why this project
  * refers to images purely by URL string). Must run AFTER sqw_renderer_draw()
  * in the same frame so the textured quad actually ends up on top. */
+/* Real CSS overflow:hidden clipping (see LayoutBox::has_clip's own
+ * comment for exact scope/approximation) via a real Vulkan scissor rect,
+ * set fresh before EVERY per-box draw call in the passes below (not just
+ * once per clipped group) -- simplest correct approach at this project's
+ * scale (a handful of clipped elements on a real page, not hundreds), and
+ * avoids having to track "did the previous box have the same clip rect"
+ * state across draw calls. `b->has_clip == 0` sets scissor back to the
+ * full viewport, same rect sqw_vk_begin_frame() already established at
+ * the top of the frame -- every one of these draw passes MUST end by
+ * calling this once more with a NULL box (full-viewport reset) before
+ * returning, or a later pass that doesn't manage scissor itself
+ * (draw_layout_borders, draw_scrollbars, draw_toolbar) would inherit
+ * whatever clip rect this pass's own LAST box happened to leave active. */
+static void sqw_apply_box_scissor(VkCommandBuffer cmd, const LayoutBox *b, float scroll_x, float scroll_y, float viewport_w, float viewport_h) {
+    VkRect2D sc;
+    if (b && b->has_clip) {
+        float cx = b->clip_x - scroll_x;
+        float cy = b->clip_y - scroll_y;
+        float cw = b->clip_w;
+        float ch = b->clip_h;
+        if (cx < 0.0f) { cw += cx; cx = 0.0f; }
+        if (cy < 0.0f) { ch += cy; cy = 0.0f; }
+        if (cx + cw > viewport_w) cw = viewport_w - cx;
+        if (cy + ch > viewport_h) ch = viewport_h - cy;
+        if (cw < 0.0f) cw = 0.0f;
+        if (ch < 0.0f) ch = 0.0f;
+        sc.offset.x = (int32_t)cx; sc.offset.y = (int32_t)cy;
+        sc.extent.width = (uint32_t)cw; sc.extent.height = (uint32_t)ch;
+    } else {
+        sc.offset.x = 0; sc.offset.y = 0;
+        sc.extent.width = (uint32_t)viewport_w; sc.extent.height = (uint32_t)viewport_h;
+    }
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+}
+
 static void draw_layout_images(SqwImageRenderer *ir, SqwVkContext *vk, VkCommandBuffer cmd,
                                 LayoutList *boxes, float viewport_w, float viewport_h,
                                 float scroll_x, float scroll_y) {
@@ -1169,9 +1345,94 @@ static void draw_layout_images(SqwImageRenderer *ir, SqwVkContext *vk, VkCommand
         float bx = b->x - scroll_x;
         float by = b->y - scroll_y;
         DomNode *n = b->node;
+        sqw_apply_box_scissor(cmd, b, scroll_x, scroll_y, viewport_w, viewport_h);
         sqw_image_draw_quad(vk, ir, cmd, handle.descriptorSet, bx, by, b->w, b->h,
             1.0f, 1.0f, 1.0f, n->css_opacity, viewport_w, viewport_h);
     }
+    sqw_apply_box_scissor(cmd, NULL, scroll_x, scroll_y, viewport_w, viewport_h);
+}
+
+/* Draws every box whose node has border-radius/box-shadow/transform --
+ * the entire background-fill this box gets (renderer_vk.c's own batched
+ * flat-fill pass skips these boxes entirely, see its own comment) via a
+ * real per-box GLSL shader pass (styled_renderer_vk.h/.c). Runs right
+ * after sqw_renderer_draw() and BEFORE draw_layout_bg_images()/
+ * draw_layout_borders(), so it stands in for exactly the "background-
+ * color" paint step these boxes would otherwise have gotten from the
+ * skipped batched pass -- background-image (if also present) still draws
+ * on top of it next, unclipped to the radius (see dom.h's own comment on
+ * this feature's scope). */
+static void draw_layout_styled(SqwStyledRenderer *sr, SqwVkContext *vk, VkCommandBuffer cmd,
+                                LayoutList *boxes, float viewport_w, float viewport_h,
+                                float scroll_x, float scroll_y) {
+    int i;
+    for (i = 0; i < boxes->count; i++) {
+        LayoutBox *b = &boxes->boxes[i];
+        if (b->kind == SQW_BOX_TEXT || b->kind == SQW_BOX_A || b->kind == SQW_BOX_SPAN) continue;
+        DomNode *n = b->node;
+        if (!n) continue;
+        if (!(n->css_border_radius > 0.0f || n->css_has_box_shadow || n->css_has_transform)) continue;
+
+        float cr, cg, cb;
+        if (n->css_has_bg) { cr = n->css_bg[0]; cg = n->css_bg[1]; cb = n->css_bg[2]; }
+        else box_color(b->kind, &cr, &cg, &cb);
+
+        SqwStyledBox sb;
+        memset(&sb, 0, sizeof sb);
+        sb.x = b->x - scroll_x;
+        sb.y = b->y - scroll_y;
+        sb.w = b->w;
+        sb.h = b->h;
+        sb.radius = n->css_border_radius;
+        sb.fill_r = cr; sb.fill_g = cg; sb.fill_b = cb; sb.fill_a = n->css_opacity;
+        sb.has_shadow = n->css_has_box_shadow;
+        if (sb.has_shadow) {
+            sb.shadow_r = n->css_shadow_r; sb.shadow_g = n->css_shadow_g; sb.shadow_b = n->css_shadow_b; sb.shadow_a = n->css_shadow_a;
+            sb.shadow_dx = n->css_shadow_dx; sb.shadow_dy = n->css_shadow_dy;
+            sb.shadow_blur = n->css_shadow_blur; sb.shadow_spread = n->css_shadow_spread;
+        }
+        sb.has_transform = n->css_has_transform;
+        if (sb.has_transform) {
+            sb.xa = n->css_transform[0]; sb.xb = n->css_transform[1];
+            sb.xc = n->css_transform[2]; sb.xd = n->css_transform[3];
+            sb.tx = n->css_transform[4]; sb.ty = n->css_transform[5];
+        }
+        sqw_apply_box_scissor(cmd, b, scroll_x, scroll_y, viewport_w, viewport_h);
+        sqw_styled_renderer_draw(vk, sr, cmd, &sb, viewport_w, viewport_h);
+    }
+    sqw_apply_box_scissor(cmd, NULL, scroll_x, scroll_y, viewport_w, viewport_h);
+}
+
+/* Draws CSS "background-image"/the url() component of "background", for
+ * ANY box kind (not just SQW_BOX_IMG -- real CSS background-image applies
+ * to any element), stretched to fill the box's own w/h. Runs right after
+ * sqw_renderer_draw() (which already drew each box's flat background-
+ * COLOR rect) and BEFORE draw_layout_borders(), matching real CSS paint
+ * order: background-color, then background-image, then border, then
+ * content -- an opaque background-image should cover the color underneath
+ * it but never paint over its own element's border. Border-radius (so a
+ * background-image would need to be clipped to a rounded rect) isn't
+ * implemented -- see css.c's own top comment -- so this always draws a
+ * plain rectangular quad; likewise no background-repeat/-position/-size
+ * modeling, always a single stretch-to-fill quad, the same simplification
+ * <img> itself already makes. */
+static void draw_layout_bg_images(SqwImageRenderer *ir, SqwVkContext *vk, VkCommandBuffer cmd,
+                                   LayoutList *boxes, float viewport_w, float viewport_h,
+                                   float scroll_x, float scroll_y) {
+    int i;
+    for (i = 0; i < boxes->count; i++) {
+        LayoutBox *b = &boxes->boxes[i];
+        DomNode *n = b->node;
+        if (!n || !n->css_bg_image_url[0]) continue;
+        SqwImageHandle handle;
+        if (!sqw_image_cache_get_handle(n->css_bg_image_url, &handle)) continue;
+        float bx = b->x - scroll_x;
+        float by = b->y - scroll_y;
+        sqw_apply_box_scissor(cmd, b, scroll_x, scroll_y, viewport_w, viewport_h);
+        sqw_image_draw_quad(vk, ir, cmd, handle.descriptorSet, bx, by, b->w, b->h,
+            1.0f, 1.0f, 1.0f, n->css_opacity, viewport_w, viewport_h);
+    }
+    sqw_apply_box_scissor(cmd, NULL, scroll_x, scroll_y, viewport_w, viewport_h);
 }
 
 /* Draws each box's own border, per side (css_border_width[4], already
@@ -1267,6 +1528,15 @@ static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer 
              * css_apply(), no walk needed here either). */
             float op = owner ? owner->css_opacity : 1.0f;
             int bold = owner && owner->css_font_weight_bold;
+            /* Unlike <a>, a plain text run has no default decoration --
+             * only draw a line when the owning element's CSS explicitly
+             * asked for one (2=underline, 3=line-through; 0=unset and
+             * 1=none both draw nothing here). */
+            if (owner && owner->css_text_decoration >= 2) {
+                float uy = (owner->css_text_decoration == 3) ? (by + b->h * 0.5f) : (by + b->h - 2.0f);
+                float tw = sqw_text_measure(textnode->text + b->text_start, b->text_len, b->text_scale);
+                sqw_renderer_draw_rect(vk, renderer, cmd, bx, uy, tw, 2.0f, tr_, tg_, tb_, viewport_w, viewport_h);
+            }
             draw_text_maybe_bold(tr, bx, by, textnode->text + b->text_start, b->text_len,
                 b->text_scale, tr_, tg_, tb_, op, bold, viewport_w, viewport_h);
         } else if (b->kind == SQW_BOX_A) {
@@ -1278,7 +1548,19 @@ static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer 
              * blending toward white, cheap and doesn't need real alpha
              * blending on the (opaque) box pipeline. */
             if (n->hover) { r = r + (1.0f - r) * 0.35f; g = g + (1.0f - g) * 0.35f; bl = bl + (1.0f - bl) * 0.35f; }
-            sqw_renderer_draw_rect(vk, renderer, cmd, bx, by + b->h - 2.0f, b->w, 2.0f, r, g, bl, viewport_w, viewport_h);
+            /* Real CSS default for <a> is "text-decoration: underline" (a
+             * user-agent stylesheet rule, not anything this project's own
+             * CSS engine invents) -- matched here by drawing the underline
+             * UNCONDITIONALLY unless the page's own CSS explicitly set
+             * "text-decoration: none" on this anchor (css_text_decoration
+             * == 1). == 3 (line-through) draws through the middle of the
+             * text instead of underneath it; anything else (0 = unset, or
+             * 2 = an explicit "underline", same visual result as the
+             * default) keeps the original underline position. */
+            if (n->css_text_decoration != 1) {
+                float uy = (n->css_text_decoration == 3) ? (by + b->h * 0.5f) : (by + b->h - 2.0f);
+                sqw_renderer_draw_rect(vk, renderer, cmd, bx, uy, b->w, 2.0f, r, g, bl, viewport_w, viewport_h);
+            }
             concat_direct_text(n, label, sizeof label);
             float op = n->css_opacity; int bold = n->css_font_weight_bold;
             draw_text_maybe_bold(tr, bx, by, label, (int)strlen(label),
@@ -1289,6 +1571,14 @@ static void draw_layout_text(SqwTextRenderer *tr, SqwVkContext *vk, SqwRenderer 
             if (n->css_has_color) { tr_ = n->css_color[0]; tg_ = n->css_color[1]; tb_ = n->css_color[2]; }
             concat_direct_text(n, label, sizeof label);
             float op = n->css_opacity; int bold = n->css_font_weight_bold;
+            /* Same "no default, only draw when explicitly requested" rule
+             * as SQW_BOX_TEXT above -- a bare <span> has no CSS default
+             * decoration, unlike <a>. */
+            if (n->css_text_decoration >= 2) {
+                float uy = (n->css_text_decoration == 3) ? (by + b->h * 0.5f) : (by + b->h - 2.0f);
+                float tw = sqw_text_measure(label, (int)strlen(label), b->text_scale);
+                sqw_renderer_draw_rect(vk, renderer, cmd, bx, uy, tw, 2.0f, tr_, tg_, tb_, viewport_w, viewport_h);
+            }
             draw_text_maybe_bold(tr, bx, by, label, (int)strlen(label),
                 b->text_scale, tr_, tg_, tb_, op, bold, viewport_w, viewport_h);
         } else if (b->kind == SQW_BOX_BUTTON) {
@@ -1852,6 +2142,7 @@ typedef struct SqwAppState {
     SqwRenderer *renderer;
     SqwTextRenderer *text_renderer;
     SqwImageRenderer *image_renderer;
+    SqwStyledRenderer *styled_renderer;
 
     DomNode *root;
     LayoutList boxes;
@@ -2915,8 +3206,11 @@ static void sqw_draw_frame(SqwAppState *st) {
      * see the adjusted value. */
     float draw_scroll_y = st->scroll_y - SQW_TOOLBAR_H;
     sqw_renderer_draw(st->vk, st->renderer, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
-    draw_layout_borders(st->vk, st->renderer, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
+    sqw_styled_renderer_begin_frame(st->styled_renderer);
+    draw_layout_styled(st->styled_renderer, st->vk, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
     sqw_image_renderer_begin_frame(st->image_renderer);
+    draw_layout_bg_images(st->image_renderer, st->vk, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
+    draw_layout_borders(st->vk, st->renderer, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
     draw_layout_images(st->image_renderer, st->vk, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
     draw_layout_text(st->text_renderer, st->vk, st->renderer, cmd, &st->boxes, st->viewport_w, st->viewport_h, st->scroll_x, draw_scroll_y);
     LayoutBox vthumb_dummy, hthumb_dummy;
@@ -3023,6 +3317,12 @@ int main(void) {
     }
     sqw_image_cache_init(st->vk, st->image_renderer);
     layout_set_image_size_lookup(sqw_image_cache_get_size);
+
+    st->styled_renderer = (SqwStyledRenderer *)malloc(sizeof(SqwStyledRenderer));
+    if (!sqw_styled_renderer_init(st->vk, st->styled_renderer)) {
+        fprintf(stderr, "SQW: styled renderer init failed\n"); fflush(stdout);
+        return 1;
+    }
     fprintf(stderr, "SQW: loading 100%% (Vulkan/renderer init complete)\n"); fflush(stdout);
 
     sqw_dirname(SQW_INITIAL_PAGE, st->current_dir);

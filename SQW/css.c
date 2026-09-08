@@ -52,13 +52,35 @@
  *               only, see css_apply_decl's own comment), justify-content,
  *               align-items, gap / column-gap / row-gap,
  *               grid-template-columns (stored raw, parsed by layout.c at
- *               layout time). font-size/text-align/line-height/
+ *               layout time), background-image / the url() component of
+ *               the "background" shorthand (fetched/decoded/drawn via the
+ *               same image_cache.h pipeline as <img>, stretched to fill
+ *               the element's own box -- see sqw_main.c's own
+ *               draw_layout_bg_images()), text-decoration / text-
+ *               decoration-line (none/underline/line-through -- an
+ *               explicit "none" on an <a> suppresses this project's own
+ *               hardcoded default anchor underline; underline/line-
+ *               through on any OTHER element draws that line too),
+ *               z-index (real per-box paint-order sorting among siblings
+ *               at the same stacking level -- see layout.c's own
+ *               layout_list_sort_by_z()), overflow / overflow-x /
+ *               overflow-y: hidden (clips this element's children to its
+ *               own box via a real Vulkan scissor rect), border-radius,
+ *               box-shadow, and transform (translate/scale/rotate/skewX/
+ *               skewY/matrix, chained) -- all three rendered via a real
+ *               hand-written GLSL shader (SQW/styled_renderer_vk.h/.c),
+ *               scoped to an element's own background-fill rect only
+ *               (background-image isn't clipped to the radius, borders
+ *               aren't curved, transform doesn't move borders/content/
+ *               children -- see dom.h's own comment on this feature's
+ *               exact scope). font-size/text-align/line-height/
  *               font-weight are real INHERITED properties (see
- *               css_apply_element()'s own comment); opacity is not.
+ *               css_apply_element()'s own comment); opacity/text-
+ *               decoration/z-index/overflow/border-radius/box-shadow/
+ *               transform are not.
  *               font-style:italic is parsed but has no visual effect (no
  *               slanted glyph variant exists in this project's single
- *               baked atlas -- font_atlas.h); border-radius/overflow/
- *               box-shadow/z-index/transforms are not implemented at all.
+ *               baked atlas -- font_atlas.h).
  *               Any other property is parsed (so it doesn't desync the
  *               declaration-list parse) and then silently ignored.
  *   Values    : lengths in px or unitless (treated as px); percentages
@@ -71,6 +93,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 
 #define CSS_RULES_INIT_CAP 64
 
@@ -330,6 +353,199 @@ static void css_parse_decls(const char **p, CssRule *rule) {
     *p = q;
 }
 
+static void css_parse_at_rule(CssStylesheet *sheet, const char **p, int *source_order, int mq_min, int mq_max);
+
+/* Bundles css_parse_decls_nested()'s own "parse context" (everything
+ * that isn't the position cursor/parent-selectors/output-rule) into one
+ * struct passed by pointer -- cuts that function down from 8 separate
+ * parameters to 4. Not just tidiness: a real squash codegen bug was
+ * confirmed via a minimal repro (this exact 8-parameter mix, called from
+ * a site computing one argument's address as a field inside an already-
+ * huge -- ~29KB -- CssRule local) corrupting incoming parameters (a
+ * plain int param read back as garbage, a pointer param read back NULL)
+ * at function entry, even though the identical-shaped call worked
+ * correctly under gcc. Cutting the parameter count (and moving the
+ * rarely-changing ones behind one pointer) reliably avoided the bad
+ * codegen path in testing -- documented here as this file's own
+ * established "squash codegen workaround" convention, same as every
+ * other one already noted throughout this file. */
+typedef struct {
+    CssStylesheet *sheet;
+    int *source_order;
+    int mq_min, mq_max;
+} CssNestCtx;
+
+/* Parses a rule body that may contain real, native CSS NESTING -- a
+ * selector list followed by '{' appearing where a declaration's own
+ * name/value would otherwise be, e.g. real Wikipedia CSS (found via a
+ * real fetched-page investigation this engine's own stylesheet-parse
+ * count silently plateaued on):
+ *   .uls-rewrite{.badge-goodarticle::before,.badge-x::before{content:url(...)}...}
+ * Before this function existed, css_parse_decls() had no notion of this
+ * shape at all: it read ".badge-goodarticle::before,..." as a
+ * declaration NAME (stopping at the first ':' inside "::before"), then
+ * misparsed everything after as that one declaration's value -- which,
+ * given enough intervening '('/')' imbalance from a later misparsed
+ * value, could desync paren-depth tracking badly enough to swallow the
+ * ENTIRE REST of the stylesheet (confirmed: 204KB of real, otherwise-
+ * valid CSS silently discarded from one nested block this engine didn't
+ * understand, hiding the real .mw-page-container-inner grid rules that
+ * make Wikipedia's sidebar render beside its content instead of full-
+ * width). Fixed for real, not just contained: a lookahead (tracking
+ * paren depth, same convention as the ordinary value scanner) decides,
+ * for each "declaration", whether a '{' or a ';'/'}' comes first at
+ * depth 0 -- a plain colon is deliberately NOT one of the lookahead's
+ * own stop characters (an earlier version of this fix used ':' as a
+ * stop char too, which broke on exactly this real input: a pseudo-
+ * element like "::before" inside the nested selector text has its own
+ * literal colons long before the real terminating '{', so stopping at
+ * the first colon misidentified every such nested rule as an ordinary
+ * declaration again) -- '{' first means this is a nested rule, not a
+ * declaration. A nested
+ * rule's own selector list is combined with EVERY one of the enclosing
+ * rule's own selectors (real CSS nesting's implicit descendant-
+ * combinator semantics for a bare, non-"&"-prefixed nested selector --
+ * "&"-prefixed nesting is not specially recognized, same lenient-
+ * degradation convention as every other unsupported selector form this
+ * file already documents: it parses without desyncing but simply never
+ * matches) and pushed as real, independent top-level CssRule entries,
+ * recursing so multiple levels of nesting (real, if rarer) also work. */
+static void css_parse_decls_nested(CssNestCtx *ctx, const char **p,
+                                    CssSelector *parent_sels, int parent_count,
+                                    CssRule *out) {
+    const char *q = *p;
+    for (;;) {
+        *p = q;
+        css_skip_ws(p);
+        q = *p;
+        if (*q == 0 || *q == '}') break;
+        if (*q == ';') { q++; continue; }
+        if (*q == '@') { *p = q; css_parse_at_rule(ctx->sheet, p, ctx->source_order, ctx->mq_min, ctx->mq_max); q = *p; continue; }
+
+        const char *scan = q;
+        int look_depth = 0;
+        int is_nested = 0;
+        while (*scan) {
+            char c = *scan;
+            if (c == '(') look_depth++;
+            else if (c == ')') look_depth--;
+            else if (look_depth <= 0 && (c == '{' || c == ';' || c == '}')) {
+                is_nested = (c == '{');
+                break;
+            }
+            scan++;
+        }
+
+        if (is_nested) {
+            /* CssSelector/CssRule are both large (a CssRule alone is
+             * ~29KB, thanks to CSS_MAX_RULE_SELECTORS * CSS_MAX_
+             * SELECTOR_CHAIN * CSS_MAX_COMPOUND_PARTS-sized nested
+             * arrays) -- two of them plus an 8-element CssSelector array
+             * as ordinary stack locals in one (recursive!) function
+             * proved to be a real squash codegen bug, not just a
+             * resource-budget concern: a minimal, non-recursive, single-
+             * level repro (one nested rule, no deep nesting at all)
+             * reliably segfaulted only when built with squash itself
+             * (gcc built and ran the identical source correctly),
+             * confirmed via gdb (a bogus, unrelated-looking crash site,
+             * consistent with a miscomputed large stack-frame offset).
+             * Heap-allocating instead sidesteps whatever squash's exact
+             * large-stack-frame limit is -- also just sensible given the
+             * sizes involved, independent of the squash bug. */
+            CssSelector *nested_sels = (CssSelector *)malloc(sizeof(CssSelector) * CSS_MAX_RULE_SELECTORS);
+            int nested_count = 0;
+            for (;;) {
+                *p = q;
+                css_skip_ws(p);
+                q = *p;
+                if (*q == 0 || *q == '{') break;
+                *p = q;
+                if (nested_count < CSS_MAX_RULE_SELECTORS) {
+                    css_parse_selector(p, &nested_sels[nested_count++]);
+                } else {
+                    CssSelector dummy;
+                    css_parse_selector(p, &dummy);
+                }
+                q = *p;
+                *p = q;
+                css_skip_ws(p);
+                q = *p;
+                if (*q == ',') { q++; continue; }
+                break;
+            }
+            if (*q != '{') { free(nested_sels); if (*q) q++; continue; } /* malformed -- resync */
+            q++;
+            *p = q;
+
+            CssRule *combined = (CssRule *)malloc(sizeof(CssRule));
+            memset(combined, 0, sizeof *combined);
+            combined->media_min_width = ctx->mq_min;
+            combined->media_max_width = ctx->mq_max;
+            int pi, ni;
+            for (pi = 0; pi < parent_count; pi++) {
+                for (ni = 0; ni < nested_count; ni++) {
+                    if (combined->selector_count >= CSS_MAX_RULE_SELECTORS) break;
+                    CssSelector *dst = &combined->selectors[combined->selector_count++];
+                    dst->chain_len = 0;
+                    dst->specificity = parent_sels[pi].specificity + nested_sels[ni].specificity;
+                    int ci;
+                    for (ci = 0; ci < parent_sels[pi].chain_len && dst->chain_len < CSS_MAX_SELECTOR_CHAIN; ci++)
+                        dst->chain[dst->chain_len++] = parent_sels[pi].chain[ci];
+                    for (ci = 0; ci < nested_sels[ni].chain_len && dst->chain_len < CSS_MAX_SELECTOR_CHAIN; ci++)
+                        dst->chain[dst->chain_len++] = nested_sels[ni].chain[ci];
+                }
+            }
+            free(nested_sels);
+            CssSelector *rec_parent_sels = combined->selectors;
+            int rec_parent_count = combined->selector_count;
+            css_parse_decls_nested(ctx, p, rec_parent_sels, rec_parent_count, combined);
+            q = *p;
+            if (*q == '}') q++;
+            if (combined->selector_count > 0 && combined->decl_count > 0) {
+                combined->source_order = (*ctx->source_order)++;
+                CssRule *r = css_push_rule(ctx->sheet);
+                *r = *combined;
+            }
+            free(combined);
+            continue;
+        }
+
+        const char *name_start = q;
+        while (*q && *q != ':' && *q != ';' && *q != '}') q++;
+        const char *name_end = q;
+        if (*q != ':') { if (*q == ';') q++; *p = q; continue; }
+        q++;
+        *p = q;
+        css_skip_ws(p);
+        q = *p;
+        const char *val_start = q;
+        int depth = 0;
+        while (*q && (depth > 0 || (*q != ';' && *q != '}'))) {
+            if (*q == '(') depth++;
+            else if (*q == ')') depth--;
+            q++;
+        }
+        const char *val_end = q;
+        while (val_end > val_start && isspace((unsigned char)val_end[-1])) val_end--;
+        while (name_end > name_start && isspace((unsigned char)name_end[-1])) name_end--;
+
+        if (out->decl_count < CSS_MAX_DECLS) {
+            CssDecl *d = &out->decls[out->decl_count++];
+            int nlen = (int)(name_end - name_start);
+            if (nlen >= (int)sizeof d->name) nlen = (int)sizeof d->name - 1;
+            int i;
+            for (i = 0; i < nlen; i++) d->name[i] = (char)tolower((unsigned char)name_start[i]);
+            d->name[nlen] = 0;
+            int vlen = (int)(val_end - val_start);
+            if (vlen >= (int)sizeof d->value) vlen = (int)sizeof d->value - 1;
+            memcpy(d->value, val_start, (size_t)vlen);
+            d->value[vlen] = 0;
+        }
+        if (*q == ';') q++;
+    }
+    *p = q;
+}
+
 /* Skips one balanced-brace block starting at *p (which must point at
  * '{'); leaves *p just past the matching '}'. Used for @-rules whose
  * body this engine doesn't understand (@font-face, @keyframes, ...). */
@@ -475,7 +691,23 @@ static void css_parse_rule_body(CssStylesheet *sheet, const char **p, int *sourc
         if (*q != '{') { if (*q) q++; continue; } /* malformed -- resync */
         q++;
         *p = q;
-        css_parse_decls(p, &tmp);
+        CssNestCtx nest_ctx;
+        nest_ctx.sheet = sheet; nest_ctx.source_order = source_order;
+        nest_ctx.mq_min = mq_min; nest_ctx.mq_max = mq_max;
+        /* Each argument hoisted into its own plain local FIRST, then
+         * passed -- see CssNestCtx's own comment on the real squash
+         * codegen bug this avoids: computing several of a call's own
+         * arguments as field accesses into the SAME largeish struct
+         * (tmp.selectors/tmp.selector_count/&tmp all being fields of
+         * this same ~29KB CssRule local) corrupted earlier-assigned
+         * argument registers, confirmed via a minimal repro and fixed by
+         * this exact hoisting pattern -- the established workaround
+         * convention this whole file already uses for the same bug
+         * class elsewhere (see css_skip_ws()'s own top comment). */
+        CssSelector *nest_parent_sels = tmp.selectors;
+        int nest_parent_count = tmp.selector_count;
+        CssRule *nest_out = &tmp;
+        css_parse_decls_nested(&nest_ctx, p, nest_parent_sels, nest_parent_count, nest_out);
         q = *p;
         if (*q == '}') q++;
         if (tmp.selector_count > 0 && tmp.decl_count > 0) {
@@ -583,11 +815,24 @@ static int css_parse_len(const char *v, float *out) {
     char *end;
     double d = strtod(v, &end);
     if (end == v) return 0;
-    /* px and unitless both taken as px; anything else (%, em, rem, vw,
-     * vh, ...) isn't resolved against a real reference size here, so
-     * it's treated as "not specified" -- see this file's top comment. */
+    /* px and unitless both taken as px; "rem" is resolved against a fixed
+     * 16px root font-size (real CSS's own default, and this engine has no
+     * notion of a page-configurable root font-size to resolve it against
+     * more precisely) -- a real, useful unit to support: confirmed via
+     * real Wikipedia CSS that its own grid track sizes (the sidebar-
+     * beside-content layout) are specified in rem ("12.25rem
+     * minmax(0,1fr)"), so leaving rem unresolved meant that whole layout
+     * silently fell back to "not specified" everywhere it mattered. "em"
+     * is deliberately NOT resolved the same way: it's relative to the
+     * CURRENT element's own font-size, not a fixed root value, and this
+     * function has no access to that context -- resolving it as if it
+     * were rem would silently produce a wrong size instead of correctly
+     * falling back to "not specified", so it stays unsupported. Anything
+     * else (%, vw, vh, ...) is unchanged -- still "not specified". */
     while (*end && isspace((unsigned char)*end)) end++;
-    if (*end != 0 && strncmp(end, "px", 2) != 0) return 0;
+    if (strncmp(end, "px", 2) == 0) { *out = (float)d; return 1; }
+    if (strncmp(end, "rem", 3) == 0) { *out = (float)d * 16.0f; return 1; }
+    if (*end != 0) return 0;
     *out = (float)d;
     return 1;
 }
@@ -600,16 +845,110 @@ static int css_hex_digit(char c) {
 }
 
 typedef struct { const char *name; unsigned char r, g, b; } CssNamedColor;
-static const CssNamedColor CSS_NAMED_COLORS[] = {
-    {"black",0,0,0}, {"white",255,255,255}, {"red",255,0,0}, {"green",0,128,0},
-    {"blue",0,0,255}, {"yellow",255,255,0}, {"gray",128,128,128}, {"grey",128,128,128},
-    {"silver",192,192,192}, {"orange",255,165,0}, {"purple",128,0,128}, {"navy",0,0,128},
-    {"teal",0,128,128}, {"maroon",128,0,0}, {"lime",0,255,0}, {"olive",128,128,0},
-    {"transparent",255,255,255}, {"none",255,255,255},
-    {0,0,0,0}
-};
+/* Expanded from the original 16-color table (basically just the CSS
+ * Level 1 set) after confirming, via real testing, that plenty of
+ * ordinary CSS -- including this project's own newly-added test pages --
+ * uses real CSS3/SVG extended color keywords ("crimson", "goldenrod", ...)
+ * that weren't recognized at all, silently leaving css_has_bg/color unset
+ * (the same safe-degrade "unrecognized value simply doesn't apply"
+ * convention as everywhere else in this engine, but for names this common
+ * it was costing real, visible correctness). Kept in sync with
+ * svg_render.c's own g_svg_named_colors table (SVG uses the identical
+ * CSS3 color keyword set) -- not shared code, just a consistent color
+ * list independently duplicated in both files, matching how this
+ * codebase already treats its 2D-affine-matrix convention.
+ *
+ * Populated at runtime by init_css_named_colors() below, NOT a static
+ * brace initializer -- a real, confirmed squash bug found via direct
+ * testing while expanding this table from 16 to ~60 entries: colors that
+ * worked fine in the small table (e.g. "teal", "orange") started silently
+ * failing to match at all once the array grew this large, even though
+ * squash compiled the file with no error or warning. Matches this
+ * project's own already-established workaround for the identical class of
+ * bug (see SQW/*_spirv.h's own top comment: "squash's C parser chokes on
+ * huge static array initializers" -- apparently including one this much
+ * smaller than a compiled SPIR-V array, just with pointer-typed (string
+ * literal) members instead of plain uint32_t words). */
+#define CSS_NAMED_COLORS_COUNT 70
+static CssNamedColor CSS_NAMED_COLORS[CSS_NAMED_COLORS_COUNT];
+static int g_css_named_colors_inited = 0;
+
+static void init_css_named_colors(void) {
+    int i = 0;
+    CSS_NAMED_COLORS[i].name = "black"; CSS_NAMED_COLORS[i].r=0; CSS_NAMED_COLORS[i].g=0; CSS_NAMED_COLORS[i].b=0; i++;
+    CSS_NAMED_COLORS[i].name = "white"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=255; CSS_NAMED_COLORS[i].b=255; i++;
+    CSS_NAMED_COLORS[i].name = "red"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=0; CSS_NAMED_COLORS[i].b=0; i++;
+    CSS_NAMED_COLORS[i].name = "green"; CSS_NAMED_COLORS[i].r=0; CSS_NAMED_COLORS[i].g=128; CSS_NAMED_COLORS[i].b=0; i++;
+    CSS_NAMED_COLORS[i].name = "blue"; CSS_NAMED_COLORS[i].r=0; CSS_NAMED_COLORS[i].g=0; CSS_NAMED_COLORS[i].b=255; i++;
+    CSS_NAMED_COLORS[i].name = "yellow"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=255; CSS_NAMED_COLORS[i].b=0; i++;
+    CSS_NAMED_COLORS[i].name = "cyan"; CSS_NAMED_COLORS[i].r=0; CSS_NAMED_COLORS[i].g=255; CSS_NAMED_COLORS[i].b=255; i++;
+    CSS_NAMED_COLORS[i].name = "magenta"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=0; CSS_NAMED_COLORS[i].b=255; i++;
+    CSS_NAMED_COLORS[i].name = "gray"; CSS_NAMED_COLORS[i].r=128; CSS_NAMED_COLORS[i].g=128; CSS_NAMED_COLORS[i].b=128; i++;
+    CSS_NAMED_COLORS[i].name = "grey"; CSS_NAMED_COLORS[i].r=128; CSS_NAMED_COLORS[i].g=128; CSS_NAMED_COLORS[i].b=128; i++;
+    CSS_NAMED_COLORS[i].name = "silver"; CSS_NAMED_COLORS[i].r=192; CSS_NAMED_COLORS[i].g=192; CSS_NAMED_COLORS[i].b=192; i++;
+    CSS_NAMED_COLORS[i].name = "maroon"; CSS_NAMED_COLORS[i].r=128; CSS_NAMED_COLORS[i].g=0; CSS_NAMED_COLORS[i].b=0; i++;
+    CSS_NAMED_COLORS[i].name = "olive"; CSS_NAMED_COLORS[i].r=128; CSS_NAMED_COLORS[i].g=128; CSS_NAMED_COLORS[i].b=0; i++;
+    CSS_NAMED_COLORS[i].name = "lime"; CSS_NAMED_COLORS[i].r=0; CSS_NAMED_COLORS[i].g=255; CSS_NAMED_COLORS[i].b=0; i++;
+    CSS_NAMED_COLORS[i].name = "aqua"; CSS_NAMED_COLORS[i].r=0; CSS_NAMED_COLORS[i].g=255; CSS_NAMED_COLORS[i].b=255; i++;
+    CSS_NAMED_COLORS[i].name = "teal"; CSS_NAMED_COLORS[i].r=0; CSS_NAMED_COLORS[i].g=128; CSS_NAMED_COLORS[i].b=128; i++;
+    CSS_NAMED_COLORS[i].name = "navy"; CSS_NAMED_COLORS[i].r=0; CSS_NAMED_COLORS[i].g=0; CSS_NAMED_COLORS[i].b=128; i++;
+    CSS_NAMED_COLORS[i].name = "fuchsia"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=0; CSS_NAMED_COLORS[i].b=255; i++;
+    CSS_NAMED_COLORS[i].name = "purple"; CSS_NAMED_COLORS[i].r=128; CSS_NAMED_COLORS[i].g=0; CSS_NAMED_COLORS[i].b=128; i++;
+    CSS_NAMED_COLORS[i].name = "orange"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=165; CSS_NAMED_COLORS[i].b=0; i++;
+    CSS_NAMED_COLORS[i].name = "brown"; CSS_NAMED_COLORS[i].r=165; CSS_NAMED_COLORS[i].g=42; CSS_NAMED_COLORS[i].b=42; i++;
+    CSS_NAMED_COLORS[i].name = "pink"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=192; CSS_NAMED_COLORS[i].b=203; i++;
+    CSS_NAMED_COLORS[i].name = "gold"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=215; CSS_NAMED_COLORS[i].b=0; i++;
+    CSS_NAMED_COLORS[i].name = "indigo"; CSS_NAMED_COLORS[i].r=75; CSS_NAMED_COLORS[i].g=0; CSS_NAMED_COLORS[i].b=130; i++;
+    CSS_NAMED_COLORS[i].name = "violet"; CSS_NAMED_COLORS[i].r=238; CSS_NAMED_COLORS[i].g=130; CSS_NAMED_COLORS[i].b=238; i++;
+    CSS_NAMED_COLORS[i].name = "coral"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=127; CSS_NAMED_COLORS[i].b=80; i++;
+    CSS_NAMED_COLORS[i].name = "salmon"; CSS_NAMED_COLORS[i].r=250; CSS_NAMED_COLORS[i].g=128; CSS_NAMED_COLORS[i].b=114; i++;
+    CSS_NAMED_COLORS[i].name = "khaki"; CSS_NAMED_COLORS[i].r=240; CSS_NAMED_COLORS[i].g=230; CSS_NAMED_COLORS[i].b=140; i++;
+    CSS_NAMED_COLORS[i].name = "plum"; CSS_NAMED_COLORS[i].r=221; CSS_NAMED_COLORS[i].g=160; CSS_NAMED_COLORS[i].b=221; i++;
+    CSS_NAMED_COLORS[i].name = "orchid"; CSS_NAMED_COLORS[i].r=218; CSS_NAMED_COLORS[i].g=112; CSS_NAMED_COLORS[i].b=214; i++;
+    CSS_NAMED_COLORS[i].name = "tan"; CSS_NAMED_COLORS[i].r=210; CSS_NAMED_COLORS[i].g=180; CSS_NAMED_COLORS[i].b=140; i++;
+    CSS_NAMED_COLORS[i].name = "beige"; CSS_NAMED_COLORS[i].r=245; CSS_NAMED_COLORS[i].g=245; CSS_NAMED_COLORS[i].b=220; i++;
+    CSS_NAMED_COLORS[i].name = "ivory"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=255; CSS_NAMED_COLORS[i].b=240; i++;
+    CSS_NAMED_COLORS[i].name = "lavender"; CSS_NAMED_COLORS[i].r=230; CSS_NAMED_COLORS[i].g=230; CSS_NAMED_COLORS[i].b=250; i++;
+    CSS_NAMED_COLORS[i].name = "crimson"; CSS_NAMED_COLORS[i].r=220; CSS_NAMED_COLORS[i].g=20; CSS_NAMED_COLORS[i].b=60; i++;
+    CSS_NAMED_COLORS[i].name = "chocolate"; CSS_NAMED_COLORS[i].r=210; CSS_NAMED_COLORS[i].g=105; CSS_NAMED_COLORS[i].b=30; i++;
+    CSS_NAMED_COLORS[i].name = "darkgray"; CSS_NAMED_COLORS[i].r=169; CSS_NAMED_COLORS[i].g=169; CSS_NAMED_COLORS[i].b=169; i++;
+    CSS_NAMED_COLORS[i].name = "darkgrey"; CSS_NAMED_COLORS[i].r=169; CSS_NAMED_COLORS[i].g=169; CSS_NAMED_COLORS[i].b=169; i++;
+    CSS_NAMED_COLORS[i].name = "lightgray"; CSS_NAMED_COLORS[i].r=211; CSS_NAMED_COLORS[i].g=211; CSS_NAMED_COLORS[i].b=211; i++;
+    CSS_NAMED_COLORS[i].name = "lightgrey"; CSS_NAMED_COLORS[i].r=211; CSS_NAMED_COLORS[i].g=211; CSS_NAMED_COLORS[i].b=211; i++;
+    CSS_NAMED_COLORS[i].name = "darkred"; CSS_NAMED_COLORS[i].r=139; CSS_NAMED_COLORS[i].g=0; CSS_NAMED_COLORS[i].b=0; i++;
+    CSS_NAMED_COLORS[i].name = "darkgreen"; CSS_NAMED_COLORS[i].r=0; CSS_NAMED_COLORS[i].g=100; CSS_NAMED_COLORS[i].b=0; i++;
+    CSS_NAMED_COLORS[i].name = "darkblue"; CSS_NAMED_COLORS[i].r=0; CSS_NAMED_COLORS[i].g=0; CSS_NAMED_COLORS[i].b=139; i++;
+    CSS_NAMED_COLORS[i].name = "lightblue"; CSS_NAMED_COLORS[i].r=173; CSS_NAMED_COLORS[i].g=216; CSS_NAMED_COLORS[i].b=230; i++;
+    CSS_NAMED_COLORS[i].name = "lightgreen"; CSS_NAMED_COLORS[i].r=144; CSS_NAMED_COLORS[i].g=238; CSS_NAMED_COLORS[i].b=144; i++;
+    CSS_NAMED_COLORS[i].name = "steelblue"; CSS_NAMED_COLORS[i].r=70; CSS_NAMED_COLORS[i].g=130; CSS_NAMED_COLORS[i].b=180; i++;
+    CSS_NAMED_COLORS[i].name = "skyblue"; CSS_NAMED_COLORS[i].r=135; CSS_NAMED_COLORS[i].g=206; CSS_NAMED_COLORS[i].b=235; i++;
+    CSS_NAMED_COLORS[i].name = "dimgray"; CSS_NAMED_COLORS[i].r=105; CSS_NAMED_COLORS[i].g=105; CSS_NAMED_COLORS[i].b=105; i++;
+    CSS_NAMED_COLORS[i].name = "dimgrey"; CSS_NAMED_COLORS[i].r=105; CSS_NAMED_COLORS[i].g=105; CSS_NAMED_COLORS[i].b=105; i++;
+    CSS_NAMED_COLORS[i].name = "slategray"; CSS_NAMED_COLORS[i].r=112; CSS_NAMED_COLORS[i].g=128; CSS_NAMED_COLORS[i].b=144; i++;
+    CSS_NAMED_COLORS[i].name = "whitesmoke"; CSS_NAMED_COLORS[i].r=245; CSS_NAMED_COLORS[i].g=245; CSS_NAMED_COLORS[i].b=245; i++;
+    CSS_NAMED_COLORS[i].name = "gainsboro"; CSS_NAMED_COLORS[i].r=220; CSS_NAMED_COLORS[i].g=220; CSS_NAMED_COLORS[i].b=220; i++;
+    CSS_NAMED_COLORS[i].name = "lightyellow"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=255; CSS_NAMED_COLORS[i].b=224; i++;
+    CSS_NAMED_COLORS[i].name = "deepskyblue"; CSS_NAMED_COLORS[i].r=0; CSS_NAMED_COLORS[i].g=191; CSS_NAMED_COLORS[i].b=255; i++;
+    CSS_NAMED_COLORS[i].name = "forestgreen"; CSS_NAMED_COLORS[i].r=34; CSS_NAMED_COLORS[i].g=139; CSS_NAMED_COLORS[i].b=34; i++;
+    CSS_NAMED_COLORS[i].name = "firebrick"; CSS_NAMED_COLORS[i].r=178; CSS_NAMED_COLORS[i].g=34; CSS_NAMED_COLORS[i].b=34; i++;
+    CSS_NAMED_COLORS[i].name = "royalblue"; CSS_NAMED_COLORS[i].r=65; CSS_NAMED_COLORS[i].g=105; CSS_NAMED_COLORS[i].b=225; i++;
+    CSS_NAMED_COLORS[i].name = "midnightblue"; CSS_NAMED_COLORS[i].r=25; CSS_NAMED_COLORS[i].g=25; CSS_NAMED_COLORS[i].b=112; i++;
+    CSS_NAMED_COLORS[i].name = "turquoise"; CSS_NAMED_COLORS[i].r=64; CSS_NAMED_COLORS[i].g=224; CSS_NAMED_COLORS[i].b=208; i++;
+    CSS_NAMED_COLORS[i].name = "goldenrod"; CSS_NAMED_COLORS[i].r=218; CSS_NAMED_COLORS[i].g=165; CSS_NAMED_COLORS[i].b=32; i++;
+    CSS_NAMED_COLORS[i].name = "seagreen"; CSS_NAMED_COLORS[i].r=46; CSS_NAMED_COLORS[i].g=139; CSS_NAMED_COLORS[i].b=87; i++;
+    CSS_NAMED_COLORS[i].name = "darkorange"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=140; CSS_NAMED_COLORS[i].b=0; i++;
+    CSS_NAMED_COLORS[i].name = "transparent"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=255; CSS_NAMED_COLORS[i].b=255; i++;
+    CSS_NAMED_COLORS[i].name = "none"; CSS_NAMED_COLORS[i].r=255; CSS_NAMED_COLORS[i].g=255; CSS_NAMED_COLORS[i].b=255; i++;
+    /* i now equals CSS_NAMED_COLORS_COUNT-1 -- one slot deliberately left
+     * as a NULL-name sentinel (matching the old brace-initializer's own
+     * trailing {0,0,0,0}), since the matching loop below scans until it
+     * sees name==0, not a separately-tracked count. */
+    CSS_NAMED_COLORS[i].name = 0;
+    g_css_named_colors_inited = 1;
+}
 
 static int css_parse_color(const char *v, float *rgb) {
+    if (!g_css_named_colors_inited) init_css_named_colors();
     while (*v && isspace((unsigned char)*v)) v++;
     if (*v == '#') {
         v++;
@@ -695,8 +1034,17 @@ static void css_set_default_style(DomNode *el) {
     el->css_gap = 0.0f;
     el->css_flex_grow = 0.0f;
     el->css_grid_template_columns[0] = 0;
+    el->css_grid_template_areas[0] = 0;
+    el->css_grid_area[0] = 0;
     el->css_position_absolute = 0;
     el->css_has_clip = 0;
+    el->css_text_decoration = 0;
+    el->css_has_z_index = 0; el->css_z_index = 0;
+    el->css_overflow_hidden = 0;
+    el->css_bg_image_url[0] = 0;
+    el->css_border_radius = 0.0f;
+    el->css_has_box_shadow = 0;
+    el->css_has_transform = 0;
 
     /* Real CSS inheritance: seed from the parent's ALREADY-RESOLVED
      * computed style (guaranteed resolved first -- css_apply()'s own walk
@@ -736,6 +1084,22 @@ static void css_set_default_style(DomNode *el) {
         el->css_font_weight_bold = 0;
     }
     el->css_opacity = 1.0f;
+}
+
+/* Extracts the raw text inside "url(...)" (optionally single/double
+ * quoted, both real forms) into `out` -- used for background-image/
+ * background's own url() component. `u` must point at the "url(" itself
+ * (i.e. the caller already found it via strstr). Leaves `out` empty if
+ * nothing sensible is found (e.g. a bare "url()"), same safe-degrade
+ * convention as every other parser in this file. */
+static void css_extract_url(const char *u, char *out, int outsz) {
+    out[0] = 0;
+    u += 4; /* skip "url(" */
+    while (*u == ' ' || *u == '\t') u++;
+    if (*u == '"' || *u == '\'') u++;
+    int i = 0;
+    while (*u && *u != ')' && *u != '"' && *u != '\'' && i < outsz - 1) out[i++] = *u++;
+    out[i] = 0;
 }
 
 static void css_apply_decl(DomNode *el, const char *name, const char *value) {
@@ -846,6 +1210,190 @@ static void css_apply_decl(DomNode *el, const char *name, const char *value) {
     else if (strcmp(name, "color") == 0) { if (css_parse_color(value, rgb)) { el->css_color[0]=rgb[0]; el->css_color[1]=rgb[1]; el->css_color[2]=rgb[2]; el->css_has_color = 1; } }
     else if (strcmp(name, "background-color") == 0 || strcmp(name, "background") == 0) {
         if (css_parse_color(value, rgb)) { el->css_bg[0]=rgb[0]; el->css_bg[1]=rgb[1]; el->css_bg[2]=rgb[2]; el->css_has_bg = 1; }
+        /* "background" is also a real shorthand for background-image
+         * (among other components this engine doesn't model -- position/
+         * repeat/size/attachment) -- a bare "background-color" never
+         * contains "url(", so this is safe to run unconditionally for
+         * both branches of this "else if". */
+        const char *u = strstr(value, "url(");
+        if (u) css_extract_url(u, el->css_bg_image_url, (int)sizeof el->css_bg_image_url);
+    } else if (strcmp(name, "background-image") == 0) {
+        const char *u = strstr(value, "url(");
+        if (u) css_extract_url(u, el->css_bg_image_url, (int)sizeof el->css_bg_image_url);
+    } else if (strcmp(name, "text-decoration") == 0 || strcmp(name, "text-decoration-line") == 0) {
+        /* Checked in this order (not "none" first) since a value can list
+         * multiple lines ("underline line-through") -- line-through wins
+         * when both are present, an arbitrary but harmless tie-break
+         * (this engine only ever draws one line per element anyway). */
+        if (strstr(value, "line-through")) el->css_text_decoration = 3;
+        else if (strstr(value, "underline")) el->css_text_decoration = 2;
+        else if (strstr(value, "none")) el->css_text_decoration = 1;
+    } else if (strcmp(name, "z-index") == 0) {
+        char *end;
+        long z = strtol(value, &end, 10);
+        if (end != value) { el->css_has_z_index = 1; el->css_z_index = (int)z; }
+    } else if (strcmp(name, "overflow") == 0 || strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0) {
+        if (strstr(value, "hidden")) el->css_overflow_hidden = 1;
+    } else if (strcmp(name, "border-radius") == 0) {
+        /* Real CSS allows 1-4 values (all corners / TL-BR + TR-BL / all
+         * four independently) and per-corner longhands -- this engine
+         * only models one uniform radius (see dom.h's own comment on this
+         * whole feature's scope), so only the FIRST value is read; a
+         * multi-value "border-radius: 4px 8px" still parses (no desync)
+         * but only the 4px applies to every corner alike. */
+        char *end;
+        double d = strtod(value, &end);
+        if (end != value) el->css_border_radius = (float)d;
+    } else if (strcmp(name, "box-shadow") == 0) {
+        /* "box-shadow: [inset] <dx> <dy> [<blur>] [<spread>] <color>" --
+         * real CSS allows a comma-separated LIST of shadows; only the
+         * FIRST is modeled (dom.h's own comment). "inset" is recognized
+         * and skipped (inset shadows aren't modeled -- drawn as a normal
+         * outer shadow instead of not at all, matching this engine's own
+         * "recover more than we lose" convention). Numbers are read in
+         * strict dx/dy/blur/spread order, stopping at the first token
+         * that ISN'T a valid leading number (assumed to be where the
+         * color starts) -- correctly handles the two real common forms
+         * ("dx dy color" and "dx dy blur spread color") without needing
+         * to look ahead for how many numeric tokens exist. */
+        if (strstr(value, "none") == value) {
+            el->css_has_box_shadow = 0;
+        } else {
+            const char *p = value;
+            while (*p == ' ') p++;
+            if (!strncmp(p, "inset", 5)) p += 5;
+            float nums[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            int nn = 0;
+            for (;;) {
+                while (*p == ' ' || *p == '\t') p++;
+                char *end;
+                double d = strtod(p, &end);
+                if (end == p || nn >= 4) break;
+                nums[nn++] = (float)d;
+                p = end;
+                /* Skip a unit suffix ("px", or bare/unitless) up to the
+                 * next space -- without this, strtod's own stop-at-"p"
+                 * behavior on "10px 10px ..." leaves `p` sitting mid-
+                 * token ("px 10px...") for the NEXT iteration, which then
+                 * fails to parse as a number at all and silently ends the
+                 * whole loop after just ONE value (confirmed as a real
+                 * bug this way: every box-shadow with px units failed to
+                 * parse past dx, so the color parse below ran on leftover
+                 * unit-suffix text instead of the real color and always
+                 * failed, meaning css_has_box_shadow was NEVER set for
+                 * any real "Npx Npx ..." box-shadow value). */
+                while (*p && *p != ' ' && *p != '\t') p++;
+            }
+            while (*p == ' ') p++;
+            if (css_parse_color(p, rgb)) {
+                el->css_has_box_shadow = 1;
+                el->css_shadow_dx = nums[0];
+                el->css_shadow_dy = nums[1];
+                el->css_shadow_blur = nn >= 3 ? nums[2] : 0.0f;
+                el->css_shadow_spread = nn >= 4 ? nums[3] : 0.0f;
+                el->css_shadow_r = rgb[0]; el->css_shadow_g = rgb[1]; el->css_shadow_b = rgb[2];
+                /* css_parse_color() itself only ever extracts rgb (every
+                 * one of its own callers historically only needed a solid
+                 * color) -- rgba()'s own alpha component matters a lot
+                 * more here (a box-shadow with no transparency looks like
+                 * a hard drop-shadow silhouette, not the soft translucent
+                 * shadow real CSS almost always uses it for), so it's
+                 * re-extracted here directly rather than widening
+                 * css_parse_color()'s own signature for every caller. */
+                el->css_shadow_a = 1.0f;
+                if (!strncmp(p, "rgba", 4)) {
+                    const char *paren = strchr(p, '(');
+                    if (paren) {
+                        int rr, gg, bb; double aa;
+                        if (sscanf(paren + 1, "%d , %d , %d , %lf", &rr, &gg, &bb, &aa) == 4 ||
+                            sscanf(paren + 1, "%d,%d,%d,%lf", &rr, &gg, &bb, &aa) == 4) {
+                            el->css_shadow_a = (float)aa;
+                        }
+                    }
+                }
+            }
+        }
+    } else if (strcmp(name, "transform") == 0) {
+        /* Same function-call grammar as SVG's own "transform" attribute
+         * (translate/scale/rotate/skewX/skewY/matrix, space-separated
+         * chain, each composed left-to-right) -- see svg_render.c's
+         * svg_parse_transform() for the identical algorithm; not shared
+         * code (different file, different value units: CSS angles carry
+         * an explicit "deg" suffix stripped here via atof's own "stop at
+         * first non-numeric character" behavior, whereas SVG angles are
+         * bare numbers already in degrees). "none" clears any transform
+         * (real CSS meaning). */
+        if (strstr(value, "none") == value) {
+            el->css_has_transform = 0;
+        } else {
+            float m[6] = {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f}; /* a,b,c,d,e,f identity */
+            const char *p = value;
+            int any = 0;
+            while (*p) {
+                while (*p == ' ' || *p == '\t' || *p == ',') p++;
+                if (!*p) break;
+                char fname[16]; int fi = 0;
+                while (*p && isalpha((unsigned char)*p) && fi < 15) fname[fi++] = *p++;
+                fname[fi] = 0;
+                while (*p == ' ') p++;
+                if (*p != '(') break;
+                p++;
+                float args[6] = {0.0f,0.0f,0.0f,0.0f,0.0f,0.0f};
+                int na = 0;
+                while (*p && *p != ')' && na < 6) {
+                    while (*p == ' ' || *p == ',') p++;
+                    char *end;
+                    double d = strtod(p, &end);
+                    if (end == p) { p++; continue; }
+                    args[na++] = (float)d;
+                    p = end;
+                    while (*p == ' ') p++;
+                    /* skip a unit suffix ("deg"/"px"/"%") up to the next
+                     * comma/paren/space -- strtod already stopped at it. */
+                    while (*p && *p != ',' && *p != ')' && *p != ' ') p++;
+                }
+                if (*p == ')') p++;
+                float la = 1.0f, lb = 0.0f, lc = 0.0f, ld = 1.0f, le = 0.0f, lf = 0.0f;
+                if (!strcmp(fname, "translate") || !strcmp(fname, "translateX")) {
+                    le = args[0]; lf = (na > 1) ? args[1] : 0.0f;
+                } else if (!strcmp(fname, "translateY")) {
+                    lf = args[0];
+                } else if (!strcmp(fname, "scale")) {
+                    la = args[0]; ld = (na > 1) ? args[1] : args[0];
+                } else if (!strcmp(fname, "scaleX")) {
+                    la = args[0];
+                } else if (!strcmp(fname, "scaleY")) {
+                    ld = args[0];
+                } else if (!strcmp(fname, "rotate")) {
+                    double ang = (double)args[0] * 3.14159265358979 / 180.0;
+                    la = (float)cos(ang); lb = (float)sin(ang); lc = -(float)sin(ang); ld = (float)cos(ang);
+                } else if (!strcmp(fname, "skewX")) {
+                    lc = (float)tan((double)args[0] * 3.14159265358979 / 180.0);
+                } else if (!strcmp(fname, "skewY")) {
+                    lb = (float)tan((double)args[0] * 3.14159265358979 / 180.0);
+                } else if (!strcmp(fname, "matrix") && na >= 6) {
+                    la = args[0]; lb = args[1]; lc = args[2]; ld = args[3]; le = args[4]; lf = args[5];
+                } else {
+                    continue; /* unrecognized function -- skip, keep composing the rest */
+                }
+                /* Compose: m = m * local (apply local AFTER everything
+                 * already composed, same left-to-right chain order as
+                 * svg_parse_transform()). */
+                float ra = m[0]*la + m[2]*lb;
+                float rb = m[1]*la + m[3]*lb;
+                float rc = m[0]*lc + m[2]*ld;
+                float rd = m[1]*lc + m[3]*ld;
+                float re = m[0]*le + m[2]*lf + m[4];
+                float rf = m[1]*le + m[3]*lf + m[5];
+                m[0]=ra; m[1]=rb; m[2]=rc; m[3]=rd; m[4]=re; m[5]=rf;
+                any = 1;
+            }
+            if (any) {
+                el->css_has_transform = 1;
+                el->css_transform[0]=m[0]; el->css_transform[1]=m[1]; el->css_transform[2]=m[2];
+                el->css_transform[3]=m[3]; el->css_transform[4]=m[4]; el->css_transform[5]=m[5];
+            }
+        }
     } else if (strcmp(name, "flex-direction") == 0) {
         el->css_flex_direction = strstr(value, "column") ? CSS_FLEX_COLUMN : CSS_FLEX_ROW;
     } else if (strcmp(name, "flex-wrap") == 0) {
@@ -899,6 +1447,40 @@ static void css_apply_decl(DomNode *el, const char *name, const char *value) {
     } else if (strcmp(name, "grid-template-columns") == 0) {
         strncpy(el->css_grid_template_columns, value, sizeof el->css_grid_template_columns - 1);
         el->css_grid_template_columns[sizeof el->css_grid_template_columns - 1] = 0;
+    } else if (strcmp(name, "grid-template-areas") == 0) {
+        strncpy(el->css_grid_template_areas, value, sizeof el->css_grid_template_areas - 1);
+        el->css_grid_template_areas[sizeof el->css_grid_template_areas - 1] = 0;
+    } else if (strcmp(name, "grid-area") == 0) {
+        /* Only the plain "grid-area: <name>" form (an area name referring
+         * to grid-template-areas) is modeled -- real CSS also allows the
+         * numeric "row-start / col-start / row-end / col-end" shorthand
+         * there, not supported here (a rule using it still parses, this
+         * value just won't match any named area at layout time, the same
+         * safe-degradation convention as every other unsupported CSS form
+         * in this engine). */
+        strncpy(el->css_grid_area, value, sizeof el->css_grid_area - 1);
+        el->css_grid_area[sizeof el->css_grid_area - 1] = 0;
+    } else if (strcmp(name, "grid-template") == 0) {
+        /* "grid-template: <row-tracks> / <col-tracks>" shorthand -- real
+         * Wikipedia CSS uses exactly this form for its own sidebar grid
+         * ("min-content 1fr min-content / 12.25rem minmax(0,1fr)"). Only
+         * the COLUMN half (after "/") is kept, feeding the same
+         * css_grid_template_columns field/parser "grid-template-columns"
+         * itself uses -- row track sizes aren't modeled at all (this
+         * engine's grid rows are always content-driven/auto-height, see
+         * layout.c's own row-height comment), so the row half is simply
+         * discarded rather than parsed for no effect. A value containing
+         * a quoted-string area-template form of this shorthand (real CSS
+         * also allows embedding grid-template-areas rows directly inside
+         * "grid-template") is NOT handled -- falls through to the
+         * else-discard below, same as any other unrecognized shape. */
+        const char *slash = strchr(value, '/');
+        if (slash && !strchr(value, '"') && !strchr(value, '\'')) {
+            const char *cols = slash + 1;
+            while (*cols == ' ') cols++;
+            strncpy(el->css_grid_template_columns, cols, sizeof el->css_grid_template_columns - 1);
+            el->css_grid_template_columns[sizeof el->css_grid_template_columns - 1] = 0;
+        }
     } else if (strcmp(name, "font-size") == 0) {
         if (css_parse_len(value, &f) && f > 0.0f) el->css_font_size = f;
     } else if (strcmp(name, "font-weight") == 0) {
@@ -947,7 +1529,22 @@ static int css_match_cmp(const void *a, const void *b) {
     return ma->rule->source_order - mb->rule->source_order;
 }
 
-#define CSS_MAX_MATCHES 128
+/* Was 128 -- confirmed, via direct testing against a real fetched
+ * Wikipedia stylesheet (~970 parsed rules from its own ~200KB external
+ * CSS bundle, see sqw_apply_css()'s own comment on why external <link
+ * rel="stylesheet"> is fetched at all now), to be far too small: a
+ * generic element matched by enough broad, common rules (any selector
+ * touching a widely-used class/tag) hit this cap well before the parser
+ * even reached specific, LATE-in-source-order rules that mattered a
+ * great deal -- confirmed as the exact reason ".mw-page-container-inner"'s
+ * own real "display:grid; grid-template-areas:...' rule (what actually
+ * places Wikipedia's sidebar beside its article content) never took
+ * effect at all: not a selector-matching or parsing bug (an isolated
+ * standalone parse of that exact rule text worked perfectly), just this
+ * cap silently dropping it before its turn. 2048 costs a few KB more
+ * stack per css_apply_element() call (CssMatchedRule is small: a pointer
+ * + an int) and comfortably covers even a large real-world stylesheet. */
+#define CSS_MAX_MATCHES 2048
 
 static void css_apply_element(DomNode *el, CssStylesheet *sheet, float viewport_w) {
     css_set_default_style(el);
@@ -1013,9 +1610,25 @@ static void css_apply_element(DomNode *el, CssStylesheet *sheet, float viewport_
      * Wikipedia markup. Checked once, after every declaration (matched
      * rules + inline style) has been applied, so it sees the final
      * computed position/clip/width/height regardless of which
-     * declaration set which property. */
+     * declaration set which property.
+     *
+     * Also covers a second, equally common real pattern found the same
+     * way (a real Wikipedia article page's language-picker dropdown
+     * rendering as a giant, full-height block of text instead of a
+     * small collapsed control): position:absolute + explicit height:0 --
+     * the standard "collapsed dropdown/menu panel, expanded only via a
+     * ':checked ~ sibling' rule this engine correctly never matches (no
+     * :checked/general-sibling-combinator support), so the base,
+     * unconditional height:0 rule is the one left in effect" idiom.
+     * Without out-of-flow placement, an in-flow position:absolute
+     * element with height:0 would otherwise still lay out its full
+     * (often huge -- here, a 119-entry language list) content height,
+     * since only ITS OWN box would be zero-height while its children
+     * still take up real space beneath it. */
     if (el->css_position_absolute &&
-        (el->css_has_clip || (el->css_has_width && el->css_width <= 2.0f && el->css_has_height && el->css_height <= 2.0f))) {
+        (el->css_has_clip ||
+         (el->css_has_width && el->css_width <= 2.0f && el->css_has_height && el->css_height <= 2.0f) ||
+         (el->css_has_height && el->css_height <= 0.0f))) {
         el->css_display = CSS_DISPLAY_NONE;
     }
 }

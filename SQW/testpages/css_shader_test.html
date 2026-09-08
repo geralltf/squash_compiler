@@ -1,0 +1,30 @@
+<html>
+<head>
+<style>
+.radius { width: 100px; height: 100px; background-color: teal; border-radius: 20px; }
+.circle { width: 80px; height: 80px; background-color: crimson; border-radius: 40px; }
+.shadow { width: 100px; height: 100px; background-color: orange; box-shadow: 10px 10px 15px 2px rgba(0,0,0,0.6); }
+.radius_shadow { width: 100px; height: 100px; background-color: royalblue; border-radius: 16px; box-shadow: 0px 0px 20px 4px rgba(0,150,255,0.8); }
+.rotated { width: 80px; height: 80px; background-color: seagreen; transform: rotate(30deg); }
+.scaled { width: 60px; height: 60px; background-color: purple; transform: scale(1.5); }
+.combo { width: 80px; height: 80px; background-color: gold; border-radius: 12px; transform: rotate(15deg) scale(1.2); }
+</style>
+</head>
+<body>
+<p>border-radius (rounded rect):</p>
+<div class="radius"></div>
+<p>border-radius (full circle, radius = half size):</p>
+<div class="circle"></div>
+<p>box-shadow (offset + blur + spread):</p>
+<div class="shadow"></div>
+<p>border-radius + box-shadow combined:</p>
+<div class="radius_shadow"></div>
+<p>transform: rotate(30deg):</p>
+<div class="rotated"></div>
+<p>transform: scale(1.5):</p>
+<div class="scaled"></div>
+<p>border-radius + transform combined (rotate+scale):</p>
+<div class="combo"></div>
+<p>end of shader test page</p>
+</body>
+</html>
