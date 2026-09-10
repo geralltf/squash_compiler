@@ -158,6 +158,32 @@ static void css_skip_ws(const char **p) {
 static void css_parse_compound(const char **p, CssCompound *out) {
     out->part_count = 0;
     out->is_child_combinator = 0;
+    /* Set when a pseudo-class/pseudo-element OTHER than ":hover" is seen
+     * anywhere in this compound -- forces part_count to 0 at the end
+     * (see below), matching this file's own DOCUMENTED design (top-of-
+     * file comment: "a rule using [an unsupported pseudo-class/element]
+     * parses without error but its selector simply never matches
+     * anything") -- a real, confirmed gap between that stated intent and
+     * what the code actually did: previously, a non-hover pseudo simply
+     * contributed no SimpleSel and was otherwise ignored, leaving the
+     * REST of the compound (its tag/class) still matching normally.
+     * Confirmed as a real, visible bug on a real Wikipedia page: rules
+     * like "a:visited{color:var(--color-visited,#6a60b0)}" and
+     * "a:where(:not([role='button'])):visited{...}" -- both of which,
+     * after stripping their unsupported pseudo-classes, degenerate to
+     * plain "a" (tag-only, exactly the SAME specificity as the page's
+     * own real, intended "a{color:var(--color-progressive,#36c)}" base
+     * link-color rule) -- won the cascade tie-break via later source
+     * order, recoloring EVERY link on the page (not just visited ones)
+     * to the visited/destructive color. Forcing the whole compound to
+     * never-match instead correctly drops such rules from the cascade
+     * entirely, same as a real browser would for `:visited` under its
+     * own privacy-motivated restrictions (real browsers also refuse to
+     * let :visited styling do anything a page could detect/observe
+     * beyond simple color, but the practical rendering effect -- an
+     * unvisited-looking page, since this engine has no browsing history
+     * to consult anyway -- is the same end result this achieves). */
+    int has_unsupported_pseudo = 0;
     const char *q = *p;
     for (;;) {
         char c = *q;
@@ -215,6 +241,8 @@ static void css_parse_compound(const char **p, CssCompound *out) {
             if (plen == 5 && strncmp(pseudo_start, "hover", 5) == 0 && out->part_count < CSS_MAX_COMPOUND_PARTS) {
                 CssSimpleSel *s = &out->parts[out->part_count++];
                 s->kind = CSS_SEL_HOVER; s->name[0] = 0; s->value_set = 0; s->value[0] = 0;
+            } else if (!(plen == 5 && strncmp(pseudo_start, "hover", 5) == 0)) {
+                has_unsupported_pseudo = 1;
             }
             continue;
         }
@@ -252,6 +280,7 @@ static void css_parse_compound(const char **p, CssCompound *out) {
         }
     }
     *p = q;
+    if (has_unsupported_pseudo) out->part_count = 0;
 }
 
 static int css_compound_specificity(const CssCompound *c) {
@@ -809,9 +838,75 @@ static int css_selector_matches(const CssSelector *sel, const DomNode *el) {
 
 /* ---- value parsing ---- */
 
+/* If `v` (after leading whitespace) is a "var(--name, fallback)" /
+ * "var(--name)" reference, copies the FALLBACK text (trimmed) into
+ * `out` and returns 1; returns 0 (leaving `out` untouched) for anything
+ * else, INCLUDING a var() with no fallback at all (real CSS then falls
+ * back to the property's own initial value, which this engine has no
+ * per-property table for -- "not specified" is the correct, safe
+ * degradation already used everywhere else in this file for an
+ * unparseable value, so it's left alone rather than guessed at).
+ *
+ * This engine doesn't implement real CSS custom properties (no
+ * *:root { --x: ... }` declaration tracking, no cascade/inheritance of
+ * custom property VALUES) -- but real-world CSS, Wikipedia's own very
+ * much included, uses "var(--name, fallback)" constantly for colors,
+ * sizes, and more (confirmed: "background-color:var(--background-color-
+ * base,#fff)", "font-size:var(--font-size-small,0.875rem)", ...), and
+ * the fallback is what a real browser renders when (as here) the custom
+ * property was never actually set to anything else -- so resolving to
+ * the DECLARED FALLBACK is a real, high-value approximation of the
+ * common case, not a guess: it's the actual, correct rendered value for
+ * any element that isn't inside a scope overriding that custom
+ * property. Before this fix, EVERY var()-based value on the page (an
+ * enormous fraction of Wikipedia's own real CSS) silently failed to
+ * parse at all, leaving color/background/font-size/etc completely
+ * unset and falling back to this engine's own per-tag PLACEHOLDER
+ * colors instead -- confirmed as the actual cause of the page's header/
+ * toolbar area rendering as a solid, wrong, placeholder blue block
+ * instead of its real (white/off-white) background.
+ *
+ * Nesting-aware (a fallback can itself contain a function call with
+ * commas, e.g. "var(--a, rgb(1, 2, 3))" -- the split has to happen on
+ * the FIRST top-level comma, not the first comma anywhere) and
+ * recursive callers (css_parse_color/css_parse_len) re-parse the
+ * extracted fallback text the normal way, so "var(--x, var(--y, red))"
+ * (a real, if less common, pattern) also resolves correctly by
+ * unwrapping one var() at a time. */
+static int css_resolve_var_fallback(const char *v, char *out, int outsz) {
+    while (*v && isspace((unsigned char)*v)) v++;
+    if (strncmp(v, "var(", 4) != 0) return 0;
+    const char *p = v + 4;
+    int depth = 1;
+    const char *comma = 0;
+    while (*p && depth > 0) {
+        if (*p == '(') depth++;
+        else if (*p == ')') { depth--; if (depth == 0) break; }
+        else if (*p == ',' && depth == 1 && !comma) comma = p;
+        p++;
+    }
+    if (*p != ')' || !comma) return 0; /* malformed, or no fallback given */
+    const char *fb = comma + 1;
+    while (*fb && isspace((unsigned char)*fb)) fb++;
+    const char *fb_end = p;
+    while (fb_end > fb && isspace((unsigned char)fb_end[-1])) fb_end--;
+    int len = (int)(fb_end - fb);
+    if (len >= outsz) len = outsz - 1;
+    if (len < 0) len = 0;
+    memcpy(out, fb, (size_t)len);
+    out[len] = 0;
+    return 1;
+}
+
 static int css_parse_len(const char *v, float *out) {
     while (*v && isspace((unsigned char)*v)) v++;
     if (strncmp(v, "auto", 4) == 0) return 0;
+    {
+        char fb[192];
+        if (css_resolve_var_fallback(v, fb, (int)sizeof fb)) {
+            return css_parse_len(fb, out);
+        }
+    }
     char *end;
     double d = strtod(v, &end);
     if (end == v) return 0;
@@ -950,6 +1045,12 @@ static void init_css_named_colors(void) {
 static int css_parse_color(const char *v, float *rgb) {
     if (!g_css_named_colors_inited) init_css_named_colors();
     while (*v && isspace((unsigned char)*v)) v++;
+    {
+        char fb[192];
+        if (css_resolve_var_fallback(v, fb, (int)sizeof fb)) {
+            return css_parse_color(fb, rgb);
+        }
+    }
     if (*v == '#') {
         v++;
         int len = 0; const char *p = v;

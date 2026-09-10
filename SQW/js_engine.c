@@ -3205,7 +3205,18 @@ static void js_dom_set_prop(JSInterp *interp, JSObject *obj, const char *name, c
         return;
     }
     if (!strcmp(name, "id")) { char buf[64]; js_to_string_buf(val, buf, sizeof buf); dom_set_attr(n, "id", buf); return; }
-    if (!strcmp(name, "className")) { char buf[128]; js_to_string_buf(val, buf, sizeof buf); dom_set_attr(n, "class", buf); interp->mutated_dom = 1; return; }
+    /* buf sized to JS_STR_MAX (matching every other string-valued DOM
+     * setter here, e.g. textContent just above), not some smaller
+     * ad-hoc size -- a real, confirmed bug: a real site's own className
+     * assignment (MediaWiki's Vector skin bootstrap script assigns a
+     * long, real feature-flag class list to document.documentElement)
+     * is comfortably longer than 128 bytes, so the previous char[128]
+     * buffer silently truncated it mid-className, losing whichever
+     * feature-flag classes happened to fall past the cut (confirmed via
+     * a real fetched Wikipedia page). dom_set_attr()'s own underlying
+     * storage (HTML_MAX_ATTR_LEN, 1024) was already large enough --
+     * only this staging buffer was too small. */
+    if (!strcmp(name, "className")) { char buf[JS_STR_MAX]; js_to_string_buf(val, buf, sizeof buf); dom_set_attr(n, "class", buf); interp->mutated_dom = 1; return; }
     if (!strcmp(name, "value")) { char buf[512]; js_to_string_buf(val, buf, sizeof buf); strncpy(n->form_value, buf, sizeof n->form_value - 1); n->form_value[sizeof n->form_value - 1] = 0; return; }
     if (!strcmp(name, "checked")) { n->form_checked = js_to_bool(val); return; }
     if (!strcmp(name, "onclick")) {

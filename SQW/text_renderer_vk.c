@@ -242,7 +242,9 @@ int sqw_text_renderer_init(SqwVkContext *vk, SqwTextRenderer *tr) {
 
 void sqw_text_draw_char(SqwTextRenderer *tr, float x, float y, char ch, float scale,
                          float r, float g, float b, float a, float viewport_w, float viewport_h) {
-    if (tr->vcount + 6 > SQW_TEXT_MAX_GLYPHS * 6) return;
+    if (tr->vcount + 6 > SQW_TEXT_MAX_GLYPHS * 6) {
+        return;
+    }
     const SqwGlyphMetrics *gm = sqw_glyph_lookup(ch);
     if (!gm || gm->glyph_w <= 0 || gm->glyph_h <= 0) return; /* space / unsupported char: nothing to draw */
 

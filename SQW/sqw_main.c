@@ -1251,7 +1251,7 @@ static void sqw_go_navigate(const char *url_text, int push_history, SqwHistorySt
  * (they're laid out as one opaque inline box, see layout.c's
  * kind_for_tag comment). Returns the number of characters written (not
  * counting the NUL). */
-static int concat_direct_text(const DomNode *node, char *buf, int bufcap) {
+static int concat_direct_text_rec(const DomNode *node, char *buf, int bufcap) {
     int i, n = 0;
     for (i = 0; i < node->child_count && n < bufcap - 1; i++) {
         const DomNode *c = node->children[i];
@@ -1268,12 +1268,57 @@ static int concat_direct_text(const DomNode *node, char *buf, int bufcap) {
              * block's raw CSS text nested inside an otherwise-empty
              * wrapper <span> (real Wikipedia markup) would otherwise get
              * "concatenated" as if it were the span's own visible label
-             * and rendered as literal CSS text on the page. */
-            n += concat_direct_text(c, buf + n, bufcap - n);
+             * and rendered as literal CSS text on the page. Once we're
+             * inside this recursion at all (see concat_direct_text()'s
+             * own top-level guard just below), EVERY descendant here
+             * genuinely has no layout box of its own -- layout.c only
+             * ever visits an atomic-inline element's children through
+             * THIS aggregation, never through its own tree-walk -- so,
+             * unlike the top-level entry point, no per-child display
+             * check belongs here: a nested child's OWN css_display
+             * doesn't change whether IT got a box (it didn't, for the
+             * same reason its parent didn't). */
+            n += concat_direct_text_rec(c, buf + n, bufcap - n);
         }
     }
     buf[n] = 0;
     return n;
+}
+
+/* Real fix (found on a real Wikipedia page) for a genuine double-text-
+ * render bug: this function is only safe to call -- and only ever
+ * needed -- when `node` itself was laid out as a single atomic inline
+ * run (layout.c's atomic-inline-tag path: css_display==INLINE,
+ * place_inline_run(), no frame/recursion into children at all -- see
+ * that function's own comment). In that case `node`'s children truly
+ * have no box of their own, and aggregating their text here is the
+ * ONLY way it ever reaches the screen -- the ORIGINAL, correct reason
+ * this function exists (a real link's label commonly wrapped in an
+ * inner <span>, e.g. real Wikipedia sidebar markup).
+ *
+ * But `node` can ALSO reach this call with a NON-inline display (flex/
+ * block/grid -- a real, common pattern for a dropdown-button LABEL,
+ * confirmed via a real page): kind_for_tag() assigns SQW_BOX_SPAN/A/
+ * BUTTON purely from the TAG NAME, with no awareness of display, so a
+ * `<label style="display:flex">` still reaches this same SQW_BOX_SPAN
+ * draw-time code. When that happens, `node` was NOT laid out
+ * atomically -- it went through layout.c's ordinary recursive block-
+ * like path instead, meaning its own children (an inner
+ * "vector-dropdown-label-text" span, in the confirmed real case) were
+ * independently visited by the tree-walk and ALREADY have their own
+ * separate boxes, drawn separately. Aggregating them here too rendered
+ * the same text TWICE, visibly overlapping on screen (a real page's
+ * language-count/menu-button labels, e.g. "119 languages", showing
+ * doubled). Guarding the whole aggregation on node's own display here
+ * (rather than per-child inside the recursion, which checks the wrong
+ * thing -- a child's OWN display says nothing about whether ITS
+ * parent already gave it a box) makes this exactly as safe as the
+ * ORIGINAL "one opaque run" assumption intended: draw nothing here
+ * when node isn't actually atomic, letting its real children's own
+ * boxes render (correctly, and exactly once). */
+static int concat_direct_text(const DomNode *node, char *buf, int bufcap) {
+    if (node->css_display != CSS_DISPLAY_INLINE) { buf[0] = 0; return 0; }
+    return concat_direct_text_rec(node, buf, bufcap);
 }
 
 /* Classic web anchor palette: unvisited blue, visited purple (see
@@ -1373,9 +1418,28 @@ static void draw_layout_styled(SqwStyledRenderer *sr, SqwVkContext *vk, VkComman
         if (!n) continue;
         if (!(n->css_border_radius > 0.0f || n->css_has_box_shadow || n->css_has_transform)) continue;
 
-        float cr, cg, cb;
-        if (n->css_has_bg) { cr = n->css_bg[0]; cg = n->css_bg[1]; cb = n->css_bg[2]; }
-        else box_color(b->kind, &cr, &cg, &cb);
+        /* Same real-vs-placeholder-background fix as renderer_vk.c's
+         * own sqw_renderer_draw() (see that function's own comment for
+         * the full story) -- an element reaching this function has a
+         * real border-radius/box-shadow/transform, so it's still drawn
+         * (the effect itself is real and wanted), but when it has no
+         * CSS background of its own and isn't a kind with a genuine
+         * real-browser default appearance, its FILL is made fully
+         * transparent (fill_a = 0) rather than the old per-tag
+         * placeholder color -- confirmed via a real Wikipedia page that
+         * this exact path (not just the flat renderer_vk.c pass) was
+         * ALSO painting solid placeholder-colored boxes (e.g. the page's
+         * own toolbar bar, which apparently carries a box-shadow/
+         * transform/border-radius from real Wikipedia CSS but no
+         * explicit background of its own) over real page chrome that a
+         * real browser renders with no fill at all. */
+        float cr, cg, cb, fa;
+        int real_default = (b->kind == SQW_BOX_BUTTON || b->kind == SQW_BOX_PRE ||
+                             b->kind == SQW_BOX_INPUT_TEXT || b->kind == SQW_BOX_TEXTAREA ||
+                             b->kind == SQW_BOX_INPUT_CHECK || b->kind == SQW_BOX_IMG);
+        if (n->css_has_bg) { cr = n->css_bg[0]; cg = n->css_bg[1]; cb = n->css_bg[2]; fa = n->css_opacity; }
+        else if (real_default) { box_color(b->kind, &cr, &cg, &cb); fa = n->css_opacity; }
+        else { cr = 0.0f; cg = 0.0f; cb = 0.0f; fa = 0.0f; }
 
         SqwStyledBox sb;
         memset(&sb, 0, sizeof sb);
@@ -1384,7 +1448,7 @@ static void draw_layout_styled(SqwStyledRenderer *sr, SqwVkContext *vk, VkComman
         sb.w = b->w;
         sb.h = b->h;
         sb.radius = n->css_border_radius;
-        sb.fill_r = cr; sb.fill_g = cg; sb.fill_b = cb; sb.fill_a = n->css_opacity;
+        sb.fill_r = cr; sb.fill_g = cg; sb.fill_b = cb; sb.fill_a = fa;
         sb.has_shadow = n->css_has_box_shadow;
         if (sb.has_shadow) {
             sb.shadow_r = n->css_shadow_r; sb.shadow_g = n->css_shadow_g; sb.shadow_b = n->css_shadow_b; sb.shadow_a = n->css_shadow_a;

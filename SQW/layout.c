@@ -312,6 +312,24 @@ static void layout_list_push_full(LayoutList *out, DomNode *node, SqwBoxKind kin
     LayoutBox *b = &out->boxes[out->count];
     b->node = node; b->kind = kind; b->x = x; b->y = y; b->w = w; b->h = h;
     b->text_start = text_start; b->text_len = text_len;
+    /* Real, confirmed bug (found via a real Wikipedia page): this field
+     * was never initialized here at all, and out->boxes is grown via
+     * plain realloc() (not calloc, no memset) -- every box pushed
+     * through THIS function (layout_list_push()'s generic block-
+     * container path, used for e.g. many real <span>s that get their own
+     * frame rather than going through the inline PlaceSpec path, which
+     * DOES set text_scale explicitly right after calling this) got
+     * whatever garbage float bit pattern happened to already be sitting
+     * in that heap slot -- confirmed via direct tracing: real page spans
+     * with a correctly-resolved css_font_size of 16 were drawn with
+     * text_scale values like 2.5, 18, 53, 154 instead of the correct
+     * 0.45, producing giant, garbled duplicate-looking text on screen.
+     * A caller that computes a more precise value (e.g. the inline
+     * PlaceSpec path, which already knows the exact wrapped-line scale)
+     * still overwrites this right after the call, unchanged -- this is
+     * just the correct, safe DEFAULT for every other caller instead of
+     * uninitialized memory. */
+    b->text_scale = node_text_scale(node);
     b->z_key = z;
     b->has_clip = has_clip; b->clip_x = clip_x; b->clip_y = clip_y; b->clip_w = clip_w; b->clip_h = clip_h;
     out->count++;
@@ -460,6 +478,61 @@ static void place_text_node(LayoutFrame *f, LayoutList *out, DomNode *node) {
         spec.text_start = start; spec.text_len = wlen; spec.gap = space_w;
         spec.text_scale = f->text_scale;
         place_inline_run(f, out, node, &spec);
+    }
+}
+
+/* Real, confirmed fix for a genuine layout bug found on a real Wikipedia
+ * page: an "atomic inline" element (see is_atomic_inline_tag()'s own
+ * comment -- <a>/<span>/<button>/etc, normally kept together as ONE
+ * indivisible run) with a LOT of direct text -- confirmed via a real
+ * article's References section, where each footnote's whole citation
+ * text is wrapped in one `<span class="reference-text">` -- was being
+ * measured at its full, unwrapped width (direct_text_width()) and
+ * placed as one giant box regardless of how absurdly wide that made it
+ * (thousands of px past the actual content column, ballooning the
+ * WHOLE PAGE's own content width and creating a huge, wrong horizontal
+ * scroll range). Real CSS never lets inline content escape its
+ * container this way -- <span> is inline-level, and inline-level
+ * content wraps across lines exactly like plain text; the "keep it
+ * together as one run" behavior other atomic-inline callers rely on is
+ * really just an approximation that happens to look right for SHORT
+ * content (a link/button label), never meant to license unbounded
+ * width.
+ *
+ * This function is the escape hatch for when that approximation
+ * breaks down: it recurses into `node`'s own children exactly the same
+ * way direct_text_width() already does for MEASURING (same tag
+ * exclusion, same one-or-more-levels-deep descent) but PLACES instead
+ * of summing -- a real text child goes through the ordinary
+ * place_text_node() word-wrap path (so it participates in the SAME
+ * line-wrapping cursor state as any other inline content), and a
+ * nested element just recurses again. This intentionally does NOT
+ * preserve the "kept together as one clickable/styled unit" property
+ * for a nested `<a>` inside the wrapped span (a link buried inside a
+ * long citation loses its own distinct box, becoming plain wrapped
+ * text) -- a real, documented scope cut, not an oversight: doing better
+ * would mean this element's own inline children needing to flow
+ * through the SAME general child-dispatch loop layout_compute() already
+ * runs for a normal block's children (text/atomic-inline/block-like all
+ * handled together), which would require extracting that loop into a
+ * shared, recursive helper -- a much larger refactor than this specific
+ * bug (unreadable, massively overflowing citation text) warrants. Each
+ * SQW_BOX_TEXT run this produces still resolves its own color/weight by
+ * walking up from its real DOM parent at draw time (see
+ * sqw_main.c's SQW_BOX_TEXT draw-time comment), so it still picks up
+ * whatever color the wrapped <span> (or further ancestor) declared --
+ * only the "nested link stays clickable" behavior is lost, not styling. */
+static void place_atomic_inline_wrapped(LayoutFrame *f, LayoutList *out, DomNode *node) {
+    int i;
+    for (i = 0; i < node->child_count; i++) {
+        DomNode *c = node->children[i];
+        if (dom_is_text(c)) {
+            int len = (int)strlen(c->text), j, all_ws = 1;
+            for (j = 0; j < len; j++) if (!isspace((unsigned char)c->text[j])) { all_ws = 0; break; }
+            if (!all_ws) place_text_node(f, out, c);
+        } else if (!html_tag_is_raw_text(c->tag)) {
+            place_atomic_inline_wrapped(f, out, c);
+        }
     }
 }
 
@@ -1009,10 +1082,24 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
             float cscale = node_text_scale(child);
             float w = direct_text_width(child, cscale);
             if (w < 4.0f) w = 4.0f;
-            PlaceSpec spec;
-            spec.kind = kind_for_tag(child->tag); spec.w = w; spec.h = node_normal_line_h(child, cscale);
-            spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP; spec.text_scale = cscale;
-            place_inline_run(f, out, child, &spec);
+            /* See place_atomic_inline_wrapped()'s own comment: content
+             * that wouldn't fit on even a completely empty line can't
+             * be kept atomic without escaping the container entirely
+             * (a real, confirmed bug on a real Wikipedia page's
+             * reference/citation text) -- word-wrap it like ordinary
+             * inline content instead of forcing it into one run. Short/
+             * normal atomic content (the vast majority: links, button
+             * labels, short spans) is completely unaffected, since this
+             * only triggers when the FULL available width isn't enough
+             * for even one copy of the text. */
+            if (w > f->avail_w) {
+                place_atomic_inline_wrapped(f, out, child);
+            } else {
+                PlaceSpec spec;
+                spec.kind = kind_for_tag(child->tag); spec.w = w; spec.h = node_normal_line_h(child, cscale);
+                spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP; spec.text_scale = cscale;
+                place_inline_run(f, out, child, &spec);
+            }
         } else if (is_block_like(child->css_display) || strcmp(child->tag, "img") == 0) {
             /* Non-atomic-inline "img"/unrecognized-inline tags fall
              * through here too and are just treated as block -- a plain,

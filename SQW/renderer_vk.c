@@ -248,13 +248,45 @@ void sqw_renderer_draw(SqwVkContext *vk, SqwRenderer *r, VkCommandBuffer cmd,
 
         float cr, cg, cb;
         /* A real CSS background-color (see css.h/css.c) always wins over
-         * the built-in per-tag placeholder palette -- that palette exists
-         * purely as a fallback for elements/pages with no matching CSS at
-         * all (including every one of this project's own local test
-         * pages, none of which carry a <style> block), not as a real
-         * browser's default appearance. */
+         * the built-in per-tag placeholder palette. That palette was
+         * originally used UNCONDITIONALLY as a fallback for every kind
+         * of box -- reasonable back when this engine had no real CSS
+         * background support at all (every page, including this
+         * project's own local test pages, none of which carry a <style>
+         * block, needed SOME way to visually tell boxes apart). Now that
+         * backgrounds genuinely resolve from real CSS, that old
+         * fallback became actively harmful for any real page: a real
+         * browser renders an unstyled <div> as TRANSPARENT (its
+         * parent's own background shows through), not filled with a
+         * saturated placeholder color -- confirmed as a major real-page
+         * regression on a real Wikipedia article, where nearly every
+         * <div> in the page's own header/toolbar chrome has no explicit
+         * background-color of its own (by design -- it's meant to show
+         * the page's plain white background through it) and was instead
+         * painting a solid, wrong placeholder blue over a huge fraction
+         * of the visible page.
+         *
+         * Scoped narrowly, matching this file's own already-established
+         * precedent for SQW_BOX_A/SPAN just above (skipped from this
+         * loop entirely, same reasoning): a plain container (DIV/
+         * CENTER/P, or any other kind not explicitly listed below) with
+         * no CSS background is now simply left transparent -- no fill
+         * at all. The remaining kinds keep their placeholder/default
+         * appearance because it reflects a REAL browser default, not an
+         * invented one: form controls (BUTTON/INPUT_TEXT/TEXTAREA/
+         * INPUT_CHECK) have real, visible default UA-stylesheet chrome
+         * in every actual browser, a <pre> block commonly gets a pale
+         * default background too, and IMG's placeholder specifically
+         * covers a still-pending/failed image load (a real "broken
+         * image" indicator, not a stand-in for missing CSS). */
         if (b->node->css_has_bg) { cr = b->node->css_bg[0]; cg = b->node->css_bg[1]; cb = b->node->css_bg[2]; }
-        else box_color(b->kind, &cr, &cg, &cb);
+        else if (b->kind == SQW_BOX_BUTTON || b->kind == SQW_BOX_PRE ||
+                 b->kind == SQW_BOX_INPUT_TEXT || b->kind == SQW_BOX_TEXTAREA ||
+                 b->kind == SQW_BOX_INPUT_CHECK || b->kind == SQW_BOX_IMG) {
+            box_color(b->kind, &cr, &cg, &cb);
+        } else {
+            continue; /* transparent -- no fill, parent's own background shows through */
+        }
 
         /* Field-by-field writes into verts[vcount], NOT a whole-SqwVertex-
          * struct assignment through a post-incremented index (the
