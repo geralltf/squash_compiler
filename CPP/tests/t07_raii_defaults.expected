@@ -1,0 +1,9 @@
+construct 1
+id=1
+destruct 1
+arr[3]=9
+hi world
+hi world
+n=2
+hi you
+n2=1

@@ -18,6 +18,8 @@
 #include "diag.h"
 #include "CS/cs_parser.h"
 #include "CS/cs_lower.h"
+#include "CPP/cpp_parser.h"
+#include "CPP/cpp_lower.h"
 #if defined(__OpenBSD__)
 #include <dirent.h>
 #endif
@@ -140,6 +142,44 @@ static char *lower_csharp_file(const char *path) {
     return r.text;
 }
 
+/* ".cpp"/".cxx"/".cc" integration — exactly the same shape as
+ * is_csharp_source_path()/lower_csharp_file() above, using CPP/cpp_parser.c
+ * + CPP/cpp_lower.c instead. See CPP/cpp_lower.h's own header comment for
+ * the current, honest scope of what a C++ source file can contain. */
+static int is_cpp_source_path(const char *path) {
+    size_t n = strlen(path);
+    return (n > 4 && strcmp(path + n - 4, ".cpp") == 0) ||
+           (n > 4 && strcmp(path + n - 4, ".cxx") == 0) ||
+           (n > 3 && strcmp(path + n - 3, ".cc") == 0);
+}
+
+static char *lower_cpp_file(const char *path) {
+    char *cpp_src = read_file(path);
+    CppParser p;
+    CppNode *unit;
+    CppLowerResult r;
+
+    cpp_parser_init(&p, cpp_src);
+    unit = cpp_parse_unit(&p);
+    if (p.error_count > 0) {
+        diag_emit(DIAG_ERROR, -1, NULL, NULL,
+                  "%s: %d C++ syntax error%s -- no output written",
+                  path, p.error_count, p.error_count == 1 ? "" : "s");
+        exit(1);
+    }
+    r = cpp_lower_unit(unit, "cpp_rt.h");
+    cppast_free(unit);
+    cpp_parser_free(&p);
+    free(cpp_src);
+    if (!r.ok) {
+        diag_emit(DIAG_ERROR, -1, NULL, NULL,
+                  "%s: %d C++ lowering error%s (unsupported construct(s) -- see messages above) -- no output written",
+                  path, r.error_count, r.error_count == 1 ? "" : "s");
+        exit(1);
+    }
+    return r.text;
+}
+
 static int find_func_offset(Assembler *a, const char *name) {
     for (int i=0;i<a->label_count;i++)
         if (strcmp(a->labels[i].name,name)==0 && a->labels[i].offset>=0)
@@ -204,7 +244,7 @@ static void inject_entry_reloc_a64(Arm64Asm *a, const char *entry) {
  * request for help). Kept deliberately terse -- "-h/--help" right there
  * at the end is the pointer to the real, detailed screen below. */
 static void print_usage_short(void) {
-    printf("Usage: squash [options] <source.c|source.cs> [object.sqo ...] [-o output]\n");
+    printf("Usage: squash [options] <source.c|source.cs|source.cpp> [object.sqo ...] [-o output]\n");
     printf("  (default target platform: whatever this squash binary was itself built for)\n");
     printf("  Run 'squash --help' for the full option reference.\n");
 }
@@ -231,11 +271,11 @@ static void help_row(const char *flag, const char *desc) {
  * "<source.c|source.cs>" placeholder. */
 static void print_help(void) {
     g_help_color = SQ_ISATTY(1) && !getenv("NO_COLOR");
-    printf("%ssquash%s %s%s%s -- a from-scratch C (and C#) compiler, straight to native machine code\n\n",
+    printf("%ssquash%s %s%s%s -- a from-scratch C (and C#, and C++) compiler, straight to native machine code\n\n",
            HC_BOLD, HC_RESET, HC_DIM, SQUASH_VERSION, HC_RESET);
 
     printf("%sUSAGE%s\n", HC_HEAD, HC_RESET);
-    printf("  squash [options] <source.c|source.cs> [object.sqo ...] [-o output]\n\n");
+    printf("  squash [options] <source.c|source.cs|source.cpp> [object.sqo ...] [-o output]\n\n");
 
     printf("%sINPUT%s\n", HC_HEAD, HC_RESET);
     printf("  A single %ssource.c%s file compiles as ordinary C, unchanged. A single\n", HC_BOLD, HC_RESET);
@@ -243,9 +283,15 @@ static void print_help(void) {
     printf("  generics-erased List<T>, LINQ method chains, string interpolation,\n");
     printf("  interfaces with real per-class vtables, and [DllImport]-declared native\n");
     printf("  calls are all supported -- see CS/cs_lower.h for the exact scope) and then\n");
-    printf("  fed through the SAME unmodified codegen every .c file goes through. Extra\n");
-    printf("  \".sqo\" arguments (previously-compiled squash objects, see objfile.h) are\n");
-    printf("  linked in alongside the freshly-compiled source.\n\n");
+    printf("  fed through the SAME unmodified codegen every .c file goes through. A\n");
+    printf("  %ssource.cpp%s/%s.cxx%s/%s.cc%s file works the same way, lowered from C++ to C\n", HC_BOLD, HC_RESET, HC_BOLD, HC_RESET, HC_BOLD, HC_RESET);
+    printf("  first (classes/structs with single inheritance and virtual dispatch,\n");
+    printf("  constructors/destructors, function/method/operator overloading,\n");
+    printf("  references, new/delete, namespaces, function and class templates, and\n");
+    printf("  std::string/std::vector<T>/std::cout/std::cin -- see CPP/cpp_lower.h for\n");
+    printf("  the exact scope). Extra \".sqo\" arguments (previously-compiled squash\n");
+    printf("  objects, see objfile.h) are linked in alongside the freshly-compiled\n");
+    printf("  source.\n\n");
 
     printf("%sTARGET PLATFORM%s  (default: whatever this squash binary was itself built for)\n", HC_HEAD, HC_RESET);
     help_row("-linux",            "native ELF output for Linux");
@@ -286,6 +332,8 @@ static void print_help(void) {
     printf("      Compile and link a native executable for this host.\n");
     printf("  %ssquash game.cs -o game%s\n", HC_DIM, HC_RESET);
     printf("      Compile a C# script straight to a native executable.\n");
+    printf("  %ssquash app.cpp -o app%s\n", HC_DIM, HC_RESET);
+    printf("      Compile a C++ program straight to a native executable.\n");
     printf("  %ssquash -c -linux -64 big_shared.c -o common.sqo%s\n", HC_DIM, HC_RESET);
     printf("      Precompile a shared translation unit once, ahead of time.\n");
     printf("  %ssquash main.c common.sqo -o app%s\n", HC_DIM, HC_RESET);
@@ -536,6 +584,7 @@ int main(int argc, char **argv) {
      * this process is already using for the current compile, which is a
      * real, avoidable risk this integration doesn't need to take). */
     int is_csharp = is_csharp_source_path(src_path);
+    int is_cpp = is_cpp_source_path(src_path);
     char rt_sqo_path[128];
     if (is_csharp) {
         const char *tag = is_arm64 ? "linux_arm64" : (is_macos ? "macos64" : (is_openbsd ? "openbsd64" : (is_linux ? "linux64" : (is_64bit ? "win64" : "win32"))));
@@ -554,7 +603,25 @@ int main(int argc, char **argv) {
         fclose(rtf);
         if (n_obj < 64) obj_flags[n_obj++] = rt_sqo_path;
     }
-    char *raw = is_csharp ? lower_csharp_file(src_path) : read_file(src_path);
+    char cpp_rt_sqo_path[128];
+    if (is_cpp) {
+        const char *tag = is_arm64 ? "linux_arm64" : (is_macos ? "macos64" : (is_openbsd ? "openbsd64" : (is_linux ? "linux64" : (is_64bit ? "win64" : "win32"))));
+        snprintf(cpp_rt_sqo_path, sizeof cpp_rt_sqo_path, "CPPR/cpp_rt.%s.sqo", tag);
+        if (n_inc < 32) include_dirs[n_inc++] = "CPPR";
+        FILE *rtf = fopen(cpp_rt_sqo_path, "rb");
+        if (!rtf) {
+            diag_emit(DIAG_ERROR, -1, NULL, NULL,
+                      "%s not found -- build the C++ runtime for this target first, e.g. \"squash -c %s %s CPPR/cpp_rt.c -o %s\"",
+                      cpp_rt_sqo_path,
+                      is_arm64 ? "-arm64" : (is_64bit ? "-64" : "-32"),
+                      is_macos ? "-macos" : (is_openbsd ? "-openbsd" : (is_linux ? "-linux" : "-windows")),
+                      cpp_rt_sqo_path);
+            return 1;
+        }
+        fclose(rtf);
+        if (n_obj < 64) obj_flags[n_obj++] = cpp_rt_sqo_path;
+    }
+    char *raw = is_csharp ? lower_csharp_file(src_path) : (is_cpp ? lower_cpp_file(src_path) : read_file(src_path));
     include_dirs[n_inc]=NULL;
     char *src=preprocess(raw,src_path,include_dirs,n_inc,is_linux);
     free(raw);
