@@ -42,11 +42,28 @@ typedef enum {
     /* :hover -- matched against the DomNode's own runtime `hover` flag
      * (already tracked by sqw_main.c's mouse-move handling for the
      * existing hardcoded a:hover/button:hover color logic -- see css.c's
-     * own comment on how this plugs into that). No other pseudo-class/
-     * -element is supported; one still parses (css_parse_compound already
-     * consumes ":anything(...)" generically) but never matches, same
-     * convention as child/sibling combinators below. */
-    CSS_SEL_HOVER
+     * own comment on how this plugs into that). */
+    CSS_SEL_HOVER,
+    /* :checked -- matched against the DomNode's own runtime
+     * `form_checked` flag (a checkbox/radio <input>'s real checked
+     * state, already tracked by sqw_main.c's click handling for its own
+     * checkbox-rendering/radio-group logic). A REAL, deliberately added
+     * "dynamic CSS" feature (not just a static-page improvement): real-
+     * world sites -- Wikipedia's own Vector skin very much included --
+     * commonly implement a JS-free collapsible dropdown/menu purely via
+     * "input:checked ~ .content { display: ... }", relying on the
+     * browser's own native checkbox-click behavior rather than a script.
+     * Before this, EVERY such component (the exact ":checked" +
+     * general-sibling-combinator pattern used by Wikipedia's language
+     * switcher, main menu, and page-tools dropdowns) was permanently
+     * stuck in its default (closed) state, un-openable by clicking, since
+     * neither half of that pattern was implemented. See the general
+     * sibling combinator support below (CssCompound::is_general_sibling)
+     * for the other required half. No OTHER pseudo-class/-element is
+     * supported; one still parses (css_parse_compound already consumes
+     * ":anything(...)" generically) but never matches, same convention as
+     * the adjacent-sibling ("+") combinator below. */
+    CSS_SEL_CHECKED
 } CssSelKind;
 
 typedef struct {
@@ -72,6 +89,20 @@ typedef struct {
      * not just some further-up ancestor. Meaningless for chain[0] (there
      * is no earlier compound to relate to). */
     int is_child_combinator;
+    /* Real GENERAL SIBLING combinator ("A ~ B") support -- see
+     * css_selector_matches()'s own comment for the matching algorithm.
+     * 1 means this compound was preceded by "~ " in the source, so it
+     * must match some EARLIER SIBLING of whatever the previous compound
+     * matched (any earlier one, not necessarily immediately before --
+     * real CSS "~" semantics), not an ancestor. Added specifically to
+     * support real-world ":checked ~ .content"-style CSS-only dropdown/
+     * menu toggles (see CSS_SEL_CHECKED's own comment) -- the narrower
+     * adjacent-sibling combinator ("A + B", matching ONLY the immediately
+     * preceding sibling) remains unsupported/never-matching, since
+     * nothing found so far actually needs it; a selector using it still
+     * parses cleanly via the same "parses but never matches" convention
+     * this file already uses for other unsupported constructs. */
+    int is_general_sibling;
 } CssCompound;
 
 /* A full selector: a whitespace-separated chain of compounds, matched as

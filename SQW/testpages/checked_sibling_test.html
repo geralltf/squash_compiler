@@ -1,0 +1,17 @@
+<html>
+<head>
+<style>
+body { font-family: sans-serif; }
+.dropdown-content { display: none; background-color: lightyellow; padding: 8px; border: 1px solid orange; }
+.toggle:checked ~ .dropdown-content { display: block; }
+.toggle:checked ~ .label-text { background-color: lightgreen; }
+</style>
+</head>
+<body>
+<p>Click the checkbox below to reveal hidden content (CSS-only, no JS: ":checked" + "~" general sibling combinator).</p>
+<input type="checkbox" id="toggle-cb" class="toggle">
+<label for="toggle-cb"><span class="label-text">Toggle me</span></label>
+<div class="dropdown-content">This content should only be visible after the checkbox above is checked.</div>
+<p>end of test</p>
+</body>
+</html>

@@ -2247,7 +2247,7 @@ typedef struct SqwAppState {
      * sqw_push_test_events()'s own comment. */
     int test_click_x, test_click_y;
     int test_click2_x, test_click2_y;
-    int test_click3_x, test_click3_y;
+    int test_click3_x, test_click3_y, test_click3_frame;
     SDL_Scancode test_key;
     const char *test_type_text;
     /* SQW_TEST_SCREENSHOT_FRAME/SQW_TEST_SCREENSHOT_PATH: dumps swapchain
@@ -2489,13 +2489,13 @@ static void sqw_push_test_events(SqwAppState *st) {
      * somewhere that navigates, click again, then click Back and confirm
      * it actually lands back on the first page). Same real-event-loop
      * rationale as SQW_TEST_CLICK_X/Y above. */
-    if (st->test_click3_x >= 0 && st->frame_count == 480) {
+    if (st->test_click3_x >= 0 && st->frame_count == st->test_click3_frame - 20) {
         SDL_Event mv; memset(&mv, 0, sizeof mv);
         mv.type = SDL_EVENT_MOUSE_MOTION;
         mv.motion.x = (float)st->test_click3_x; mv.motion.y = (float)st->test_click3_y;
         SDL_PushEvent(&mv);
     }
-    if (st->test_click3_x >= 0 && st->frame_count == 500) {
+    if (st->test_click3_x >= 0 && st->frame_count == st->test_click3_frame) {
         SDL_Event bd; memset(&bd, 0, sizeof bd);
         bd.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
         bd.button.button = 1; bd.button.down = 1;
@@ -2941,11 +2941,30 @@ static void sqw_handle_event(SqwAppState *st, SDL_Event *ev) {
                         } else {
                             target_node->form_checked = !target_node->form_checked;
                         }
-                        {
-                            int relayout = 0;
-                            js_dispatch_change(g_current_js_interp, target_node, &relayout);
-                            if (relayout) { layout_list_free(&st->boxes); layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes); return; }
+                        /* Real ":checked"-driven CSS re-resolve -- see
+                         * CSS_SEL_CHECKED's own comment (css.h) for why
+                         * this matters: a real checkbox-toggle click can
+                         * change what "input:checked ~ .content{...}"
+                         * matches ANYWHERE later in the same parent's
+                         * sibling list (Wikipedia's own JS-free dropdown/
+                         * menu pattern), which needs a REAL cascade
+                         * re-apply (not just this one element's own
+                         * style, unlike :hover's narrower single-element
+                         * css_apply_one() re-resolve above) plus a real
+                         * relayout, since display/height are exactly
+                         * what such rules typically toggle. Unconditional
+                         * (not gated on js_dispatch_change() asking for
+                         * one below) -- a checkbox with no "change"
+                         * listener at all (the common case for a pure-
+                         * CSS toggle; nothing here is JS-driven) still
+                         * needs its own :checked state to actually take
+                         * visual effect. */
+                        if (g_current_css_sheet_valid) {
+                            css_apply(st->root, &g_current_css_sheet, st->viewport_w);
                         }
+                        int relayout = 0;
+                        js_dispatch_change(g_current_js_interp, target_node, &relayout);
+                        layout_list_free(&st->boxes); layout_compute(st->root, st->viewport_w, st->viewport_h, &st->boxes); return;
                     }
                 }
             }
@@ -3462,11 +3481,13 @@ int main(void) {
         const char *ey = getenv("SQW_TEST_CLICK2_Y");
         if (ex && ey) { st->test_click2_x = atoi(ex); st->test_click2_y = atoi(ey); }
     }
-    st->test_click3_x = -1; st->test_click3_y = -1;
+    st->test_click3_x = -1; st->test_click3_y = -1; st->test_click3_frame = 500;
     {
         const char *ex = getenv("SQW_TEST_CLICK3_X");
         const char *ey = getenv("SQW_TEST_CLICK3_Y");
         if (ex && ey) { st->test_click3_x = atoi(ex); st->test_click3_y = atoi(ey); }
+        const char *ef = getenv("SQW_TEST_CLICK3_FRAME");
+        if (ef) st->test_click3_frame = atoi(ef);
     }
     /* SQW_TEST_KEY: same rationale as SQW_TEST_CLICK_X/Y above -- names one
      * of "pagedown"/"pageup"/"home"/"end"/"up"/"down", pushed as a real

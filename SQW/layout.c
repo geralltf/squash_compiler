@@ -857,6 +857,72 @@ static int compute_flex_row_positions(DomNode *node, float avail_w, float *flex_
     return num_rows;
 }
 
+/* Real table-row layout: lays out a <tr>'s own <td>/<th> children SIDE
+ * BY SIDE (columns), filling the row's full available width, instead
+ * of each cell stacking as its own full-width block underneath the
+ * previous one (this engine's only table behavior before this fix --
+ * see css_set_default_style()'s own comment on td/th/tbody/thead/tfoot
+ * for the earlier, more basic fix that at least made cell CONTENT
+ * visible at all, just not arranged as real columns).
+ *
+ * This engine has no real table-layout algorithm (no cross-row column-
+ * width alignment, no rowspan support) -- deliberately scoped to what
+ * meaningfully improves the common real-world case (Wikipedia infobox/
+ * wikitable rows, and ordinary HTML tables generally) without a much
+ * larger project (a real table needs a first pass across every row to
+ * agree on shared column widths, tracking rowspan reservations across
+ * rows -- a genuinely different, stateful algorithm from anything else
+ * this file does). Each ROW independently divides its own available
+ * width EQUALLY among its own cells, weighted by each cell's own
+ * "colspan" attribute (default 1) -- e.g. a 3-cell row with colspan
+ * 1/1/2 splits into quarters, the last cell getting two of them. This
+ * means columns do NOT align vertically between rows with a different
+ * cell count/colspan pattern (a real, visible simplification --
+ * acceptable for THIS engine's scope, and still a large, real
+ * improvement over full-width stacking). rowspan is read nowhere here:
+ * a rowspan cell simply occupies its own row like any other, not
+ * reserving space in subsequent rows -- parses/renders without error,
+ * just doesn't visually span, the same "safe degrade" convention this
+ * file already uses for other unsupported constructs (e.g. this file's
+ * own compute_flex_row_positions() sibling-combinator handling,
+ * css.c's unsupported-pseudo-class handling). */
+#define SQW_TABLE_CELL_GAP 2.0f
+static int compute_table_row_positions(DomNode *tr, float avail_w, float *flex_x, float *flex_w, int *flex_row) {
+    int n = tr->child_count;
+    int *idx = (int *)malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
+    int *span = (int *)malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
+    int cnt = 0, i;
+    int total_shares = 0;
+    for (i = 0; i < n; i++) {
+        DomNode *c = tr->children[i];
+        if (dom_is_text(c)) continue;
+        if (c->css_display == CSS_DISPLAY_NONE) continue;
+        if (strcmp(c->tag, "td") != 0 && strcmp(c->tag, "th") != 0) continue;
+        int sp = 1;
+        const char *cs = dom_get_attr(c, "colspan");
+        if (cs) { int v = atoi(cs); if (v > 0 && v <= 100) sp = v; }
+        idx[cnt] = i; span[cnt] = sp; total_shares += sp;
+        cnt++;
+    }
+    if (cnt == 0) { free(idx); free(span); return 0; }
+
+    float gap = SQW_TABLE_CELL_GAP;
+    float usable = avail_w - gap * (float)(cnt > 1 ? cnt - 1 : 0);
+    if (usable < 0.0f) usable = 0.0f;
+    float share_w = total_shares > 0 ? usable / (float)total_shares : 0.0f;
+
+    float cur = 0.0f;
+    for (i = 0; i < cnt; i++) {
+        flex_x[idx[i]] = cur;
+        flex_w[idx[i]] = share_w * (float)span[i];
+        flex_row[idx[i]] = 0;
+        cur = cur + flex_w[idx[i]] + gap;
+    }
+
+    free(idx); free(span);
+    return 1;
+}
+
 void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutList *out) {
     out->boxes = 0; out->count = 0; out->cap = 0;
     out->content_w = 0; out->content_h = 0;
@@ -1055,7 +1121,32 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
             PlaceSpec spec;
             spec.text_start = 0; spec.text_len = 0; spec.gap = SQW_INLINE_GAP; spec.text_scale = SQW_TEXT_SCALE;
             if (type && (strcmp(type, "checkbox") == 0 || strcmp(type, "radio") == 0)) {
-                spec.kind = SQW_BOX_INPUT_CHECK; spec.w = SQW_CHECK_SIZE; spec.h = SQW_CHECK_SIZE;
+                /* Real, confirmed bug fix: this used to hardcode
+                 * SQW_CHECK_SIZE unconditionally, ignoring ANY CSS width/
+                 * height entirely -- found while investigating why a
+                 * synthetic click on a real Wikipedia dropdown toggle's
+                 * own VISIBLE button never actually landed on its
+                 * checkbox: real Wikipedia CSS declares "width:100%;
+                 * height:100%" on this exact checkbox specifically so
+                 * its real (if invisible, opacity:0) clickable area
+                 * covers the WHOLE dropdown button, not a tiny default
+                 * square tucked in one corner of it. A percentage
+                 * resolves against `f`'s own available width for width
+                 * (the real, well-defined reference this inline-flow
+                 * model already tracks) and normal_line_h for height (no
+                 * clean "nearest positioned ancestor's own box height"
+                 * reference exists in this simplified model -- the
+                 * current line height is a reasonable stand-in for an
+                 * inline-context checkbox, real improvement over a flat
+                 * 16px regardless of what the real CSS actually asked
+                 * for). A plain, non-percent explicit width/height (rare
+                 * for a checkbox, but honored the same way any other
+                 * input already is) still just uses the real px value
+                 * directly. */
+                float w = SQW_CHECK_SIZE, h = SQW_CHECK_SIZE;
+                if (child->css_has_width) w = child->css_width_is_percent ? f->avail_w * (child->css_width_percent / 100.0f) : child->css_width;
+                if (child->css_has_height) h = child->css_height_is_percent ? f->normal_line_h * (child->css_height_percent / 100.0f) : child->css_height;
+                spec.kind = SQW_BOX_INPUT_CHECK; spec.w = w; spec.h = h;
             } else if (type && (strcmp(type, "submit") == 0 || strcmp(type, "button") == 0 || strcmp(type, "reset") == 0)) {
                 float w = sqw_text_measure(child->form_value, (int)strlen(child->form_value), SQW_TEXT_SCALE) + 16.0f;
                 if (w < SQW_INPUT_MIN_W) w = SQW_INPUT_MIN_W;
@@ -1184,7 +1275,13 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
                 bx = f->x + SQW_PAD + margin_left;
                 by = f->y + f->cursor_y + margin_top;
                 bw = f->avail_w - 2 * SQW_PAD - margin_left - margin_right;
-                if (child->css_has_width) bw = child->css_width;
+                /* Real percentage width support -- see DomNode's own
+                 * css_width_is_percent comment (dom.h) for the full
+                 * story: resolved here, at the one point this ordinary
+                 * block-level child's real containing-block width
+                 * (f->avail_w, the enclosing frame's own content width)
+                 * is actually known. */
+                if (child->css_has_width) bw = child->css_width_is_percent ? f->avail_w * (child->css_width_percent / 100.0f) : child->css_width;
             }
             if (bw < 0) bw = 0;
 
@@ -1247,6 +1344,24 @@ void layout_compute(DomNode *root, float viewport_w, float viewport_h, LayoutLis
                 stack[stack_top].flex_w = (float *)calloc((size_t)n, sizeof(float));
                 stack[stack_top].flex_row = (int *)calloc((size_t)n, sizeof(int));
                 compute_flex_row_positions(child, content_w, stack[stack_top].flex_x, stack[stack_top].flex_w, stack[stack_top].flex_row);
+            } else if (strcmp(child->tag, "tr") == 0) {
+                /* Real table-row layout -- see compute_table_row_positions()'s
+                 * own comment for the full story. Reuses the SAME is_flex_row
+                 * machinery a real CSS flex-row container uses (the pop-time
+                 * Y-advance logic keys off is_flex_row/flex_row[] generically,
+                 * with no flex-specific assumptions) -- a <tr> laid out this
+                 * way behaves like a single-row, non-wrapping flex row whose
+                 * "flex-grow" is really per-cell colspan-weighted equal
+                 * division, computed once here instead of through the
+                 * generic flex algorithm (which shrink-to-fits by content
+                 * width first, wrong for table cells that should fill the
+                 * row). */
+                stack[stack_top].is_flex_row = 1;
+                int n = child->child_count > 0 ? child->child_count : 1;
+                stack[stack_top].flex_x = (float *)calloc((size_t)n, sizeof(float));
+                stack[stack_top].flex_w = (float *)calloc((size_t)n, sizeof(float));
+                stack[stack_top].flex_row = (int *)calloc((size_t)n, sizeof(int));
+                compute_table_row_positions(child, content_w, stack[stack_top].flex_x, stack[stack_top].flex_w, stack[stack_top].flex_row);
             } else if (child->css_display == CSS_DISPLAY_GRID && child->css_grid_template_columns[0]) {
                 float widths[16];
                 int ncols = parse_grid_tracks(child->css_grid_template_columns, content_w, widths, 16);

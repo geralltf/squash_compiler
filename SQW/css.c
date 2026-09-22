@@ -238,10 +238,15 @@ static void css_parse_compound(const char **p, CssCompound *out) {
             while (isalnum((unsigned char)*q) || *q == '-') q++;
             int plen = (int)(q - pseudo_start);
             if (*q == '(') { int depth = 1; q++; while (*q && depth > 0) { if (*q == '(') depth++; else if (*q == ')') depth--; q++; } }
-            if (plen == 5 && strncmp(pseudo_start, "hover", 5) == 0 && out->part_count < CSS_MAX_COMPOUND_PARTS) {
+            int is_hover = plen == 5 && strncmp(pseudo_start, "hover", 5) == 0;
+            int is_checked = plen == 7 && strncmp(pseudo_start, "checked", 7) == 0;
+            if (is_hover && out->part_count < CSS_MAX_COMPOUND_PARTS) {
                 CssSimpleSel *s = &out->parts[out->part_count++];
                 s->kind = CSS_SEL_HOVER; s->name[0] = 0; s->value_set = 0; s->value[0] = 0;
-            } else if (!(plen == 5 && strncmp(pseudo_start, "hover", 5) == 0)) {
+            } else if (is_checked && out->part_count < CSS_MAX_COMPOUND_PARTS) {
+                CssSimpleSel *s = &out->parts[out->part_count++];
+                s->kind = CSS_SEL_CHECKED; s->name[0] = 0; s->value_set = 0; s->value[0] = 0;
+            } else if (!is_hover && !is_checked) {
                 has_unsupported_pseudo = 1;
             }
             continue;
@@ -287,7 +292,7 @@ static int css_compound_specificity(const CssCompound *c) {
     int i, sp = 0;
     for (i = 0; i < c->part_count; i++) {
         if (c->parts[i].kind == CSS_SEL_ID) sp += 100;
-        else if (c->parts[i].kind == CSS_SEL_CLASS || c->parts[i].kind == CSS_SEL_ATTR || c->parts[i].kind == CSS_SEL_HOVER) sp += 10;
+        else if (c->parts[i].kind == CSS_SEL_CLASS || c->parts[i].kind == CSS_SEL_ATTR || c->parts[i].kind == CSS_SEL_HOVER || c->parts[i].kind == CSS_SEL_CHECKED) sp += 10;
         else if (c->parts[i].kind == CSS_SEL_TAG) sp += 1;
     }
     return sp;
@@ -307,7 +312,7 @@ static int css_compound_specificity(const CssCompound *c) {
 static void css_parse_selector(const char **p, CssSelector *out) {
     out->chain_len = 0;
     out->specificity = 0;
-    int pending_child = 0, pending_unsupported = 0;
+    int pending_child = 0, pending_unsupported = 0, pending_sibling = 0;
     for (;;) {
         css_skip_ws(p);
         const char *q = *p;
@@ -317,7 +322,12 @@ static void css_parse_selector(const char **p, CssSelector *out) {
             pending_child = 1;
             continue;
         }
-        if (*q == '+' || *q == '~') {
+        if (*q == '~') {
+            q++; *p = q; css_skip_ws(p);
+            pending_sibling = 1;
+            continue;
+        }
+        if (*q == '+') {
             q++; *p = q; css_skip_ws(p);
             pending_unsupported = 1;
             continue;
@@ -331,8 +341,10 @@ static void css_parse_selector(const char **p, CssSelector *out) {
         }
         css_parse_compound(p, comp);
         comp->is_child_combinator = pending_child;
-        if (pending_unsupported) comp->part_count = 0; /* +/~ target: never matches, see this function's own comment */
+        comp->is_general_sibling = pending_sibling;
+        if (pending_unsupported) comp->part_count = 0; /* + target: never matches, see this function's own comment */
         pending_child = 0;
+        pending_sibling = 0;
         pending_unsupported = 0;
         if (comp != &dummy) out->specificity += css_compound_specificity(comp);
     }
@@ -787,6 +799,8 @@ static int css_compound_matches(const CssCompound *c, const DomNode *el) {
             if (s->value_set && strcmp(av, s->value) != 0) return 0;
         } else if (s->kind == CSS_SEL_HOVER) {
             if (!el->hover) return 0;
+        } else if (s->kind == CSS_SEL_CHECKED) {
+            if (!el->form_checked) return 0;
         }
     }
     /* An empty (zero-part, unsupported-combinator-target) compound is
@@ -798,19 +812,42 @@ static int css_compound_matches(const CssCompound *c, const DomNode *el) {
     return 1;
 }
 
-/* Descendant/child-combinator chain match: chain[last] must match `el`
- * itself; each earlier chain[i] must match an ancestor, walking up from
- * `el` -- by DEFAULT (plain whitespace between compounds) any ancestor,
- * matching real CSS's descendant combinator, but when chain[i+1] (the
- * LATER, already-matched compound) was preceded by "> " in the source
- * (chain[i+1].is_child_combinator, see CssCompound's own comment) that
- * ancestor must be EXACTLY the immediate parent of whatever chain[i+1]
- * matched, not some further-up one -- real CSS's child-combinator
- * semantics. A zero-part compound (the target of a still-unsupported "+"/
- * "~" sibling combinator, or beyond CSS_MAX_SELECTOR_CHAIN) never
- * matches, failing the whole selector immediately -- same "parses
- * cleanly, degrades to never-matching" convention as everywhere else in
- * this file. */
+/* The element immediately before `node` among its own parent's ELEMENT
+ * children (text nodes skipped, since no compound ever matches one) --
+ * real CSS's own "previous sibling" notion, used by the general-sibling
+ * ("~") combinator match below. A plain linear scan (find `node`'s own
+ * index, then walk backward) -- this file has no cached "index in
+ * parent"/"previous sibling" pointer anywhere, and doesn't need one
+ * badly enough to add one just for this: css_apply_element() is called
+ * once per element per real cascade pass, not in any tighter loop. */
+static const DomNode *css_prev_sibling(const DomNode *node) {
+    if (!node->parent) return 0;
+    const DomNode *parent = node->parent;
+    int i, found_idx = -1;
+    for (i = 0; i < parent->child_count; i++) {
+        if (parent->children[i] == node) { found_idx = i; break; }
+    }
+    if (found_idx < 0) return 0;
+    for (i = found_idx - 1; i >= 0; i--) {
+        if (!dom_is_text(parent->children[i])) return parent->children[i];
+    }
+    return 0;
+}
+
+/* Descendant/child/general-sibling chain match: chain[last] must match
+ * `el` itself; each earlier chain[i] relates to whatever chain[i+1]
+ * already matched according to chain[i+1]'s OWN combinator flags (see
+ * CssCompound's own comments) -- by DEFAULT (plain whitespace) chain[i]
+ * must match some ANCESTOR (any ancestor, real CSS's descendant
+ * combinator); when chain[i+1].is_child_combinator ("> "), that ancestor
+ * must be EXACTLY the immediate parent, not some further-up one; when
+ * chain[i+1].is_general_sibling ("~ "), chain[i] must instead match some
+ * EARLIER SIBLING (any earlier one, real CSS "~" semantics -- walking
+ * css_prev_sibling() repeatedly rather than ->parent). A zero-part
+ * compound (the target of the still-unsupported adjacent-sibling "+"
+ * combinator, or beyond CSS_MAX_SELECTOR_CHAIN) never matches, failing
+ * the whole selector immediately -- same "parses cleanly, degrades to
+ * never-matching" convention as everywhere else in this file. */
 static int css_selector_matches(const CssSelector *sel, const DomNode *el) {
     if (sel->chain_len == 0) return 0;
     const CssCompound *last = &sel->chain[sel->chain_len - 1];
@@ -819,21 +856,32 @@ static int css_selector_matches(const CssSelector *sel, const DomNode *el) {
     if (sel->chain_len == 1) return 1;
 
     int ci = sel->chain_len - 2;
-    const DomNode *anc = el->parent;
-    while (ci >= 0 && anc) {
+    const DomNode *matched = el;
+    while (ci >= 0) {
         const CssCompound *c = &sel->chain[ci];
         if (c->part_count == 0) return 0;
-        int must_be_immediate = sel->chain[ci + 1].is_child_combinator;
-        if (css_compound_matches(c, anc)) {
-            ci--;
-            anc = anc->parent;
-        } else if (must_be_immediate) {
-            return 0;
+        if (sel->chain[ci + 1].is_general_sibling) {
+            const DomNode *cand = css_prev_sibling(matched);
+            int found = 0;
+            while (cand) {
+                if (css_compound_matches(c, cand)) { found = 1; matched = cand; break; }
+                cand = css_prev_sibling(cand);
+            }
+            if (!found) return 0;
         } else {
-            anc = anc->parent;
+            int must_be_immediate = sel->chain[ci + 1].is_child_combinator;
+            const DomNode *anc = matched->parent;
+            int found = 0;
+            while (anc) {
+                if (css_compound_matches(c, anc)) { found = 1; matched = anc; break; }
+                if (must_be_immediate) break;
+                anc = anc->parent;
+            }
+            if (!found) return 0;
         }
+        ci--;
     }
-    return ci < 0;
+    return 1;
 }
 
 /* ---- value parsing ---- */
@@ -1109,9 +1157,34 @@ static void css_set_default_style(DomNode *el) {
         strcmp(t,"main")==0 || strcmp(t,"ul")==0 || strcmp(t,"ol")==0 || strcmp(t,"li")==0 ||
         strcmp(t,"h1")==0 || strcmp(t,"h2")==0 || strcmp(t,"h3")==0 || strcmp(t,"h4")==0 ||
         strcmp(t,"h5")==0 || strcmp(t,"h6")==0 || strcmp(t,"blockquote")==0 || strcmp(t,"figure")==0 ||
-        strcmp(t,"figcaption")==0 || strcmp(t,"table")==0 || strcmp(t,"tr")==0 || strcmp(t,"form")==0;
+        strcmp(t,"figcaption")==0 || strcmp(t,"table")==0 || strcmp(t,"tr")==0 || strcmp(t,"form")==0 ||
+        /* Real, confirmed bug fix (found on a real Wikipedia page):
+         * "td"/"th"/"tbody"/"thead"/"tfoot" were missing from this list
+         * entirely, defaulting to css_display=INLINE (this function's
+         * own fallback for anything not explicitly listed as block).
+         * layout.c's per-child dispatch has no case for a display:INLINE
+         * element that's also not one of the recognized "atomic inline"
+         * tags (span/a/button/...) and not <img> -- its own comment
+         * documents this exactly: "any other tag ... is skipped
+         * entirely -- not visited, not descended into." A <td>/<th>
+         * matched NONE of layout.c's cases, so every table cell's own
+         * content -- on a real page, an infobox's image and key-facts
+         * rows, or any "wikitable" data table -- was silently dropped
+         * from layout altogether (confirmed: every real <table> box
+         * measured at essentially zero height). This engine has no real
+         * table-layout algorithm (rows/columns/cell alignment) at all,
+         * so treating a cell as an ordinary block (stacked top-to-
+         * bottom, like everything else this simplified model handles)
+         * is a real, documented simplification -- cells within one row
+         * render as separate stacked blocks rather than side-by-side
+         * columns -- but is enormously better than the cell's entire
+         * content being invisible, which is what happened before this
+         * fix on literally every table on every page. */
+        strcmp(t,"td")==0 || strcmp(t,"th")==0 || strcmp(t,"tbody")==0 ||
+        strcmp(t,"thead")==0 || strcmp(t,"tfoot")==0 || strcmp(t,"caption")==0;
     el->css_display = block ? CSS_DISPLAY_BLOCK : CSS_DISPLAY_INLINE;
     el->css_has_width = 0; el->css_has_height = 0;
+    el->css_width_is_percent = 0; el->css_height_is_percent = 0;
     /* Deliberately 4 separate statements, not one chained
      * "a=b=c=d=0.0f;" -- a real, confirmed squash codegen bug (a minimal
      * standalone repro: "s.w[0]=s.w[1]=s.w[2]=s.w[3]=99.0f;" on a struct
@@ -1184,6 +1257,23 @@ static void css_set_default_style(DomNode *el) {
         el->css_line_height = 0.0f;  /* "normal" */
         el->css_font_weight_bold = 0;
     }
+    /* Real UA-stylesheet defaults (applied AFTER inheritance, exactly
+     * like a real browser's own user-agent stylesheet -- a page's own
+     * CSS, applied later in css_apply_element(), still overrides this
+     * normally): <b>/<strong> render bold, and so does <th> -- real
+     * HTML5 gives table headers a bold, centered default even with zero
+     * page CSS. Found missing while building this engine's first real
+     * table test page: css_font_weight_bold was ONLY ever settable via
+     * an explicit "font-weight" CSS declaration, so a bare "<b>bold</b>"
+     * or "<th>Header</th>" with no matching CSS rule rendered as
+     * perfectly plain text, unlike any real browser. (":italic" has the
+     * same kind of gap for <i>/<em> but is a separate, pre-existing,
+     * documented limitation -- this engine's single baked font atlas has
+     * no slanted glyph variant to switch to, so there's no real fix
+     * available at this layer the way bold's separate glyph weight
+     * allows.) */
+    if (strcmp(t,"b")==0 || strcmp(t,"strong")==0 || strcmp(t,"th")==0) el->css_font_weight_bold = 1;
+    if (strcmp(t,"th")==0) el->css_text_align = 1; /* center */
     el->css_opacity = 1.0f;
 }
 
@@ -1214,9 +1304,58 @@ static void css_apply_decl(DomNode *el, const char *name, const char *value) {
         else if (strstr(value, "inline")) el->css_display = CSS_DISPLAY_INLINE;
         else if (strstr(value, "block")) el->css_display = CSS_DISPLAY_BLOCK;
     } else if (strcmp(name, "width") == 0) {
-        if (css_parse_len(value, &f)) { el->css_width = f; el->css_has_width = 1; }
+        if (css_parse_len(value, &f)) { el->css_width = f; el->css_has_width = 1; el->css_width_is_percent = 0; }
+        /* Real, confirmed bug fix: "width:auto"/"height:auto" (checked
+         * separately just below) previously did NOTHING at all --
+         * css_parse_len() correctly recognizes "auto" as a real CSS
+         * keyword (its very first check) but returns failure for it
+         * (0, no length to report), and this call site's own "only
+         * assign on success" pattern then just left css_has_width/
+         * css_has_height whatever they ALREADY were. That's silently
+         * WRONG whenever a LATER, higher-priority rule sets "auto" to
+         * explicitly override an EARLIER rule's real numeric length --
+         * exactly the shape of a real, confirmed bug found while
+         * testing this engine's new ":checked" + general-sibling-
+         * combinator support (CSS_SEL_CHECKED, this file's own top-of-
+         * struct comment in css.h): a real dropdown's default,
+         * collapsed rule sets "height:0" (correctly triggering this
+         * file's own position:absolute+height<=0 "treat as collapsed"
+         * heuristic just below in css_apply_element()), and the
+         * ":checked ~ .content" rule that's supposed to REVEAL it on
+         * click sets "height:auto" specifically to countermand that --
+         * but since "auto" was a silent no-op, css_has_height/
+         * css_height kept remembering the EARLIER "0" value forever,
+         * so the collapse heuristic kept firing even after a real
+         * click made :checked genuinely match. Real CSS "auto" means
+         * "revert to content-driven sizing", which in this engine's own
+         * terms is exactly what css_has_width/css_has_height==0 (no
+         * explicit size at all) already means -- so "auto" now
+         * explicitly CLEARS the flag instead of leaving it untouched. */
+        else if (strcmp(value, "auto") == 0) { el->css_has_width = 0; el->css_width_is_percent = 0; }
+        else {
+            /* Real percentage width support -- see DomNode's own
+             * css_width_is_percent comment (dom.h) for why the percent
+             * value is stored RAW here (not resolved into a real px
+             * width yet -- the containing block's own width isn't known
+             * during this top-down CSS cascade pass) and re-resolved by
+             * layout.c once it is. css_has_width is still set (matching
+             * every other successful-parse branch here) so any existing
+             * "does this element have an explicit width" check
+             * elsewhere keeps working unchanged. */
+            char *end; double pct = strtod(value, &end);
+            if (end != value && *end == '%') {
+                el->css_width_percent = (float)pct; el->css_width_is_percent = 1; el->css_has_width = 1;
+            }
+        }
     } else if (strcmp(name, "height") == 0) {
-        if (css_parse_len(value, &f)) { el->css_height = f; el->css_has_height = 1; }
+        if (css_parse_len(value, &f)) { el->css_height = f; el->css_has_height = 1; el->css_height_is_percent = 0; }
+        else if (strcmp(value, "auto") == 0) { el->css_has_height = 0; el->css_height_is_percent = 0; }
+        else {
+            char *end; double pct = strtod(value, &end);
+            if (end != value && *end == '%') {
+                el->css_height_percent = (float)pct; el->css_height_is_percent = 1; el->css_has_height = 1;
+            }
+        }
     } else if (strcmp(name, "margin") == 0) {
         float v[4]; int n = 0;
         char buf[192]; strncpy(buf, value, sizeof buf - 1); buf[sizeof buf - 1] = 0;
@@ -1726,10 +1865,26 @@ static void css_apply_element(DomNode *el, CssStylesheet *sheet, float viewport_
      * (often huge -- here, a 119-entry language list) content height,
      * since only ITS OWN box would be zero-height while its children
      * still take up real space beneath it. */
+    /* The "el->css_height <= 0.0f" checks below deliberately exclude a
+     * PERCENTAGE height (css_height_is_percent) -- a real, confirmed
+     * regression found while adding real percentage width/height
+     * support (see DomNode's own css_width_is_percent comment, dom.h):
+     * a percentage height is stored raw and only resolved into a real
+     * px value later, at LAYOUT time, once the real containing-block
+     * height is known (this CSS-cascade pass runs earlier and has no
+     * such reference) -- so el->css_height is always still its
+     * placeholder 0 here, even for a real, honest "height:100%"
+     * (confirmed on Wikipedia's own dropdown-toggle checkboxes, which
+     * declare exactly that so their real clickable area covers their
+     * whole visible button). Without this exclusion, EVERY percentage-
+     * height, position:absolute element -- not just the genuinely
+     * collapsed "height:0" dropdown-content case this heuristic was
+     * built for -- got incorrectly treated as collapsed and removed
+     * from layout entirely, checkbox included. */
     if (el->css_position_absolute &&
         (el->css_has_clip ||
-         (el->css_has_width && el->css_width <= 2.0f && el->css_has_height && el->css_height <= 2.0f) ||
-         (el->css_has_height && el->css_height <= 0.0f))) {
+         (el->css_has_width && el->css_width <= 2.0f && el->css_has_height && el->css_height <= 2.0f && !el->css_width_is_percent && !el->css_height_is_percent) ||
+         (el->css_has_height && el->css_height <= 0.0f && !el->css_height_is_percent))) {
         el->css_display = CSS_DISPLAY_NONE;
     }
 }

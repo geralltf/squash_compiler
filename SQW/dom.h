@@ -278,6 +278,38 @@ typedef struct DomNode {
      * if unset. */
     char css_grid_template_areas[256];
     char css_grid_area[32];
+
+    /* Real CSS percentage width/height ("width:100%"/"height:50%") --
+     * previously completely unsupported: css_parse_len() correctly
+     * recognized a "%" suffix as "a real length token, just one this
+     * engine can't resolve" (same category as vw/vh/em -- see its own
+     * top comment) and returned failure for it, same as an outright
+     * parse error, so css_has_width/css_has_height (and therefore any
+     * REAL sizing) never got set at all. A real, confirmed bug this
+     * surfaced: Wikipedia's own dropdown-toggle checkboxes (language
+     * switcher, main menu, page-tools) declare "width:100%;height:100%"
+     * specifically so the checkbox's own real (if invisible, opacity:0)
+     * clickable area covers its whole visible dropdown button, not just
+     * a tiny default checkbox square -- without this, a synthetic click
+     * anywhere on the VISIBLE button misses the checkbox's own much
+     * smaller REAL hitbox entirely.
+     *
+     * Stored as a raw percentage (0-100), NOT pre-resolved into px --
+     * same "resolved against real content at LAYOUT time, not CSS-
+     * cascade time" reasoning as css_grid_template_columns/
+     * css_grid_template_areas above: the percentage's own REFERENCE
+     * size (the containing block's width/height) isn't known yet during
+     * css_apply()'s own top-down cascade pass, only once layout.c
+     * actually reaches this element with its real parent frame's
+     * avail_w in hand. css_has_width/css_has_height are BOTH still set
+     * whenever a percentage resolves successfully (so every existing
+     * "does this element have an explicit width" check elsewhere in
+     * this file keeps working unchanged) -- layout.c re-resolves
+     * css_width/css_height from the percentage against the real
+     * containing block right before using them, overwriting the
+     * placeholder 0 css_parse_len() would otherwise have left there. */
+    int css_width_is_percent, css_height_is_percent;
+    float css_width_percent, css_height_percent;
 } DomNode;
 
 DomNode *dom_parse(const char *html);

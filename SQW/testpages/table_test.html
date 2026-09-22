@@ -1,0 +1,91 @@
+<html>
+<head>
+<style>
+body { font-family: sans-serif; }
+h2 { background-color: goldenrod; padding: 4px; }
+table { border: 1px solid black; margin-bottom: 20px; }
+th { background-color: steelblue; color: white; text-align: left; }
+td, th { padding: 4px; border: 1px solid gray; }
+.wide-cell { background-color: lightgreen; }
+.narrow-cell { background-color: lightblue; }
+caption { font-weight: bold; background-color: crimson; color: white; }
+tfoot { background-color: lightgray; }
+</style>
+</head>
+<body>
+
+<h2>1. Basic table (no colspan, equal columns)</h2>
+<table>
+<tr><td>Row1 Cell1</td><td>Row1 Cell2</td><td>Row1 Cell3</td></tr>
+<tr><td>Row2 Cell1</td><td>Row2 Cell2</td><td>Row2 Cell3</td></tr>
+<tr><td>Row3 Cell1</td><td>Row3 Cell2</td><td>Row3 Cell3</td></tr>
+</table>
+
+<h2>2. Table with thead/tbody/tfoot</h2>
+<table>
+<thead>
+<tr><th>Name</th><th>Age</th><th>City</th></tr>
+</thead>
+<tbody>
+<tr><td>Alice</td><td>30</td><td>New York</td></tr>
+<tr><td>Bob</td><td>25</td><td>Boston</td></tr>
+</tbody>
+<tfoot>
+<tr><td>Total</td><td>2 people</td><td>-</td></tr>
+</tfoot>
+</table>
+
+<h2>3. Table with colspan</h2>
+<table>
+<tr><td class="wide-cell" colspan="2">Wide cell spanning 2 columns</td><td class="narrow-cell">Normal</td></tr>
+<tr><td>A</td><td>B</td><td>C</td></tr>
+</table>
+
+<h2>4. Table with caption</h2>
+<table>
+<caption>A table with a caption above it</caption>
+<tr><td>X</td><td>Y</td></tr>
+<tr><td>1</td><td>2</td></tr>
+</table>
+
+<h2>5. Table with different row cell counts (columns won't align -- documented limitation)</h2>
+<table>
+<tr><td>One</td><td>Two</td><td>Three</td><td>Four</td></tr>
+<tr><td>Short row</td><td>Only two</td></tr>
+</table>
+
+<h2>6. Table with links and inline formatting inside cells</h2>
+<table>
+<tr><th>Link</th><th>Formatted text</th></tr>
+<tr><td><a href="page2.html">a link</a></td><td><b>bold</b> and <i>italic</i> and <code>code</code></td></tr>
+</table>
+
+<h2>7. Nested table (table inside a table cell)</h2>
+<table>
+<tr><td>Outer cell 1
+  <table>
+  <tr><td>Inner A</td><td>Inner B</td></tr>
+  </table>
+</td><td>Outer cell 2</td></tr>
+</table>
+
+<h2>8. Table with a long paragraph in one cell (wrapping inside a narrow column)</h2>
+<table>
+<tr><td>Short</td><td>This cell has a much longer piece of text in it that should wrap across multiple lines within its own column instead of overflowing the whole table.</td><td>Short</td></tr>
+</table>
+
+<h2>9. Table with rowspan (not supported -- should degrade safely, not crash or overlap badly)</h2>
+<table>
+<tr><td rowspan="2">Spans two rows (not merged, real limitation)</td><td>Row1</td></tr>
+<tr><td>Row2</td></tr>
+</table>
+
+<h2>10. Single-column table</h2>
+<table>
+<tr><td>Only column, row 1</td></tr>
+<tr><td>Only column, row 2</td></tr>
+</table>
+
+<p>end of table test page</p>
+</body>
+</html>
