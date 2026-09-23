@@ -53,6 +53,7 @@ char *typeinfo_str(const TypeInfo *t) {
 int g_squash_windows_target = 0;
 int g_squash_macos_target   = 0;
 int g_squash_openbsd_target = 0;
+int g_squash_android_target = 0;
 const char *g_squash_libc_soname = "libc.so.6";
 
 int typeinfo_size(const TypeInfo *t, int is_64bit) {

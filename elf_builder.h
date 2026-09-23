@@ -18,6 +18,24 @@ typedef struct {
      * the is_openbsd branches in elf_link_and_write(). */
     int is_openbsd;
 
+    /* 1 = Android target: emit a bionic-ABI ET_DYN shared object (a real
+     * .so, not an executable) instead of squash's usual ET_EXEC-with-
+     * PT_INTERP layout. No CRT0 _start stub is generated -- there is no
+     * process entry point to call, since the object is dlopen()'d by the
+     * Android runtime (via android.app.NativeActivity's native glue),
+     * never exec()'d. Instead, `android_export_name` (the function found
+     * via __entry__, i.e. whatever in->entry_func names) is exported as a
+     * DEFINED global symbol in .dynsym so dlsym() can find it, backed by
+     * a minimal SysV .hash table (DT_HASH) -- bionic's linker needs one of
+     * DT_HASH/DT_GNU_HASH to even know how many symbols are in .dynsym, so
+     * unlike on desktop Linux it is not optional here. */
+    int is_android;
+    /* DT_SONAME value, e.g. "libapp.so". Defaults to "lib.so" if NULL. */
+    const char *android_soname;
+    /* Symbol name to export as a defined dynamic symbol. Defaults to
+     * in->entry_func if NULL. */
+    const char *android_export_name;
+
     /* 1 = omit the section-header table (.symtab/.strtab/.shstrtab and the
      * SHT describing every section) that elf_link_and_write() writes by
      * default. Those sections are pure post-program-image metadata (see

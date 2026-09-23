@@ -20,6 +20,7 @@
 #include "CS/cs_lower.h"
 #include "CPP/cpp_parser.h"
 #include "CPP/cpp_lower.h"
+#include "android/android_pack.h"
 #if defined(__OpenBSD__)
 #include <dirent.h>
 #endif
@@ -342,6 +343,27 @@ static void print_help(void) {
     printf("      Cross-compile a Windows binary that links against Vulkan.\n");
 }
 
+/* Derives a lowercase, alphanumeric app identifier from an output path's
+ * basename (stripping any directory and extension) -- used as both the
+ * package name's final segment ("com.squash.<name>") and the bare .so
+ * library name ("lib<name>.so") when -android-package isn't given. Any
+ * character that isn't a-z/0-9 is dropped; an empty or all-punctuation
+ * basename falls back to "app". */
+static void android_derive_name(const char *out_path, char *out, size_t out_cap) {
+    const char *base = strrchr(out_path, '/');
+    const char *dot;
+    size_t n = 0;
+    base = base ? base + 1 : out_path;
+    dot = strrchr(base, '.');
+    for (; *base && (!dot || base < dot) && n + 1 < out_cap; base++) {
+        char c = *base;
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) out[n++] = c;
+    }
+    out[n] = '\0';
+    if (n == 0) snprintf(out, out_cap, "app");
+}
+
 int main(int argc, char **argv) {
     int    is_64bit=1;
     int    is_linux=0;
@@ -361,6 +383,14 @@ int main(int argc, char **argv) {
      * in ast.h. */
     int    is_openbsd=0;
     const char *openbsd_libc_override = NULL;
+    /* -android: rides the same -linux+-arm64 ELF codegen path as
+     * -openbsd/-macos do (see their comments above) -- only elf_builder.c's
+     * output shape differs (a bionic .so instead of an ET_EXEC binary),
+     * and compiler.c packages that .so into a signed .apk afterward
+     * instead of writing it out directly. See g_squash_android_target's
+     * doc comment in ast.h. */
+    int    is_android=0;
+    const char *android_package_override = NULL;
     char  *src_path=NULL, *out_path=NULL;
     int    dump=0;
     int    compile_only=0; /* -c: emit a .sqo object file instead of a linked executable */
@@ -415,6 +445,13 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i],"-windows")==0) { is_linux=0; is_macos=0; is_openbsd=0; target_explicit=1; }
         else if (strcmp(argv[i],"-macos")==0)   { is_macos=1; is_linux=1; is_64bit=1; is_openbsd=0; target_explicit=1; }
         else if (strcmp(argv[i],"-openbsd")==0) { is_openbsd=1; is_linux=1; is_macos=0; target_explicit=1; }
+        else if (strcmp(argv[i],"-android")==0) { is_android=1; is_linux=1; is_macos=0; is_openbsd=0; is_arm64=1; is_64bit=1; target_explicit=1; }
+        else if (strncmp(argv[i],"-android-package",16)==0) {
+            const char *v=argv[i]+16;
+            if (v[0]=='=') v++;
+            else if (!v[0] && i+1<argc) v=argv[++i];
+            android_package_override=v;
+        }
         else if (strncmp(argv[i],"-openbsd-libc",13)==0) {
             const char *v=argv[i]+13;
             if (v[0]=='=') v++;
@@ -505,6 +542,12 @@ int main(int argc, char **argv) {
     g_squash_windows_target = !is_linux;
     g_squash_macos_target   = is_macos;
     g_squash_openbsd_target = is_openbsd;
+    g_squash_android_target = is_android;
+    if (is_android) {
+        /* bionic's libc soname has no ".6"-style version suffix, unlike
+         * glibc's -- see g_squash_libc_soname's doc comment. */
+        g_squash_libc_soname = "libc.so";
+    }
     if (is_openbsd) {
         if (openbsd_libc_override && openbsd_libc_override[0]) {
             g_squash_libc_soname = openbsd_libc_override;
@@ -1144,7 +1187,23 @@ int main(int argc, char **argv) {
         ebi.import_specs      = have_merged ? merged.import_specs  : sym.imports;
         ebi.import_count      = have_merged ? merged.import_count  : sym.import_count;
         ebi.entry_func        = "main";
-        ebi.output_path       = out_path;
+        char android_so_tmp_path[1024];
+        char android_app_name[256];
+        if (is_android) {
+            /* -android packages a .apk, not a raw executable -- build the
+             * bionic .so to a scratch path first, then wrap/sign it into
+             * the user's real -o target below (see android_pack_apk). */
+            snprintf(android_so_tmp_path, sizeof android_so_tmp_path, "%s.android_tmp.so", out_path);
+            ebi.output_path = android_so_tmp_path;
+            android_derive_name(out_path, android_app_name, sizeof android_app_name);
+            ebi.is_android = 1;
+            { static char soname_buf[300];
+              snprintf(soname_buf, sizeof soname_buf, "lib%s.so", android_app_name);
+              ebi.android_soname = soname_buf; }
+            ebi.android_export_name = "ANativeActivity_onCreate";
+        } else {
+            ebi.output_path = out_path;
+        }
         /* Skipped when merging object files: this patches `as.code` in place
          * using `as.labels[]`, but the merged build uses a separate,
          * concatenated text buffer (`merged.text`) with different offsets
@@ -1153,6 +1212,25 @@ int main(int argc, char **argv) {
         ebi.linker            = linker;
         rc = elf_link_and_write(&ebi);
         if (ebi.wdata_bytes) free(ebi.wdata_bytes);
+        if (rc == 0 && is_android) {
+            android_pack_spec pspec;
+            char package_name_buf[300];
+            if (android_package_override && android_package_override[0]) {
+                pspec.package_name = android_package_override;
+            } else {
+                snprintf(package_name_buf, sizeof package_name_buf, "com.squash.%s", android_app_name);
+                pspec.package_name = package_name_buf;
+            }
+            pspec.app_label = android_app_name;
+            pspec.lib_name = android_app_name;
+            pspec.min_sdk_version = 21;
+            pspec.target_sdk_version = 34;
+            pspec.version_code = 1;
+            pspec.version_name = "1.0";
+            pspec.keystore_base_path = NULL;
+            rc = android_pack_apk(android_so_tmp_path, out_path, &pspec);
+            remove(android_so_tmp_path);
+        }
     } else {
         /* Stage 7b: PE build + link */
         /* Resolve RELOC_TEXT_ABS32 (function pointer addresses in 32-bit mode).

@@ -254,6 +254,14 @@ extern int g_squash_macos_target;
  * it will execute a native binary at all. */
 extern int g_squash_openbsd_target;
 
+/* 1 = Android target: rides on the same SysV/LP64 -linux + -arm64 codegen
+ * path (see is_macos/is_openbsd's comments above for why this pattern is
+ * used repeatedly), but elf_builder.c emits a bionic-ABI ET_DYN shared
+ * object instead of an ET_EXEC executable, and compiler.c packages the
+ * result into a signed .apk afterward instead of writing it out directly
+ * -- see elf_builder.h's is_android doc comment and android/android_pack.h. */
+extern int g_squash_android_target;
+
 /* The libc shared-object soname used for every dynamic libc import
  * ("libc.so.6:printf" etc, see emit_linux_libc_call() in codegen.c).
  * Defaults to "libc.so.6" (the stable glibc soname); overridden for targets

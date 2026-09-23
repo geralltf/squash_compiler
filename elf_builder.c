@@ -235,8 +235,14 @@ int elf_link_and_write(ELFBuildInput *in) {
 
     /* ---- Step 1: group imports ---- */
     elf_grp_reset();
-    { char exit_key[128]; snprintf(exit_key,sizeof exit_key,"%s:exit",g_squash_libc_soname);
-      elf_grp_add(exit_key); } /* always import exit so _start can call it to flush stdio */
+    if (!in->is_android) {
+        /* Android .so targets have no _start/CRT0 (see is_android's doc
+         * comment in elf_builder.h) so there is no stub here that would
+         * ever call exit() -- importing it unconditionally would just be
+         * an unused DT_NEEDED-adjacent dependency. */
+        char exit_key[128]; snprintf(exit_key,sizeof exit_key,"%s:exit",g_squash_libc_soname);
+        elf_grp_add(exit_key); /* always import exit so _start can call it to flush stdio */
+    }
     {
         int ii = 0;
         while (ii < in->import_count) { elf_grp_add(in->import_specs[ii]); ii++; }
@@ -278,7 +284,7 @@ int elf_link_and_write(ELFBuildInput *in) {
     int nfuncs = elf_total_funcs;
 
     /* ---- Step 2: build .dynstr ---- */
-    int dynstr_cap = 1 + MAX_LIBS * LIB_NLEN + MAX_FUNCS * FUNC_NLEN + 8;
+    int dynstr_cap = 1 + MAX_LIBS * LIB_NLEN + MAX_FUNCS * FUNC_NLEN + 8 + 512;
     uint8_t *dynstr = (uint8_t *)calloc(dynstr_cap, 1);
     int dynstr_len = 0;
     dynstr[dynstr_len++] = 0; /* index 0 = empty string */
@@ -306,6 +312,19 @@ int elf_link_and_write(ELFBuildInput *in) {
             slot++;
         }
     }
+    /* Android-only extra dynstr entries: DT_SONAME's string, and the name
+     * of the symbol we export. Interned after every other dynstr content
+     * so none of the existing offset math above needs to change. */
+    int android_soname_off = 0;
+    int android_export_name_off = 0;
+    if (in->is_android) {
+        const char *soname = in->android_soname ? in->android_soname : "lib.so";
+        const char *expname = in->android_export_name ? in->android_export_name : in->entry_func;
+        android_soname_off = dynstr_len;
+        { const char *s = soname; while (*s) dynstr[dynstr_len++] = (uint8_t)(*s++); dynstr[dynstr_len++] = 0; }
+        android_export_name_off = dynstr_len;
+        { const char *s = expname; while (*s) dynstr[dynstr_len++] = (uint8_t)(*s++); dynstr[dynstr_len++] = 0; }
+    }
     int dynstr_sz = dynstr_len;
 
     /* ---- Step 3: _start stub ---- */
@@ -314,7 +333,15 @@ int elf_link_and_write(ELFBuildInput *in) {
     int stub_call_off;
     int stub_exit_off; /* offset of 4-byte placeholder for call exit via GOT */
 
-    if (in->is_arm64) {
+    if (in->is_android) {
+        /* No CRT0 for a dlopen()'d shared object -- see is_android's doc
+         * comment in elf_builder.h. The exported function is later found
+         * directly at its own text offset (main_user_off below), with
+         * nothing prepended in front of it. */
+        stub_len = 0;
+        stub_call_off = 0;
+        stub_exit_off = 0;
+    } else if (in->is_arm64) {
         /* AArch64 _start:
          *   ldr  x0, [sp]        ; x0 = argc
          *   add  x1, sp, #8      ; x1 = argv
@@ -406,8 +433,10 @@ int elf_link_and_write(ELFBuildInput *in) {
     }
     int main_text_off = stub_len + main_user_off;
 
-    /* Patch call disp32 in stub */
-    if (in->is_arm64) {
+    /* Patch call disp32 in stub (no-op for Android: stub_len==0, nothing to patch) */
+    if (in->is_android) {
+        /* nothing */
+    } else if (in->is_arm64) {
         /* BL is PC-relative to its own address, offset in units of 4 bytes */
         int32_t imm26 = (int32_t)((main_text_off - stub_call_off) / 4);
         uint32_t instr = 0x94000000u | ((uint32_t)imm26 & 0x3FFFFFFu);
@@ -421,7 +450,7 @@ int elf_link_and_write(ELFBuildInput *in) {
     }
 
     /* ---- Step 5: layout ---- */
-    uint64_t load_base = is64 ? (uint64_t)0x400000ULL : (uint64_t)0x08048000ULL;
+    uint64_t load_base = in->is_android ? (uint64_t)0 : (is64 ? (uint64_t)0x400000ULL : (uint64_t)0x08048000ULL);
     /* PT_LOAD alignment/padding unit, also written out as each PT_LOAD's
      * p_align. x86 Linux is universally 4K-paged, but arm64 Linux is not:
      * distros/kernels are free to run 4K, 16K, or 64K pages (e.g. this
@@ -444,17 +473,23 @@ int elf_link_and_write(ELFBuildInput *in) {
     int ehdr_size = is64 ? 64 : 52;
     int phdr_size = is64 ? 56 : 32;
     /* OpenBSD needs one extra PT_NOTE program header carrying
-     * .note.openbsd.ident — see the branding note below. */
-    int n_phdrs = in->is_openbsd ? 7 : 6;
+     * .note.openbsd.ident — see the branding note below. Android has no
+     * PT_INTERP at all (a dlopen()'d .so is never exec()'d, so there is no
+     * interpreter to name) -- PT_PHDR, PT_LOAD rx, PT_LOAD rw, PT_DYNAMIC,
+     * PT_GNU_STACK = 5. */
+    int n_phdrs = in->is_android ? 5 : (in->is_openbsd ? 7 : 6);
 
     const char *interp_str;
-    if (in->is_openbsd)    interp_str = "/usr/libexec/ld.so";
+    if (in->is_android)    interp_str = "";
+    else if (in->is_openbsd)    interp_str = "/usr/libexec/ld.so";
     else if (in->is_arm64) interp_str = "/lib/ld-linux-aarch64.so.1";
     else if (is64)         interp_str = "/lib64/ld-linux-x86-64.so.2";
     else                   interp_str = "/lib/ld-linux.so.2";
     int interp_len = 0;
-    while (interp_str[interp_len]) interp_len++;
-    interp_len++;
+    if (!in->is_android) {
+        while (interp_str[interp_len]) interp_len++;
+        interp_len++;
+    }
 
     /* OpenBSD ELF branding: the kernel's exec_elf will refuse ENOEXEC on a
      * native binary unless it carries a PT_NOTE segment with an
@@ -478,17 +513,36 @@ int elf_link_and_write(ELFBuildInput *in) {
         note_len = no;
     }
 
-    int dynsym_count = 1 + nfuncs;
+    /* Android exports exactly one extra, DEFINED dynsym entry (see
+     * is_android's doc comment) appended AFTER the existing import entries
+     * (indices 1..nfuncs) so none of their sym_idx=slot+1 references used
+     * by .rela.dyn below need to change. */
+    int dynsym_count = 1 + nfuncs + (in->is_android ? 1 : 0);
     int dynsym_sz = dynsym_count * sym_entry_size;
     int relasz = nfuncs * rela_entry_size;
     int got_sz = nfuncs * got_slot_size;
-    int n_dyn = elf_nlibs + 9 + 1;
+    /* Android needs two extra dynamic entries: DT_HASH and DT_SONAME (the
+     * existing "+1" beyond the 9 fixed tag/value pairs is spare headroom
+     * already present for every target). */
+    int n_dyn = elf_nlibs + 9 + 1 + (in->is_android ? 2 : 0);
     int dynamic_sz = n_dyn * dyn_entry_size;
     int static_rdata_len = 0;
     uint8_t *static_rdata_bytes = NULL;
     if (in->linker) static_rdata_bytes = linker_static_rdata(in->linker, &static_rdata_len);
     int rodata_sz = in->rdata_strings_len + static_rdata_len;
     int data_sz   = in->wdata_len;
+
+    /* SysV .hash (DT_HASH): bionic's dynamic linker needs this (or
+     * DT_GNU_HASH) to even know how many entries .dynsym has -- there is no
+     * separate "symbol count" dynamic tag. nbucket=1 keeps this trivially
+     * correct rather than efficient (irrelevant for a handful of symbols):
+     * every name hashes to bucket 0, so bucket[0] must point at the entry
+     * most worth finding fast -- our one exported symbol, which is also
+     * the only name anything will ever dlsym() out of this object. Layout:
+     * nbucket(4) nchain(4) bucket[nbucket](4 each) chain[nchain](4 each). */
+    int hash_nbucket = in->is_android ? 1 : 0;
+    int hash_nchain  = in->is_android ? dynsym_count : 0;
+    int hash_sz = in->is_android ? (2 + hash_nbucket + hash_nchain) * 4 : 0;
 
     int off_ehdr  = 0;
     int off_phdrs = ehdr_size;
@@ -498,7 +552,8 @@ int elf_link_and_write(ELFBuildInput *in) {
     int off_dynstr = off_interp + interp_len;
     int off_dynsym = elf_align_up(off_dynstr + dynstr_sz, 8);
     int off_reloc  = elf_align_up(off_dynsym + dynsym_sz, 8);
-    int off_text   = elf_align_up(off_reloc  + relasz, 16);
+    int off_hash   = elf_align_up(off_reloc  + relasz, 8);
+    int off_text   = elf_align_up(off_hash   + hash_sz, 16);
     int off_rodata = off_text + text_len;
     int rx_seg_filesz = off_rodata + rodata_sz;
     int rx_seg_filesz_padded = elf_align_up(rx_seg_filesz, page);
@@ -514,13 +569,16 @@ int elf_link_and_write(ELFBuildInput *in) {
     uint64_t vma_dynstr = vma_rx + (uint64_t)off_dynstr;
     uint64_t vma_dynsym = vma_rx + (uint64_t)off_dynsym;
     uint64_t vma_reloc  = vma_rx + (uint64_t)off_reloc;
+    uint64_t vma_hash   = vma_rx + (uint64_t)off_hash;
     uint64_t vma_text   = vma_rx + (uint64_t)off_text;
     uint64_t vma_rodata = vma_rx + (uint64_t)off_rodata;
     uint64_t vma_rw     = load_base + (uint64_t)rx_seg_filesz_padded;
     uint64_t vma_got    = vma_rw + (uint64_t)(off_got - rx_seg_filesz_padded);
     uint64_t vma_dynamic = vma_rw + (uint64_t)(off_dynamic - rx_seg_filesz_padded);
     uint64_t vma_data   = vma_rw + (uint64_t)(off_data - rx_seg_filesz_padded);
-    uint64_t entry_vma  = vma_text;
+    /* A dlopen()'d .so is never exec()'d, so e_entry is meaningless for
+     * Android -- 0 is the conventional value real .so files carry. */
+    uint64_t entry_vma  = in->is_android ? 0 : vma_text;
 
     /* ---- Step 5.5: patch stub's call-exit displacement ---- */
     {
@@ -573,6 +631,48 @@ int elf_link_and_write(ELFBuildInput *in) {
             }
             slot++;
         }
+        if (in->is_android) {
+            /* The one exported, DEFINED symbol -- st_shndx=5 matches
+             * .text's fixed section index in the section-header table this
+             * file always writes below (shnames[5]), and st_value is the
+             * function's real virtual address (unlike the imports above,
+             * which are undefined placeholders resolved by GLOB_DAT relocs
+             * into the GOT instead of via this field). */
+            uint64_t sym_vma = vma_text + (uint64_t)main_text_off;
+            if (is64) {
+                e_pu32(dynsym_buf, &doff, (uint32_t)android_export_name_off);
+                e_pu8 (dynsym_buf, &doff, 0x12); /* STB_GLOBAL|STT_FUNC */
+                e_pu8 (dynsym_buf, &doff, 0x00);
+                e_pu16(dynsym_buf, &doff, 5);
+                e_pu64(dynsym_buf, &doff, sym_vma);
+                e_pu64(dynsym_buf, &doff, 0);
+            } else {
+                e_pu32(dynsym_buf, &doff, (uint32_t)android_export_name_off);
+                e_pu32(dynsym_buf, &doff, (uint32_t)sym_vma);
+                e_pu32(dynsym_buf, &doff, 0);
+                e_pu8 (dynsym_buf, &doff, 0x12);
+                e_pu8 (dynsym_buf, &doff, 0x00);
+                e_pu16(dynsym_buf, &doff, 5);
+            }
+        }
+    }
+
+    /* ---- Step 6.5: .hash (Android only) ---- */
+    uint8_t *hash_buf = NULL;
+    if (in->is_android) {
+        hash_buf = (uint8_t *)calloc((size_t)hash_sz + 1, 1);
+        int ho = 0;
+        e_pu32(hash_buf, &ho, (uint32_t)hash_nbucket);
+        e_pu32(hash_buf, &ho, (uint32_t)hash_nchain);
+        /* bucket[0] = index of our exported symbol (the last dynsym entry).
+         * Its own chain[] slot is left 0 (calloc) to terminate the bucket's
+         * chain -- correct, since it's the only member. Every other
+         * chain[] slot is also left 0: those symbols (the imports) are
+         * simply unreachable by name through this table, which is exactly
+         * right -- nothing ever needs to dlsym() an import out of this
+         * object, only resolve it against libc.so/etc via their own hash
+         * tables, which doesn't go through this one at all. */
+        e_pu32(hash_buf, &ho, (uint32_t)(dynsym_count - 1));
     }
 
     /* ---- Step 7: .rela.dyn / .rel.dyn ---- */
@@ -623,7 +723,11 @@ int elf_link_and_write(ELFBuildInput *in) {
             e_pu64(dynamic_buf,&doff,8);  e_pu64(dynamic_buf,&doff,(uint64_t)relasz);
             e_pu64(dynamic_buf,&doff,9);  e_pu64(dynamic_buf,&doff,(uint64_t)rela_entry_size);
             e_pu64(dynamic_buf,&doff,30); e_pu64(dynamic_buf,&doff,8); /* DF_BIND_NOW */
-            e_pu64(dynamic_buf,&doff,0);  e_pu64(dynamic_buf,&doff,0); /* DT_NULL */
+            if (in->is_android) {
+                e_pu64(dynamic_buf,&doff,4);  e_pu64(dynamic_buf,&doff,vma_hash);              /* DT_HASH */
+                e_pu64(dynamic_buf,&doff,14); e_pu64(dynamic_buf,&doff,(uint64_t)android_soname_off); /* DT_SONAME */
+            }
+            e_pu64(dynamic_buf,&doff,0);  e_pu64(dynamic_buf,&doff,0); /* DT_NULL -- must stay last */
         } else {
             e_pu32(dynamic_buf,&doff,5);  e_pu32(dynamic_buf,&doff,(uint32_t)vma_dynstr);
             e_pu32(dynamic_buf,&doff,10); e_pu32(dynamic_buf,&doff,(uint32_t)dynstr_sz);
@@ -1152,7 +1256,7 @@ int elf_link_and_write(ELFBuildInput *in) {
         e_pu8(hdr_buf,&hoff, in->is_openbsd ? 12 : 0); /* EI_OSABI: ELFOSABI_OPENBSD or ELFOSABI_NONE */
         { int pi=0; while(pi<8){e_pu8(hdr_buf,&hoff,0);pi++;} }
         if (is64) {
-            e_pu16(hdr_buf,&hoff,2);    /* ET_EXEC */
+            e_pu16(hdr_buf,&hoff, in->is_android ? 3 : 2); /* ET_DYN or ET_EXEC */
             e_pu16(hdr_buf,&hoff, in->is_arm64 ? 183 : 0x3E); /* EM_AARCH64 or EM_X86_64 */
             e_pu32(hdr_buf,&hoff,1);
             e_pu64(hdr_buf,&hoff,entry_vma);
@@ -1200,14 +1304,17 @@ int elf_link_and_write(ELFBuildInput *in) {
                 e_pu64(hdr_buf,&hoff,(uint64_t)note_len);
                 e_pu64(hdr_buf,&hoff,4);
             }
-            /* PT_INTERP */
-            e_pu32(hdr_buf,&hoff,3); e_pu32(hdr_buf,&hoff,4);
-            e_pu64(hdr_buf,&hoff,(uint64_t)off_interp);
-            e_pu64(hdr_buf,&hoff,vma_interp);   /* vaddr */
-            e_pu64(hdr_buf,&hoff,vma_interp);   /* paddr */
-            e_pu64(hdr_buf,&hoff,(uint64_t)interp_len);
-            e_pu64(hdr_buf,&hoff,(uint64_t)interp_len);
-            e_pu64(hdr_buf,&hoff,1);
+            /* PT_INTERP (never present for Android -- see is_android's doc
+             * comment in elf_builder.h) */
+            if (!in->is_android) {
+                e_pu32(hdr_buf,&hoff,3); e_pu32(hdr_buf,&hoff,4);
+                e_pu64(hdr_buf,&hoff,(uint64_t)off_interp);
+                e_pu64(hdr_buf,&hoff,vma_interp);   /* vaddr */
+                e_pu64(hdr_buf,&hoff,vma_interp);   /* paddr */
+                e_pu64(hdr_buf,&hoff,(uint64_t)interp_len);
+                e_pu64(hdr_buf,&hoff,(uint64_t)interp_len);
+                e_pu64(hdr_buf,&hoff,1);
+            }
             /* PT_LOAD rx */
             e_pu32(hdr_buf,&hoff,1); e_pu32(hdr_buf,&hoff,5);
             e_pu64(hdr_buf,&hoff,0);
@@ -1375,8 +1482,14 @@ int elf_link_and_write(ELFBuildInput *in) {
 
     fwrite(reloc_buf, 1, relasz, fp);
 
+    /* pad to hash */
+    { int cur = off_reloc + relasz; int need = off_hash - cur;
+      int _n = need; while(_n-->0) { uint8_t _z=0; fwrite(&_z,1,1,fp); } }
+
+    if (hash_buf && hash_sz > 0) fwrite(hash_buf, 1, (size_t)hash_sz, fp);
+
     /* pad to text */
-    { int cur = off_reloc + relasz; int need = off_text - cur;
+    { int cur = off_hash + hash_sz; int need = off_text - cur;
       int _n = need; while(_n-->0) { uint8_t _z=0; fwrite(&_z,1,1,fp); } }
 
     fwrite(text, 1, text_len, fp);
@@ -1455,7 +1568,7 @@ int elf_link_and_write(ELFBuildInput *in) {
     printf("ELF written: %s (%d bytes)\n", in->output_path,
            in->strip_debug_sections ? rw_seg_filesz : shdrs_end);
 
-    free(dynstr); free(dynsym_buf); free(reloc_buf);
+    free(dynstr); free(dynsym_buf); free(reloc_buf); free(hash_buf);
     free(dynamic_buf); free(hdr_buf); free(text);
     free(symtab_buf); free(strtab_buf); free(shstrtab_buf); free(shdr_buf);
     return 0;
