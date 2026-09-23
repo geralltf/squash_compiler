@@ -662,16 +662,24 @@ int main(int argc, char **argv) {
     int is_cpp = is_cpp_source_path(src_path);
     char rt_sqo_path[128];
     if (is_csharp) {
-        const char *tag = is_arm64 ? "linux_arm64" : (is_macos ? "macos64" : (is_openbsd ? "openbsd64" : (is_linux ? "linux64" : (is_64bit ? "win64" : "win32"))));
+        /* -android MUST get its own tag, distinct from plain "-arm64
+         * -linux" ("linux_arm64") -- both share is_arm64=1/is_linux=1, but
+         * bake in a different libc soname (bionic's unversioned "libc.so"
+         * vs glibc's "libc.so.6", see g_squash_libc_soname). Sharing a tag
+         * would let an Android build's cached runtime .sqo (with "libc.so"
+         * import specs baked in) get silently reused by a real desktop
+         * ARM64 Linux build or vice versa -- wrong DT_NEEDED soname on
+         * whichever target didn't build it last. */
+        const char *tag = is_android ? "android_arm64" : (is_arm64 ? "linux_arm64" : (is_macos ? "macos64" : (is_openbsd ? "openbsd64" : (is_linux ? "linux64" : (is_64bit ? "win64" : "win32")))));
         snprintf(rt_sqo_path, sizeof rt_sqo_path, "CSR/csharp_rt.%s.sqo", tag);
         if (n_inc < 32) include_dirs[n_inc++] = "CSR";
         FILE *rtf = fopen(rt_sqo_path, "rb");
         if (!rtf) {
             diag_emit(DIAG_ERROR, -1, NULL, NULL,
-                      "%s not found -- build the C# runtime for this target first, e.g. \"squash -c %s %s CSR/csharp_rt.c -o %s\"",
+                      "%s not found -- build the C# runtime for this target first, e.g. \"squash -c %s%s CSR/csharp_rt.c -o %s\"",
                       rt_sqo_path,
-                      is_arm64 ? "-arm64" : (is_64bit ? "-64" : "-32"),
-                      is_macos ? "-macos" : (is_openbsd ? "-openbsd" : (is_linux ? "-linux" : "-windows")),
+                      is_android ? "-android" : (is_arm64 ? "-arm64 " : (is_64bit ? "-64 " : "-32 ")),
+                      is_android ? "" : (is_macos ? "-macos" : (is_openbsd ? "-openbsd" : (is_linux ? "-linux" : "-windows"))),
                       rt_sqo_path);
             return 1;
         }
@@ -680,16 +688,18 @@ int main(int argc, char **argv) {
     }
     char cpp_rt_sqo_path[128];
     if (is_cpp) {
-        const char *tag = is_arm64 ? "linux_arm64" : (is_macos ? "macos64" : (is_openbsd ? "openbsd64" : (is_linux ? "linux64" : (is_64bit ? "win64" : "win32"))));
+        /* See the identical tag comment on the C# branch above -- -android
+         * needs its own cache tag, not "linux_arm64". */
+        const char *tag = is_android ? "android_arm64" : (is_arm64 ? "linux_arm64" : (is_macos ? "macos64" : (is_openbsd ? "openbsd64" : (is_linux ? "linux64" : (is_64bit ? "win64" : "win32")))));
         snprintf(cpp_rt_sqo_path, sizeof cpp_rt_sqo_path, "CPPR/cpp_rt.%s.sqo", tag);
         if (n_inc < 32) include_dirs[n_inc++] = "CPPR";
         FILE *rtf = fopen(cpp_rt_sqo_path, "rb");
         if (!rtf) {
             diag_emit(DIAG_ERROR, -1, NULL, NULL,
-                      "%s not found -- build the C++ runtime for this target first, e.g. \"squash -c %s %s CPPR/cpp_rt.c -o %s\"",
+                      "%s not found -- build the C++ runtime for this target first, e.g. \"squash -c %s%s CPPR/cpp_rt.c -o %s\"",
                       cpp_rt_sqo_path,
-                      is_arm64 ? "-arm64" : (is_64bit ? "-64" : "-32"),
-                      is_macos ? "-macos" : (is_openbsd ? "-openbsd" : (is_linux ? "-linux" : "-windows")),
+                      is_android ? "-android" : (is_arm64 ? "-arm64 " : (is_64bit ? "-64 " : "-32 ")),
+                      is_android ? "" : (is_macos ? "-macos" : (is_openbsd ? "-openbsd" : (is_linux ? "-linux" : "-windows"))),
                       cpp_rt_sqo_path);
             return 1;
         }

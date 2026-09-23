@@ -797,7 +797,13 @@ static void a64_load_sym_value(CodeGenA64 *cg, Symbol *sym) {
     if (sym->kind == SYM_VAR || sym->kind == SYM_PARAM) {
         int fp_off = a64_sym_fp_off(sym);
         TypeInfo *t = sym->type;
-        int sz = typeinfo_size_a64(t, 1);
+        /* a64_sizeof_type_sym, NOT typeinfo_size_a64 -- see the identical
+         * fix at the external-call return-value fixup above for the full
+         * story: an unrecognized typedef/enum (e.g. "VkResult") silently
+         * defaulted to 8 bytes here too, so a variable's LOAD width could
+         * disagree with its real size the same way its call-site fixup
+         * did. */
+        int sz = a64_sizeof_type_sym(cg->sym, t, 1);
         /* Each sized load instruction has its own encodable immediate range
          * (unsigned offset, scaled by the access size): LDR up to 32760,
          * LDR32 up to 16380, LDRH up to 8190, LDRB up to 4095 (unscaled).
@@ -856,7 +862,7 @@ static void a64_load_sym_value(CodeGenA64 *cg, Symbol *sym) {
             /* Scalar: dereference, sized to the type — wdata entries are
              * packed tightly (8-byte aligned, not padded), so a wider load
              * than the type's size would read into the next global. */
-            int sz = sym->type ? typeinfo_size_a64(sym->type, 1) : 4;
+            int sz = sym->type ? a64_sizeof_type_sym(cg->sym, sym->type, 1) : 4;
             int sym_unsigned = sym->type && sym->type->is_unsigned;
             if (sz >= 8)       a64_emit(a, a64_LDR(A64_X0, A64_X0, 0));
             else if (sz == 4)  a64_emit(a, sym_unsigned ? a64_LDR32(A64_X0, A64_X0, 0) : a64_LDRSW(A64_X0, A64_X0, 0));
@@ -891,7 +897,11 @@ static void a64_store_to_sym(CodeGenA64 *cg, Symbol *sym, int val_reg) {
     if (sym->kind == SYM_VAR || sym->kind == SYM_PARAM) {
         int fp_off = a64_sym_fp_off(sym);
         TypeInfo *t = sym->type;
-        int sz = typeinfo_size_a64(t, 1);
+        /* a64_sizeof_type_sym, NOT typeinfo_size_a64 -- see a64_load_sym_value's
+         * identical fix; store width must agree with load width or a
+         * round-tripped value picks up stale bits from whatever used to
+         * occupy the rest of an over-wide slot. */
+        int sz = a64_sizeof_type_sym(cg->sym, t, 1);
         /* See a64_load_sym_value for why the range check must be per-size:
          * STR up to 32760, STR32 up to 16380, STRH up to 8190, STRB up to
          * 4095 (unscaled) — gating all of them on STR's wider range let
@@ -924,7 +934,7 @@ static void a64_store_to_sym(CodeGenA64 *cg, Symbol *sym, int val_reg) {
     } else if (sym->kind == SYM_GLOBAL) {
         const char *lbl = (sym->dll && sym->dll[0]) ? sym->dll : sym->name;
         emit_data_ref(cg, A64_X8, lbl, RELOC_A64_WDATA_ADRP, RELOC_A64_WDATA_LO12);
-        int sz = sym->type ? typeinfo_size_a64(sym->type, 1) : 4;
+        int sz = sym->type ? a64_sizeof_type_sym(cg->sym, sym->type, 1) : 4;
         if (sz >= 8)       a64_emit(a, a64_STR(val_reg, A64_X8, 0));
         else if (sz == 4)  a64_emit(a, a64_STR32(val_reg, A64_X8, 0));
         else if (sz == 2)  a64_emit(a, a64_STRH(val_reg, A64_X8, 0));
@@ -1282,7 +1292,18 @@ static void a64_emit_call(CodeGenA64 *cg, ASTNode *n) {
     if (fsym && fsym->func_node && !(fsym->kind == SYM_FUNC && fsym->func_node->func.body)) {
         TypeInfo *rt = fsym->func_node->func.ret_type;
         if (rt && rt->pointer_depth == 0) {
-            int sz = typeinfo_size_a64(rt, 1);
+            /* a64_sizeof_type_sym, NOT typeinfo_size_a64 -- the latter has
+             * no symbol-table access and silently defaults an unrecognized
+             * typedef/enum return type (e.g. Vulkan's "VkResult", a
+             * typedef'd enum) to 8 bytes instead of its real 4, which
+             * skipped this fixup entirely for exactly the case it exists
+             * to handle. Reproduced directly: "VkResult vr =
+             * vkCreateInstance(...); if (vr == VK_SUCCESS)" took the wrong
+             * branch even though (int)vr and (int)VK_SUCCESS were both 0,
+             * because vr's stored/loaded value still carried whatever
+             * garbage the real driver call left in x0's upper 32 bits --
+             * this fixup never ran to clear it. */
+            int sz = a64_sizeof_type_sym(cg->sym, rt, 1);
             if (sz == 4)      a64_emit(a, rt->is_unsigned ? a64_UXTW(A64_X0, A64_X0) : a64_SXTW(A64_X0, A64_X0));
             else if (sz == 2) a64_emit(a, rt->is_unsigned ? 0xD3403C00u|A64_X0 : 0x93403C00u|A64_X0);
             else if (sz == 1) a64_emit(a, rt->is_unsigned ? 0xD3401C00u|A64_X0 : 0x93401C00u|A64_X0);
@@ -1534,7 +1555,7 @@ static void a64_store_to_lvalue(CodeGenA64 *cg, ASTNode *lhs) {
     } else if (lhs->kind == AST_DEREF) {
         sz = a64_index_elem_size(cg, lhs->deref.operand);
     } else if (lhs->type) {
-        sz = typeinfo_size_a64(lhs->type, 1);
+        sz = a64_sizeof_type_sym(cg->sym, lhs->type, 1);
     }
     if (sz >= 8)
         a64_emit(a, a64_STR(A64_X19, A64_X0, 0));
@@ -1686,7 +1707,7 @@ static void a64_expr(CodeGenA64 *cg, ASTNode *n) {
             a64_expr(cg, n->cast.expr);
             /* Truncate/sign-extend based on target type */
             if (ct && ct->pointer_depth == 0) {
-                int sz = typeinfo_size_a64(ct, 1);
+                int sz = a64_sizeof_type_sym(cg->sym, ct, 1);
                 if (sz == 1 && !ct->is_unsigned)
                     a64_emit(a, 0x93401C00u | A64_X0);   /* SXTB */
                 else if (sz == 1 && ct->is_unsigned)
@@ -2580,7 +2601,13 @@ static void a64_stmt(CodeGenA64 *cg, ASTNode *n) {
              * every call, and the wdata pool is already zero-initialised
              * (matches "= 0", which is the only case squash programs use). */
             int arr = nd->var_decl.array_size;
-            int elem_sz = nd->var_decl.type ? typeinfo_size_a64(nd->var_decl.type, 1) : 4;
+            /* a64_sizeof_type_sym_ex, NOT typeinfo_size_a64 -- same fix as
+             * elsewhere in this file. ignore_array=1 since `arr` here
+             * already tracks the element count separately (multiplied in
+             * below) -- using the plain a64_sizeof_type_sym wrapper
+             * (ignore_array=0) would double-count it if the type itself
+             * also carried a nonzero array_size. */
+            int elem_sz = nd->var_decl.type ? a64_sizeof_type_sym_ex(cg->sym, nd->var_decl.type, 1, 0, 1) : 4;
             if (elem_sz < 1) elem_sz = 4;
             int total_sz = (arr > 0) ? elem_sz * arr : elem_sz;
 
@@ -3294,17 +3321,33 @@ static void a64_codegen_global(CodeGenA64 *cg, ASTNode *n) {
     if (!n || n->kind != AST_VAR_DECL) return;
     /* Allocate in wdata pool */
     TypeInfo *t = n->var_decl.type;
-    int sz = typeinfo_size_a64(t, 1);
-    if (t && t->array_size > 1) sz *= t->array_size;
-    /* 2D array (T x[N][M]) — array_size2 (M) was never factored in here,
-     * so a global like "static char g_bufs[8][32]" was only allocated
-     * 1*8=8 bytes of wdata space (M silently dropped) instead of the real
-     * 8*32=256. The very next global declared after it then landed
-     * PARTWAY INSIDE g_bufs's own real memory footprint — reproduced
-     * directly: "static char g_bufs[8][32]; static int g_next=0;" placed
-     * g_next at g_bufs+64, i.e. overlapping g_bufs[2], so any write to
-     * that row silently clobbered g_next's own value mid-loop. */
-    if (t && t->array_size2 > 1) sz *= t->array_size2;
+    /* a64_sizeof_type_sym, NOT typeinfo_size_a64 -- the latter has no
+     * symbol-table access (see its own doc comment at AST_SIZEOF_TYPE
+     * above) and silently falls back to a generic "is64?8:4" default for
+     * any struct/typedef name it doesn't recognize as a builtin. For a
+     * global struct variable that meant reserving only 8 bytes of wdata
+     * space for the WHOLE struct regardless of its real size, so the next
+     * global declared after it landed PARTWAY INSIDE the first one's true
+     * memory footprint -- reproduced directly: two globals, "struct
+     * AppInfo g_appInfo;" (real size 48) followed by "struct CreateInfo
+     * g_createInfo;", placed g_createInfo starting at g_appInfo+8, i.e.
+     * exactly overlapping g_appInfo's own second field (pNext) -- so
+     * g_createInfo.sType=1 silently overwrote g_appInfo.pNext with 1,
+     * corrupting a value that had already been explicitly set to 0/NULL
+     * several statements earlier with no visible relation to the actual
+     * bug. Exactly the same bug class already fixed at AST_SIZEOF_TYPE
+     * above and documented at the 2D-array (array_size2) case just below
+     * -- this call site was simply never updated to match. */
+    /* a64_sizeof_type_sym_ex (which the 2-arg wrapper below calls with
+     * ignore_array=0) already multiplies by array_size and array_size2
+     * itself -- see its own array-handling block -- so no additional
+     * multiplication belongs here. (An earlier version of this function
+     * had to do that multiplication by hand, one dimension at a time, and
+     * had a bug where 2D arrays' second dimension was silently dropped —
+     * see git history/this file's other comments for that incident — but
+     * routing through the shared, already-correct helper below makes
+     * that entire class of bug impossible to reintroduce here.) */
+    int sz = a64_sizeof_type_sym(cg->sym, t, 1);
     if (sz < 1) sz = 1;
     a64_alloc_wdata(cg, sz, n->var_decl.name);
     /* Define in symtable as global */
