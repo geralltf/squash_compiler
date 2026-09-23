@@ -5,6 +5,7 @@
 #include "android_rsa_keyfile.h"
 #include "android_x509.h"
 #include "android_apk_sign.h"
+#include "android_apk_sign_v1.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,14 +88,6 @@ int android_pack_apk(const char *so_path, const char *out_apk_path,
 
     snprintf(entry_name, sizeof entry_name, "lib/arm64-v8a/lib%s.so", spec->lib_name);
 
-    zw = android_zip_new();
-    android_zip_add_file(zw, "AndroidManifest.xml", manifest_data, manifest_len);
-    android_zip_add_file(zw, entry_name, so_data, (size_t)so_len);
-    android_zip_finish(zw, &unsigned_apk, &unsigned_apk_len);
-    android_zip_free(zw);
-    free(manifest_data);
-    free(so_data);
-
     if (spec->keystore_base_path && spec->keystore_base_path[0]) {
         snprintf(keystore_base, sizeof keystore_base, "%s", spec->keystore_base_path);
     } else {
@@ -104,9 +97,42 @@ int android_pack_apk(const char *so_path, const char *out_apk_path,
     }
 
     if (load_or_create_debug_key(keystore_base, &key, &cert_der, &cert_len) != 0) {
-        free(unsigned_apk);
+        free(manifest_data); free(so_data);
         return -1;
     }
+
+    /* v1 (classic JAR) signing: required for real installability on API<24
+     * devices, which have no concept of v2/v3. `cn`/serial here MUST match
+     * exactly what load_or_create_debug_key's android_x509_self_signed
+     * call used, or SignerInfo's issuerAndSerialNumber won't identify the
+     * embedded certificate. */
+    { android_v1_entry v1_entries[2];
+      unsigned char *manifest_mf, *cert_sf, *cert_rsa;
+      size_t manifest_mf_len, cert_sf_len, cert_rsa_len;
+
+      v1_entries[0].name = "AndroidManifest.xml";
+      v1_entries[0].data = manifest_data;
+      v1_entries[0].len = manifest_len;
+      v1_entries[1].name = entry_name;
+      v1_entries[1].data = so_data;
+      v1_entries[1].len = (size_t)so_len;
+
+      android_apk_sign_v1(v1_entries, 2, &key, cert_der, cert_len, "squash debug", 1,
+                           &manifest_mf, &manifest_mf_len, &cert_sf, &cert_sf_len,
+                           &cert_rsa, &cert_rsa_len);
+
+      zw = android_zip_new();
+      android_zip_add_file(zw, "AndroidManifest.xml", manifest_data, manifest_len);
+      android_zip_add_file(zw, entry_name, so_data, (size_t)so_len);
+      android_zip_add_file(zw, "META-INF/MANIFEST.MF", manifest_mf, manifest_mf_len);
+      android_zip_add_file(zw, "META-INF/CERT.SF", cert_sf, cert_sf_len);
+      android_zip_add_file(zw, "META-INF/CERT.RSA", cert_rsa, cert_rsa_len);
+      android_zip_finish(zw, &unsigned_apk, &unsigned_apk_len);
+      android_zip_free(zw);
+      free(manifest_mf); free(cert_sf); free(cert_rsa);
+    }
+    free(manifest_data);
+    free(so_data);
 
     if (android_apk_sign_v2(unsigned_apk, unsigned_apk_len, &key, cert_der, cert_len,
                              &signed_apk, &signed_apk_len) != 0) {

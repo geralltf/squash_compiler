@@ -256,7 +256,7 @@ static void print_usage_short(void) {
  * flag spelling is -- the same visual shape `git --help`/`gcc --help`
  * use, not a bare unaligned list. */
 static void help_row(const char *flag, const char *desc) {
-    int pad = 22 - (int)strlen(flag);
+    int pad = 25 - (int)strlen(flag);
     printf("  %s%s%s", HC_FLAG, flag, HC_RESET);
     while (pad-- > 0) putchar(' ');
     printf("%s\n", desc);
@@ -300,12 +300,21 @@ static void print_help(void) {
     help_row("-macos",            "native Mach-O output for Intel (x86-64) macOS");
     help_row("-openbsd",          "native ELF output for OpenBSD");
     help_row("-openbsd-libc <so>","override the OpenBSD libc.so soname this compile links against");
-    printf("\n");
+    help_row("-android",          "signed, installable .apk for Android (implies -linux -arm64 -64)");
+    help_row("-android-package <name>", "Android package name (default: derived from -o's basename)");
+    printf("  %s-android%s needs no AAPT/apksigner/Gradle/NDK -- squash emits the ARM64\n", HC_DIM, HC_RESET);
+    printf("  bionic .so, the binary AndroidManifest.xml, and signs the .apk itself\n");
+    printf("  (APK Signature Scheme v1 + v2, both self-implemented; a debug signing key\n");
+    printf("  is generated once and cached under ~/.squash/). The compiled program's\n");
+    printf("  %smain()%s is exported as %sANativeActivity_onCreate%s and runs once at app\n", HC_BOLD, HC_RESET, HC_BOLD, HC_RESET);
+    printf("  creation via Android's built-in NativeActivity mechanism -- no Java/\n");
+    printf("  Kotlin/DEX involved at all.\n\n");
 
     printf("%sTARGET WORD SIZE%s\n", HC_HEAD, HC_RESET);
     help_row("-32",  "32-bit output (Windows only -- every other target is 64-bit-only)");
     help_row("-64",  "64-bit output (the default)");
-    help_row("-arm64","AArch64 output instead of x86-64 (implies -64; Linux/macOS only)");
+    help_row("-arm64","AArch64 output instead of x86-64 (implies -64; Linux only -- -android");
+    help_row("",       "always targets AArch64 already, and -macos is Intel x86-64 only)");
     printf("\n");
 
     printf("%sCOMPILE MODE%s\n", HC_HEAD, HC_RESET);
@@ -341,6 +350,29 @@ static void print_help(void) {
     printf("      Recompile only main.c and relink it against that .sqo.\n");
     printf("  %ssquash -windows -64 app.c -lvulkan -o app.exe%s\n", HC_DIM, HC_RESET);
     printf("      Cross-compile a Windows binary that links against Vulkan.\n");
+    printf("\n");
+    printf("  %sCross-compiling for a different platform than this host%s\n", HC_DIM, HC_RESET);
+    printf("  %ssquash -linux -64 app.c -o app%s\n", HC_DIM, HC_RESET);
+    printf("      Build a Linux x86-64 ELF binary from any host.\n");
+    printf("  %ssquash -linux -arm64 app.c -o app%s\n", HC_DIM, HC_RESET);
+    printf("      Build a Linux AArch64 (ARM64) ELF binary from any host.\n");
+    printf("  %ssquash -windows -32 app.c -o app.exe%s\n", HC_DIM, HC_RESET);
+    printf("      Build a 32-bit Windows PE binary from any host.\n");
+    printf("  %ssquash -macos app.c -o app%s\n", HC_DIM, HC_RESET);
+    printf("      Build an Intel (x86-64) macOS Mach-O binary from any host.\n");
+    printf("  %ssquash -openbsd app.c -o app%s\n", HC_DIM, HC_RESET);
+    printf("      Build an OpenBSD ELF binary from any host (auto-detects the\n");
+    printf("      target's libc.so soname when run ON OpenBSD; pass -openbsd-libc\n");
+    printf("      explicitly when cross-compiling FROM a non-OpenBSD host).\n");
+    printf("  %ssquash -openbsd -openbsd-libc libc.so.99.1 app.c -o app%s\n", HC_DIM, HC_RESET);
+    printf("      Cross-compile for OpenBSD from Linux/Windows/macOS, naming the\n");
+    printf("      exact libc.so version installed on the actual target machine.\n");
+    printf("  %ssquash -android app.c -o app.apk%s\n", HC_DIM, HC_RESET);
+    printf("      Build a signed, installable Android .apk from any host -- no\n");
+    printf("      Android SDK/NDK/Java toolchain needed anywhere in the process.\n");
+    printf("  %ssquash -android -android-package com.example.demo app.c -o demo.apk%s\n", HC_DIM, HC_RESET);
+    printf("      Same, with an explicit package name instead of one derived from\n");
+    printf("      the output filename.\n");
 }
 
 /* Derives a lowercase, alphanumeric app identifier from an output path's

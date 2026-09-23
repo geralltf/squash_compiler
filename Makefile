@@ -9,7 +9,8 @@ CFLAGS=-I. -Wall -pedantic
 LDFLAGS=
 DEPS =
 HEADERS =
-OBJ = compiler.o assembler.o ast.o codegen.o arm64_asm.o codegen_arm64.o lexer.o parser_new4.o pe_builder.o elf_builder.o macho_builder.o symtable.o linker.o winlinker.o objfile.o implib.o diag.o CS/cs_ast.o CS/cs_lexer.o CS/cs_parser.o CS/cs_lower.o CPP/cpp_ast.o CPP/cpp_lexer.o CPP/cpp_parser.o CPP/cpp_lower.o
+ANDROID_OBJ = android/android_sha256.o android/android_crc32.o android/android_zip.o android/android_axml.o android/android_manifest.o android/android_bignum.o android/android_der.o android/android_rsa.o android/android_rsa_keyfile.o android/android_x509.o android/android_apk_digest.o android/android_apk_sign.o android/android_base64.o android/android_apk_sign_v1.o android/android_pack.o
+OBJ = compiler.o assembler.o ast.o codegen.o arm64_asm.o codegen_arm64.o lexer.o parser_new4.o pe_builder.o elf_builder.o macho_builder.o symtable.o linker.o winlinker.o objfile.o implib.o diag.o CS/cs_ast.o CS/cs_lexer.o CS/cs_parser.o CS/cs_lower.o CPP/cpp_ast.o CPP/cpp_lexer.o CPP/cpp_parser.o CPP/cpp_lower.o $(ANDROID_OBJ)
 
 %.o: %.c $(DEPS)
 	$(CC) -c -o $@ $< $(CFLAGS)
