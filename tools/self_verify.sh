@@ -252,7 +252,7 @@ MANIFEST="$WORKDIR/manifest.txt"
 } > "$MANIFEST"
 
 echo "--- Generation 0 (gcc bootstrap) ---"
-UNITY_FILES="assembler.c ast.c codegen.c arm64_asm.c codegen_arm64.c lexer.c parser_new4.c pe_builder.c elf_builder.c macho_builder.c symtable.c linker.c winlinker.c objfile.c implib.c diag.c CS/cs_ast.c CS/cs_lexer.c CS/cs_parser.c CS/cs_lower.c compiler.c"
+UNITY_FILES="assembler.c ast.c codegen.c arm64_asm.c codegen_arm64.c lexer.c parser_new4.c pe_builder.c elf_builder.c macho_builder.c symtable.c linker.c winlinker.c objfile.c implib.c diag.c CS/cs_ast.c CS/cs_lexer.c CS/cs_parser.c CS/cs_lower.c CPP/cpp_ast.c CPP/cpp_lexer.c CPP/cpp_parser.c CPP/cpp_lower.c android/android_sha256.c android/android_crc32.c android/android_zip.c android/android_axml.c android/android_manifest.c android/android_bignum.c android/android_der.c android/android_rsa.c android/android_rsa_keyfile.c android/android_x509.c android/android_apk_digest.c android/android_apk_sign.c android/android_base64.c android/android_apk_sign_v1.c android/android_pack.c android/android_sha1.c android/android_adler32.c android/android_dex.c compiler.c"
 if ! gcc -o "$GEN0" $UNITY_FILES -I. -w 2>"$WORKDIR/gen0_build.log"; then
     echo "FATAL: gcc itself failed to build gen0 -- cannot proceed."
     cat "$WORKDIR/gen0_build.log"

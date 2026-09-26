@@ -56,4 +56,7 @@
 #include "android/android_base64.c"
 #include "android/android_apk_sign_v1.c"
 #include "android/android_pack.c"
+#include "android/android_sha1.c"
+#include "android/android_adler32.c"
+#include "android/android_dex.c"
 #include "compiler.c"

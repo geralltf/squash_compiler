@@ -422,6 +422,15 @@ int main(int argc, char **argv) {
      * instead of writing it out directly. See g_squash_android_target's
      * doc comment in ast.h. */
     int    is_android=0;
+    /* Opt-in: use the DEX-based com.squash.runtime.SquashActivity shim
+     * (Activity+SurfaceView, JNI native methods) instead of the legacy raw
+     * android.app.NativeActivity. Added because raw NativeActivity's
+     * onNativeWindowCreated/onResume dispatch was found broken on real
+     * Android 17 hardware (verified even against a control app built with
+     * Google's own NDK toolchain) -- NativeActivity still works fine on
+     * older devices/the emulator, so this stays opt-in rather than
+     * replacing the default. */
+    int    android_use_shim=0;
     const char *android_package_override = NULL;
     char  *src_path=NULL, *out_path=NULL;
     int    dump=0;
@@ -478,6 +487,7 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i],"-macos")==0)   { is_macos=1; is_linux=1; is_64bit=1; is_openbsd=0; target_explicit=1; }
         else if (strcmp(argv[i],"-openbsd")==0) { is_openbsd=1; is_linux=1; is_macos=0; target_explicit=1; }
         else if (strcmp(argv[i],"-android")==0) { is_android=1; is_linux=1; is_macos=0; is_openbsd=0; is_arm64=1; is_64bit=1; target_explicit=1; }
+        else if (strcmp(argv[i],"-android-activity")==0) { android_use_shim=1; }
         else if (strncmp(argv[i],"-android-package",16)==0) {
             const char *v=argv[i]+16;
             if (v[0]=='=') v++;
@@ -822,7 +832,11 @@ int main(int argc, char **argv) {
          * blindly carried through by objfile_merge() (which has no way to
          * know it came from a non-main part) and could silently override
          * the real merged entry point, corrupting the final binary. */
-        if (!compile_only) inject_entry_reloc_a64(&a64as, "main");
+        /* The android-activity shim has no single entry point (only the
+         * JNI native methods matter, resolved separately below) -- skip
+         * looking for "main" so a shim-only source with no main() doesn't
+         * print a spurious "no entry point found" warning. */
+        if (!compile_only && !(is_android && android_use_shim)) inject_entry_reloc_a64(&a64as, "main");
 
         text   = a64_codegen_get_text(&cg64, &text_len);
         rdata_data = a64_codegen_get_rdata(&cg64, &rdata_len);
@@ -1242,7 +1256,38 @@ int main(int argc, char **argv) {
             { static char soname_buf[300];
               snprintf(soname_buf, sizeof soname_buf, "lib%s.so", android_app_name);
               ebi.android_soname = soname_buf; }
-            ebi.android_export_name = "ANativeActivity_onCreate";
+            if (android_use_shim) {
+                /* JNI shim path: export whichever of the 3 native methods
+                 * the user's source actually defines, each under its
+                 * standard JNI-mangled symbol name, at its real .text
+                 * offset (found the same way inject_entry_reloc_a64() finds
+                 * "main" -- see find_func_offset_a64()). Not every native
+                 * method needs to be defined (e.g. an app that ignores
+                 * resize/destroy events just won't export those two). Only
+                 * supported for a single-TU compile (not have_merged) --
+                 * multi-object Android-activity links aren't a case this
+                 * needs to handle yet. */
+                static ElfAndroidExport exports[3];
+                int nexp = 0;
+                static const struct { const char *c_name; const char *jni_name; } jni_methods[3] = {
+                    { "nativeSurfaceCreated",   "Java_com_squash_runtime_SquashActivity_nativeSurfaceCreated" },
+                    { "nativeSurfaceChanged",   "Java_com_squash_runtime_SquashActivity_nativeSurfaceChanged" },
+                    { "nativeSurfaceDestroyed", "Java_com_squash_runtime_SquashActivity_nativeSurfaceDestroyed" },
+                };
+                int mi;
+                for (mi = 0; mi < 3; mi++) {
+                    int off = have_merged ? -1 : find_func_offset_a64(&a64as, jni_methods[mi].c_name);
+                    if (off >= 0) {
+                        exports[nexp].symbol = jni_methods[mi].jni_name;
+                        exports[nexp].text_offset = off;
+                        nexp++;
+                    }
+                }
+                ebi.android_extra_exports = exports;
+                ebi.android_extra_export_count = nexp;
+            } else {
+                ebi.android_export_name = "ANativeActivity_onCreate";
+            }
         } else {
             ebi.output_path = out_path;
         }
@@ -1270,6 +1315,7 @@ int main(int argc, char **argv) {
             pspec.version_code = 1;
             pspec.version_name = "1.0";
             pspec.keystore_base_path = NULL;
+            pspec.use_activity_shim = android_use_shim;
             rc = android_pack_apk(android_so_tmp_path, out_path, &pspec);
             remove(android_so_tmp_path);
         }
