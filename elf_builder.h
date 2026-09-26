@@ -5,6 +5,8 @@
 #include "assembler.h"
 #include "linker.h"
 
+typedef struct { const char *symbol; int text_offset; } ElfAndroidExport;
+
 /* =========================================================================
  * ELF build input — mirrors PEBuildInput for Linux ELF output
  * ========================================================================= */
@@ -33,8 +35,22 @@ typedef struct {
     /* DT_SONAME value, e.g. "libapp.so". Defaults to "lib.so" if NULL. */
     const char *android_soname;
     /* Symbol name to export as a defined dynamic symbol. Defaults to
-     * in->entry_func if NULL. */
+     * in->entry_func if NULL. Used by the raw android.app.NativeActivity
+     * path (exports "ANativeActivity_onCreate" at the entry function's
+     * address). May be NULL when only android_extra_exports is used (the
+     * SquashActivity/JNI shim path -- see below -- has no single "entry
+     * point" the way a NativeActivity .so does). */
     const char *android_export_name;
+
+    /* Additional named exports beyond android_export_name, each at its own
+     * explicit .text offset rather than the entry function's -- needed for
+     * the JNI-based Android backend (com.squash.runtime.SquashActivity),
+     * which calls into several distinctly-named native methods
+     * (Java_com_squash_runtime_SquashActivity_nativeSurfaceCreated etc),
+     * not just one entry point. All exports (android_export_name, if set,
+     * plus every one of these) share the same .dynsym/.hash machinery. */
+    ElfAndroidExport *android_extra_exports;
+    int android_extra_export_count;
 
     /* 1 = omit the section-header table (.symtab/.strtab/.shstrtab and the
      * SHT describing every section) that elf_link_and_write() writes by

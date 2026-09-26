@@ -317,13 +317,26 @@ int elf_link_and_write(ELFBuildInput *in) {
      * so none of the existing offset math above needs to change. */
     int android_soname_off = 0;
     int android_export_name_off = 0;
+    /* Whether we emit the single "main export" slot (android_export_name,
+     * or entry_func as its legacy default) at all: skipped when a caller
+     * provides ONLY android_extra_exports (the JNI shim path has no single
+     * "entry point" the way a NativeActivity .so does). */
+    int have_main_export = in->is_android && (in->android_export_name || in->android_extra_export_count == 0);
+    int android_extra_export_off[64];
     if (in->is_android) {
         const char *soname = in->android_soname ? in->android_soname : "lib.so";
-        const char *expname = in->android_export_name ? in->android_export_name : in->entry_func;
+        int ei;
         android_soname_off = dynstr_len;
         { const char *s = soname; while (*s) dynstr[dynstr_len++] = (uint8_t)(*s++); dynstr[dynstr_len++] = 0; }
-        android_export_name_off = dynstr_len;
-        { const char *s = expname; while (*s) dynstr[dynstr_len++] = (uint8_t)(*s++); dynstr[dynstr_len++] = 0; }
+        if (have_main_export) {
+            const char *expname = in->android_export_name ? in->android_export_name : in->entry_func;
+            android_export_name_off = dynstr_len;
+            { const char *s = expname; while (*s) dynstr[dynstr_len++] = (uint8_t)(*s++); dynstr[dynstr_len++] = 0; }
+        }
+        for (ei = 0; ei < in->android_extra_export_count; ei++) {
+            android_extra_export_off[ei] = dynstr_len;
+            { const char *s = in->android_extra_exports[ei].symbol; while (*s) dynstr[dynstr_len++] = (uint8_t)(*s++); dynstr[dynstr_len++] = 0; }
+        }
     }
     int dynstr_sz = dynstr_len;
 
@@ -513,11 +526,12 @@ int elf_link_and_write(ELFBuildInput *in) {
         note_len = no;
     }
 
-    /* Android exports exactly one extra, DEFINED dynsym entry (see
-     * is_android's doc comment) appended AFTER the existing import entries
-     * (indices 1..nfuncs) so none of their sym_idx=slot+1 references used
-     * by .rela.dyn below need to change. */
-    int dynsym_count = 1 + nfuncs + (in->is_android ? 1 : 0);
+    /* Android exports 1+N extra, DEFINED dynsym entries (see is_android's
+     * doc comment) appended AFTER the existing import entries (indices
+     * 1..nfuncs) so none of their sym_idx=slot+1 references used by
+     * .rela.dyn below need to change. */
+    int android_export_count = (have_main_export ? 1 : 0) + (in->is_android ? in->android_extra_export_count : 0);
+    int dynsym_count = 1 + nfuncs + android_export_count;
     int dynsym_sz = dynsym_count * sym_entry_size;
     int relasz = nfuncs * rela_entry_size;
     int got_sz = nfuncs * got_slot_size;
@@ -632,27 +646,50 @@ int elf_link_and_write(ELFBuildInput *in) {
             slot++;
         }
         if (in->is_android) {
-            /* The one exported, DEFINED symbol -- st_shndx=5 matches
-             * .text's fixed section index in the section-header table this
-             * file always writes below (shnames[5]), and st_value is the
+            /* Every exported, DEFINED symbol (the legacy single
+             * android_export_name, if present, then every
+             * android_extra_exports[] entry) -- st_shndx=5 matches .text's
+             * fixed section index in the section-header table this file
+             * always writes below (shnames[5]), and st_value is the
              * function's real virtual address (unlike the imports above,
              * which are undefined placeholders resolved by GLOB_DAT relocs
              * into the GOT instead of via this field). */
-            uint64_t sym_vma = vma_text + (uint64_t)main_text_off;
-            if (is64) {
-                e_pu32(dynsym_buf, &doff, (uint32_t)android_export_name_off);
-                e_pu8 (dynsym_buf, &doff, 0x12); /* STB_GLOBAL|STT_FUNC */
-                e_pu8 (dynsym_buf, &doff, 0x00);
-                e_pu16(dynsym_buf, &doff, 5);
-                e_pu64(dynsym_buf, &doff, sym_vma);
-                e_pu64(dynsym_buf, &doff, 0);
-            } else {
-                e_pu32(dynsym_buf, &doff, (uint32_t)android_export_name_off);
-                e_pu32(dynsym_buf, &doff, (uint32_t)sym_vma);
-                e_pu32(dynsym_buf, &doff, 0);
-                e_pu8 (dynsym_buf, &doff, 0x12);
-                e_pu8 (dynsym_buf, &doff, 0x00);
-                e_pu16(dynsym_buf, &doff, 5);
+            int ei;
+            if (have_main_export) {
+                uint64_t sym_vma = vma_text + (uint64_t)main_text_off;
+                if (is64) {
+                    e_pu32(dynsym_buf, &doff, (uint32_t)android_export_name_off);
+                    e_pu8 (dynsym_buf, &doff, 0x12); /* STB_GLOBAL|STT_FUNC */
+                    e_pu8 (dynsym_buf, &doff, 0x00);
+                    e_pu16(dynsym_buf, &doff, 5);
+                    e_pu64(dynsym_buf, &doff, sym_vma);
+                    e_pu64(dynsym_buf, &doff, 0);
+                } else {
+                    e_pu32(dynsym_buf, &doff, (uint32_t)android_export_name_off);
+                    e_pu32(dynsym_buf, &doff, (uint32_t)sym_vma);
+                    e_pu32(dynsym_buf, &doff, 0);
+                    e_pu8 (dynsym_buf, &doff, 0x12);
+                    e_pu8 (dynsym_buf, &doff, 0x00);
+                    e_pu16(dynsym_buf, &doff, 5);
+                }
+            }
+            for (ei = 0; ei < in->android_extra_export_count; ei++) {
+                uint64_t sym_vma = vma_text + (uint64_t)(stub_len + in->android_extra_exports[ei].text_offset);
+                if (is64) {
+                    e_pu32(dynsym_buf, &doff, (uint32_t)android_extra_export_off[ei]);
+                    e_pu8 (dynsym_buf, &doff, 0x12);
+                    e_pu8 (dynsym_buf, &doff, 0x00);
+                    e_pu16(dynsym_buf, &doff, 5);
+                    e_pu64(dynsym_buf, &doff, sym_vma);
+                    e_pu64(dynsym_buf, &doff, 0);
+                } else {
+                    e_pu32(dynsym_buf, &doff, (uint32_t)android_extra_export_off[ei]);
+                    e_pu32(dynsym_buf, &doff, (uint32_t)sym_vma);
+                    e_pu32(dynsym_buf, &doff, 0);
+                    e_pu8 (dynsym_buf, &doff, 0x12);
+                    e_pu8 (dynsym_buf, &doff, 0x00);
+                    e_pu16(dynsym_buf, &doff, 5);
+                }
             }
         }
     }
@@ -664,15 +701,34 @@ int elf_link_and_write(ELFBuildInput *in) {
         int ho = 0;
         e_pu32(hash_buf, &ho, (uint32_t)hash_nbucket);
         e_pu32(hash_buf, &ho, (uint32_t)hash_nchain);
-        /* bucket[0] = index of our exported symbol (the last dynsym entry).
-         * Its own chain[] slot is left 0 (calloc) to terminate the bucket's
-         * chain -- correct, since it's the only member. Every other
-         * chain[] slot is also left 0: those symbols (the imports) are
-         * simply unreachable by name through this table, which is exactly
-         * right -- nothing ever needs to dlsym() an import out of this
-         * object, only resolve it against libc.so/etc via their own hash
-         * tables, which doesn't go through this one at all. */
-        e_pu32(hash_buf, &ho, (uint32_t)(dynsym_count - 1));
+        /* bucket[0] = index of the FIRST exported symbol (all exports sit
+         * contiguously at the tail of .dynsym, after the null entry and
+         * every import). Every export's chain[] slot points to the next
+         * export's index, chaining them together within this one bucket
+         * (hash_nbucket==1, so every name collides into bucket 0 regardless
+         * of its real hash -- fine for a handful of exports); the last
+         * export's chain[] slot is 0 (terminator). Every other chain[] slot
+         * (imports, and the null 0th entry) is left 0 from calloc: those
+         * symbols are simply unreachable by name through this table, which
+         * is exactly right -- nothing ever needs to dlsym() an import out
+         * of this object, only resolve it against libc.so/etc via their
+         * own hash tables, which doesn't go through this one at all. */
+        if (android_export_count > 0) {
+            int first_export = dynsym_count - android_export_count;
+            int k;
+            e_pu32(hash_buf, &ho, (uint32_t)first_export);
+            for (k = 0; k < android_export_count; k++) {
+                int idx = first_export + k;
+                int chain_off = 8 + hash_nbucket * 4 + idx * 4;
+                uint32_t next = (k + 1 < android_export_count) ? (uint32_t)(idx + 1) : 0u;
+                hash_buf[chain_off + 0] = (uint8_t)(next);
+                hash_buf[chain_off + 1] = (uint8_t)(next >> 8);
+                hash_buf[chain_off + 2] = (uint8_t)(next >> 16);
+                hash_buf[chain_off + 3] = (uint8_t)(next >> 24);
+            }
+        } else {
+            e_pu32(hash_buf, &ho, 0);
+        }
     }
 
     /* ---- Step 7: .rela.dyn / .rel.dyn ---- */

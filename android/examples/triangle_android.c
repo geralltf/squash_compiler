@@ -4,55 +4,29 @@
 /* Per-vertex-color-interpolated triangle, real Vulkan, real SPIR-V shaders
  * (triangle_spirv.h -- same bytecode already validated by the existing
  * Windows/Linux triangle_vulkan.c demo, compiled from real GLSL via
- * glslangValidator, not hand-authored). Unlike that demo's continuous
- * render loop, Android's lifecycle is callback-driven: there is no window
- * to render into until the platform calls onNativeWindowCreated, so the
- * entire pipeline setup AND one rendered+presented frame happen inside
- * that callback instead of linearly in main(). See
- * android/android_native_glue.h-equivalent struct declarations below,
- * proven correct against the real device in an earlier test
- * (sdkVersion/internalDataPath read back correctly, and the platform
- * genuinely called back into a squash-compiled function). */
+ * glslangValidator, not hand-authored).
+ *
+ * Uses the DEX-based com.squash.runtime.SquashActivity shim (compile with
+ * `squash -android -android-activity`), NOT raw android.app.NativeActivity
+ * -- the latter was found to never dispatch onNativeWindowCreated/onResume
+ * on real Android 17 hardware (confirmed even against a control app built
+ * with Google's own NDK toolchain; see project memory / the approved plan
+ * for the full investigation). The shim's Java-side onCreate() creates a
+ * SurfaceView and forwards its lifecycle to three native entry points below
+ * via JNI; nativeSurfaceCreated() gets a real android.view.Surface jobject,
+ * from which ANativeWindow_fromSurface() (a current, non-deprecated NDK
+ * function) yields the same kind of ANativeWindow* the pipeline below
+ * always expected. Android's lifecycle is still callback-driven -- there is
+ * no window to render into until nativeSurfaceCreated() fires, so the
+ * entire pipeline setup AND one rendered+presented frame happen inside it
+ * instead of linearly in main() (there is no main() in this architecture at
+ * all; JNI native methods are the only entry points). */
 
 extern int __android_log_print(int prio, const char *tag, const char *fmt, ...);
-
-typedef struct ANativeActivityCallbacks {
-    void (*onStart)(void *activity);
-    void (*onResume)(void *activity);
-    void *(*onSaveInstanceState)(void *activity, long *outSize);
-    void (*onPause)(void *activity);
-    void (*onStop)(void *activity);
-    void (*onDestroy)(void *activity);
-    void (*onWindowFocusChanged)(void *activity, int hasFocus);
-    void (*onNativeWindowCreated)(void *activity, void *window);
-    void (*onNativeWindowResized)(void *activity, void *window);
-    void (*onNativeWindowRedrawNeeded)(void *activity, void *window);
-    void (*onNativeWindowDestroyed)(void *activity, void *window);
-    void (*onInputQueueCreated)(void *activity, void *queue);
-    void (*onInputQueueDestroyed)(void *activity, void *queue);
-    void (*onContentRectChanged)(void *activity, void *rect);
-    void (*onConfigurationChanged)(void *activity);
-    void (*onLowMemory)(void *activity);
-} ANativeActivityCallbacks;
-
-typedef struct ANativeActivity {
-    ANativeActivityCallbacks *callbacks;
-    void *vm;
-    void *env;
-    void *clazz;
-    const char *internalDataPath;
-    const char *externalDataPath;
-    int sdkVersion;
-    void *instance;
-    void *configuration;
-    void *assetManager;
-    const char *obbPath;
-} ANativeActivity;
+extern void *ANativeWindow_fromSurface(void *env, void *surface);
 
 typedef struct { float x, y; float r, g, b; } Vertex;
 typedef struct { float angle; } PushConstants;
-
-ANativeActivityCallbacks g_callbacks;
 
 static uint32_t find_memory_type(VkPhysicalDeviceMemoryProperties *memProps, uint32_t typeBits, VkFlags props) {
     uint32_t i;
@@ -229,7 +203,14 @@ void *vulkan_thread_main(void *window) {
     if (extent.width == 0xFFFFFFFFu) { extent.width = 1080; extent.height = 2400; }
     __android_log_print(4, "squashvk", "surface extent=%ux%u minImageCount=%u", extent.width, extent.height, caps.minImageCount);
 
-    uint32_t imageCount = caps.minImageCount + 1;
+    /* DIAGNOSTIC: this real Mali device reports minImageCount=5, and
+     * creating a 5- or 6-image swapchain crashes inside the real Mali
+     * driver's own image_view::init specifically on the 5th image
+     * regardless of total count requested -- indices 0-3 always succeed
+     * first. Testing whether requesting fewer than the reported minimum
+     * (technically invalid, but many drivers silently clamp up rather than
+     * failing) avoids ever reaching a 5th vkCreateImageView call. */
+    uint32_t imageCount = 2;
     if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) imageCount = caps.maxImageCount;
 
     VkSwapchainCreateInfoKHR scInfo;
@@ -260,8 +241,43 @@ void *vulkan_thread_main(void *window) {
     vkGetSwapchainImagesKHR(device, swapchain, &swapImageCount, swapImages);
     __android_log_print(4, "squashvk", "swapImageCount=%u", swapImageCount);
 
+    /* Acquire which single image we'll actually use BEFORE creating any
+     * per-image resources (image views/framebuffers), and only ever create
+     * those resources for that one image -- not for all swapImageCount
+     * images. This real Mali device reports minImageCount=5 (the platform
+     * enforces at least 5 real images no matter what smaller count is
+     * requested) and creating image views for all 5 eagerly crashes inside
+     * the real Mali driver's own image_view::init specifically on the 5th
+     * one (indices 0-3 always succeed first, confirmed not a squash bug --
+     * the crash backtrace is entirely inside vendor driver code, and it
+     * reproduces regardless of requested count or added vkDeviceWaitIdle
+     * pacing between calls). Since this demo only ever renders one frame,
+     * only the acquired image is ever actually needed. */
+    VkSemaphoreCreateInfo semInfo;
+    memset(&semInfo, 0, sizeof(semInfo));
+    semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    VkSemaphore imageAvailable = 0, renderFinished = 0;
+    vkCreateSemaphore(device, &semInfo, 0, &imageAvailable);
+    vkCreateSemaphore(device, &semInfo, 0, &renderFinished);
+
+    VkFenceCreateInfo fenceInfo;
+    memset(&fenceInfo, 0, sizeof(fenceInfo));
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    VkFence inFlightFence = 0;
+    vkCreateFence(device, &fenceInfo, 0, &inFlightFence);
+    __android_log_print(4, "squashvk", "sync objects created");
+
+    vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, ~0ull);
+    vkResetFences(device, 1, &inFlightFence);
+
+    uint32_t imageIndex = 0;
+    vr = vkAcquireNextImageKHR(device, swapchain, ~0ull, imageAvailable, 0, &imageIndex);
+    __android_log_print(4, "squashvk", "vkAcquireNextImageKHR (early) vr=%d imageIndex=%u", (int)vr, imageIndex);
+    if (vr != VK_SUCCESS && vr != VK_SUBOPTIMAL_KHR) return 0;
+
     VkImageView swapViews[8];
-    for (i = 0; i < swapImageCount; i++) {
+    for (i = imageIndex; i <= imageIndex; i++) {
         VkImageViewCreateInfo ivInfo;
         memset(&ivInfo, 0, sizeof(ivInfo));
         ivInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -275,8 +291,11 @@ void *vulkan_thread_main(void *window) {
         ivInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         ivInfo.subresourceRange.levelCount = 1;
         ivInfo.subresourceRange.layerCount = 1;
+        __android_log_print(4, "squashvk", "about to vkCreateImageView[%u] image=%p format=%d", i, (void*)swapImages[i], (int)chosenFormat);
         vr = vkCreateImageView(device, &ivInfo, 0, &swapViews[i]);
+        __android_log_print(4, "squashvk", "vkCreateImageView[%u] returned vr=%d", i, (int)vr);
         if (vr != VK_SUCCESS) { __android_log_print(4, "squashvk", "vkCreateImageView[%u] failed vr=%d", i, (int)vr); return 0; }
+        vkDeviceWaitIdle(device);
     }
 
     VkAttachmentDescription colorAttach;
@@ -325,7 +344,7 @@ void *vulkan_thread_main(void *window) {
     if (vr != VK_SUCCESS) return 0;
 
     VkFramebuffer framebuffers[8];
-    for (i = 0; i < swapImageCount; i++) {
+    for (i = imageIndex; i <= imageIndex; i++) {
         VkFramebufferCreateInfo fbInfo;
         memset(&fbInfo, 0, sizeof(fbInfo));
         fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -338,7 +357,7 @@ void *vulkan_thread_main(void *window) {
         vr = vkCreateFramebuffer(device, &fbInfo, 0, &framebuffers[i]);
         if (vr != VK_SUCCESS) { __android_log_print(4, "squashvk", "vkCreateFramebuffer[%u] failed vr=%d", i, (int)vr); return 0; }
     }
-    __android_log_print(4, "squashvk", "%u framebuffers created", swapImageCount);
+    __android_log_print(4, "squashvk", "1 framebuffer created (imageIndex=%u)", imageIndex);
 
     VkShaderModuleCreateInfo vsInfo;
     memset(&vsInfo, 0, sizeof(vsInfo));
@@ -537,28 +556,7 @@ void *vulkan_thread_main(void *window) {
     __android_log_print(4, "squashvk", "vkAllocateCommandBuffers vr=%d", (int)vr);
     if (vr != VK_SUCCESS) return 0;
 
-    VkSemaphoreCreateInfo semInfo;
-    memset(&semInfo, 0, sizeof(semInfo));
-    semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-    VkSemaphore imageAvailable = 0, renderFinished = 0;
-    vkCreateSemaphore(device, &semInfo, 0, &imageAvailable);
-    vkCreateSemaphore(device, &semInfo, 0, &renderFinished);
-
-    VkFenceCreateInfo fenceInfo;
-    memset(&fenceInfo, 0, sizeof(fenceInfo));
-    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-    VkFence inFlightFence = 0;
-    vkCreateFence(device, &fenceInfo, 0, &inFlightFence);
-    __android_log_print(4, "squashvk", "sync objects created -- rendering one frame");
-
-    vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, ~0ull);
-    vkResetFences(device, 1, &inFlightFence);
-
-    uint32_t imageIndex = 0;
-    vr = vkAcquireNextImageKHR(device, swapchain, ~0ull, imageAvailable, 0, &imageIndex);
-    __android_log_print(4, "squashvk", "vkAcquireNextImageKHR vr=%d imageIndex=%u", (int)vr, imageIndex);
-    if (vr != VK_SUCCESS && vr != VK_SUBOPTIMAL_KHR) return 0;
+    __android_log_print(4, "squashvk", "rendering one frame (imageIndex=%u, acquired earlier)", imageIndex);
 
     VkCommandBuffer cmd = cmdBufs[imageIndex];
     vkResetCommandBuffer(cmd, 0);
@@ -629,17 +627,18 @@ void *vulkan_thread_main(void *window) {
     return 0;
 }
 
-void on_native_window_created(void *activity, void *window) {
+void nativeSurfaceCreated(void *env, void *clazz, void *surface) {
     unsigned long t1, t2;
-    __android_log_print(4, "squashvk", "onNativeWindowCreated: spawning instance+render threads, window=%p", window);
+    void *window = ANativeWindow_fromSurface(env, surface);
+    __android_log_print(4, "squashvk", "nativeSurfaceCreated: window=%p (from surface=%p), spawning instance+render threads", window, surface);
     pthread_create(&t1, 0, create_instance_thread, window);
     pthread_create(&t2, 0, vulkan_thread_main, window);
 }
 
-int main(void *activity, void *savedState, long savedStateSize) {
-    ANativeActivity *act = (ANativeActivity *)activity;
-    g_callbacks.onNativeWindowCreated = on_native_window_created;
-    act->callbacks = &g_callbacks;
-    __android_log_print(4, "squashvk", "main: onCreate, waiting for native window...");
-    return 0;
+void nativeSurfaceChanged(void *env, void *clazz, int width, int height) {
+    __android_log_print(4, "squashvk", "nativeSurfaceChanged: %dx%d", width, height);
+}
+
+void nativeSurfaceDestroyed(void *env, void *clazz) {
+    __android_log_print(4, "squashvk", "nativeSurfaceDestroyed");
 }

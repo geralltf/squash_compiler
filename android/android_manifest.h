@@ -12,6 +12,15 @@ typedef struct {
     int32_t target_sdk_version;
     int32_t version_code;
     const char *version_name;
+    /* 1 = use the DEX-based com.squash.runtime.SquashActivity shim
+     * (hasCode=true, no android.app.lib_name meta-data needed -- the shim
+     * calls System.loadLibrary(lib_name) itself, baked into its own
+     * classes.dex) instead of the legacy raw android.app.NativeActivity
+     * (hasCode=false). See android_dex.h -- added because raw
+     * NativeActivity's onNativeWindowCreated/onResume dispatch was found
+     * broken on real Android 17 hardware; NativeActivity still works fine
+     * on older devices/the emulator so this is opt-in, not a replacement. */
+    int use_activity_shim;
 } android_manifest_spec;
 
 /* Builds the binary AndroidManifest.xml for a minimal NativeActivity app

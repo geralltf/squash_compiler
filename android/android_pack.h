@@ -16,6 +16,11 @@ typedef struct {
      * impractical to iterate with). NULL uses "$HOME/.squash/android_debug".
      */
     const char *keystore_base_path;
+    /* 1 = package the DEX-based com.squash.runtime.SquashActivity shim
+     * (embeds a classes.dex, built on the fly via android_dex.h) instead
+     * of the legacy raw android.app.NativeActivity path. See
+     * android_manifest.h's identically-named field for why this exists. */
+    int use_activity_shim;
 } android_pack_spec;
 
 /* Reads the ELF shared object at `so_path`, wraps it in a minimal

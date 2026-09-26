@@ -51,19 +51,26 @@ int android_manifest_build(const android_manifest_spec *spec,
 
     application = axml_new_element(NULL, "application");
     axml_add_attr_string(application, ANDROID_NS, "label", RESID_label, spec->app_label);
-    axml_add_attr_int(application, ANDROID_NS, "hasCode", RESID_hasCode, 0, AXML_ATTR_INT_BOOLEAN);
+    axml_add_attr_int(application, ANDROID_NS, "hasCode", RESID_hasCode,
+                       spec->use_activity_shim ? 1 : 0, AXML_ATTR_INT_BOOLEAN);
     axml_add_attr_int(application, ANDROID_NS, "allowBackup", RESID_allowBackup, 1, AXML_ATTR_INT_BOOLEAN);
 
     activity = axml_new_element(NULL, "activity");
-    axml_add_attr_string(activity, ANDROID_NS, "name", RESID_name, "android.app.NativeActivity");
+    axml_add_attr_string(activity, ANDROID_NS, "name", RESID_name,
+                          spec->use_activity_shim ? "com.squash.runtime.SquashActivity" : "android.app.NativeActivity");
     axml_add_attr_string(activity, ANDROID_NS, "label", RESID_label, spec->app_label);
     axml_add_attr_int(activity, ANDROID_NS, "exported", RESID_exported, 1, AXML_ATTR_INT_BOOLEAN);
 
-    meta_data = axml_new_element(NULL, "meta-data");
-    axml_add_attr_string(meta_data, ANDROID_NS, "name", RESID_name, "android.app.lib_name");
-    snprintf(libname_buf, sizeof(libname_buf), "%s", spec->lib_name);
-    axml_add_attr_string(meta_data, ANDROID_NS, "value", RESID_value, libname_buf);
-    axml_add_child(activity, meta_data);
+    if (!spec->use_activity_shim) {
+        /* The DEX shim calls System.loadLibrary(lib_name) itself (baked
+         * into its own classes.dex at build time); only the legacy raw
+         * NativeActivity path needs this meta-data convention. */
+        meta_data = axml_new_element(NULL, "meta-data");
+        axml_add_attr_string(meta_data, ANDROID_NS, "name", RESID_name, "android.app.lib_name");
+        snprintf(libname_buf, sizeof(libname_buf), "%s", spec->lib_name);
+        axml_add_attr_string(meta_data, ANDROID_NS, "value", RESID_value, libname_buf);
+        axml_add_child(activity, meta_data);
+    }
 
     intent_filter = axml_new_element(NULL, "intent-filter");
     action = axml_new_element(NULL, "action");
