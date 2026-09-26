@@ -302,13 +302,21 @@ static void print_help(void) {
     help_row("-openbsd-libc <so>","override the OpenBSD libc.so soname this compile links against");
     help_row("-android",          "signed, installable .apk for Android (implies -linux -arm64 -64)");
     help_row("-android-package <name>", "Android package name (default: derived from -o's basename)");
+    help_row("-android-activity", "use the DEX-based SquashActivity shim instead of raw NativeActivity");
     printf("  %s-android%s needs no AAPT/apksigner/Gradle/NDK -- squash emits the ARM64\n", HC_DIM, HC_RESET);
     printf("  bionic .so, the binary AndroidManifest.xml, and signs the .apk itself\n");
     printf("  (APK Signature Scheme v1 + v2, both self-implemented; a debug signing key\n");
-    printf("  is generated once and cached under ~/.squash/). The compiled program's\n");
+    printf("  is generated once and cached under ~/.squash/). By default, the program's\n");
     printf("  %smain()%s is exported as %sANativeActivity_onCreate%s and runs once at app\n", HC_BOLD, HC_RESET, HC_BOLD, HC_RESET);
     printf("  creation via Android's built-in NativeActivity mechanism -- no Java/\n");
-    printf("  Kotlin/DEX involved at all.\n\n");
+    printf("  Kotlin/DEX involved at all.\n");
+    printf("  With %s-android-activity%s, squash instead also emits a tiny classes.dex\n", HC_DIM, HC_RESET);
+    printf("  (com.squash.runtime.SquashActivity) that creates a SurfaceView and\n");
+    printf("  forwards its lifecycle to three JNI entry points the program defines:\n");
+    printf("  %sJava_com_squash_runtime_SquashActivity_nativeSurfaceCreated%s,\n", HC_BOLD, HC_RESET);
+    printf("  ...%snativeSurfaceChanged%s and ...%snativeSurfaceDestroyed%s (no main()).\n", HC_BOLD, HC_RESET, HC_BOLD, HC_RESET);
+    printf("  Use it on newer devices -- raw NativeActivity was found never to deliver\n");
+    printf("  its window callbacks on real Android 17 hardware.\n\n");
 
     printf("%sTARGET WORD SIZE%s\n", HC_HEAD, HC_RESET);
     help_row("-32",  "32-bit output (Windows only -- every other target is 64-bit-only)");
@@ -373,6 +381,9 @@ static void print_help(void) {
     printf("  %ssquash -android -android-package com.example.demo app.c -o demo.apk%s\n", HC_DIM, HC_RESET);
     printf("      Same, with an explicit package name instead of one derived from\n");
     printf("      the output filename.\n");
+    printf("  %ssquash -android -android-activity triangle_android.c -o triangle.apk%s\n", HC_DIM, HC_RESET);
+    printf("      Build an .apk using the DEX SquashActivity shim + JNI surface\n");
+    printf("      callbacks (see android/examples/triangle_android.c).\n");
 }
 
 /* Derives a lowercase, alphanumeric app identifier from an output path's
