@@ -1,0 +1,74 @@
+# Builds the Android Vulkan example APKs using squash's own -android
+# backend (no aapt/apksigner/gradle/NDK anywhere in this process -- see
+# `squash --help`'s own -android section). Two demos:
+#   triangle -- android/examples/triangle_android.c: a real per-vertex-
+#               color-interpolated Vulkan triangle.
+#   buttons  -- android/examples/buttons_android.c: real HTML/CSS-driven
+#               buttons + scrolling + hover + wrapped/unwrapped text, built
+#               on SQW's own DOM/CSS/layout/text-rendering engine.
+#
+# Usage:
+#   make -f Makefile.android_examples            # build both APKs
+#   make -f Makefile.android_examples triangle    # build just the triangle
+#   make -f Makefile.android_examples buttons     # build just the buttons demo
+#   make -f Makefile.android_examples install     # adb install both (device/emulator required)
+#   make -f Makefile.android_examples run         # install + launch both, tail logcat briefly
+#   make -f Makefile.android_examples clean       # remove built APKs
+
+SQUASH       := ./squash
+ADB          := adb
+
+# triangle_spirv.h (shared shader bytecode) lives here, not in android/examples/.
+SPIRV_DIR    := SDL3_Build/scratch
+LIBS_DIR     := android/libs
+
+COMMON_FLAGS := -android -android-activity -I $(SPIRV_DIR) -I . -L $(LIBS_DIR) -llog -lvulkan -landroid
+
+TRIANGLE_SRC := android/examples/triangle_android.c
+TRIANGLE_PKG := com.squash.triangledemo
+TRIANGLE_APK := android/examples/triangle_android.apk
+
+BUTTONS_SRC  := android/examples/buttons_android.c
+BUTTONS_PKG  := com.squash.buttonsdemo
+BUTTONS_APK  := android/examples/buttons_android.apk
+
+.PHONY: all triangle buttons clean install install-triangle install-buttons run run-triangle run-buttons
+
+all: triangle buttons
+
+triangle: $(TRIANGLE_APK)
+
+buttons: $(BUTTONS_APK)
+
+$(TRIANGLE_APK): $(TRIANGLE_SRC) $(SQUASH)
+	$(SQUASH) $(COMMON_FLAGS) -android-package $(TRIANGLE_PKG) $(TRIANGLE_SRC) -o $@
+
+$(BUTTONS_APK): $(BUTTONS_SRC) $(SQUASH)
+	$(SQUASH) $(COMMON_FLAGS) -android-package $(BUTTONS_PKG) $(BUTTONS_SRC) -o $@
+
+clean:
+	rm -f $(TRIANGLE_APK) $(BUTTONS_APK)
+
+install-triangle: $(TRIANGLE_APK)
+	$(ADB) install -r $(TRIANGLE_APK)
+
+install-buttons: $(BUTTONS_APK)
+	$(ADB) install -r $(BUTTONS_APK)
+
+install: install-triangle install-buttons
+
+run-triangle: install-triangle
+	$(ADB) shell am force-stop $(TRIANGLE_PKG)
+	$(ADB) logcat -c
+	$(ADB) shell am start -n $(TRIANGLE_PKG)/com.squash.runtime.SquashActivity
+	sleep 2
+	$(ADB) logcat -d | grep -i squashvk | tail -40
+
+run-buttons: install-buttons
+	$(ADB) shell am force-stop $(BUTTONS_PKG)
+	$(ADB) logcat -c
+	$(ADB) shell am start -n $(BUTTONS_PKG)/com.squash.runtime.SquashActivity
+	sleep 2
+	$(ADB) logcat -d | grep -i squashbtn | tail -40
+
+run: run-triangle run-buttons

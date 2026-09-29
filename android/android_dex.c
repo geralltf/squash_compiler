@@ -72,13 +72,16 @@ static void dbuf_align4(dbuf *b) { while (b->len % 4) dbuf_u8(b, 0); }
 /* ---- fixed logical model of the SquashActivity shim ---- */
 
 enum {
-    T_INT, T_VOID, T_ACTIVITY, T_CONTEXT, T_BUNDLE, T_SURFACE, T_CALLBACK,
-    T_HOLDER, T_SURFACEVIEW, T_VIEW, T_SYSTEM, T_STRING, T_SQUASHACTIVITY,
+    T_INT, T_VOID, T_FLOAT, T_BOOLEAN, T_ACTIVITY, T_CONTEXT, T_BUNDLE, T_SURFACE, T_CALLBACK,
+    T_HOLDER, T_SURFACEVIEW, T_VIEW, T_SYSTEM, T_STRING, T_MOTIONEVENT, T_SQUASHACTIVITY,
+    T_FLOAT_CLASS,
     T_COUNT
 };
 static const char *g_raw_types[T_COUNT] = {
     "I",
     "V",
+    "F",
+    "Z",
     "Landroid/app/Activity;",
     "Landroid/content/Context;",
     "Landroid/os/Bundle;",
@@ -89,13 +92,37 @@ static const char *g_raw_types[T_COUNT] = {
     "Landroid/view/View;",
     "Ljava/lang/System;",
     "Ljava/lang/String;",
+    "Landroid/view/MotionEvent;",
     "Lcom/squash/runtime/SquashActivity;",
+    /* Real, confirmed platform/runtime issue found via extensive direct
+     * device testing (not a squash DEX-encoding bug -- verified byte-for-
+     * byte identical to real d8 output at every level: bytecode structure,
+     * ELF export offset/symbol type, and the native prologue's AAPCS64
+     * register spilling all checked out correct): a FLOAT-typed argument
+     * to a squash-exported native method called via implicit/symbol-name
+     * JNI binding on this real device consistently arrives as 0.0,
+     * reproduced even with a bare hardcoded float CONSTANT passed through
+     * invoke-static with no MotionEvent/getX involved at all -- while the
+     * exact same call shape with an INT argument works perfectly every
+     * time. A real, from-scratch Activity+SurfaceView app built entirely
+     * with javac+d8 (no squash involved) confirms MotionEvent.getX()/getY()
+     * themselves return real, correct coordinates on this device -- so the
+     * platform's OWN float-returning methods work fine; only a FLOAT
+     * argument crossing INTO a squash-exported native method is affected.
+     * Workaround (not a real fix, since the root cause is outside this
+     * DEX-shim's own bytecode): route every float across this boundary as
+     * its raw 32-bit bit pattern via java.lang.Float.floatToIntBits(F)I,
+     * which only ever needs the already-proven-reliable INT marshaling
+     * path; the C side reinterprets the bits back into a real float via a
+     * union. See nativeTouchEvent's own call site below. */
+    "Ljava/lang/Float;",
 };
 
 typedef struct { const char *shorty; int ret; int params[4]; int nparams; } raw_proto;
 enum {
     P_RET_SURFACE, P_RET_HOLDER, P_VOID, P_VII, P_VL_CONTEXT, P_VL_BUNDLE,
     P_VL_SURFACE, P_VL_CALLBACK, P_VL_HOLDER, P_VLIII, P_VL_VIEW, P_VL_STRING,
+    P_RET_FLOAT, P_RET_INT, P_VIII, P_RET_BOOL_VL_MOTIONEVENT, P_RET_INT_VL_FLOAT,
     P_COUNT
 };
 static const raw_proto g_raw_protos[P_COUNT] = {
@@ -111,6 +138,13 @@ static const raw_proto g_raw_protos[P_COUNT] = {
     /* P_VLIII        */ { "VLIII", T_VOID,    {T_HOLDER, T_INT, T_INT, T_INT}, 4 },
     /* P_VL_VIEW      */ { "VL",    T_VOID,    {T_VIEW, 0,0,0}, 1 },
     /* P_VL_STRING    */ { "VL",    T_VOID,    {T_STRING, 0,0,0}, 1 },
+    /* P_RET_FLOAT    */ { "F",     T_FLOAT,   {0,0,0,0}, 0 },
+    /* P_RET_INT      */ { "I",     T_INT,     {0,0,0,0}, 0 },
+    /* P_VIII         */ { "VIII",  T_VOID,    {T_INT, T_INT, T_INT, 0}, 3 },
+    /* P_RET_BOOL_VL_MOTIONEVENT */ { "ZL", T_BOOLEAN, {T_MOTIONEVENT, 0,0,0}, 1 },
+    /* P_RET_INT_VL_FLOAT: java.lang.Float.floatToIntBits(F)I -- see
+     * T_FLOAT_CLASS's own comment for why this exists at all. */
+    { "IF", T_INT, {T_FLOAT, 0,0,0}, 1 },
 };
 
 typedef struct { int cls; const char *name; int proto; } raw_method;
@@ -120,6 +154,8 @@ enum {
     M_SA_INIT, M_SA_NATIVE_CHANGED, M_SA_NATIVE_CREATED, M_SA_NATIVE_DESTROYED,
     M_SA_ONCREATE, M_SA_SETCONTENTVIEW, M_SA_SURFACECHANGED, M_SA_SURFACECREATED,
     M_SA_SURFACEDESTROYED, M_SYSTEM_LOADLIBRARY,
+    M_MOTIONEVENT_GETX, M_MOTIONEVENT_GETY, M_MOTIONEVENT_GETACTION,
+    M_SA_NATIVE_TOUCH, M_SA_ONTOUCHEVENT, M_FLOAT_TO_INT_BITS,
     M_COUNT
 };
 static const raw_method g_raw_methods[M_COUNT] = {
@@ -139,6 +175,12 @@ static const raw_method g_raw_methods[M_COUNT] = {
     { T_SQUASHACTIVITY, "surfaceCreated",         P_VL_HOLDER },
     { T_SQUASHACTIVITY, "surfaceDestroyed",       P_VL_HOLDER },
     { T_SYSTEM,         "loadLibrary",            P_VL_STRING },
+    { T_MOTIONEVENT,    "getX",                   P_RET_FLOAT },
+    { T_MOTIONEVENT,    "getY",                   P_RET_FLOAT },
+    { T_MOTIONEVENT,    "getAction",              P_RET_INT },
+    { T_SQUASHACTIVITY, "nativeTouchEvent",       P_VIII },
+    { T_SQUASHACTIVITY, "onTouchEvent",           P_RET_BOOL_VL_MOTIONEVENT },
+    { T_FLOAT_CLASS,    "floatToIntBits",         P_RET_INT_VL_FLOAT },
 };
 
 /* ---- string pool: dedup + sort ---- */
@@ -215,7 +257,14 @@ static void emit_invoke(dbuf *c, unsigned op, unsigned argc,
     dbuf_u8(c, (c3 << 4) | c2);
 }
 static void emit_return_void(dbuf *c) { dbuf_u8(c, 0x0e); dbuf_u8(c, 0); }
+static void emit_return(dbuf *c, unsigned reg) { dbuf_u8(c, 0x0f); dbuf_u8(c, reg); }
 static void emit_move_result_object(dbuf *c, unsigned reg) { dbuf_u8(c, 0x0c); dbuf_u8(c, reg); }
+/* move-result vAA: same format 11x as move-result-object, for a
+ * primitive (int/float/etc, anything that isn't an object reference)
+ * single-register-wide result. */
+static void emit_move_result(dbuf *c, unsigned reg) { dbuf_u8(c, 0x0a); dbuf_u8(c, reg); }
+/* const/4 vA, #+B: format 11n -- B is a signed 4-bit immediate (-8..7). */
+static void emit_const4(dbuf *c, unsigned reg, int val) { dbuf_u8(c, 0x12); dbuf_u8(c, (unsigned)(((val & 0xf) << 4) | reg)); }
 static void emit_new_instance(dbuf *c, unsigned reg, unsigned type_idx) { dbuf_u8(c, 0x22); dbuf_u8(c, reg); dbuf_u16(c, type_idx); }
 static void emit_const_string(dbuf *c, unsigned reg, unsigned str_idx) { dbuf_u8(c, 0x1a); dbuf_u8(c, reg); dbuf_u16(c, str_idx); }
 
@@ -231,7 +280,7 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
     uint32_t off_data_start;
     uint32_t off_interfaces, off_class_data, off_map;
     uint32_t off_proto_params[P_COUNT]; /* 0 if nparams==0 */
-    uint32_t off_code[5];
+    uint32_t off_code[6];
     uint32_t *off_string_data;
     uint32_t file_size;
     unsigned char sha1[20];
@@ -309,6 +358,11 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
         int m_native_destroyed  = g_method_order[M_SA_NATIVE_DESTROYED];
         int m_setcontentview    = g_method_order[M_SA_SETCONTENTVIEW];
         int m_loadlibrary       = g_method_order[M_SYSTEM_LOADLIBRARY];
+        int m_motionevent_getx      = g_method_order[M_MOTIONEVENT_GETX];
+        int m_motionevent_gety      = g_method_order[M_MOTIONEVENT_GETY];
+        int m_motionevent_getaction = g_method_order[M_MOTIONEVENT_GETACTION];
+        int m_native_touch          = g_method_order[M_SA_NATIVE_TOUCH];
+        int m_float_to_int_bits     = g_method_order[M_FLOAT_TO_INT_BITS];
 
         /* <init>()V : regs=1 ins=1 outs=1 ; v0=this */
         dbuf_init(&code);
@@ -380,36 +434,69 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
         dbuf_u32(&data, (uint32_t)(code.len / 2));
         dbuf_bytes(&data, code.data, code.len);
         dbuf_free(&code);
+
+        /* onTouchEvent(MotionEvent)Z : regs=5 ins=2 outs=3 ;
+         * v3=this v4=event, locals v0=x(float) v1=y(float) v2=action(int).
+         * x and y are immediately converted to their raw 32-bit bit
+         * pattern via Float.floatToIntBits(F)I before ever crossing into
+         * nativeTouchEvent -- see T_FLOAT_CLASS's own comment for the full
+         * story on why a plain float argument doesn't survive that call on
+         * this real device, confirmed as a platform/runtime issue and not
+         * a bug in this bytecode. nativeTouchEvent's own C-side signature
+         * changed to (int,int,int) accordingly, reinterpreting v0/v1's
+         * bits back into real floats via a union. */
+        dbuf_init(&code);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 4,0,0,0,0, (unsigned)m_motionevent_getx);
+        emit_move_result(&code, 0);
+        emit_invoke(&code, OP_INVOKE_STATIC, 1, 0,0,0,0,0, (unsigned)m_float_to_int_bits);
+        emit_move_result(&code, 0);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 4,0,0,0,0, (unsigned)m_motionevent_gety);
+        emit_move_result(&code, 1);
+        emit_invoke(&code, OP_INVOKE_STATIC, 1, 1,0,0,0,0, (unsigned)m_float_to_int_bits);
+        emit_move_result(&code, 1);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 4,0,0,0,0, (unsigned)m_motionevent_getaction);
+        emit_move_result(&code, 2);
+        emit_invoke(&code, OP_INVOKE_STATIC, 3, 0,1,2,0,0, (unsigned)m_native_touch);
+        emit_const4(&code, 0, 1);
+        emit_return(&code, 0);
+        dbuf_align4(&data);
+        off_code[5] = off_data_start + (uint32_t)data.len;
+        dbuf_u16(&data, 5); dbuf_u16(&data, 2); dbuf_u16(&data, 3); dbuf_u16(&data, 0);
+        dbuf_u32(&data, 0);
+        dbuf_u32(&data, (uint32_t)(code.len / 2));
+        dbuf_bytes(&data, code.data, code.len);
+        dbuf_free(&code);
     }
 
     /* --- class_data_item ---
-     * Direct methods (<init> + 3 statics), then virtual methods (onCreate,
-     * surfaceChanged, surfaceCreated, surfaceDestroyed). Each sublist's
-     * method_idx_diff restarts from 0 and must be emitted in ascending
-     * final-method_idx order within that sublist. */
+     * Direct methods (<init> + 4 statics), then virtual methods (onCreate,
+     * surfaceChanged, surfaceCreated, surfaceDestroyed, onTouchEvent). Each
+     * sublist's method_idx_diff restarts from 0 and must be emitted in
+     * ascending final-method_idx order within that sublist. */
     {
-        int direct_raw[4]  = { M_SA_INIT, M_SA_NATIVE_CHANGED, M_SA_NATIVE_CREATED, M_SA_NATIVE_DESTROYED };
-        int virtual_raw[4] = { M_SA_ONCREATE, M_SA_SURFACECHANGED, M_SA_SURFACECREATED, M_SA_SURFACEDESTROYED };
-        int direct_idx[4], virtual_idx[4];
+        int direct_raw[5]  = { M_SA_INIT, M_SA_NATIVE_CHANGED, M_SA_NATIVE_CREATED, M_SA_NATIVE_DESTROYED, M_SA_NATIVE_TOUCH };
+        int virtual_raw[5] = { M_SA_ONCREATE, M_SA_SURFACECHANGED, M_SA_SURFACECREATED, M_SA_SURFACEDESTROYED, M_SA_ONTOUCHEVENT };
+        int direct_idx[5], virtual_idx[5];
         int prev, v;
 
-        for (i = 0; i < 4; i++) direct_idx[i] = g_method_order[direct_raw[i]];
-        for (i = 0; i < 4; i++) virtual_idx[i] = g_method_order[virtual_raw[i]];
-        for (i = 1; i < 4; i++) { v = direct_idx[i]; j = i - 1; while (j >= 0 && direct_idx[j] > v) { direct_idx[j+1] = direct_idx[j]; j--; } direct_idx[j+1] = v; }
-        for (i = 1; i < 4; i++) { v = virtual_idx[i]; j = i - 1; while (j >= 0 && virtual_idx[j] > v) { virtual_idx[j+1] = virtual_idx[j]; j--; } virtual_idx[j+1] = v; }
+        for (i = 0; i < 5; i++) direct_idx[i] = g_method_order[direct_raw[i]];
+        for (i = 0; i < 5; i++) virtual_idx[i] = g_method_order[virtual_raw[i]];
+        for (i = 1; i < 5; i++) { v = direct_idx[i]; j = i - 1; while (j >= 0 && direct_idx[j] > v) { direct_idx[j+1] = direct_idx[j]; j--; } direct_idx[j+1] = v; }
+        for (i = 1; i < 5; i++) { v = virtual_idx[i]; j = i - 1; while (j >= 0 && virtual_idx[j] > v) { virtual_idx[j+1] = virtual_idx[j]; j--; } virtual_idx[j+1] = v; }
 
         dbuf_align4(&data);
         off_class_data = off_data_start + (uint32_t)data.len;
         dbuf_uleb128(&data, 0);
         dbuf_uleb128(&data, 0);
-        dbuf_uleb128(&data, 4);
-        dbuf_uleb128(&data, 4);
+        dbuf_uleb128(&data, 5);
+        dbuf_uleb128(&data, 5);
 
         prev = 0;
-        for (i = 0; i < 4; i++) {
+        for (i = 0; i < 5; i++) {
             int is_native = (direct_idx[i] == g_method_order[M_SA_NATIVE_CHANGED] ||
                               direct_idx[i] == g_method_order[M_SA_NATIVE_CREATED] ||
-                              direct_idx[i] == g_method_order[M_SA_NATIVE_DESTROYED]);
+                              direct_idx[i] == g_method_order[M_SA_NATIVE_DESTROYED] ||
+                              direct_idx[i] == g_method_order[M_SA_NATIVE_TOUCH]);
             int is_init = (direct_idx[i] == g_method_order[M_SA_INIT]);
             uint32_t access = is_native ? 0x0108u : (is_init ? 0x10001u : 0x0002u);
             uint32_t code_off = is_init ? off_code[0] : 0;
@@ -419,12 +506,13 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
             prev = direct_idx[i];
         }
         prev = 0;
-        for (i = 0; i < 4; i++) {
+        for (i = 0; i < 5; i++) {
             uint32_t code_off, access;
             if (virtual_idx[i] == g_method_order[M_SA_ONCREATE]) { code_off = off_code[1]; access = 0x0004u; }
             else if (virtual_idx[i] == g_method_order[M_SA_SURFACECREATED]) { code_off = off_code[2]; access = 0x0001u; }
             else if (virtual_idx[i] == g_method_order[M_SA_SURFACECHANGED]) { code_off = off_code[3]; access = 0x0001u; }
-            else { code_off = off_code[4]; access = 0x0001u; }
+            else if (virtual_idx[i] == g_method_order[M_SA_SURFACEDESTROYED]) { code_off = off_code[4]; access = 0x0001u; }
+            else { code_off = off_code[5]; access = 0x0001u; }
             dbuf_uleb128(&data, (uint32_t)(virtual_idx[i] - prev));
             dbuf_uleb128(&data, access);
             dbuf_uleb128(&data, code_off);
@@ -469,7 +557,7 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
          * alone suggests) -- this must match the actual physical layout
          * order used above: type_lists, then code_items, then
          * class_data_item, then string_data_items. */
-        MAPITEM(0x2001, 5, off_code[0]);
+        MAPITEM(0x2001, 6, off_code[0]);
         /* NB: verified empirically against real d8 output that
          * TYPE_CLASS_DATA_ITEM = 0x2000 and TYPE_STRING_DATA_ITEM = 0x2002
          * -- the reverse of what a web-fetched summary of the spec claimed;

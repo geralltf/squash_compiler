@@ -2216,7 +2216,37 @@ static void push_64bit_int_arg(CodeGen *cg, ASTNode *n) {
  * ========================================================================= */
 static void emit_linux_libc_call(CodeGen *cg, const char *fname, ASTNode **args, int argc) {
     Assembler *a = cg->asm_;
-    char key[128]; snprintf(key, sizeof key, "%s:%s", g_squash_libc_soname, fname);
+    /* Math functions (cos/sin/sqrt/...) live in a SEPARATE shared library
+     * from libc on real glibc systems (libm.so.6, not libc.so.6) despite
+     * both being part of "the C library" conceptually -- confirmed the
+     * identical split exists (and matters) on Android/bionic too, see
+     * codegen_arm64.c's a64_emit_linux_extern_call for the fuller story
+     * and how this was actually found (a real Pixel 6 Pro dlopen failure,
+     * "cannot locate symbol \"cos\"", while building an SQW-based Android
+     * demo). Applied here too since this function is the one true
+     * "assume it's some real Linux .so export" fallback for ALL of
+     * codegen.c's x86 call paths, not just the ones already special-cased
+     * above -- the exact same wrong-soname mistake would otherwise repeat
+     * for any x86-64 -linux program calling a real math function. */
+    static const char *libm_funcs[] = {
+        "sin","cos","tan","asin","acos","atan","atan2",
+        "sinh","cosh","tanh","asinh","acosh","atanh",
+        "exp","exp2","log","log2","log10","pow","sqrt","cbrt",
+        "ceil","floor","round","trunc","fmod","fabs","hypot","ldexp","frexp","modf",
+        "sinf","cosf","tanf","expf","logf","powf","sqrtf","fabsf","floorf","ceilf","roundf",
+        0
+    };
+    const char *soname = g_squash_libc_soname;
+    if (!g_squash_windows_target) {
+        int mi;
+        for (mi = 0; libm_funcs[mi]; mi++) {
+            if (strcmp(fname, libm_funcs[mi]) == 0) {
+                soname = g_squash_android_target ? "libm.so" : "libm.so.6";
+                break;
+            }
+        }
+    }
+    char key[128]; snprintf(key, sizeof key, "%s:%s", soname, fname);
     symtable_add_import(cg->sym, key);
     if (cg->is_64bit) {
         int nreg = argc < 6 ? argc : 6;

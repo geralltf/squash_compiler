@@ -30,7 +30,19 @@ static float sqw_text_glyph_advance(char ch, float scale) {
 static float sqw_text_measure(const char *s, int len, float scale) {
     float w = 0.0f;
     int i;
-    for (i = 0; i < len; i++) w += sqw_text_glyph_advance(s[i], scale);
+    /* NOT "w += sqw_text_glyph_advance(...)" -- a real, confirmed squash/
+     * ARM64 codegen bug found while building the Android text-rendering
+     * demo: accumulating a float via "+=" directly from a function call's
+     * return value inside a loop silently drops every addition (w stayed
+     * 0.0 for any real string, reproduced live on device), while hoisting
+     * the call's result into its own local first and adding THAT works
+     * correctly every time -- same bug shape, same fix, as this
+     * project's other documented "never combine a function call with an
+     * operation on its result in one statement" workarounds. */
+    for (i = 0; i < len; i++) {
+        float adv = sqw_text_glyph_advance(s[i], scale);
+        w = w + adv;
+    }
     return w;
 }
 

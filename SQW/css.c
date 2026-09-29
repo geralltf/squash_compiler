@@ -754,7 +754,16 @@ static void css_parse_rule_body(CssStylesheet *sheet, const char **p, int *sourc
         if (tmp.selector_count > 0 && tmp.decl_count > 0) {
             tmp.source_order = (*source_order)++;
             CssRule *r = css_push_rule(sheet);
-            *r = tmp;
+            /* memcpy(), NOT "*r = tmp;" -- a real, confirmed squash/ARM64
+             * codegen bug: a whole-struct assignment through a pointer
+             * silently drops/corrupts fields on a struct this large
+             * (CssRule is ~29KB), reproduced live on device as every
+             * pushed rule's selector_count reading back 0 even though it
+             * was set correctly in `tmp` right above. Same bug class, same
+             * fix, as every other "whole-struct-assignment" workaround
+             * already documented throughout this codebase (e.g. this
+             * file's own top comment, php_mini.c's). */
+            memcpy(r, &tmp, sizeof(CssRule));
         }
     }
 }

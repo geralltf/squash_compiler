@@ -174,6 +174,38 @@ static int a64_is_float_type(SymTable *sym, TypeInfo *t) {
     return 0;
 }
 
+/* Is t a real 4-byte `float` (not `double`)? Used to decide whether a
+ * plain NAMED float variable/parameter (not a struct field/array element,
+ * which already always narrows correctly via a64_lvalue_size) must be
+ * spilled/read/written as 4 bytes instead of this backend's usual "treat
+ * every named float-family variable as an 8-byte double" convention.
+ * That convention is exactly right for a `double`, and was harmless for a
+ * `float` too AS LONG AS every access to it (spill, plain read, plain
+ * write) agreed on the same 8-byte width -- which they did, until code
+ * takes the variable's ADDRESS and hands it to something that genuinely
+ * expects a real, ABI-correct 4-byte `float *` (e.g. any function with a
+ * "float *out" parameter, an extremely common C idiom -- SQW/css.c's own
+ * "css_parse_len(const char *v, float *out)" is exactly this shape). That
+ * pointer's target is real memory a real 4-byte store/load must agree on;
+ * writing 4 bytes through it while every other access to the same slot
+ * still assumes 8 corrupts the low half of whatever the 8-byte convention
+ * left in the upper 4 bytes (reproduced directly: "float f = -1.0f; set(&f)"
+ * where set() does "*out = 900.0f;" left f reading back as -1 again --
+ * essentially unchanged, since 900.0f's bit pattern landed in the LOW 32
+ * bits of -1.0's 8-byte double representation, a change far too small in
+ * magnitude for the resulting bogus double to round to anything but ~-1
+ * when truncated to int). */
+static int a64_is_narrow_float_type(SymTable *sym, TypeInfo *t) {
+    if (!t || t->pointer_depth > 0) return 0;
+    if (strcmp(t->base, "float") == 0) return 1;
+    if (strcmp(t->base, "double") == 0 || t->is_float) return 0;
+    Symbol *td = symtable_lookup(sym, t->base);
+    if (td && td->kind == SYM_TYPEDEF && td->type)
+        return strcmp(td->type->base, "float") == 0 &&
+               strcmp(td->type->base, "double") != 0;
+    return 0;
+}
+
 /* =========================================================================
  * Struct/union field resolution.
  * Only handles the common case exercised by squash programs: obj is a plain
@@ -696,6 +728,24 @@ static int a64_index_elem_size(CodeGenA64 *cg, ASTNode *arr_expr) {
         }
     } else if (arr_expr && arr_expr->kind == AST_MEMBER) {
         return a64_field_elem_size(cg, arr_expr);
+    } else if (arr_expr && arr_expr->kind == AST_CAST && arr_expr->cast.type &&
+               arr_expr->cast.type->pointer_depth > 0) {
+        /* "*(T *)expr" -- the parser never populates a plain TypeInfo's
+         * own `pointed_to` field (confirmed: no assignment to it anywhere
+         * in parser_new4.c), so the `arr_expr->type->pointed_to` fallback
+         * just below this never actually fires for a cast's pointee type;
+         * a cast expression's target type is only ever recorded in its own
+         * `cast.type`. Without this case, dereferencing a pointer CAST
+         * (e.g. "*(float *)&some_int", used to reinterpret a raw bit
+         * pattern -- see a64_is_float's identical AST_DEREF fix for the
+         * real caller, buttons_android.c's touch-coordinate handoff)
+         * silently fell through to the generic "return 8" default,
+         * mis-sizing a 4-byte float pointee as 8 bytes and reading/storing
+         * 4 bytes of adjacent garbage alongside it. */
+        TypeInfo pointee = *arr_expr->cast.type;
+        pointee.pointer_depth -= 1;
+        int sz = a64_sizeof_type_sym(cg->sym, &pointee, 1);
+        return sz < 1 ? 1 : sz;
     } else if (arr_expr && arr_expr->type && arr_expr->type->pointed_to) {
         return a64_sizeof_type_sym(cg->sym, arr_expr->type->pointed_to, 1);
     }
@@ -1005,12 +1055,122 @@ static int a64_is_float(CodeGenA64 *cg, ASTNode *n) {
     case AST_MEMBER: {
         int off;
         ASTNode *f = a64_resolve_field(cg, n->member.obj, n->member.field, &off);
-        return f && a64_is_float_type(cg->sym, f->field.type);
+        /* An ARRAY-typed field (e.g. "float bg[3];") used bare as a value
+         * (not indexed) decays to its ADDRESS -- an integer/pointer value,
+         * never a float, regardless of the array's element type. Without
+         * this check, "float *p = obj->bg;" (obj->bg's element type IS
+         * float) got misclassified as "this initializer is a float
+         * expression", routing it through a64_float_expr() (which loads a
+         * scalar float VALUE into D0) instead of a64_expr() (which -- see
+         * its own AST_MEMBER case's identical array_size check -- computes
+         * the field's real address via a64_lvalue() and leaves it in X0
+         * for exactly this decay case). The result: `p` silently ended up
+         * NULL/garbage instead of a real pointer to the array. Reproduced
+         * directly with a minimal repro (a plain one-field struct, no
+         * large-offset/big-struct involvement needed at all) -- this is a
+         * general ARM64 codegen bug, not specific to any particular
+         * struct's size or field layout. */
+        return f && f->field.array_size <= 0 && a64_is_float_type(cg->sym, f->field.type);
     }
     case AST_INDEX: {
         if (n->index.array && n->index.array->kind == AST_VAR) {
             Symbol *s = symtable_lookup(cg->sym, n->index.array->var.name);
-            return s && a64_is_float_type(cg->sym, s->type);
+            if (!s || !s->type) return 0;
+            /* "float *p; p[i] = ...;" (a plain POINTER variable, array_size
+             * 0 -- a genuine array variable is handled the same way this
+             * always was, s->type directly IS the element type for that
+             * case) -- a64_is_float_type() itself always returns false for
+             * ANY pointer type (pointer_depth>0), by design, since a
+             * pointer VALUE is never itself float-typed. Indexing through
+             * it decrements pointer_depth by one first, same as
+             * AST_DEREF's identical fix just below in this function, or a
+             * real float-array output parameter (e.g. SQW/css.c's own
+             * "static int css_parse_color(const char *v, float *rgb) {
+             * ...; rgb[0] = ...; }") got misclassified as an integer
+             * assignment, truncating every real color/coordinate value
+             * written through it to 0 via FCVTZS before it ever reached
+             * memory. */
+            if (s->type->pointer_depth > 0 && s->array_size == 0) {
+                TypeInfo pointee = *s->type;
+                pointee.pointer_depth -= 1;
+                return a64_is_float_type(cg->sym, &pointee);
+            }
+            return a64_is_float_type(cg->sym, s->type);
+        }
+        /* Same case as AST_MEMBER above, one level down: "obj->bg[i]" is an
+         * AST_INDEX whose array is an AST_MEMBER (a struct field), not a
+         * plain AST_VAR -- this branch never checked that shape at all, so
+         * indexing into a float-array STRUCT FIELD (as opposed to a plain
+         * float-array local/global) was always misclassified as non-float,
+         * routing "obj->bg[i] = 0.9f;" through the integer assignment path
+         * (which FCVTZS-truncates the float RHS to an int before storing --
+         * see this file's AST_ASSIGN handling's own comment on exactly
+         * this failure mode) instead of the correct float-store path.
+         * Reproduced directly: writing more than one element of a
+         * struct-field float array left earlier elements reading back as
+         * 0 after a later element was written. */
+        if (n->index.array && n->index.array->kind == AST_MEMBER) {
+            int off;
+            ASTNode *f = a64_resolve_field(cg, n->index.array->member.obj, n->index.array->member.field, &off);
+            return f && a64_is_float_type(cg->sym, f->field.type);
+        }
+        return 0;
+    }
+    case AST_TERNARY:
+        /* "cond ? a : b" had no case here at all, defaulting to "not
+         * float" -- so an assignment like "bw = pct ? x*y : node->
+         * css_width;" (a real, common width-resolution idiom, see SQW/
+         * layout.c) got routed through AST_ASSIGN's INTEGER path even
+         * though both branches are genuinely float-valued, which then
+         * evaluated the ternary via a64_expr() (not a64_float_expr()):
+         * a64_expr's own AST_TERNARY case evaluates each branch via
+         * a64_expr too, so a float struct-field branch had its raw
+         * IEEE-754 bits read back as an INTEGER (900.0f's bit pattern,
+         * reinterpreted, is 1147207680) and then that garbage integer got
+         * numerically converted to a float, producing a wildly wrong
+         * result with no relation to the real value at all. Checking
+         * either branch mirrors AST_BINARY's own "either operand float"
+         * propagation just above. */
+        return a64_is_float(cg, n->ternary.then_) || a64_is_float(cg, n->ternary.else_);
+    case AST_DEREF: {
+        /* "*(float *)&some_int;" (or any pointer-to-float dereference) had
+         * no case here at all, defaulting to "not float" -- a real, common
+         * bit-reinterpretation idiom (e.g. reconstructing a float from its
+         * raw 32-bit pattern passed as an int, needed for
+         * android/examples/buttons_android.c's own touch-coordinate
+         * handoff -- see nativeTouchEvent's own comment for the full
+         * story) got routed through the INTEGER init/assign path, which
+         * loads the pointee's raw bytes correctly (a plain memory read
+         * doesn't care about int-vs-float) but then stores that value as
+         * if it were an ordinary integer -- e.g. into a "float" local's
+         * slot via a plain wide integer store, zero/sign-extending the
+         * low 32 bits into a bogus 64-bit pattern instead of properly
+         * widening it as a float-to-double conversion. Reading that slot
+         * back later as a real double then yields a wildly wrong,
+         * typically near-zero value (the raw 32-bit pattern's bits end up
+         * as the low half of a subnormal double). Handles both the
+         * "*(T *)&expr" shape (operand is itself a pointer cast) and a
+         * plain "float *fp; *fp" (operand is just a pointer-typed
+         * variable) -- the latter matters just as much in practice: e.g.
+         * SQW/css.c's own "static int css_parse_len(const char *v, float
+         * *out) { ...; *out = (float)d; ...}" (writing a parsed CSS length
+         * back through an output parameter -- a completely ordinary,
+         * common pattern, not the bit-reinterpretation idiom above) hit
+         * this exact gap, silently storing 0 for every parsed width/
+         * height/etc. value passed through it. */
+        ASTNode *op = n->deref.operand;
+        if (op && op->kind == AST_CAST && op->cast.type && op->cast.type->pointer_depth > 0) {
+            TypeInfo pointee = *op->cast.type;
+            pointee.pointer_depth -= 1;
+            return a64_is_float_type(cg->sym, &pointee);
+        }
+        if (op && op->kind == AST_VAR) {
+            Symbol *s = symtable_lookup(cg->sym, op->var.name);
+            if (s && s->type && s->type->pointer_depth > 0) {
+                TypeInfo pointee = *s->type;
+                pointee.pointer_depth -= 1;
+                return a64_is_float_type(cg->sym, &pointee);
+            }
         }
         return 0;
     }
@@ -1052,6 +1212,18 @@ static int a64_is_float(CodeGenA64 *cg, ASTNode *n) {
  *     are new; step 4 is intentionally untouched. */
 static void a64_emit_linux_extern_call(CodeGenA64 *cg, const char *name) {
     Arm64Asm *a = cg->asm_;
+    /* _stricmp/_strnicmp are MSVCRT-only symbol names (see
+     * include/string.h's own "Windows-specific" comment) -- neither
+     * glibc.so nor bionic's libc.so exports a symbol by either name, so
+     * calling through unchanged always fails at runtime with "cannot
+     * locate symbol" (confirmed via SQW/html_lexer.c, the first ARM64/
+     * Android caller of _strnicmp -- codegen.c's x86-64 path already had
+     * this exact remap, see its own near-identical comment; codegen_arm64.c
+     * never got the same fix applied until now). Route to the POSIX
+     * equivalents instead (strcasecmp/strncasecmp, same argument order/
+     * count), which both real libcs genuinely export. */
+    if (strcmp(name, "_stricmp") == 0) name = "strcasecmp";
+    else if (strcmp(name, "_strnicmp") == 0) name = "strncasecmp";
     if (cg->linker) {
         const char *soname = linker_lookup_dynamic(cg->linker, name);
         if (soname) {
@@ -1081,7 +1253,35 @@ static void a64_emit_linux_extern_call(CodeGenA64 *cg, const char *name) {
         a64_call_static(a, name);
         return;
     }
-    char lkey2[512]; snprintf(lkey2,sizeof lkey2,"%s:%s",g_squash_libc_soname,name);
+    /* Math functions (cos/sin/sqrt/...): on real Android/bionic these are
+     * NOT resolvable through libc.so's own dynamic symbol table at
+     * dlopen-time despite the implementation being merged into libc since
+     * API 21 -- confirmed directly on a real Pixel 6 Pro ("cannot locate
+     * symbol \"cos\"" at dlopen), and confirmed libm.so is still a real,
+     * separate on-device file apps must declare as a dependency
+     * (/system/lib64/libm.so, pulled to android/libs/libm.so the same way
+     * liblog.so/libvulkan.so/libandroid.so were, for compile-time SONAME/
+     * symbol-existence validation). This mirrors the equally-real
+     * desktop-glibc split (libm.so.6 vs libc.so.6) that codegen.c's x86-64
+     * path has never needed to handle either -- this list is Android-only
+     * for now since that's the only target this was actually exercised
+     * on. */
+    const char *soname = g_squash_libc_soname;
+    if (g_squash_android_target) {
+        static const char *libm_funcs[] = {
+            "sin","cos","tan","asin","acos","atan","atan2",
+            "sinh","cosh","tanh","asinh","acosh","atanh",
+            "exp","exp2","log","log2","log10","pow","sqrt","cbrt",
+            "ceil","floor","round","trunc","fmod","fabs","hypot","ldexp","frexp","modf",
+            "sinf","cosf","tanf","expf","logf","powf","sqrtf","fabsf","floorf","ceilf","roundf",
+            0
+        };
+        int mi;
+        for (mi = 0; libm_funcs[mi]; mi++) {
+            if (strcmp(name, libm_funcs[mi]) == 0) { soname = "libm.so"; break; }
+        }
+    }
+    char lkey2[512]; snprintf(lkey2,sizeof lkey2,"%s:%s",soname,name);
     symtable_add_import(cg->sym, lkey2);
     emit_iat_ref(cg, A64_X16, name);
     a64_emit(a, a64_BLR(A64_X16));
@@ -1096,9 +1296,33 @@ static void a64_emit_call(CodeGenA64 *cg, ASTNode *n) {
      * Mirrors codegen.c's x86 handling of the same ambiguous call syntax. */
     {
         Symbol *csym = n->call.name ? symtable_lookup(cg->sym, n->call.name) : NULL;
-        int is_fptr_var = (csym &&
-                          (csym->kind==SYM_VAR || csym->kind==SYM_PARAM) &&
-                           csym->type && csym->type->pointer_depth > 0);
+        int is_fptr_kind = (csym && (csym->kind==SYM_VAR || csym->kind==SYM_PARAM || csym->kind==SYM_GLOBAL));
+        int is_fptr_var = (is_fptr_kind && csym->type && csym->type->pointer_depth > 0);
+        /* A variable/parameter/global declared with a TYPEDEF'D
+         * function-pointer type (e.g. "typedef void (*Fn)(int); void
+         * f(Fn cb) { cb(1); }", or a file-scope "static Fn g_cb = ...;")
+         * never sets pointer_depth>0 on its OWN TypeInfo -- ParseTypeSpecifier
+         * resolving a typedef name just stores the alias string as `base`
+         * with pointer_depth left at 0 (see its TOK_IDENT/SYM_TYPEDEF
+         * branch), the same gap already worked around in several places in
+         * symtable.c/parser_new4.c by re-resolving the base name through
+         * the symbol table to the typedef's OWN stored TypeInfo. Without
+         * this, a call like "visit(child, depth, ctx)" through a
+         * DomVisitFn-typed PARAMETER (SQW/dom_walk.c/.h), or
+         * "g_image_size_lookup(url, &w, &h)" through a plain (non-typedef)
+         * function-pointer GLOBAL variable (SQW/layout.c), both fell
+         * through to the "unknown extern function" path below and tried
+         * to resolve the variable's NAME as a real libc/.so symbol,
+         * crashing at dlopen with "cannot locate symbol ..." -- reproduced
+         * directly and confirmed NOT libc/Android-specific (a plain
+         * -arm64 -linux build of a minimal repro produces a bogus UND
+         * dynamic symbol literally named after the variable). */
+        if (!is_fptr_var && is_fptr_kind &&
+            csym->type && csym->type->pointer_depth==0 && csym->type->base) {
+            Symbol *td = symtable_lookup(cg->sym, csym->type->base);
+            if (td && td->kind==SYM_TYPEDEF && td->type && td->type->pointer_depth > 0)
+                is_fptr_var = 1;
+        }
         if (is_fptr_var) {
             ASTNode fake_var; memset(&fake_var,0,sizeof fake_var);
             fake_var.kind=AST_VAR; fake_var.line=n->line;
@@ -1170,6 +1394,14 @@ static void a64_emit_call(CodeGenA64 *cg, ASTNode *n) {
      * same 8-byte-strided temp slot format (see their own bodies), so an
      * integer load just moves the raw bit pattern through — exactly what
      * a stack-argument copy needs, no float reinterpretation required. */
+    /* Looked up here (not just at the "emit call" site below) so the
+     * argument-loading loop right below can see each parameter's REAL
+     * declared type -- needed to know whether a float-class argument must
+     * be narrowed to single-precision before the call. Only available for
+     * a callee with a visible declaration (fsym->func_node); calls through
+     * an unprototyped/unknown extern fall back to the previous always-wide
+     * behavior, unchanged. */
+    Symbol *call_fsym = n->call.name ? symtable_lookup(cg->sym, n->call.name) : NULL;
     for (i = nargs - 1; i >= 0; i--) {
         cg->cur_temp_depth--;
         int off = cg->temp_base + cg->cur_temp_depth * 8;
@@ -1177,7 +1409,27 @@ static void a64_emit_call(CodeGenA64 *cg, ASTNode *n) {
             a64_emit(a, a64_LDR(A64_X8, A64_FP, off));
             a64_emit(a, a64_STR(A64_X8, A64_SP, stack_slot[i] * 8));
         } else if (is_float_arg[i]) {
-            if (reg_idx[i] < 8) a64_emit(a, a64_FLDR(reg_idx[i], A64_FP, off));
+            if (reg_idx[i] < 8) {
+                a64_emit(a, a64_FLDR(reg_idx[i], A64_FP, off));
+                /* A real 4-byte `float` PARAMETER expects its value in
+                 * only the low 32 bits of Dn as a genuine single-precision
+                 * value -- this file's argument-temp slots always hold a
+                 * full double (a64_float_expr's universal output width),
+                 * so narrow it here when the callee's own declared
+                 * parameter type says `float`, not `double`. Without this,
+                 * the callee's now-consistently-narrow parameter spill
+                 * (see a64_is_narrow_float_type's own comment) stored the
+                 * low 32 bits of a DOUBLE bit pattern -- garbage bearing no
+                 * resemblance to the real single-precision value -- instead
+                 * of the real float. Reproduced directly: calling
+                 * "touchlike(float x, float y, int action)" with real
+                 * literals read back as x=0.0/y=0.0 on the callee side. */
+                if (call_fsym && call_fsym->func_node && i < call_fsym->func_node->func.paramc) {
+                    ASTNode *pr = call_fsym->func_node->func.params[i];
+                    if (pr && a64_is_narrow_float_type(cg->sym, pr->param.type))
+                        a64_emit(a, a64_FCVT_D_TO_S(reg_idx[i], reg_idx[i]));
+                }
+            }
         } else {
             if (reg_idx[i] < 8) a64_emit(a, a64_LDR(reg_idx[i], A64_FP, off));
         }
@@ -1326,9 +1578,43 @@ static void a64_float_expr(CodeGenA64 *cg, ASTNode *n) {
     }
     case AST_VAR: {
         Symbol *s = symtable_lookup(cg->sym, n->var.name);
+        /* A plain named "float"-typed local/param/global is, throughout
+         * this backend's own actual convention, always spilled/reloaded as
+         * a full 8-byte double (AST_VAR_DECL's combined init path does an
+         * unconditional a64_FSTR; a float PARAMETER's prologue spill does
+         * an unconditional a64_FSTR of its incoming D-register too) --
+         * unlike a real struct field or array element (AST_MEMBER/
+         * AST_INDEX, handled separately above), which genuinely must be
+         * narrowed to stay byte-compatible with whatever real C type size
+         * and neighboring fields memory layout demands. This case's own
+         * SYM_GLOBAL branch was simply missing before (silently emitting
+         * nothing, leaving D0 whatever it already held) -- added here,
+         * matching the same unconditional-wide convention every other
+         * plain-variable float path already uses; see AST_ASSIGN's
+         * float-lvalue store path for the mirroring fix (that path used to
+         * incorrectly narrow a plain AST_VAR store to 4 bytes, which is
+         * what actually broke a later plain wide read like this one). */
         if (s && (s->kind == SYM_VAR || s->kind == SYM_PARAM)) {
             int fp_off = a64_sym_fp_off(s);
-            a64_emit(a, a64_FLDR(A64_D0, A64_FP, fp_off));
+            /* Narrow read for a real 4-byte `float` -- must agree with the
+             * spill/store side (parameter prologue, VAR_DECL init, and
+             * AST_ASSIGN all now narrow consistently too when the true
+             * type is `float`; see a64_is_narrow_float_type's own
+             * comment). A `double` still reads the full 8 bytes. */
+            if (a64_is_narrow_float_type(cg->sym, s->type)) {
+                a64_emit(a, a64_FLDR_S(A64_D0, A64_FP, fp_off));
+                a64_emit(a, a64_FCVT_S_TO_D(A64_D0, A64_D0));
+            } else {
+                a64_emit(a, a64_FLDR(A64_D0, A64_FP, fp_off));
+            }
+        } else if (s && s->kind == SYM_GLOBAL) {
+            a64_lvalue(cg, n);
+            if (a64_is_narrow_float_type(cg->sym, s->type)) {
+                a64_emit(a, a64_FLDR_S(A64_D0, A64_X0, 0));
+                a64_emit(a, a64_FCVT_S_TO_D(A64_D0, A64_D0));
+            } else {
+                a64_emit(a, a64_FLDR(A64_D0, A64_X0, 0));
+            }
         }
         break;
     }
@@ -1388,11 +1674,19 @@ static void a64_float_expr(CodeGenA64 *cg, ASTNode *n) {
         break;
     case AST_MEMBER:
     case AST_INDEX:
-        /* A double-typed struct field or array element: the default case
-         * below would read the raw IEEE-754 bit pattern as an INTEGER via
-         * a64_expr() and numerically convert it with SCVTF, producing a
-         * wildly wrong value instead of the actual stored double. Compute
-         * the lvalue's address and load it as a double directly. */
+    case AST_DEREF:
+        /* A double-typed struct field/array element/dereferenced pointer:
+         * the default case below would read the raw IEEE-754 bit pattern
+         * as an INTEGER via a64_expr() and numerically convert it with
+         * SCVTF, producing a wildly wrong value instead of the actual
+         * stored double. Compute the lvalue's address and load it as a
+         * double directly. AST_DEREF added alongside MEMBER/INDEX for the
+         * identical reason -- see a64_is_float's own AST_DEREF case for
+         * the real caller (buttons_android.c's "*(float *)&x_bits" touch-
+         * coordinate bit-reinterpretation) and a64_index_elem_size's own
+         * new AST_CAST case (used by a64_lvalue_size(cg,n) just below,
+         * for AST_DEREF, to correctly size a pointer-CAST's pointee
+         * instead of the previous generic 8-byte default). */
         a64_lvalue(cg, n);
         /* A real 4-byte `float` field/element (not `double`) was only ever
          * written as 4 bytes at this exact offset (see the mirroring fix
@@ -1406,6 +1700,39 @@ static void a64_float_expr(CodeGenA64 *cg, ASTNode *n) {
             a64_emit(a, a64_FLDR(A64_D0, A64_X0, 0));
         }
         break;
+    case AST_TERNARY: {
+        /* "cond ? float_expr : float_expr" (e.g. SQW/layout.c's own
+         * "child->css_width_is_percent ? f->avail_w * pct : child->
+         * css_width" -- a real, common width-resolution idiom) had NO case
+         * here at all, falling to the generic "default" below: evaluate
+         * via a64_expr() (the INTEGER path) then SCVTF the result. a64_expr
+         * itself has its own AST_TERNARY case, but it evaluates EACH BRANCH
+         * via a64_expr too -- so a float-valued branch (a plain struct
+         * field/array read) went through a64_expr's AST_MEMBER/AST_INDEX
+         * case, which has no idea the field is float and just loads its
+         * raw bytes as an INTEGER (reproduced directly: "child->css_width"
+         * holding the real float 900.0f, bit pattern 0x44610000, read back
+         * as the integer 1147207680) -- then that garbage integer gets
+         * numerically SCVTF-converted to 1147207680.0, a wildly wrong
+         * value with no relation to 900.0 at all. Mirrors a64_expr's own
+         * AST_TERNARY structure exactly, just evaluating each branch
+         * through a64_float_expr and leaving the live result in d0. */
+        int else_lbl = a64_new_label(a, "");
+        int end_lbl  = a64_new_label(a, "");
+        a64_expr(cg, n->ternary.cond);
+        a64_emit(a, a64_CMP_imm(A64_X0, 0));
+        int p1 = a->code_len;
+        a64_emit(a, a64_Bcond(A64_EQ, 0));
+        a64_add_fixup(a, p1, else_lbl);
+        a64_float_expr(cg, n->ternary.then_);
+        int p2 = a->code_len;
+        a64_emit(a, a64_B(0));
+        a64_add_fixup(a, p2, end_lbl);
+        a64_def_label(a, else_lbl);
+        a64_float_expr(cg, n->ternary.else_);
+        a64_def_label(a, end_lbl);
+        break;
+    }
     default:
         /* fall back to int expr then convert */
         a64_expr(cg, n);
@@ -1614,8 +1941,19 @@ static void a64_expr(CodeGenA64 *cg, ASTNode *n) {
          * through a NULL/garbage base address (reproduced directly: "float
          * arr[4]; arr[0]=1.5f;" segfaulted with x0=0 at the store).
          * a64_load_sym_value (below) already gets this ordering right;
-         * this call site just needs the same array_size check first. */
-        if (s->array_size > 0 && (s->kind == SYM_VAR || s->kind == SYM_PARAM)) {
+         * this call site just needs the same array_size check first.
+         *
+         * The kind check originally only allowed SYM_VAR/SYM_PARAM, missing
+         * SYM_GLOBAL -- which is exactly what a function-local "static"
+         * array is registered as (symtable_define_global(), same as a
+         * real file-scope global; see codegen.c's static-local handling).
+         * A plain "static const float one[1] = {0.9f};" fell through to
+         * the float-scalar branch below, loading a garbage bit pattern
+         * from the wrong address and truncating it to an int to use as
+         * the array's base pointer -- confirmed via a minimal repro
+         * (any function-local static float array segfaulted, fault addr
+         * 0x0, the very first time the array was written to). */
+        if (s->array_size > 0 && (s->kind == SYM_VAR || s->kind == SYM_PARAM || s->kind == SYM_GLOBAL)) {
             a64_load_sym_addr(cg, s);
             break;
         }
@@ -1686,6 +2024,28 @@ static void a64_expr(CodeGenA64 *cg, ASTNode *n) {
             Symbol *esym = symtable_lookup(cg->sym, se->deref.operand->var.name);
             if (esym && esym->type && esym->type->pointer_depth > 0) {
                 sz = a64_sizeof_type_sym_ex(cg->sym, esym->type, 1, 1, 1);
+            }
+        } else if (se && se->kind == AST_MEMBER) {
+            /* sizeof(x.field) / sizeof(p->field) -- had no case here at all,
+             * always falling to the generic 8-byte pointer-size default
+             * regardless of the field's real type. For a fixed-size array
+             * field specifically (e.g. "char name[40];") this isn't just
+             * imprecise, it's actively wrong: real callers like SQW/css.c's
+             * "if (nlen >= (int)sizeof d->name) nlen = sizeof(d->name)-1;"
+             * (bounding a copy into the field) silently clamped every
+             * value/name longer than 7 bytes to exactly 7, truncating
+             * "inline-block" to "inline-" and "background-color" to
+             * "backgro" -- reproduced directly via a real inline "style="
+             * attribute on android/examples/buttons_android.c's own
+             * manually-built HTML. Mirrors this file's own AST_MEMBER
+             * handling elsewhere (a64_field_elem_size et al.): resolve the
+             * field through the symbol table and size ITS real type,
+             * including array_size. */
+            int off;
+            ASTNode *f = a64_resolve_field(cg, se->member.obj, se->member.field, &off);
+            if (f && f->field.type) {
+                sz = a64_sizeof_type_sym(cg->sym, f->field.type, 1);
+                if (f->field.array_size > 0) sz *= f->field.array_size;
             }
         } else if (se && se->type) {
             sz = a64_sizeof_type_sym(cg->sym, se->type, 1);
@@ -2028,10 +2388,21 @@ static void a64_expr(CodeGenA64 *cg, ASTNode *n) {
                 a64_emit(a, a64_SCVTF(A64_D0, A64_X0));
             }
             a64_lvalue(cg, n->assign.lhs);   /* address in x0; doesn't touch d0 */
-            /* Real 4-byte `float` lvalue (struct field/array element, not
-             * `double`): narrow before storing, or the 8-byte store below
-             * overwrites the next field/element's first 4 bytes too — see
-             * a64_FLDR_S's comment. */
+            /* Real 4-byte `float` lvalue: narrow before storing, or an
+             * 8-byte store either overwrites a struct field/array
+             * element's neighbor (see a64_FLDR_S's comment) or desyncs a
+             * plain named variable from every OTHER access to it, which
+             * now consistently narrows too when the true type is `float`
+             * (parameter prologue spill, VAR_DECL init, and this backend's
+             * whole plain-AST_VAR read/write path -- see
+             * a64_is_narrow_float_type's own comment for the full
+             * reasoning and the real bug this fixes: taking a plain float
+             * variable's address and writing through it as a genuine
+             * `float *`, e.g. any "void f(float *out)" callee, silently
+             * corrupted almost nothing when the two conventions
+             * disagreed). AST_MEMBER/AST_INDEX/AST_DEREF still narrow
+             * purely off a64_lvalue_size(); a plain AST_VAR narrows only
+             * when its OWN declared type is real `float`, not `double`. */
             if (a64_lvalue_size(cg, n->assign.lhs) == 4) {
                 a64_emit(a, a64_FCVT_D_TO_S(A64_D0, A64_D0));
                 a64_emit(a, a64_FSTR_S(A64_D0, A64_X0, 0));
@@ -2783,10 +3154,66 @@ static void a64_stmt(CodeGenA64 *cg, ASTNode *n) {
                 } else if (a64_is_float(cg, nd->var_decl.init)) {
                     a64_float_expr(cg, nd->var_decl.init);
                     int fp_off = a64_sym_fp_off(s);
-                    a64_emit(a, a64_FSTR(A64_D0, A64_FP, fp_off));
+                    /* Narrow to a real 4-byte `float` slot when that's this
+                     * variable's true declared type -- see
+                     * a64_is_narrow_float_type's own comment for why every
+                     * access site must now agree on this. */
+                    if (a64_is_narrow_float_type(cg->sym, s->type)) {
+                        a64_emit(a, a64_FCVT_D_TO_S(A64_D0, A64_D0));
+                        a64_emit(a, a64_FSTR_S(A64_D0, A64_FP, fp_off));
+                        a64_emit(a, a64_FCVT_S_TO_D(A64_D0, A64_D0));
+                    } else {
+                        a64_emit(a, a64_FSTR(A64_D0, A64_FP, fp_off));
+                    }
                 } else {
-                    a64_expr(cg, nd->var_decl.init);
-                    a64_store_to_sym(cg, s, A64_X0);
+                    /* "StructType local = some_struct_valued_expr;" (e.g.
+                     * "LayoutBox key = out->boxes[i];", a very common "copy
+                     * then tweak" idiom -- see this file's own
+                     * a64_struct_copy_size_of comment for the identical
+                     * AST_ASSIGN fix and its real Vulkan-barrier repro).
+                     * Falling into the plain scalar path below evaluated
+                     * the RHS via a64_expr's AST_INDEX/AST_MEMBER case,
+                     * which only ever loads a single 8-byte register's
+                     * worth (see its own "if (sz>=8) LDR" — one fixed-width
+                     * load regardless of the real struct size), then stored
+                     * just that into the local's first 8 bytes -- every
+                     * field after the first (offset 8 onward: this file's
+                     * own LayoutBox has `kind` right there) kept whatever
+                     * garbage was already on the stack. Confirmed directly:
+                     * a real SQW layout's z-index stable-insertion-sort
+                     * ("LayoutBox key = out->boxes[i]; ...; out->boxes[j+1]
+                     * = key;" in layout.c) silently corrupted every box's
+                     * `kind` field the instant this line ran on it, so
+                     * every button after the first ever box permanently
+                     * stopped being recognized as SQW_BOX_BUTTON. Reuse the
+                     * exact same byte-copy loop AST_ASSIGN's struct-copy
+                     * fast path already uses, just with the destination
+                     * address being this new local's own stack slot. */
+                    int rsz = a64_struct_copy_size_of(cg, nd->var_decl.init);
+                    if (rsz > 0 && s->type && s->type->pointer_depth == 0 &&
+                        a64_find_struct_def(cg, s->type->base)) {
+                        a64_struct_copy_addr_of(cg, nd->var_decl.init);
+                        push_temp(cg);
+                        a64_load_sym_addr(cg, s);
+                        a64_emit(a, a64_MOV(A64_X2, A64_X0));
+                        pop_temp_into_x1(cg);
+                        int off = 0;
+                        for (; off + 8 <= rsz; off += 8) {
+                            a64_emit(a, a64_LDR(A64_X8, A64_X1, off));
+                            a64_emit(a, a64_STR(A64_X8, A64_X2, off));
+                        }
+                        for (; off + 4 <= rsz; off += 4) {
+                            a64_emit(a, a64_LDR32(A64_X8, A64_X1, off));
+                            a64_emit(a, a64_STR32(A64_X8, A64_X2, off));
+                        }
+                        for (; off < rsz; off++) {
+                            a64_emit(a, a64_LDRB(A64_X8, A64_X1, off));
+                            a64_emit(a, a64_STRB(A64_X8, A64_X2, off));
+                        }
+                    } else {
+                        a64_expr(cg, nd->var_decl.init);
+                        a64_store_to_sym(cg, s, A64_X0);
+                    }
                 }
             }
         }
@@ -3234,7 +3661,18 @@ static void a64_codegen_func(CodeGenA64 *cg, ASTNode *n) {
         int pos_off = n->func.is_variadic ? (param_slots - (i + 1) * 8) : (i + 1) * 16;
         s->offset = -pos_off;
         if (a64_is_float_type(cg->sym, pr->param.type)) {
-            if (freg < 8) a64_emit(a, a64_FSTR(freg, A64_FP, pos_off));
+            /* A real 4-byte `float` parameter arrives in the low 32 bits of
+             * Dn per AAPCS64 -- spill only those 4 bytes (FSTR_S), matching
+             * every other access to a plain named float variable now doing
+             * the same; a `double` still spills the full 8 bytes. See
+             * a64_is_narrow_float_type's own comment for why this must be
+             * consistent across every access site, not just this one. */
+            if (freg < 8) {
+                if (a64_is_narrow_float_type(cg->sym, pr->param.type))
+                    a64_emit(a, a64_FSTR_S(freg, A64_FP, pos_off));
+                else
+                    a64_emit(a, a64_FSTR(freg, A64_FP, pos_off));
+            }
             freg++;
         } else {
             if (ireg < 8) a64_emit(a, a64_STR(ireg, A64_FP, pos_off));
