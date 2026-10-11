@@ -1,5 +1,6 @@
 #include "include/vulkan_android.h"
 #include "triangle_spirv.h"
+#include "android/jni_min.h"
 #include "SQW/dom_walk.c"
 #include "SQW/css.c"
 #include "SQW/layout.c"
@@ -104,6 +105,7 @@ typedef struct {
 static Button g_buttons[MAX_BUTTONS];
 static int g_button_count = 0;
 static LayoutList g_layout;
+static DomNode *g_dom_root = 0;
 
 /* Kept alive for the whole app lifetime (never freed) so a live ":hover"
  * re-resolve can re-run css_apply_one() against the SAME rule set that
@@ -149,6 +151,76 @@ static float clamp_scroll(float v, float content, float view) {
     return v;
 }
 
+/* ---- real soft-keyboard text entry state (see the approved UI-component-
+ * library plan): a real, persistent, off-screen android.widget.EditText
+ * drives the REAL Android IME; this demo's own Vulkan glyph pipeline still
+ * renders all VISIBLE text. Declared here (forward of nativeTouchEvent,
+ * which needs to react to taps on a text box) even though they're only
+ * ASSIGNED later in nativeEditTextReady() -- C requires the declaration to
+ * come before first use, and nativeTouchEvent is defined above that
+ * point in the file. All zero-initialized, matching every other global in
+ * this file (see g_hover_box_index's own comment on why a non-zero
+ * initializer isn't reliable here). */
+static jobject g_edit_text = 0;
+static jmethodID g_m_edittext_settext = 0;
+static jmethodID g_m_edittext_gettext = 0;
+static jmethodID g_m_edittext_requestfocus = 0;
+static jmethodID g_m_edittext_clearfocus = 0;
+static jmethodID g_m_charsequence_tostring = 0;
+static jobject g_imm = 0;
+static jmethodID g_m_imm_showsoftinput = 0;
+static jmethodID g_m_imm_hidesoftinputfromwindow = 0;
+static jmethodID g_m_view_getwindowtoken = 0;
+/* Which DomNode (by layout-box index, same "int not pointer" convention as
+ * g_hover_box_index -- see its own comment) currently owns the keyboard,
+ * so a later keystroke callback (phase 4) knows which DomNode::form_value
+ * to update. Zero-initialized with a separate "is anything focused" flag,
+ * NOT a "-1 means none" sentinel -- same confirmed squash bug as
+ * g_hover_box_index: a non-zero global initializer isn't reliable here,
+ * full stop, regardless of how the value is later used. */
+static int g_focused_box_index = 0;
+static int g_has_focus = 0;
+
+/* Phase 3 of the plan: tapping a text box / textarea requests real focus
+ * and raises the real system keyboard. Runs directly inside
+ * nativeTouchEvent (NOT the render thread's own touch-handling loop)
+ * specifically because `env` here is a genuinely valid JNIEnv for
+ * nativeTouchEvent's OWN calling thread (Android's real UI thread) --
+ * JNIEnv values are thread-specific and the render thread is a plain
+ * pthread with no JNIEnv of its own at all, so any JNI call needed in
+ * response to a tap has to happen here, synchronously, not be deferred
+ * through the usual g_touch_pending flag handoff the Vulkan redraw path
+ * uses. */
+static void sqw_dispatch_text_focus(void *env, float x, float y, int action) {
+    if (action != ACTION_DOWN) return;
+    if (!g_edit_text || g_layout.count == 0) return;
+    float contentX = x + g_scroll_x;
+    float contentY = y + g_scroll_y;
+    int hit = layout_hit_test(&g_layout, contentX, contentY);
+    if (hit < 0) return;
+    LayoutBox *lb = &g_layout.boxes[hit];
+    if (lb->kind != SQW_BOX_INPUT_TEXT && lb->kind != SQW_BOX_TEXTAREA) return;
+
+    DomNode *node = lb->node;
+    g_focused_box_index = hit;
+    g_has_focus = 1;
+
+    jstring currentVal = sqw_jni_NewStringUTF(env, node->form_value);
+    jvalue setArgs[1];
+    setArgs[0].l = currentVal;
+    sqw_jni_CallVoidMethodA(env, g_edit_text, g_m_edittext_settext, setArgs);
+
+    sqw_jni_CallBooleanMethodA(env, g_edit_text, g_m_edittext_requestfocus, 0);
+
+    if (g_imm && g_m_imm_showsoftinput) {
+        jvalue showArgs[2];
+        showArgs[0].l = g_edit_text;
+        showArgs[1].i = 0;
+        sqw_jni_CallBooleanMethodA(env, g_imm, g_m_imm_showsoftinput, showArgs);
+    }
+    __android_log_print(4, "squashbtn", "sqw_dispatch_text_focus: focused box=%d", hit);
+}
+
 /* ---- touch handoff: nativeTouchEvent (Android main thread) -> render
  * thread. Same simple polled-flag convention as g_instance_ready above,
  * already proven safe at this project's scale (a human dragging a finger
@@ -168,6 +240,13 @@ static int g_dragging = 0;
 #define ACTION_DOWN 0
 #define ACTION_UP 1
 #define ACTION_MOVE 2
+/* Not a real Android MotionEvent action -- reuses the exact same
+ * g_touch_pending/g_touch_action single-slot queue nativeTouchEvent
+ * already uses to wake the render thread's touch-handling loop, just with
+ * a value that loop recognizes as "a DomNode::form_value changed
+ * elsewhere (nativeTextChanged, real keystroke delivery), redraw, skip
+ * all the hit-test/hover/drag logic that assumes real screen coordinates." */
+#define ACTION_TEXT_CHANGED 3
 
 /* x_bits/y_bits are the raw IEEE-754 bit patterns of the real touch
  * coordinates, NOT the coordinates themselves -- a real, confirmed
@@ -187,6 +266,7 @@ static int g_dragging = 0;
 void nativeTouchEvent(void *env, void *clazz, int x_bits, int y_bits, int action) {
     float x = *(float *)&x_bits;
     float y = *(float *)&y_bits;
+    sqw_dispatch_text_focus(env, x, y, action);
     g_touch_x = x; g_touch_y = y; g_touch_action = action; g_touch_pending = 1;
 }
 
@@ -234,6 +314,19 @@ static const char *get_body_html(void) {
         "<button id=\"btn3\"></button>"
         "<p>This paragraph demonstrates real word wrapping inside SQW's own layout engine. Each word is measured against the baked font atlas and the line breaks exactly at the container's width, the same way a real browser flows ordinary text. Keep scrolling down, and try dragging sideways too, to see the non-wrapping line below.</p>"
         "<pre>This single pre-formatted line deliberately never wraps no matter how long it gets so it overflows far past the right edge of the screen and pulls in the horizontal scrollbar you can drag to reveal the rest of it.</pre>"
+        "<label for=\"name\">Name:</label>"
+        "<input type=\"text\" id=\"name\" name=\"name\" class=\"textfield\">"
+        "<label for=\"bio\">Bio:</label>"
+        "<textarea id=\"bio\" name=\"bio\"></textarea>"
+        "<input type=\"checkbox\" id=\"subscribe\" name=\"subscribe\" class=\"checkbox\">"
+        "<label for=\"subscribe\">Subscribe</label>"
+        "<input type=\"radio\" id=\"opt_a\" name=\"choice\" class=\"checkbox\" checked>"
+        "<label for=\"opt_a\">Option A</label>"
+        "<input type=\"radio\" id=\"opt_b\" name=\"choice\" class=\"checkbox\">"
+        "<label for=\"opt_b\">Option B</label>"
+        "<input type=\"checkbox\" id=\"toggle1\" name=\"toggle1\" class=\"toggle\">"
+        "<label for=\"toggle1\">Toggle</label>"
+        "<button type=\"submit\" id=\"submitbtn\">Submit</button>"
         "</body></html>";
 }
 
@@ -245,7 +338,20 @@ static const char *get_css_text(void) {
         "#btn3{display:inline-block;width:900px;height:140px;background-color:#3498db;}"
         "#btn3:hover{background-color:#9cd5f7;}"
         "p{color:#ffffff;font-size:32px;}"
-        "pre{color:#ffffff;background-color:#242424;font-size:28px;}";
+        "pre{color:#ffffff;background-color:#242424;font-size:28px;}"
+        "label{color:#ffffff;font-size:28px;}"
+        "input.textfield{width:400px;height:60px;}"
+        "input.checkbox{width:40px;height:40px;}"
+        "input.toggle{width:70px;height:36px;}"
+        "textarea{width:600px;height:150px;}"
+        /* No explicit height here: SQW's block-layout path only honors an
+         * explicit css_height for a CHILDLESS element (see layout.c's own
+         * "content_h_eff" comment) -- this button has a text child, so an
+         * explicit height would be silently dropped in favor of the
+         * content-driven (text line height) one anyway. font-size drives
+         * a comfortably-sized touch target instead. */
+        "#submitbtn{display:inline-block;width:300px;font-size:32px;color:#ffffff;background-color:#555555;}"
+        "#submitbtn:hover{background-color:#777777;}";
 }
 
 /* ---- real SQW DOM + layout_compute()/layout_hit_test(): the actual UI
@@ -262,6 +368,7 @@ static void build_page_dom_layout(uint32_t ew, uint32_t eh) {
     sqw_font_atlas_decode();
 
     DomNode *root = dom_parse(get_body_html());
+    g_dom_root = root;
     css_stylesheet_init(&g_css_sheet);
     css_parse_into(&g_css_sheet, get_css_text());
     css_apply(root, &g_css_sheet, (float)ew);
@@ -279,6 +386,166 @@ static void build_page_dom_layout(uint32_t ew, uint32_t eh) {
     }
     __android_log_print(4, "squashbtn", "SQW layout done: %d button(s), %d total box(es), content=%.0fx%.0f",
                          g_button_count, g_layout.count, g_layout.content_w, g_layout.content_h);
+
+    /* g_form_nodes populated HERE, called directly inline (not through a
+     * separate wrapper function, and never again later from the touch-
+     * handling loop below) -- two real, confirmed ARM64 codegen bugs
+     * found this session, both involving dom_walk():
+     *   1. A dom_walk() call moved into its own one-line wrapper function
+     *      silently visits ZERO nodes (no crash, callback just never
+     *      invoked) even though the identical call inline in THIS
+     *      function's own body visits every node correctly.
+     *   2. Independently, dom_walk() also silently visits zero nodes when
+     *      called from the touch-handling for(;;) loop later in this
+     *      same function/thread, after all of vulkan_thread_main's own
+     *      large Vulkan setup locals (VkImageView swapViews[8], command
+     *      buffers, etc.) are already on the stack -- a stack-depth-
+     *      dependent failure, confirmed via a trivial counting-only
+     *      callback showing 29/29 nodes visited from this early call site
+     *      and 0/29 from the late one in the identical build.
+     * Neither isolated further -- worked around by calling dom_walk()
+     * exactly once, inline, right here, and never again. */
+    g_form_node_count = 0;
+    dom_walk(root, sqw_collect_form_nodes_visit, 0);
+}
+
+/* ---- widget interaction helpers: checkbox/radio toggle, label "for="
+ * forwarding, submit-field collection -- all pure C/DOM logic, no new
+ * JNI/DEX surface. Radio-group exclusivity and submit-field collection
+ * are ported from SQW/sqw_main.c's own radio_group_clear_visit()/
+ * form_collect_visit() (desktop walks only the enclosing <form>; this
+ * demo's radios/inputs aren't inside an explicit <form> wrapper, so these
+ * walk the whole document instead -- same logic, wider root). ---- */
+
+/* Flat list of every <input>/<textarea> in the document, built ONCE via a
+ * dom_walk() call made directly inline inside build_page_dom_layout() (see
+ * its own comment for why it must be inline, not a wrapper function, and
+ * must never run again later from the touch-handling loop) and reused by
+ * every runtime interaction helper below (label "for=" lookup, radio-group
+ * clearing, submit collection) instead of calling dom_walk() again at tap
+ * time. */
+#define SQW_MAX_FORM_NODES 32
+static DomNode *g_form_nodes[SQW_MAX_FORM_NODES];
+static int g_form_node_count = 0;
+static void sqw_collect_form_nodes_visit(DomNode *node, int depth, void *ctx) {
+    (void)depth; (void)ctx;
+    if (g_form_node_count >= SQW_MAX_FORM_NODES) return;
+    if (strcmp(node->tag, "input") == 0 || strcmp(node->tag, "textarea") == 0) {
+        g_form_nodes[g_form_node_count++] = node;
+    }
+}
+
+static DomNode *sqw_find_by_id(const char *id) {
+    int i;
+    if (!id) return 0;
+    for (i = 0; i < g_form_node_count; i++) {
+        const char *nid = dom_get_attr(g_form_nodes[i], "id");
+        if (nid && strcmp(nid, id) == 0) return g_form_nodes[i];
+    }
+    return 0;
+}
+
+static void sqw_radio_group_clear(const char *name, DomNode *skip) {
+    int i;
+    for (i = 0; i < g_form_node_count; i++) {
+        DomNode *node = g_form_nodes[i];
+        if (node == skip) continue;
+        const char *type = dom_get_attr(node, "type");
+        if (!type || strcmp(type, "radio") != 0) continue;
+        const char *nname = dom_get_attr(node, "name");
+        if (nname && strcmp(nname, name) == 0) node->form_checked = 0;
+    }
+}
+
+/* Returns 1 if `node` is a toggle-styled checkbox (class="toggle"), not a
+ * plain checkbox -- SQW itself has no native <input type="toggle">, so a
+ * toggle switch here is just a checkbox with a different VISUAL (pill
+ * track + sliding thumb instead of a bordered box + inset fill), sharing
+ * the exact same form_checked boolean and SQW_BOX_INPUT_CHECK kind. */
+static int sqw_node_is_toggle(DomNode *node) {
+    const char *cls = dom_get_attr(node, "class");
+    if (!cls) return 0;
+    const char *p = cls;
+    while (*p) {
+        while (*p && isspace((unsigned char)*p)) p++;
+        const char *tok = p;
+        while (*p && !isspace((unsigned char)*p)) p++;
+        int tlen = (int)(p - tok);
+        if (tlen == 6 && strncmp(tok, "toggle", 6) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Click handling for a SQW_BOX_INPUT_CHECK box (checkbox, radio, or a
+ * toggle -- all share this one box kind, see layout.c's own comment) --
+ * ported 1:1 from SQW/sqw_main.c's own click handler: a radio sets itself
+ * checked and clears every other same-"name" radio in the document; a
+ * plain checkbox (or toggle) just flips its own form_checked. Re-resolves
+ * CSS afterward in case a ":checked"-driven rule exists, matching the
+ * same live re-style approach this file's own ":hover" handling already
+ * uses. */
+static void sqw_toggle_check_or_radio(DomNode *node) {
+    const char *type = dom_get_attr(node, "type");
+    if (type && strcmp(type, "radio") == 0) {
+        const char *name = dom_get_attr(node, "name");
+        if (name) sqw_radio_group_clear(name, node);
+        node->form_checked = 1;
+    } else {
+        node->form_checked = !node->form_checked;
+    }
+    css_apply_one(node, &g_css_sheet, g_viewport_w);
+}
+
+/* Submit: ported from SQW/sqw_main.c's own form_collect_visit(), but
+ * local-only (no network) -- walks the WHOLE document (this demo has no
+ * explicit <form> wrapper) collecting every named input/textarea's
+ * current value, skipping unchecked checkboxes/radios and the submit
+ * control itself, and hands the result to a simple app-facing callback
+ * instead of building a URL-encoded request. This is the shape other
+ * applications using this as a component library would want: get the
+ * field values back, decide what to do with them themselves. */
+#define SQW_MAX_FORM_FIELDS 32
+typedef struct { const char *name; const char *value; } SqwFormField;
+/* First direct text-node child's content -- used to draw a <button>'s own
+ * label or a <label>'s own caption, neither of which get a separate
+ * SQW_BOX_TEXT run of their own (both are "atomic inline" boxes sized via
+ * direct_text_width() but never split into word-level sub-boxes, see
+ * layout.c's own is_atomic_inline_tag branch) -- so the draw pass reads
+ * the text straight from the DOM, exactly the same way SQW's own desktop
+ * renderer draws a <button>'s label from its child text / form_value
+ * (see sqw_main.c's own SQW_BOX_BUTTON draw-time comment). */
+static const char *node_direct_text(DomNode *node, int *outLen) {
+    int i;
+    for (i = 0; i < node->child_count; i++) {
+        DomNode *c = node->children[i];
+        if (dom_is_text(c)) {
+            *outLen = (int)strlen(c->text);
+            return c->text;
+        }
+    }
+    *outLen = 0;
+    return "";
+}
+
+static void sqw_submit_form(void) {
+    SqwFormField fields[SQW_MAX_FORM_FIELDS];
+    int count = 0;
+    int i;
+    for (i = 0; i < g_form_node_count && count < SQW_MAX_FORM_FIELDS; i++) {
+        DomNode *node = g_form_nodes[i];
+        const char *name = dom_get_attr(node, "name");
+        if (!name) continue;
+        const char *type = dom_get_attr(node, "type");
+        if (type && (strcmp(type, "submit") == 0 || strcmp(type, "button") == 0 || strcmp(type, "reset") == 0)) continue;
+        if (type && (strcmp(type, "checkbox") == 0 || strcmp(type, "radio") == 0) && !node->form_checked) continue;
+        fields[count].name = name;
+        fields[count].value = node->form_value;
+        count++;
+    }
+    __android_log_print(4, "squashbtn", "FORM SUBMITTED: %d field(s)", count);
+    for (i = 0; i < count; i++) {
+        __android_log_print(4, "squashbtn", "  %s = %s", fields[i].name, fields[i].value);
+    }
 }
 
 /* ---- glyph rendering: ported field-by-field from SQW/text_renderer_vk.c's
@@ -357,7 +624,7 @@ static void text_draw_string(float x, float y, const char *s, int len, float sca
     }
 }
 
-#define MAX_RECTS 16
+#define MAX_RECTS 64
 static Vertex g_rectStaging[MAX_RECTS * 6];
 
 /* Builds this frame's flat-rect vertices (buttons, <pre> background,
@@ -374,6 +641,7 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
     uint32_t rectCount = 0;
     int i;
 
+    g_glyphVCount = 0;
     for (i = 0; i < g_button_count; i++) {
         Button *b = &g_buttons[i];
         DomNode *btn_node = b->node;
@@ -384,8 +652,29 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
         write_rect_quad(&g_rectStaging[rectCount * 6], b->x, b->y, b->w, b->h, r, gg, bl,
                          g_scroll_x, g_scroll_y, ew, eh);
         rectCount++;
+        /* Only draw the caption manually when this button is a true
+         * ATOMIC-INLINE box (css_display==CSS_DISPLAY_INLINE exactly) --
+         * see layout.c's own is_atomic_inline_tag branch: that's the ONLY
+         * case where the button's text child gets no separate box of its
+         * own. A real, confirmed bug found via forms_android.c's
+         * block-layout signup form: #submitbtn here uses
+         * display:inline-block, which routes through the ordinary
+         * block-child-layout path instead, where its text DOES get real
+         * SQW_BOX_TEXT child box(es) -- drawing it manually here too
+         * double-drew the caption (the garbled-looking "Suhmitt"/
+         * "S6bbrítít" text originally misdiagnosed as a screenshot
+         * downscaling artifact), since the second loop below
+         * (kind==SQW_BOX_TEXT) draws those same boxes again. */
+        if (btn_node && btn_node->css_display == CSS_DISPLAY_INLINE) {
+            int tlen = 0;
+            const char *txt = node_direct_text(btn_node, &tlen);
+            if (tlen > 0) {
+                float scale = node_text_scale(btn_node);
+                text_draw_string(b->x - g_scroll_x + 8.0f, b->y - g_scroll_y + (b->h - SQW_FONT_CELL_H * scale) * 0.5f,
+                                  txt, tlen, scale, 1.0f, 1.0f, 1.0f, 1.0f, ew, eh);
+            }
+        }
     }
-    g_glyphVCount = 0;
     for (i = 0; i < g_layout.count; i++) {
         LayoutBox *lb = &g_layout.boxes[i];
         float bx = lb->x - g_scroll_x;
@@ -415,6 +704,78 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
             if (anc) { tr = anc->css_color[0]; tg = anc->css_color[1]; tb = anc->css_color[2]; }
             text_draw_string(bx, by, textnode->text + lb->text_start, lb->text_len,
                               lb->text_scale, tr, tg, tb, 1.0f, ew, eh);
+        } else if (lb->kind == SQW_BOX_SPAN && strcmp(lb->node->tag, "label") == 0) {
+            /* <label>: same "atomic inline, no separate text run" shape as
+             * <button> above -- read its own direct text child. */
+            DomNode *label_node = lb->node;
+            int tlen = 0;
+            const char *txt = node_direct_text(label_node, &tlen);
+            if (tlen > 0) {
+                float tr = 1.0f, tg = 1.0f, tb = 1.0f;
+                if (label_node->css_has_color) { tr = label_node->css_color[0]; tg = label_node->css_color[1]; tb = label_node->css_color[2]; }
+                text_draw_string(bx, by, txt, tlen, lb->text_scale, tr, tg, tb, 1.0f, ew, eh);
+            }
+        } else if (lb->kind == SQW_BOX_INPUT_TEXT || lb->kind == SQW_BOX_TEXTAREA) {
+            DomNode *field_node = lb->node;
+            /* Blue-tinted border when focused (real keyboard is up on
+             * this field), gray otherwise -- same signal SQW's own
+             * desktop renderer uses, just one filled rect here instead of
+             * 4 hollow border strips. */
+            int isFocused = g_has_focus && g_focused_box_index == i;
+            float br = isFocused ? 0.20f : 0.55f, bg = isFocused ? 0.45f : 0.55f, bb = isFocused ? 0.85f : 0.55f;
+            write_rect_quad(&g_rectStaging[rectCount * 6], lb->x - 2, lb->y - 2, lb->w + 4, lb->h + 4, br, bg, bb,
+                             g_scroll_x, g_scroll_y, ew, eh);
+            rectCount++;
+            write_rect_quad(&g_rectStaging[rectCount * 6], lb->x, lb->y, lb->w, lb->h, 1.0f, 1.0f, 1.0f,
+                             g_scroll_x, g_scroll_y, ew, eh);
+            rectCount++;
+            int vlen = (int)strlen(field_node->form_value);
+            if (vlen > 0) {
+                float scale = node_text_scale(field_node);
+                text_draw_string(bx + 6.0f, by + 4.0f, field_node->form_value, vlen, scale, 0.05f, 0.05f, 0.05f, 1.0f, ew, eh);
+            }
+        } else if (lb->kind == SQW_BOX_INPUT_CHECK) {
+            DomNode *check_node = lb->node;
+            int isToggle = sqw_node_is_toggle(check_node);
+            if (isToggle) {
+                /* Pill track + sliding thumb -- 2 rects, no SQW desktop
+                 * precedent to port (it has no native toggle), styled as
+                 * its own checkbox variant sharing the same form_checked
+                 * boolean. */
+                float trackR = check_node->form_checked ? 0.20f : 0.35f;
+                float trackG = check_node->form_checked ? 0.60f : 0.35f;
+                float trackB = check_node->form_checked ? 0.30f : 0.35f;
+                write_rect_quad(&g_rectStaging[rectCount * 6], lb->x, lb->y, lb->w, lb->h, trackR, trackG, trackB,
+                                 g_scroll_x, g_scroll_y, ew, eh);
+                rectCount++;
+                float thumbSize = lb->h - 6.0f;
+                float thumbX = check_node->form_checked ? (lb->x + lb->w - thumbSize - 3.0f) : (lb->x + 3.0f);
+                write_rect_quad(&g_rectStaging[rectCount * 6], thumbX, lb->y + 3.0f, thumbSize, thumbSize, 0.95f, 0.95f, 0.95f,
+                                 g_scroll_x, g_scroll_y, ew, eh);
+                rectCount++;
+            } else {
+                /* Plain checkbox/radio: bordered face, then (matching
+                 * SQW desktop's own simplification -- no real checkmark/
+                 * circle primitive exists anywhere in that renderer
+                 * either) one inset filled rect when checked. Radio vs
+                 * checkbox differs only in that inset amount, same as
+                 * desktop. */
+                int isRadio = 0;
+                const char *type = dom_get_attr(check_node, "type");
+                if (type && strcmp(type, "radio") == 0) isRadio = 1;
+                write_rect_quad(&g_rectStaging[rectCount * 6], lb->x, lb->y, lb->w, lb->h, 0.55f, 0.55f, 0.55f,
+                                 g_scroll_x, g_scroll_y, ew, eh);
+                rectCount++;
+                write_rect_quad(&g_rectStaging[rectCount * 6], lb->x + 1, lb->y + 1, lb->w - 2, lb->h - 2, 1.0f, 1.0f, 1.0f,
+                                 g_scroll_x, g_scroll_y, ew, eh);
+                rectCount++;
+                if (check_node->form_checked) {
+                    float inset = isRadio ? 4.0f : 3.0f;
+                    write_rect_quad(&g_rectStaging[rectCount * 6], lb->x + inset, lb->y + inset, lb->w - inset * 2, lb->h - inset * 2,
+                                     0.15f, 0.45f, 0.85f, g_scroll_x, g_scroll_y, ew, eh);
+                    rectCount++;
+                }
+            }
         }
     }
     if (g_glyphVCount > 0) {
@@ -1406,7 +1767,16 @@ void *vulkan_thread_main(void *window) {
             int action = g_touch_action;
             int changed = 0;
 
-            if (action == ACTION_DOWN) {
+            if (action == ACTION_TEXT_CHANGED) {
+                /* form_value was already updated directly by
+                 * nativeTextChanged() before this flag was raised -- just
+                 * redraw so the new characters appear via the existing
+                 * glyph pipeline. None of the coordinate-based hit-test/
+                 * hover/drag logic below applies to this synthetic action,
+                 * so skip straight past all of it via this one guard
+                 * (avoids a goto across the block-scoped locals below). */
+                changed = 1;
+            } else if (action == ACTION_DOWN) {
                 g_drag_down_x = tx; g_drag_down_y = ty;
                 g_drag_anchor_scroll_x = g_scroll_x; g_drag_anchor_scroll_y = g_scroll_y;
                 g_drag_total_dist = 0;
@@ -1458,8 +1828,47 @@ void *vulkan_thread_main(void *window) {
             if (action == ACTION_UP) {
                 if (g_dragging && g_drag_total_dist < 20.0f) {
                     int upHit = layout_hit_test(&g_layout, contentX, contentY);
-                    if (upHit >= 0 && g_layout.boxes[upHit].kind == SQW_BOX_BUTTON) {
-                        __android_log_print(4, "squashbtn", "button CLICKED (box#%d)", upHit);
+                    if (upHit >= 0) {
+                        SqwBoxKind k = g_layout.boxes[upHit].kind;
+                        DomNode *tappedNode = g_layout.boxes[upHit].node;
+                        /* A tap landing on a button's own CAPTION rather
+                         * than its background hit-tests into that
+                         * caption's own SQW_BOX_TEXT word-box, not the
+                         * button's box -- real for any button whose
+                         * css_display isn't exactly CSS_DISPLAY_INLINE
+                         * (e.g. #submitbtn's display:inline-block here).
+                         * Re-target to the owning element first, before
+                         * the label check below, so a tap anywhere on a
+                         * button's own text still counts as tapping the
+                         * button -- see this file's own node_direct_text()
+                         * draw-site comment for the matching double-draw
+                         * fix this pairs with. */
+                        if (k == SQW_BOX_TEXT && tappedNode->parent) {
+                            tappedNode = tappedNode->parent;
+                            k = kind_for_tag(tappedNode->tag);
+                        }
+                        /* <label for="x">: hit-test the label's own box,
+                         * but act as though the tap landed on the real
+                         * target control instead -- cheap, self-contained,
+                         * shares this same dispatch (no separate phase). */
+                        if (k == SQW_BOX_SPAN && strcmp(tappedNode->tag, "label") == 0) {
+                            const char *forId = dom_get_attr(tappedNode, "for");
+                            DomNode *target = forId ? sqw_find_by_id(forId) : 0;
+                            if (target) { tappedNode = target; k = kind_for_tag(target->tag); }
+                        }
+                        if (k == SQW_BOX_INPUT_CHECK) {
+                            sqw_toggle_check_or_radio(tappedNode);
+                            changed = 1;
+                        } else if (k == SQW_BOX_BUTTON) {
+                            const char *btype = dom_get_attr(tappedNode, "type");
+                            int isSubmit = (strcmp(tappedNode->tag, "button") == 0) &&
+                                           (!btype || strcmp(btype, "submit") == 0);
+                            if (isSubmit) {
+                                sqw_submit_form();
+                            } else {
+                                __android_log_print(4, "squashbtn", "button CLICKED (box#%d)", upHit);
+                            }
+                        }
                     }
                 }
                 g_dragging = 0;
@@ -1504,4 +1913,101 @@ void nativeSurfaceChanged(void *env, void *clazz, int width, int height) {
 
 void nativeSurfaceDestroyed(void *env, void *clazz) {
     __android_log_print(4, "squashbtn", "nativeSurfaceDestroyed");
+}
+
+/* The EditText is constructed once in onCreate() (see android_dex.c's
+ * extended onCreate bytecode) and handed to native exactly once here. We
+ * keep it alive past this call via NewGlobalRef (a local ref would be
+ * freed once this native method returns) and resolve every jmethodID
+ * we'll ever need against it up front -- GetMethodID/GetObjectClass are
+ * real reflection-style lookups, not free, so doing this once here
+ * instead of on every keystroke/tap is both correct (jmethodIDs are
+ * stable for a class's lifetime) and the obviously right place for it.
+ * (g_edit_text and friends are declared earlier in this file, forward of
+ * nativeTouchEvent/sqw_dispatch_text_focus, which also need them.) */
+void nativeEditTextReady(void *env, void *clazz, void *editText) {
+    g_edit_text = sqw_jni_NewGlobalRef(env, (jobject)editText);
+    jclass editTextClass = sqw_jni_GetObjectClass(env, g_edit_text);
+
+    g_m_edittext_settext = sqw_jni_GetMethodID(env, editTextClass, "setText", "(Ljava/lang/CharSequence;)V");
+    g_m_edittext_gettext = sqw_jni_GetMethodID(env, editTextClass, "getText", "()Ljava/lang/CharSequence;");
+    g_m_edittext_requestfocus = sqw_jni_GetMethodID(env, editTextClass, "requestFocus", "()Z");
+    g_m_edittext_clearfocus = sqw_jni_GetMethodID(env, editTextClass, "clearFocus", "()V");
+    g_m_view_getwindowtoken = sqw_jni_GetMethodID(env, editTextClass, "getWindowToken", "()Landroid/os/IBinder;");
+
+    /* toString() is declared on java.lang.Object, not EditText/TextView/
+     * CharSequence -- resolved separately against that class, then called
+     * later (via CallObjectMethodA) on whatever concrete object getText()
+     * returns, exactly as real JNI code always does for an inherited
+     * method. */
+    jclass objectClass = sqw_jni_FindClass(env, "java/lang/Object");
+    g_m_charsequence_tostring = sqw_jni_GetMethodID(env, objectClass, "toString", "()Ljava/lang/String;");
+
+    /* InputMethodManager: obtained via the EditText's own getContext()
+     * (the Activity it was constructed with), not a separate "this"
+     * parameter -- nativeEditTextReady is a STATIC native method (see
+     * android_dex.c's access-flags comment), so its own "clazz" parameter
+     * is the SquashActivity jclass, not an instance; a View's Context IS
+     * the real Activity instance that created it, which is exactly what
+     * getSystemService() needs to be called on. */
+    jmethodID m_getcontext = sqw_jni_GetMethodID(env, editTextClass, "getContext", "()Landroid/content/Context;");
+    jobject contextObj = sqw_jni_CallObjectMethodA(env, g_edit_text, m_getcontext, 0);
+    jclass contextClass = sqw_jni_GetObjectClass(env, contextObj);
+    jmethodID m_getsystemservice = sqw_jni_GetMethodID(env, contextClass, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
+    jstring serviceName = sqw_jni_NewStringUTF(env, "input_method");
+    jvalue svcArgs[1];
+    svcArgs[0].l = serviceName;
+    jobject imm = sqw_jni_CallObjectMethodA(env, contextObj, m_getsystemservice, svcArgs);
+    g_imm = sqw_jni_NewGlobalRef(env, imm);
+    jclass immClass = sqw_jni_GetObjectClass(env, g_imm);
+    g_m_imm_showsoftinput = sqw_jni_GetMethodID(env, immClass, "showSoftInput", "(Landroid/view/View;I)Z");
+    g_m_imm_hidesoftinputfromwindow = sqw_jni_GetMethodID(env, immClass, "hideSoftInputFromWindow", "(Landroid/os/IBinder;I)Z");
+
+    __android_log_print(4, "squashbtn", "nativeEditTextReady: edittext=%p imm=%p showSoftInput=%p hideSoftInput=%p",
+                         (void *)g_edit_text, (void *)g_imm,
+                         (void *)g_m_imm_showsoftinput, (void *)g_m_imm_hidesoftinputfromwindow);
+
+    /* One-shot verification (see the approved plan's phase 2): prove a
+     * real CallVoidMethodA call with a real jstring argument reaches the
+     * real EditText by setting then immediately reading back a known
+     * value, entirely independent of any touch/UI wiring. Cleared back to
+     * empty immediately after so the (invisible, 1x1) EditText starts
+     * genuinely blank rather than holding leftover test content. */
+    jstring testStr = sqw_jni_NewStringUTF(env, "phase2 jni verification");
+    jvalue args[1];
+    args[0].l = testStr;
+    sqw_jni_CallVoidMethodA(env, g_edit_text, g_m_edittext_settext, args);
+
+    jobject gotten = sqw_jni_CallObjectMethodA(env, g_edit_text, g_m_edittext_gettext, 0);
+    jstring gottenStr = (jstring)sqw_jni_CallObjectMethodA(env, gotten, g_m_charsequence_tostring, 0);
+    const char *cstr = sqw_jni_GetStringUTFChars(env, gottenStr, 0);
+    __android_log_print(4, "squashbtn", "nativeEditTextReady: setText/getText round-trip = %s", cstr ? cstr : "(null)");
+    if (cstr) sqw_jni_ReleaseStringUTFChars(env, gottenStr, cstr);
+
+    jstring emptyStr = sqw_jni_NewStringUTF(env, "");
+    args[0].l = emptyStr;
+    sqw_jni_CallVoidMethodA(env, g_edit_text, g_m_edittext_settext, args);
+}
+
+/* Phase 4/5 of the plan: real keystroke delivery. Called by the hand-
+ * written SquashTextWatcher.onTextChanged (see android_dex.c) on the
+ * Android UI thread every time the real EditText's text changes --
+ * exactly once per edit, already converted to a real Java String on the
+ * Java side via toString(). Copies it straight into the currently-
+ * focused DomNode's form_value (bounded to that field's real 512-byte
+ * size) and wakes the render thread via the existing touch-event queue
+ * with the synthetic ACTION_TEXT_CHANGED action, so the new text actually
+ * appears through the existing glyph pipeline on the very next frame. */
+void nativeTextChanged(void *env, void *clazz, void *text) {
+    (void)clazz;
+    if (!g_has_focus || g_focused_box_index < 0 || g_focused_box_index >= g_layout.count) return;
+    DomNode *node = g_layout.boxes[g_focused_box_index].node;
+    const char *cstr = sqw_jni_GetStringUTFChars(env, (jstring)text, 0);
+    if (cstr) {
+        strncpy(node->form_value, cstr, sizeof(node->form_value) - 1);
+        node->form_value[sizeof(node->form_value) - 1] = 0;
+        sqw_jni_ReleaseStringUTFChars(env, (jstring)text, cstr);
+    }
+    g_touch_action = ACTION_TEXT_CHANGED;
+    g_touch_pending = 1;
 }

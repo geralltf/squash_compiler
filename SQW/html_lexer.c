@@ -2,16 +2,6 @@
 #include <string.h>
 #include <ctype.h>
 
-/* "textarea" belongs here too, real HTML5 spec: its content is raw
- * replaceable text (its OWN initial value), never nested markup -- a
- * literal "<b>" typed inside a real <textarea> must show up as the four
- * characters "<b>" in the box, not get parsed as a bold tag. */
-static const char *RAW_TEXT_TAGS[] = { "script", "style", "textarea", 0 };
-static const char *VOID_TAGS[] = {
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr", 0
-};
-
 static void lower_copy(char *dst, const char *src, int n, int dstcap) {
     int i;
     if (n > dstcap - 1) n = dstcap - 1;
@@ -19,16 +9,32 @@ static void lower_copy(char *dst, const char *src, int n, int dstcap) {
     dst[i] = 0;
 }
 
-static int tag_in_list(const char *tag, const char **list) {
-    int i;
-    for (i = 0; list[i]; i++) {
-        if (strcmp(tag, list[i]) == 0) return 1;
-    }
-    return 0;
+/* NOT a `static const char *LIST[] = {"a","b",...,0};` global array walked
+ * via strcmp in a loop -- a real, confirmed squash/ARM64 codegen bug
+ * (first found in SQW/font_atlas.h's hex-chunk table, see that file's own
+ * comment and project_android_backend.md): a global array of `const char*`
+ * initialized directly from string literals reads back corrupted (garbage
+ * or empty pointers) on this backend, while the exact same literals used
+ * directly inline in a function body work correctly every time. This bit
+ * here for real: `html_tag_is_void("input")` silently returned 0 on
+ * device (though it works fine on an x86 host build of the identical
+ * source), so <input>'s self-closing flag never got set, it was pushed
+ * onto the open-element stack as if a `</input>` were expected, and every
+ * sibling after it in the whole document became a never-visited
+ * grandchild of that permanently-open <input> instead of body's own
+ * child -- silently truncating layout at the first <input>/<br>/<img>/
+ * etc. of any page. Fixed by comparing directly against inline literals
+ * instead of walking a global literal-pointer table. */
+int html_tag_is_raw_text(const char *tag) {
+    return strcmp(tag, "script") == 0 || strcmp(tag, "style") == 0 || strcmp(tag, "textarea") == 0;
 }
-
-int html_tag_is_raw_text(const char *tag) { return tag_in_list(tag, RAW_TEXT_TAGS); }
-int html_tag_is_void(const char *tag) { return tag_in_list(tag, VOID_TAGS); }
+int html_tag_is_void(const char *tag) {
+    return strcmp(tag, "area") == 0 || strcmp(tag, "base") == 0 || strcmp(tag, "br") == 0 ||
+           strcmp(tag, "col") == 0 || strcmp(tag, "embed") == 0 || strcmp(tag, "hr") == 0 ||
+           strcmp(tag, "img") == 0 || strcmp(tag, "input") == 0 || strcmp(tag, "link") == 0 ||
+           strcmp(tag, "meta") == 0 || strcmp(tag, "param") == 0 || strcmp(tag, "source") == 0 ||
+           strcmp(tag, "track") == 0 || strcmp(tag, "wbr") == 0;
+}
 
 void html_lexer_init(HtmlLexer *lx, const char *src) {
     lx->src = src;
