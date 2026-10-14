@@ -1764,7 +1764,19 @@ void *vulkan_thread_main(void *window) {
             }
 
             if (action == ACTION_UP) {
-                if (g_dragging && g_drag_total_dist < 20.0f) {
+                /* Deliberately NOT gated on g_dragging: the single-slot
+                 * g_touch_pending queue this loop reads from can silently
+                 * coalesce away a DOWN event that lands in the same ~5ms
+                 * poll window as its own UP (confirmed on-device with a
+                 * synthetic fast tap -- DOWN never got read, so g_dragging
+                 * was never set to 1, and every non-text-field tap was
+                 * silently dropped even though the hit-test itself found
+                 * the right box). g_drag_total_dist alone is the correct
+                 * gate: it is zero-initialized and only ever incremented by
+                 * an ACTION_MOVE this loop actually observed, so a lost
+                 * DOWN (meaning no MOVE happened either) still correctly
+                 * reads as "not a drag" here. */
+                if (g_drag_total_dist < 20.0f) {
                     int upHit = layout_hit_test(&g_layout, contentX, contentY);
                     /* Label for= forwarding, checkbox/radio toggling, and
                      * submit-control detection all handled by the header's
@@ -1778,6 +1790,7 @@ void *vulkan_thread_main(void *window) {
                     }
                 }
                 g_dragging = 0;
+                g_drag_total_dist = 0;
             }
 
             __android_log_print(4, "sqwforms", "touch action=%d at %.0f,%.0f scroll=%.0f,%.0f hit=%d",

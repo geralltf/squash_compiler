@@ -66,6 +66,43 @@ static volatile float g_touch_x = 0, g_touch_y = 0;
 static volatile int g_touch_action = -1;
 static volatile int g_touch_pending = 0;
 
+/* Raw touch coordinates delivered to nativeTouchEvent are in WINDOW/screen
+ * space, but the SurfaceView that actually renders our content does not
+ * start at screen-space (0,0) -- the Activity's window places it below its
+ * title bar, confirmed on-device via pixel-precise screenshot analysis
+ * (content measured at screen_y = content_y + ~340px while X has zero
+ * offset). Corrected via a real View.getLocationOnScreen() JNI call against
+ * the EditText (a sibling of the SurfaceView inside the same FrameLayout,
+ * both positioned at the FrameLayout's own origin) -- subtracted from every
+ * raw touch Y before it is used as a content coordinate anywhere.
+ *
+ * NOT queried in nativeEditTextReady: that runs during onCreate(), before
+ * the view hierarchy's first layout pass, so getLocationOnScreen() would
+ * see the EditText still sitting at its pre-layout (0,0) and bake in a
+ * wrong, permanent zero offset (confirmed on-device: logged offset was
+ * exactly 0,0 from that call site). Instead queried lazily, once, on the
+ * first real touch event (nativeTouchEvent always runs well after the
+ * first layout pass, since the user can't touch anything before the
+ * window is actually shown) -- see sqw_ensure_surface_offset(). */
+static int g_surface_offset_y = 0;
+static int g_surface_offset_queried = 0;
+static jmethodID g_m_edittext_getlocationonscreen = 0;
+
+static void sqw_ensure_surface_offset(void *env) {
+    if (g_surface_offset_queried) return;
+    if (!g_edit_text || !g_m_edittext_getlocationonscreen) return;
+    g_surface_offset_queried = 1;
+    jintArray locArr = sqw_jni_NewIntArray(env, 2);
+    jvalue locArgs[1];
+    locArgs[0].l = locArr;
+    sqw_jni_CallVoidMethodA(env, g_edit_text, g_m_edittext_getlocationonscreen, locArgs);
+    jint locOut[2];
+    sqw_jni_GetIntArrayRegion(env, locArr, 0, 2, locOut);
+    g_surface_offset_y = (int)locOut[1];
+    __android_log_print(4, "sqwui", "sqw_ensure_surface_offset: surface screen offset x=%d y=%d",
+                         (int)locOut[0], g_surface_offset_y);
+}
+
 #define ACTION_DOWN 0
 #define ACTION_UP 1
 #define ACTION_MOVE 2
@@ -155,6 +192,13 @@ void nativeTouchEvent(void *env, void *clazz, int x_bits, int y_bits, int action
     (void)clazz;
     float x = *(float *)&x_bits;
     float y = *(float *)&y_bits;
+    /* Correct raw window-space Y into content-space Y once, here, before
+     * ANY consumer (sqw_dispatch_text_focus below, and the render thread's
+     * own touch-handling loop which reads g_touch_y) ever sees it -- see
+     * g_surface_offset_y's own comment. X needs no correction (confirmed
+     * zero X offset on-device). */
+    sqw_ensure_surface_offset(env);
+    y = y - (float)g_surface_offset_y;
     sqw_dispatch_text_focus(env, x, y, action);
     g_touch_x = x; g_touch_y = y; g_touch_action = action; g_touch_pending = 1;
 }
@@ -205,6 +249,12 @@ void nativeEditTextReady(void *env, void *clazz, void *editText) {
     jclass immClass = sqw_jni_GetObjectClass(env, g_imm);
     g_m_imm_showsoftinput = sqw_jni_GetMethodID(env, immClass, "showSoftInput", "(Landroid/view/View;I)Z");
     g_m_imm_hidesoftinputfromwindow = sqw_jni_GetMethodID(env, immClass, "hideSoftInputFromWindow", "(Landroid/os/IBinder;I)Z");
+
+    /* Resolved here (jmethodIDs are stable for a class's lifetime, same as
+     * every other method ID above) but deliberately NOT called yet -- see
+     * sqw_ensure_surface_offset()'s own comment on why this has to wait
+     * until the first real touch event. */
+    g_m_edittext_getlocationonscreen = sqw_jni_GetMethodID(env, editTextClass, "getLocationOnScreen", "([I)V");
 
     __android_log_print(4, "sqwui", "nativeEditTextReady: edittext=%p imm=%p showSoftInput=%p hideSoftInput=%p",
                          (void *)g_edit_text, (void *)g_imm,

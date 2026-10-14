@@ -319,6 +319,41 @@ static volatile float g_touch_x = 0, g_touch_y = 0;
 static volatile int g_touch_action = -1;
 static volatile int g_touch_pending = 0;
 
+/* Raw touch coordinates delivered to nativeTouchEvent are in WINDOW/screen
+ * space, but the SurfaceView that actually renders our content does not
+ * start at screen-space (0,0) -- the Activity's window places it below its
+ * title bar, confirmed on-device via pixel-precise screenshot analysis
+ * (content measured at screen_y = content_y + ~340px while X has zero
+ * offset). Corrected via a real View.getLocationOnScreen() JNI call against
+ * the EditText (a sibling of the SurfaceView inside the same FrameLayout,
+ * both positioned at the FrameLayout's own origin) -- subtracted from every
+ * raw touch Y before it is used as a content coordinate anywhere.
+ *
+ * NOT queried in nativeEditTextReady: that runs during onCreate(), before
+ * the view hierarchy's first layout pass, so getLocationOnScreen() would
+ * see the EditText still sitting at its pre-layout (0,0) and bake in a
+ * wrong, permanent zero offset (confirmed on-device). Instead queried
+ * lazily, once, on the first real touch event (nativeTouchEvent always
+ * runs well after the first layout pass) -- see sqw_ensure_surface_offset(). */
+static int g_surface_offset_y = 0;
+static int g_surface_offset_queried = 0;
+static jmethodID g_m_edittext_getlocationonscreen = 0;
+
+static void sqw_ensure_surface_offset(void *env) {
+    if (g_surface_offset_queried) return;
+    if (!g_edit_text || !g_m_edittext_getlocationonscreen) return;
+    g_surface_offset_queried = 1;
+    jintArray locArr = sqw_jni_NewIntArray(env, 2);
+    jvalue locArgs[1];
+    locArgs[0].l = locArr;
+    sqw_jni_CallVoidMethodA(env, g_edit_text, g_m_edittext_getlocationonscreen, locArgs);
+    jint locOut[2];
+    sqw_jni_GetIntArrayRegion(env, locArr, 0, 2, locOut);
+    g_surface_offset_y = (int)locOut[1];
+    __android_log_print(4, "squashbtn", "sqw_ensure_surface_offset: surface screen offset x=%d y=%d",
+                         (int)locOut[0], g_surface_offset_y);
+}
+
 /* drag-vs-tap disambiguation state, updated only from the render thread's
  * own touch-handling loop below (single reader/writer, no locking needed --
  * same convention as the g_touch_* handoff fields above). */
@@ -356,6 +391,11 @@ static int g_dragging = 0;
 void nativeTouchEvent(void *env, void *clazz, int x_bits, int y_bits, int action) {
     float x = *(float *)&x_bits;
     float y = *(float *)&y_bits;
+    /* Correct raw window-space Y into content-space Y once, here, before
+     * ANY consumer sees it -- see g_surface_offset_y's own comment. X needs
+     * no correction (confirmed zero X offset on-device). */
+    sqw_ensure_surface_offset(env);
+    y = y - (float)g_surface_offset_y;
     sqw_dispatch_text_focus(env, x, y, action);
     g_touch_x = x; g_touch_y = y; g_touch_action = action; g_touch_pending = 1;
 }
@@ -2007,7 +2047,19 @@ void *vulkan_thread_main(void *window) {
             }
 
             if (action == ACTION_UP) {
-                if (g_dragging && g_drag_total_dist < 20.0f) {
+                /* Deliberately NOT gated on g_dragging: the single-slot
+                 * g_touch_pending queue this loop reads from can silently
+                 * coalesce away a DOWN event that lands in the same ~5ms
+                 * poll window as its own UP (confirmed on-device with a
+                 * synthetic fast tap -- DOWN never got read, so g_dragging
+                 * was never set to 1, and every tap was silently dropped
+                 * even though the hit-test itself found the right box).
+                 * g_drag_total_dist alone is the correct gate: it is zero-
+                 * initialized and only ever incremented by an ACTION_MOVE
+                 * this loop actually observed, so a lost DOWN (meaning no
+                 * MOVE happened either) still correctly reads as "not a
+                 * drag" here. */
+                if (g_drag_total_dist < 20.0f) {
                     int upHit = layout_hit_test(&g_layout, contentX, contentY);
                     if (upHit >= 0) {
                         SqwBoxKind k = g_layout.boxes[upHit].kind;
@@ -2053,6 +2105,7 @@ void *vulkan_thread_main(void *window) {
                     }
                 }
                 g_dragging = 0;
+                g_drag_total_dist = 0;
             }
 
             __android_log_print(4, "squashbtn", "touch action=%d at %.0f,%.0f scroll=%.0f,%.0f hit=%d",
@@ -2168,6 +2221,11 @@ void nativeEditTextReady(void *env, void *clazz, void *editText) {
     jstring emptyStr = sqw_jni_NewStringUTF(env, "");
     args[0].l = emptyStr;
     sqw_jni_CallVoidMethodA(env, g_edit_text, g_m_edittext_settext, args);
+
+    /* Resolved here (jmethodIDs are stable for a class's lifetime) but
+     * deliberately NOT called yet -- see sqw_ensure_surface_offset()'s own
+     * comment on why this has to wait until the first real touch event. */
+    g_m_edittext_getlocationonscreen = sqw_jni_GetMethodID(env, editTextClass, "getLocationOnScreen", "([I)V");
 }
 
 /* Phase 4/5 of the plan: real keystroke delivery. Called by the hand-

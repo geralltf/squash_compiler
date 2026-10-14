@@ -17,7 +17,8 @@
  * itself call -- only the ones actually used below (FindClass, NewGlobalRef,
  * NewObjectA, GetObjectClass, GetMethodID, CallObjectMethodA,
  * CallBooleanMethodA, CallVoidMethodA, NewStringUTF, GetStringUTFChars,
- * ReleaseStringUTFChars) get their real, ABI-correct function pointer type;
+ * ReleaseStringUTFChars, NewIntArray, GetIntArrayRegion) get their real,
+ * ABI-correct function pointer type;
  * every field's *position* still has to be right since it's a flat array of
  * same-sized (pointer) slots underneath, but only the CALLED fields need a
  * real signature. This also sidesteps a totally untested shape on this
@@ -53,6 +54,8 @@ typedef void *jobject;
 typedef jobject jclass;
 typedef jobject jstring;
 typedef jobject jthrowable;
+typedef jobject jarray;
+typedef jarray jintArray;
 
 /* Opaque IDs -- real jni.h declares these as pointers to incomplete structs
  * (`struct _jmethodID; typedef struct _jmethodID *jmethodID;`) purely so the
@@ -78,8 +81,8 @@ typedef union jvalue {
 typedef const struct JNINativeInterface *JNIEnv;
 
 /* Field order below is the real NDK struct's order, verified field-by-field
- * against jni.h (171 entries total, indices 0-170; the last real field this
- * file declares, ReleaseStringUTFChars, is real index 170). Every function
+ * against jni.h (204 entries total, indices 0-203; the last real field this
+ * file declares, GetIntArrayRegion, is real index 203). Every function
  * pointer actually called by this project has its real signature; every
  * other slot is a same-size `void *reservedN;` placeholder preserving the
  * real struct's layout. Do NOT reorder, insert, or remove any field below
@@ -279,6 +282,44 @@ struct JNINativeInterface {
     void *reserved168_GetStringUTFLength;
     const char *(*GetStringUTFChars)(JNIEnv *, jstring, jboolean *);
     void (*ReleaseStringUTFChars)(JNIEnv *, jstring, const char *);
+
+    void *reserved171_GetArrayLength;
+    void *reserved172_NewObjectArray;
+    void *reserved173_GetObjectArrayElement;
+    void *reserved174_SetObjectArrayElement;
+
+    void *reserved175_NewBooleanArray;
+    void *reserved176_NewByteArray;
+    void *reserved177_NewCharArray;
+    void *reserved178_NewShortArray;
+    jintArray (*NewIntArray)(JNIEnv *, jsize);
+    void *reserved180_NewLongArray;
+    void *reserved181_NewFloatArray;
+    void *reserved182_NewDoubleArray;
+
+    void *reserved183_GetBooleanArrayElements;
+    void *reserved184_GetByteArrayElements;
+    void *reserved185_GetCharArrayElements;
+    void *reserved186_GetShortArrayElements;
+    void *reserved187_GetIntArrayElements;
+    void *reserved188_GetLongArrayElements;
+    void *reserved189_GetFloatArrayElements;
+    void *reserved190_GetDoubleArrayElements;
+
+    void *reserved191_ReleaseBooleanArrayElements;
+    void *reserved192_ReleaseByteArrayElements;
+    void *reserved193_ReleaseCharArrayElements;
+    void *reserved194_ReleaseShortArrayElements;
+    void *reserved195_ReleaseIntArrayElements;
+    void *reserved196_ReleaseLongArrayElements;
+    void *reserved197_ReleaseFloatArrayElements;
+    void *reserved198_ReleaseDoubleArrayElements;
+
+    void *reserved199_GetBooleanArrayRegion;
+    void *reserved200_GetByteArrayRegion;
+    void *reserved201_GetCharArrayRegion;
+    void *reserved202_GetShortArrayRegion;
+    void (*GetIntArrayRegion)(JNIEnv *, jintArray, jsize, jsize, jint *);
 };
 
 /* `env` as received by every native method is really a `JNIEnv *` --
@@ -353,6 +394,16 @@ static void sqw_jni_ReleaseStringUTFChars(void *env, jstring s, const char *utf)
     JNIEnv *penv = (JNIEnv *)env;
     JNIEnv vtable = *penv;
     vtable->ReleaseStringUTFChars(penv, s, utf);
+}
+static jintArray sqw_jni_NewIntArray(void *env, jsize len) {
+    JNIEnv *penv = (JNIEnv *)env;
+    JNIEnv vtable = *penv;
+    return vtable->NewIntArray(penv, len);
+}
+static void sqw_jni_GetIntArrayRegion(void *env, jintArray arr, jsize start, jsize len, jint *buf) {
+    JNIEnv *penv = (JNIEnv *)env;
+    JNIEnv vtable = *penv;
+    vtable->GetIntArrayRegion(penv, arr, start, len, buf);
 }
 
 #endif /* SQUASH_JNI_MIN_H */
