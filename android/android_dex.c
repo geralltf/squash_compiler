@@ -75,6 +75,28 @@ enum {
     T_INT, T_VOID, T_FLOAT, T_BOOLEAN, T_ACTIVITY, T_CONTEXT, T_BUNDLE, T_SURFACE, T_CALLBACK,
     T_HOLDER, T_SURFACEVIEW, T_VIEW, T_SYSTEM, T_STRING, T_MOTIONEVENT, T_SQUASHACTIVITY,
     T_FLOAT_CLASS,
+    /* UI-component-library additions (see the approved plan): real soft-
+     * keyboard text entry routes through one persistent, real android.widget.
+     * EditText added alongside the SurfaceView -- both live inside a
+     * FrameLayout now, since activity content can only have one root view.
+     * addView() is declared on ViewGroup (FrameLayout's own superclass),
+     * not redeclared on FrameLayout itself, so it needs its own type here
+     * to reference the method against the class that actually declares it
+     * (exactly how a real javac-built call site would reference it too). */
+    T_FRAMELAYOUT, T_VIEWGROUP, T_EDITTEXT, T_LAYOUTPARAMS,
+    /* Real soft-keyboard TYPING (not just show/hide) needs a TextWatcher
+     * callback -- the only way Android ever delivers individual keystrokes,
+     * since they go straight from the IME to the focused EditText, never
+     * through onTouchEvent/nativeTouchEvent. This is the first class in
+     * this DEX besides SquashActivity itself, and the first INTERFACE
+     * implementation anywhere in this project. Every type/proto/method
+     * choice below (including which class java.lang.Object vs
+     * java.lang.CharSequence ends up referenced against for toString(),
+     * and that EditText.addTextChangedListener is referenced directly
+     * against EditText rather than its real declaring class TextView) was
+     * ground-truthed against real javac+d8 output for this exact shape,
+     * per this file's own documented verification practice. */
+    T_OBJECT, T_EDITABLE, T_TEXTWATCHER, T_CHARSEQUENCE, T_WATCHERIMPL,
     T_COUNT
 };
 static const char *g_raw_types[T_COUNT] = {
@@ -116,6 +138,23 @@ static const char *g_raw_types[T_COUNT] = {
      * path; the C side reinterprets the bits back into a real float via a
      * union. See nativeTouchEvent's own call site below. */
     "Ljava/lang/Float;",
+    "Landroid/widget/FrameLayout;",
+    "Landroid/view/ViewGroup;",
+    "Landroid/widget/EditText;",
+    /* Constructing a plain ViewGroup$LayoutParams (not the FrameLayout-
+     * specific nested subclass) and passing it to FrameLayout's inherited
+     * addView(View,LayoutParams) still works correctly: ViewGroup.addView
+     * calls checkLayoutParams() first and, finding a plain LayoutParams
+     * isn't already a FrameLayout.LayoutParams, automatically converts it
+     * via generateLayoutParams() before attaching -- real, standard
+     * Android behavior, not a workaround, and it avoids needing a second
+     * nested-class type just to size this one invisible view. */
+    "Landroid/view/ViewGroup$LayoutParams;",
+    "Ljava/lang/Object;",
+    "Landroid/text/Editable;",
+    "Landroid/text/TextWatcher;",
+    "Ljava/lang/CharSequence;",
+    "Lcom/squash/runtime/SquashTextWatcher;",
 };
 
 typedef struct { const char *shorty; int ret; int params[4]; int nparams; } raw_proto;
@@ -123,6 +162,8 @@ enum {
     P_RET_SURFACE, P_RET_HOLDER, P_VOID, P_VII, P_VL_CONTEXT, P_VL_BUNDLE,
     P_VL_SURFACE, P_VL_CALLBACK, P_VL_HOLDER, P_VLIII, P_VL_VIEW, P_VL_STRING,
     P_RET_FLOAT, P_RET_INT, P_VIII, P_RET_BOOL_VL_MOTIONEVENT, P_RET_INT_VL_FLOAT,
+    P_VL_EDITTEXT, P_VLL_VIEW_LAYOUTPARAMS,
+    P_RET_STRING, P_VL_EDITABLE, P_VL_TEXTWATCHER, P_VLIII_CHARSEQ,
     P_COUNT
 };
 static const raw_proto g_raw_protos[P_COUNT] = {
@@ -145,6 +186,34 @@ static const raw_proto g_raw_protos[P_COUNT] = {
     /* P_RET_INT_VL_FLOAT: java.lang.Float.floatToIntBits(F)I -- see
      * T_FLOAT_CLASS's own comment for why this exists at all. */
     { "IF", T_INT, {T_FLOAT, 0,0,0}, 1 },
+    /* P_VL_EDITTEXT: same "VL" shorty as P_VL_VIEW/P_VL_SURFACE/etc -- the
+     * shorty is just a quick descriptor summary and is allowed to repeat;
+     * this proto is a genuinely distinct entry because its real parameter
+     * TYPE (EditText) differs, which is what the sort/dedup below actually
+     * keys on. */
+    { "VL", T_VOID, {T_EDITTEXT, 0,0,0}, 1 },
+    /* P_VLL_VIEW_LAYOUTPARAMS: addView(View, ViewGroup.LayoutParams)V --
+     * two DIFFERENT object parameter types, a genuinely new proto shape
+     * (every other 2-param proto used so far is all-int or all-object-
+     * then-int; this is the first two-DISTINCT-reference-types one). */
+    { "VLL", T_VOID, {T_VIEW, T_LAYOUTPARAMS, 0,0}, 2 },
+    /* P_RET_STRING: Object.toString()Ljava/lang/String; -- real javac
+     * resolves CharSequence.toString() against java.lang.Object (toString
+     * isn't redeclared on the CharSequence interface in the real API in a
+     * way that changes resolution here), ground-truthed via a real
+     * javac+d8 build of this exact call shape. */
+    { "L", T_STRING, {0,0,0,0}, 0 },
+    /* P_VL_EDITABLE: afterTextChanged(Editable)V */
+    { "VL", T_VOID, {T_EDITABLE, 0,0,0}, 1 },
+    /* P_VL_TEXTWATCHER: EditText.addTextChangedListener(TextWatcher)V --
+     * referenced directly against EditText (ground-truthed), not its real
+     * declaring class TextView. */
+    { "VL", T_VOID, {T_TEXTWATCHER, 0,0,0}, 1 },
+    /* P_VLIII_CHARSEQ: before/onTextChanged(CharSequence,I,I,I)V -- same
+     * "VLIII" shorty as P_VLIII (surfaceChanged) but a genuinely distinct
+     * proto since its first param type differs (CharSequence vs
+     * SurfaceHolder). */
+    { "VLIII", T_VOID, {T_CHARSEQUENCE, T_INT, T_INT, T_INT}, 4 },
 };
 
 typedef struct { int cls; const char *name; int proto; } raw_method;
@@ -156,6 +225,10 @@ enum {
     M_SA_SURFACEDESTROYED, M_SYSTEM_LOADLIBRARY,
     M_MOTIONEVENT_GETX, M_MOTIONEVENT_GETY, M_MOTIONEVENT_GETACTION,
     M_SA_NATIVE_TOUCH, M_SA_ONTOUCHEVENT, M_FLOAT_TO_INT_BITS,
+    M_FRAMELAYOUT_INIT, M_VIEWGROUP_ADDVIEW, M_EDITTEXT_INIT, M_SA_NATIVE_EDITTEXT_READY,
+    M_LAYOUTPARAMS_INIT, M_VIEWGROUP_ADDVIEW_LP,
+    M_OBJECT_INIT, M_OBJECT_TOSTRING, M_WATCHER_INIT, M_WATCHER_BEFORE,
+    M_WATCHER_ONCHANGED, M_WATCHER_AFTER, M_EDITTEXT_ADDLISTENER, M_SA_NATIVE_TEXTCHANGED,
     M_COUNT
 };
 static const raw_method g_raw_methods[M_COUNT] = {
@@ -181,6 +254,20 @@ static const raw_method g_raw_methods[M_COUNT] = {
     { T_SQUASHACTIVITY, "nativeTouchEvent",       P_VIII },
     { T_SQUASHACTIVITY, "onTouchEvent",           P_RET_BOOL_VL_MOTIONEVENT },
     { T_FLOAT_CLASS,    "floatToIntBits",         P_RET_INT_VL_FLOAT },
+    { T_FRAMELAYOUT,    "<init>",                 P_VL_CONTEXT },
+    { T_VIEWGROUP,      "addView",                P_VL_VIEW },
+    { T_EDITTEXT,       "<init>",                 P_VL_CONTEXT },
+    { T_SQUASHACTIVITY, "nativeEditTextReady",    P_VL_EDITTEXT },
+    { T_LAYOUTPARAMS,   "<init>",                 P_VII },
+    { T_VIEWGROUP,      "addView",                P_VLL_VIEW_LAYOUTPARAMS },
+    { T_OBJECT,         "<init>",                 P_VOID },
+    { T_OBJECT,         "toString",               P_RET_STRING },
+    { T_WATCHERIMPL,    "<init>",                 P_VOID },
+    { T_WATCHERIMPL,    "beforeTextChanged",      P_VLIII_CHARSEQ },
+    { T_WATCHERIMPL,    "onTextChanged",          P_VLIII_CHARSEQ },
+    { T_WATCHERIMPL,    "afterTextChanged",       P_VL_EDITABLE },
+    { T_EDITTEXT,       "addTextChangedListener", P_VL_TEXTWATCHER },
+    { T_SQUASHACTIVITY, "nativeTextChanged",      P_VL_STRING },
 };
 
 /* ---- string pool: dedup + sort ---- */
@@ -278,9 +365,9 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
     dbuf data, out, code;
     uint32_t off_string_ids, off_type_ids, off_proto_ids, off_method_ids, off_class_defs;
     uint32_t off_data_start;
-    uint32_t off_interfaces, off_class_data, off_map;
+    uint32_t off_interfaces, off_interfaces2, off_class_data, off_class_data2, off_map;
     uint32_t off_proto_params[P_COUNT]; /* 0 if nparams==0 */
-    uint32_t off_code[6];
+    uint32_t off_code[10];
     uint32_t *off_string_data;
     uint32_t file_size;
     unsigned char sha1[20];
@@ -325,16 +412,25 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
     off_proto_ids  = off_type_ids + (uint32_t)T_COUNT * 4;
     off_method_ids = off_proto_ids + (uint32_t)P_COUNT * 12;
     off_class_defs = off_method_ids + (uint32_t)M_COUNT * 8;
-    off_data_start = off_class_defs + 32;
+    off_data_start = off_class_defs + 64; /* 2 class_def_items now: SquashActivity + SquashTextWatcher */
 
     dbuf_init(&data);
 
-    /* --- type_lists: interfaces (1 entry) + one per proto with params --- */
+    /* --- type_lists: interfaces (1 entry each, SquashActivity's then
+     * SquashTextWatcher's) + one per proto with params -- all TYPE_TYPE_LIST
+     * entries must stay contiguous in file-offset order to match the single
+     * grouped map_list entry below. */
     dbuf_align4(&data);
     off_interfaces = off_data_start + (uint32_t)data.len;
     dbuf_u32(&data, 1);
     dbuf_u16(&data, (unsigned)type_final_idx(T_CALLBACK));
     dbuf_u16(&data, 0); /* pad to 4-byte multiple (1 entry * 2 bytes + 2 pad) */
+
+    dbuf_align4(&data);
+    off_interfaces2 = off_data_start + (uint32_t)data.len;
+    dbuf_u32(&data, 1);
+    dbuf_u16(&data, (unsigned)type_final_idx(T_TEXTWATCHER));
+    dbuf_u16(&data, 0);
 
     for (i = 0; i < P_COUNT; i++) {
         const raw_proto *rp = &g_raw_protos[i];
@@ -363,6 +459,20 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
         int m_motionevent_getaction = g_method_order[M_MOTIONEVENT_GETACTION];
         int m_native_touch          = g_method_order[M_SA_NATIVE_TOUCH];
         int m_float_to_int_bits     = g_method_order[M_FLOAT_TO_INT_BITS];
+        int m_framelayout_init      = g_method_order[M_FRAMELAYOUT_INIT];
+        int m_viewgroup_addview     = g_method_order[M_VIEWGROUP_ADDVIEW];
+        int m_edittext_init         = g_method_order[M_EDITTEXT_INIT];
+        int m_native_edittext_ready = g_method_order[M_SA_NATIVE_EDITTEXT_READY];
+        int m_layoutparams_init     = g_method_order[M_LAYOUTPARAMS_INIT];
+        int m_viewgroup_addview_lp  = g_method_order[M_VIEWGROUP_ADDVIEW_LP];
+        int m_object_init           = g_method_order[M_OBJECT_INIT];
+        int m_object_tostring       = g_method_order[M_OBJECT_TOSTRING];
+        int m_watcher_init          = g_method_order[M_WATCHER_INIT];
+        int m_watcher_before        = g_method_order[M_WATCHER_BEFORE];
+        int m_watcher_onchanged     = g_method_order[M_WATCHER_ONCHANGED];
+        int m_watcher_after         = g_method_order[M_WATCHER_AFTER];
+        int m_edittext_addlistener  = g_method_order[M_EDITTEXT_ADDLISTENER];
+        int m_native_textchanged    = g_method_order[M_SA_NATIVE_TEXTCHANGED];
 
         /* <init>()V : regs=1 ins=1 outs=1 ; v0=this */
         dbuf_init(&code);
@@ -376,21 +486,56 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
         dbuf_bytes(&data, code.data, code.len);
         dbuf_free(&code);
 
-        /* onCreate(Bundle)V : regs=5 ins=2 outs=2 ; v3=this v4=bundle, locals v0,v1,v2 */
+        /* onCreate(Bundle)V : regs=8 ins=2 outs=3 ; v6=this v7=bundle,
+         * locals v0=tmp(libname str, later reused as the int constant 1),
+         * v1=surfaceView then reused for editText once surfaceView's last
+         * use (addView) has already consumed it, v2=holder, v3=frameLayout,
+         * v4=layoutParams, v5=textWatcher.
+         *
+         * UI-component-library addition (see the approved plan): activity
+         * content can only have ONE root view, so the real SurfaceView
+         * this demo already depended on now lives inside a FrameLayout
+         * alongside one persistent, real android.widget.EditText, sized to
+         * a tiny 1x1 ViewGroup.LayoutParams so it's effectively invisible
+         * -- it exists purely as a real-keyboard-driving text buffer; this
+         * demo's own Vulkan glyph pipeline renders all visible text.
+         * nativeEditTextReady() (the one new native entry point) is handed
+         * the reference immediately so native can cache a global ref +
+         * method IDs before any further wiring.
+         *
+         * Registers grew from 7 to 8 (one new local, v5, for the
+         * SquashTextWatcher instance) to wire real keystroke delivery --
+         * see T_WATCHERIMPL's own comment. Since DEX "ins" are always the
+         * LAST N registers of the method's own total, growing total regs
+         * shifts this/bundle from v5/v6 to v6/v7 -- every register number
+         * in this method had to be re-derived, not just appended to. */
         dbuf_init(&code);
-        emit_invoke(&code, OP_INVOKE_SUPER, 2, 3,4,0,0,0, (unsigned)m_activity_oncreate);
+        emit_invoke(&code, OP_INVOKE_SUPER, 2, 6,7,0,0,0, (unsigned)m_activity_oncreate);
         emit_const_string(&code, 0, (unsigned)lib_name_str);
         emit_invoke(&code, OP_INVOKE_STATIC, 1, 0,0,0,0,0, (unsigned)m_loadlibrary);
         emit_new_instance(&code, 1, (unsigned)type_final_idx(T_SURFACEVIEW));
-        emit_invoke(&code, OP_INVOKE_DIRECT, 2, 1,3,0,0,0, (unsigned)m_sv_init);
+        emit_invoke(&code, OP_INVOKE_DIRECT, 2, 1,6,0,0,0, (unsigned)m_sv_init);
         emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 1,0,0,0,0, (unsigned)m_sv_getholder);
         emit_move_result_object(&code, 2);
-        emit_invoke(&code, OP_INVOKE_INTERFACE, 2, 2,3,0,0,0, (unsigned)m_holder_addcb);
-        emit_invoke(&code, OP_INVOKE_VIRTUAL, 2, 3,1,0,0,0, (unsigned)m_setcontentview);
+        emit_invoke(&code, OP_INVOKE_INTERFACE, 2, 2,6,0,0,0, (unsigned)m_holder_addcb);
+        emit_new_instance(&code, 3, (unsigned)type_final_idx(T_FRAMELAYOUT));
+        emit_invoke(&code, OP_INVOKE_DIRECT, 2, 3,6,0,0,0, (unsigned)m_framelayout_init);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 2, 3,1,0,0,0, (unsigned)m_viewgroup_addview);
+        emit_new_instance(&code, 1, (unsigned)type_final_idx(T_EDITTEXT));
+        emit_invoke(&code, OP_INVOKE_DIRECT, 2, 1,6,0,0,0, (unsigned)m_edittext_init);
+        emit_new_instance(&code, 4, (unsigned)type_final_idx(T_LAYOUTPARAMS));
+        emit_const4(&code, 0, 1);
+        emit_invoke(&code, OP_INVOKE_DIRECT, 3, 4,0,0,0,0, (unsigned)m_layoutparams_init);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 3, 3,1,4,0,0, (unsigned)m_viewgroup_addview_lp);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 2, 6,3,0,0,0, (unsigned)m_setcontentview);
+        emit_invoke(&code, OP_INVOKE_STATIC, 1, 1,0,0,0,0, (unsigned)m_native_edittext_ready);
+        emit_new_instance(&code, 5, (unsigned)type_final_idx(T_WATCHERIMPL));
+        emit_invoke(&code, OP_INVOKE_DIRECT, 1, 5,0,0,0,0, (unsigned)m_watcher_init);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 2, 1,5,0,0,0, (unsigned)m_edittext_addlistener);
         emit_return_void(&code);
         dbuf_align4(&data);
         off_code[1] = off_data_start + (uint32_t)data.len;
-        dbuf_u16(&data, 5); dbuf_u16(&data, 2); dbuf_u16(&data, 2); dbuf_u16(&data, 0);
+        dbuf_u16(&data, 8); dbuf_u16(&data, 2); dbuf_u16(&data, 3); dbuf_u16(&data, 0);
         dbuf_u32(&data, 0);
         dbuf_u32(&data, (uint32_t)(code.len / 2));
         dbuf_bytes(&data, code.data, code.len);
@@ -466,6 +611,74 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
         dbuf_u32(&data, (uint32_t)(code.len / 2));
         dbuf_bytes(&data, code.data, code.len);
         dbuf_free(&code);
+
+        /* ---- SquashTextWatcher's own 4 methods -- all ground-truthed
+         * against a real javac+d8 build of this exact class (see the
+         * approved plan / project notes for the full verification
+         * transcript), including the surprising-but-confirmed detail that
+         * real javac resolves CharSequence.toString() against
+         * java.lang.Object, not java.lang.CharSequence. ---- */
+
+        /* <init>()V : regs=1 ins=1 outs=1 ; v0=this -- identical shape to
+         * SquashActivity's own <init>, just chaining to Object's
+         * constructor instead of Activity's. */
+        dbuf_init(&code);
+        emit_invoke(&code, OP_INVOKE_DIRECT, 1, 0,0,0,0,0, (unsigned)m_object_init);
+        emit_return_void(&code);
+        dbuf_align4(&data);
+        off_code[6] = off_data_start + (uint32_t)data.len;
+        dbuf_u16(&data, 1); dbuf_u16(&data, 1); dbuf_u16(&data, 1); dbuf_u16(&data, 0);
+        dbuf_u32(&data, 0);
+        dbuf_u32(&data, (uint32_t)(code.len / 2));
+        dbuf_bytes(&data, code.data, code.len);
+        dbuf_free(&code);
+
+        /* beforeTextChanged(CharSequence,I,I,I)V : regs=5 ins=5 outs=0 --
+         * no-op; this app only needs the AFTER-edit text. */
+        dbuf_init(&code);
+        emit_return_void(&code);
+        dbuf_align4(&data);
+        off_code[7] = off_data_start + (uint32_t)data.len;
+        dbuf_u16(&data, 5); dbuf_u16(&data, 5); dbuf_u16(&data, 0); dbuf_u16(&data, 0);
+        dbuf_u32(&data, 0);
+        dbuf_u32(&data, (uint32_t)(code.len / 2));
+        dbuf_bytes(&data, code.data, code.len);
+        dbuf_free(&code);
+
+        /* onTextChanged(CharSequence,I,I,I)V : regs=5 ins=5 outs=1 ; all 5
+         * registers are ins (0 locals) -- v0=this v1=s v2=start v3=before
+         * v4=count, with v1 reused in place to hold the String result
+         * after its last use as the CharSequence argument (exactly what
+         * real javac does for this call shape, confirmed via the
+         * ground-truth build). This is the one real keystroke-delivery
+         * path: convert the CharSequence to a String and hand it to
+         * native via one static call. */
+        dbuf_init(&code);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 1,0,0,0,0, (unsigned)m_object_tostring);
+        emit_move_result_object(&code, 1);
+        emit_invoke(&code, OP_INVOKE_STATIC, 1, 1,0,0,0,0, (unsigned)m_native_textchanged);
+        emit_return_void(&code);
+        dbuf_align4(&data);
+        off_code[8] = off_data_start + (uint32_t)data.len;
+        dbuf_u16(&data, 5); dbuf_u16(&data, 5); dbuf_u16(&data, 1); dbuf_u16(&data, 0);
+        dbuf_u32(&data, 0);
+        dbuf_u32(&data, (uint32_t)(code.len / 2));
+        dbuf_bytes(&data, code.data, code.len);
+        dbuf_free(&code);
+
+        /* afterTextChanged(Editable)V : regs=2 ins=2 outs=0 -- no-op; the
+         * real text was already captured in onTextChanged above. */
+        dbuf_init(&code);
+        emit_return_void(&code);
+        dbuf_align4(&data);
+        off_code[9] = off_data_start + (uint32_t)data.len;
+        dbuf_u16(&data, 2); dbuf_u16(&data, 2); dbuf_u16(&data, 0); dbuf_u16(&data, 0);
+        dbuf_u32(&data, 0);
+        dbuf_u32(&data, (uint32_t)(code.len / 2));
+        dbuf_bytes(&data, code.data, code.len);
+        dbuf_free(&code);
+
+        (void)m_watcher_before; (void)m_watcher_onchanged; (void)m_watcher_after;
     }
 
     /* --- class_data_item ---
@@ -474,29 +687,31 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
      * sublist's method_idx_diff restarts from 0 and must be emitted in
      * ascending final-method_idx order within that sublist. */
     {
-        int direct_raw[5]  = { M_SA_INIT, M_SA_NATIVE_CHANGED, M_SA_NATIVE_CREATED, M_SA_NATIVE_DESTROYED, M_SA_NATIVE_TOUCH };
+        int direct_raw[7]  = { M_SA_INIT, M_SA_NATIVE_CHANGED, M_SA_NATIVE_CREATED, M_SA_NATIVE_DESTROYED, M_SA_NATIVE_TOUCH, M_SA_NATIVE_EDITTEXT_READY, M_SA_NATIVE_TEXTCHANGED };
         int virtual_raw[5] = { M_SA_ONCREATE, M_SA_SURFACECHANGED, M_SA_SURFACECREATED, M_SA_SURFACEDESTROYED, M_SA_ONTOUCHEVENT };
-        int direct_idx[5], virtual_idx[5];
+        int direct_idx[7], virtual_idx[5];
         int prev, v;
 
-        for (i = 0; i < 5; i++) direct_idx[i] = g_method_order[direct_raw[i]];
+        for (i = 0; i < 7; i++) direct_idx[i] = g_method_order[direct_raw[i]];
         for (i = 0; i < 5; i++) virtual_idx[i] = g_method_order[virtual_raw[i]];
-        for (i = 1; i < 5; i++) { v = direct_idx[i]; j = i - 1; while (j >= 0 && direct_idx[j] > v) { direct_idx[j+1] = direct_idx[j]; j--; } direct_idx[j+1] = v; }
+        for (i = 1; i < 7; i++) { v = direct_idx[i]; j = i - 1; while (j >= 0 && direct_idx[j] > v) { direct_idx[j+1] = direct_idx[j]; j--; } direct_idx[j+1] = v; }
         for (i = 1; i < 5; i++) { v = virtual_idx[i]; j = i - 1; while (j >= 0 && virtual_idx[j] > v) { virtual_idx[j+1] = virtual_idx[j]; j--; } virtual_idx[j+1] = v; }
 
         dbuf_align4(&data);
         off_class_data = off_data_start + (uint32_t)data.len;
         dbuf_uleb128(&data, 0);
         dbuf_uleb128(&data, 0);
-        dbuf_uleb128(&data, 5);
+        dbuf_uleb128(&data, 7);
         dbuf_uleb128(&data, 5);
 
         prev = 0;
-        for (i = 0; i < 5; i++) {
+        for (i = 0; i < 7; i++) {
             int is_native = (direct_idx[i] == g_method_order[M_SA_NATIVE_CHANGED] ||
                               direct_idx[i] == g_method_order[M_SA_NATIVE_CREATED] ||
                               direct_idx[i] == g_method_order[M_SA_NATIVE_DESTROYED] ||
-                              direct_idx[i] == g_method_order[M_SA_NATIVE_TOUCH]);
+                              direct_idx[i] == g_method_order[M_SA_NATIVE_TOUCH] ||
+                              direct_idx[i] == g_method_order[M_SA_NATIVE_EDITTEXT_READY] ||
+                              direct_idx[i] == g_method_order[M_SA_NATIVE_TEXTCHANGED]);
             int is_init = (direct_idx[i] == g_method_order[M_SA_INIT]);
             uint32_t access = is_native ? 0x0108u : (is_init ? 0x10001u : 0x0002u);
             uint32_t code_off = is_init ? off_code[0] : 0;
@@ -520,8 +735,59 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
         }
     }
 
-    /* --- string_data_items, one per pool string, in string_id order --- */
-    dbuf_align4(&data);
+    /* --- second class_data_item: SquashTextWatcher -- 1 direct (<init>) +
+     * 3 virtual methods implementing android.text.TextWatcher. All three
+     * interface methods must be PUBLIC (access 0x0001), matching the
+     * interface's own contract -- ground-truthed against real javac+d8
+     * output (see the approved plan / project notes). */
+    {
+        int direct_raw[1]  = { M_WATCHER_INIT };
+        int virtual_raw[3] = { M_WATCHER_BEFORE, M_WATCHER_ONCHANGED, M_WATCHER_AFTER };
+        int direct_idx[1], virtual_idx[3];
+        int prev, v;
+
+        direct_idx[0] = g_method_order[direct_raw[0]];
+        for (i = 0; i < 3; i++) virtual_idx[i] = g_method_order[virtual_raw[i]];
+        for (i = 1; i < 3; i++) { v = virtual_idx[i]; j = i - 1; while (j >= 0 && virtual_idx[j] > v) { virtual_idx[j+1] = virtual_idx[j]; j--; } virtual_idx[j+1] = v; }
+
+        /* NO dbuf_align4() here: class_data_item has no alignment
+         * requirement per spec, and real d8 output packs multiple
+         * class_data_items back-to-back with zero gap (confirmed: this
+         * call used to insert 2 padding bytes between the two
+         * class_data_items, which dexdump's verifier rejected as
+         * unexpected padding before the following string_data section). */
+        off_class_data2 = off_data_start + (uint32_t)data.len;
+        dbuf_uleb128(&data, 0);
+        dbuf_uleb128(&data, 0);
+        dbuf_uleb128(&data, 1);
+        dbuf_uleb128(&data, 3);
+
+        dbuf_uleb128(&data, (uint32_t)direct_idx[0]);
+        dbuf_uleb128(&data, 0x10001u);
+        dbuf_uleb128(&data, off_code[6]);
+
+        prev = 0;
+        for (i = 0; i < 3; i++) {
+            uint32_t code_off;
+            if (virtual_idx[i] == g_method_order[M_WATCHER_BEFORE]) code_off = off_code[7];
+            else if (virtual_idx[i] == g_method_order[M_WATCHER_ONCHANGED]) code_off = off_code[8];
+            else code_off = off_code[9];
+            dbuf_uleb128(&data, (uint32_t)(virtual_idx[i] - prev));
+            dbuf_uleb128(&data, 0x0001u);
+            dbuf_uleb128(&data, code_off);
+            prev = virtual_idx[i];
+        }
+    }
+
+    /* --- string_data_items, one per pool string, in string_id order --
+     * NO dbuf_align4() here: string_data_item (like class_data_item) has
+     * no alignment requirement per spec, and really is back-to-back with
+     * zero gap in real d8 output. With 1 class this always coincidentally
+     * landed on a 4-aligned offset already (dbuf_align4() a no-op), but
+     * with 2 class_data_items the combined size no longer happens to be a
+     * multiple of 4, and the stray 1-3 padding bytes that call inserted
+     * made dexdump's verifier fail with "Non-zero padding N before
+     * section of type 8194" -- confirmed by removing this call. */
     off_string_data = (uint32_t *)malloc(sizeof(uint32_t) * (size_t)g_strcount);
     for (i = 0; i < g_strcount; i++) {
         size_t slen = strlen(g_strtab[i]);
@@ -544,20 +810,17 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
         MAPITEM(0x0002, T_COUNT, off_type_ids);
         MAPITEM(0x0003, P_COUNT, off_proto_ids);
         MAPITEM(0x0005, M_COUNT, off_method_ids);
-        MAPITEM(0x0006, 1, off_class_defs);
-        if (nparam_lists) {
-            /* group: interfaces list + all proto param lists, all
-             * TYPE_TYPE_LIST, contiguous starting at off_interfaces */
-            MAPITEM(0x1001, 1 + nparam_lists, off_interfaces);
-        } else {
-            MAPITEM(0x1001, 1, off_interfaces);
-        }
+        MAPITEM(0x0006, 2, off_class_defs);
+        /* group: both interfaces lists (SquashActivity's, SquashTextWatcher's)
+         * + all proto param lists, all TYPE_TYPE_LIST, contiguous starting
+         * at off_interfaces */
+        MAPITEM(0x1001, 2 + nparam_lists, off_interfaces);
         /* map entries must appear in ascending file-offset order (enforced
          * by the real verifier, not just ascending type as the spec prose
          * alone suggests) -- this must match the actual physical layout
          * order used above: type_lists, then code_items, then
-         * class_data_item, then string_data_items. */
-        MAPITEM(0x2001, 6, off_code[0]);
+         * class_data_items, then string_data_items. */
+        MAPITEM(0x2001, 10, off_code[0]);
         /* NB: verified empirically against real d8 output that
          * TYPE_CLASS_DATA_ITEM = 0x2000 and TYPE_STRING_DATA_ITEM = 0x2002
          * -- the reverse of what a web-fetched summary of the spec claimed;
@@ -566,8 +829,11 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
          * development. Ground-truthed via a real dex's class_def_item's
          * own class_data_off field (0x636) matching the map entry
          * confusingly labeled by the wrong constant, cross-checked against
-         * string_ids[0]'s real offset (0x372) matching the other one. */
-        MAPITEM(0x2000, 1, off_class_data);
+         * string_ids[0]'s real offset (0x372) matching the other one.
+         * Two contiguous class_data_items now (SquashActivity's,
+         * SquashTextWatcher's) -- one map entry with cnt=2 describes both,
+         * same way the 10 contiguous code_items above are one entry. */
+        MAPITEM(0x2000, 2, off_class_data);
         MAPITEM(0x2002, g_strcount, off_string_data[0]);
         MAPITEM(0x1000, 1, off_map);
 #undef MAPITEM
@@ -602,6 +868,19 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
     dbuf_u32(&out, off_class_data);
     dbuf_u32(&out, 0);
 
+    /* Second class_def_item: SquashTextWatcher. class_defs must be emitted
+     * in ascending class_idx (= ascending sorted-type-table) order -- "A" <
+     * "T" in "SquashActivity" vs "SquashTextWatcher" means this one
+     * correctly comes second, matching the real d8 ground-truth build. */
+    dbuf_u32(&out, (uint32_t)type_final_idx(T_WATCHERIMPL));
+    dbuf_u32(&out, 0x0001u);
+    dbuf_u32(&out, (uint32_t)type_final_idx(T_OBJECT));
+    dbuf_u32(&out, off_interfaces2);
+    dbuf_u32(&out, 0xFFFFFFFFu);
+    dbuf_u32(&out, 0);
+    dbuf_u32(&out, off_class_data2);
+    dbuf_u32(&out, 0);
+
     dbuf_bytes(&out, data.data, data.len);
     dbuf_free(&data);
     free(off_string_data);
@@ -623,7 +902,7 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
     memset(out.data + 0x50, 0, 8);
     { uint32_t v = (uint32_t)M_COUNT; memcpy(out.data + 0x58, &v, 4); }
     memcpy(out.data + 0x5c, &off_method_ids, 4);
-    { uint32_t v = 1; memcpy(out.data + 0x60, &v, 4); }
+    { uint32_t v = 2; memcpy(out.data + 0x60, &v, 4); } /* 2 classes now: SquashActivity + SquashTextWatcher */
     memcpy(out.data + 0x64, &off_class_defs, 4);
     { uint32_t ds = file_size - off_data_start; memcpy(out.data + 0x68, &ds, 4); }
     memcpy(out.data + 0x6c, &off_data_start, 4);

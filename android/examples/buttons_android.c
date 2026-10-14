@@ -59,6 +59,96 @@ static uint32_t find_memory_type(VkPhysicalDeviceMemoryProperties *memProps, uin
     return 0xFFFFFFFFu;
 }
 
+/* Copies a just-rendered offscreen frame into a real, acquired swapchain
+ * image -- see offscreenImage's own comment in vulkan_thread_main() for
+ * why this exists at all (a real Mali driver bug makes vkCreateImageView
+ * crash on this device's swapchain's 5th image; rendering into one
+ * persistent offscreen image and copying it into whichever swapchain
+ * image was acquired avoids ever calling vkCreateImageView on a
+ * swapchain image in the first place). The render pass's own
+ * colorAttach.finalLayout (PRESENT_SRC_KHR) already leaves offscreenImage
+ * in that layout at the end of every render pass (its initialLayout is
+ * UNDEFINED, so the next frame's render pass re-transitions it
+ * regardless of what this function leaves it in).
+ *
+ * A separate function, not inlined into vulkan_thread_main()'s own
+ * per-frame loop -- purely for readability, NOT working around any
+ * squash bug. This exact code (ported from forms_android.c, where it was
+ * developed and fully verified first -- see that file's own history)
+ * originally failed to even PARSE ("expected ';' but got 'IDENT'" right
+ * after a `VkImageCopy` declaration) wherever it was placed, which looked
+ * exactly like one of this project's own deep ARM64 codegen/parser-limit
+ * bugs until isolated down to a 4-line standalone repro: `VkImageCopy`
+ * (needed for vkCmdCopyImage, never used anywhere in this project
+ * before) was simply missing from include/vulkan_core.h's own
+ * hand-trimmed subset of the real Vulkan header -- squash's parser has no
+ * "unknown type name" diagnostic, so referencing an undefined type
+ * produced a generic, misleading syntax error instead. Fixed by adding
+ * the real `VkImageCopy` struct + the `vkCmdCopyImage` declaration to
+ * include/vulkan_core.h (see that file's own comment at the new
+ * declaration for the full story). */
+static void sqw_copy_offscreen_to_swapchain(VkCommandBuffer cmd, VkImage offscreenImage, VkImage swapImage, uint32_t extentWidth, uint32_t extentHeight) {
+    VkImageMemoryBarrier offToSrc;
+    memset(&offToSrc, 0, sizeof(offToSrc));
+    offToSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    offToSrc.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    offToSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    offToSrc.srcQueueFamilyIndex = 0xFFFFFFFFu;
+    offToSrc.dstQueueFamilyIndex = 0xFFFFFFFFu;
+    offToSrc.image = offscreenImage;
+    offToSrc.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    offToSrc.subresourceRange.levelCount = 1;
+    offToSrc.subresourceRange.layerCount = 1;
+    offToSrc.srcAccessMask = 0;
+    offToSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, 0, 0, 0, 1, &offToSrc);
+
+    VkImageMemoryBarrier swapToDst;
+    memset(&swapToDst, 0, sizeof(swapToDst));
+    swapToDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    swapToDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    swapToDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    swapToDst.srcQueueFamilyIndex = 0xFFFFFFFFu;
+    swapToDst.dstQueueFamilyIndex = 0xFFFFFFFFu;
+    swapToDst.image = swapImage;
+    swapToDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    swapToDst.subresourceRange.levelCount = 1;
+    swapToDst.subresourceRange.layerCount = 1;
+    swapToDst.srcAccessMask = 0;
+    swapToDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, 0, 0, 0, 1, &swapToDst);
+
+    VkImageCopy copyRegion;
+    memset(&copyRegion, 0, sizeof(copyRegion));
+    copyRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copyRegion.srcSubresource.layerCount = 1;
+    copyRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copyRegion.dstSubresource.layerCount = 1;
+    copyRegion.extent.width = extentWidth;
+    copyRegion.extent.height = extentHeight;
+    copyRegion.extent.depth = 1;
+    vkCmdCopyImage(cmd, offscreenImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        swapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+
+    VkImageMemoryBarrier swapToPresent;
+    memset(&swapToPresent, 0, sizeof(swapToPresent));
+    swapToPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    swapToPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    swapToPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    swapToPresent.srcQueueFamilyIndex = 0xFFFFFFFFu;
+    swapToPresent.dstQueueFamilyIndex = 0xFFFFFFFFu;
+    swapToPresent.image = swapImage;
+    swapToPresent.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    swapToPresent.subresourceRange.levelCount = 1;
+    swapToPresent.subresourceRange.layerCount = 1;
+    swapToPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    swapToPresent.dstAccessMask = 0;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0, 0, 0, 0, 0, 1, &swapToPresent);
+}
+
 VkInstance g_instance = 0;
 int g_instance_ready = 0;
 
@@ -443,6 +533,28 @@ static DomNode *sqw_find_by_id(const char *id) {
         if (nid && strcmp(nid, id) == 0) return g_form_nodes[i];
     }
     return 0;
+}
+
+/* kind_for_tag() alone can't distinguish a checkbox/radio <input> from a
+ * plain text <input> -- it only ever sees the tag name "input" (real,
+ * confirmed bug: tapping a checkbox's own real-width <label> re-derived
+ * its kind via plain kind_for_tag(), which unconditionally returns
+ * SQW_BOX_INPUT_TEXT for any "input" tag regardless of its real type=
+ * attribute -- the type-aware distinction only exists in
+ * layout_compute()'s own inline-child branch. The checkbox's
+ * SQW_BOX_INPUT_CHECK dispatch branch was silently never reached this
+ * way, so tapping the label visibly did nothing). Re-derives the real
+ * kind by also checking type=, for any node reached via re-targeting
+ * (label for=, button-caption text) rather than directly from
+ * layout_hit_test() (which already gets it right the first time). */
+static SqwBoxKind sqw_kind_for_node(DomNode *node) {
+    if (strcmp(node->tag, "input") == 0) {
+        const char *type = dom_get_attr(node, "type");
+        if (type && (strcmp(type, "checkbox") == 0 || strcmp(type, "radio") == 0)) return SQW_BOX_INPUT_CHECK;
+        return SQW_BOX_INPUT_TEXT;
+    }
+    if (strcmp(node->tag, "textarea") == 0) return SQW_BOX_TEXTAREA;
+    return kind_for_tag(node->tag);
 }
 
 static void sqw_radio_group_clear(const char *name, DomNode *skip) {
@@ -962,7 +1074,28 @@ void *vulkan_thread_main(void *window) {
 
     uint32_t swapImageCount = 0;
     vkGetSwapchainImagesKHR(device, swapchain, &swapImageCount, 0);
-    VkImage swapImages[8];
+    /* [16], not [8] -- a real, confirmed squash ARM64 bug found this
+     * session (in forms_android.c first, then confirmed to affect this
+     * file identically): a LOCAL array of VkImage (a `typedef struct
+     * VkImage_T *VkImage` opaque-pointer handle --
+     * VK_DEFINE_NON_DISPATCHABLE_HANDLE in vulkan_core.h) read back with
+     * its LAST populated element's upper 32 bits silently lost/
+     * overwritten (real stack corruption, not just a stale/uninitialized
+     * read) when sized exactly [8] with 5 real elements written via
+     * vkGetSwapchainImagesKHR(). The SAME shape hit `VkCommandBuffer
+     * cmdBufs[8]` too (see its own declaration below) -- both are arrays
+     * of a non-dispatchable-handle pointer-typedef, both indexed at
+     * runtime up to index 4. Root cause not isolated further (plausibly
+     * a local-array element-size miscalculation for this exact typedef
+     * shape, the same general bug CLASS as this project's very first
+     * documented ARM64 codegen bug, `a64_codegen_global`'s wrong
+     * `typeinfo_size_a64()` call, but for a LOCAL array this time) --
+     * worked around by over-allocating well past anything actually
+     * indexed. Verified via an extended real-device stress test in
+     * forms_android.c (150+ rapid redraws cycling through every
+     * swapchain index many times, zero crashes after this fix,
+     * deterministic crash before it) before being ported here. */
+    VkImage swapImages[16];
     if (swapImageCount > 8) swapImageCount = 8;
     vkGetSwapchainImagesKHR(device, swapchain, &swapImageCount, swapImages);
     __android_log_print(4, "squashbtn", "swapImageCount=%u", swapImageCount);
@@ -1025,6 +1158,93 @@ void *vulkan_thread_main(void *window) {
     VkRenderPass renderPass = 0;
     vr = vkCreateRenderPass(device, &rpInfo, 0, &renderPass);
     __android_log_print(4, "squashbtn", "vkCreateRenderPass vr=%d", (int)vr);
+    if (vr != VK_SUCCESS) return 0;
+
+    /* Real Mali driver bug workaround (confirmed via an earlier session's
+     * actual driver crash-backtrace inspection -- NOT a squash bug, NOT a
+     * live-view-count or eviction-order issue, both tried and ruled out
+     * in this project's own history, see forms_android.c's identical
+     * copy of this comment for the full story): vkCreateImageView()
+     * crashes deterministically inside the vendor driver's own
+     * image_view::init when called against this device's swapchain's 5th
+     * real image, no matter when or how it's created. Fixed properly (not
+     * just differently triggered) by never calling vkCreateImageView on a
+     * swapchain image AT ALL: render every frame into ONE persistent
+     * OFFSCREEN image instead (a real, ordinary, non-swapchain VkImage --
+     * vkCreateImageView against it is unaffected, exactly like the
+     * already-proven-safe font atlas image above), then vkCmdCopyImage()
+     * the finished frame into whichever swapchain image was acquired
+     * that frame. vkCmdCopyImage only ever needs the raw VkImage handle,
+     * never a VkImageView, so the swapchain's own images are never
+     * touched by the buggy call at all, regardless of how many distinct
+     * indices a long interactive session eventually cycles through.
+     * Developed and fully verified first in forms_android.c (including a
+     * 150+-rapid-redraw real-device stress test cycling through every
+     * swapchain index many times with zero crashes) before being ported
+     * here unchanged, to eliminate this same pre-existing crash from both
+     * demos without introducing new divergence between them. */
+    VkImageCreateInfo offImgInfo;
+    memset(&offImgInfo, 0, sizeof(offImgInfo));
+    offImgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    offImgInfo.imageType = VK_IMAGE_TYPE_2D;
+    offImgInfo.format = chosenFormat;
+    offImgInfo.extent.width = extent.width;
+    offImgInfo.extent.height = extent.height;
+    offImgInfo.extent.depth = 1;
+    offImgInfo.mipLevels = 1;
+    offImgInfo.arrayLayers = 1;
+    offImgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    offImgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    offImgInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    offImgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    offImgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImage offscreenImage = 0;
+    vr = vkCreateImage(device, &offImgInfo, 0, &offscreenImage);
+    __android_log_print(4, "squashbtn", "offscreen vkCreateImage vr=%d", (int)vr);
+    if (vr != VK_SUCCESS) return 0;
+
+    VkMemoryRequirements offMemReq;
+    vkGetImageMemoryRequirements(device, offscreenImage, &offMemReq);
+    VkMemoryAllocateInfo offAllocInfo;
+    memset(&offAllocInfo, 0, sizeof(offAllocInfo));
+    offAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    offAllocInfo.allocationSize = offMemReq.size;
+    offAllocInfo.memoryTypeIndex = find_memory_type(&memProps, offMemReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VkDeviceMemory offscreenMemory = 0;
+    vr = vkAllocateMemory(device, &offAllocInfo, 0, &offscreenMemory);
+    if (vr != VK_SUCCESS) return 0;
+    vkBindImageMemory(device, offscreenImage, offscreenMemory, 0);
+
+    VkImageViewCreateInfo offViewInfo;
+    memset(&offViewInfo, 0, sizeof(offViewInfo));
+    offViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    offViewInfo.image = offscreenImage;
+    offViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    offViewInfo.format = chosenFormat;
+    offViewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+    offViewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+    offViewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+    offViewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+    offViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    offViewInfo.subresourceRange.levelCount = 1;
+    offViewInfo.subresourceRange.layerCount = 1;
+    VkImageView offscreenView = 0;
+    vr = vkCreateImageView(device, &offViewInfo, 0, &offscreenView);
+    __android_log_print(4, "squashbtn", "offscreen vkCreateImageView vr=%d", (int)vr);
+    if (vr != VK_SUCCESS) return 0;
+
+    VkFramebufferCreateInfo offFbInfo;
+    memset(&offFbInfo, 0, sizeof(offFbInfo));
+    offFbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    offFbInfo.renderPass = renderPass;
+    offFbInfo.attachmentCount = 1;
+    offFbInfo.pAttachments = &offscreenView;
+    offFbInfo.width = extent.width;
+    offFbInfo.height = extent.height;
+    offFbInfo.layers = 1;
+    VkFramebuffer offscreenFramebuffer = 0;
+    vr = vkCreateFramebuffer(device, &offFbInfo, 0, &offscreenFramebuffer);
+    __android_log_print(4, "squashbtn", "offscreen vkCreateFramebuffer vr=%d", (int)vr);
     if (vr != VK_SUCCESS) return 0;
 
     VkShaderModuleCreateInfo vsInfo;
@@ -1613,32 +1833,18 @@ void *vulkan_thread_main(void *window) {
     cbAllocInfo.commandPool = commandPool;
     cbAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cbAllocInfo.commandBufferCount = swapImageCount;
-    VkCommandBuffer cmdBufs[8];
+    /* [16], not [8] -- a real, confirmed squash ARM64 local-array bug
+     * (see swapImages' own declaration above for the full story, ported
+     * from forms_android.c where this was found and fixed first):
+     * VkCommandBuffer (an opaque-pointer handle typedef, same shape as
+     * VkImage) indexed at runtime up to index 4 had its last populated
+     * element's upper 32 bits silently lost when this array was sized
+     * exactly [8] -- worked around by over-allocating well past anything
+     * actually indexed. */
+    VkCommandBuffer cmdBufs[16];
     vr = vkAllocateCommandBuffers(device, &cbAllocInfo, cmdBufs);
     __android_log_print(4, "squashbtn", "vkAllocateCommandBuffers vr=%d", (int)vr);
     if (vr != VK_SUCCESS) return 0;
-
-    /* Per-swapchain-image-index resources, created lazily on first use
-     * and cached thereafter (see this file's top comment on the real
-     * Mali vkCreateImageView bug this avoids triggering in a tight
-     * loop).
-     *
-     * KNOWN LIMITATION, confirmed while building this file: creating a
-     * 5th DISTINCT swapchain image's view+framebuffer -- whether lazily
-     * here during interactive use, or in a tight loop up front before
-     * the render loop even starts -- SIGSEGVs inside vkCreateImageView()
-     * itself on this device, deterministically and regardless of timing
-     * (a 50ms sleep between calls made no difference). Images 0-3 always
-     * succeed; only the swapchain's 5th image (this device's own
-     * minImageCount) ever exposes it. Root cause not yet isolated --
-     * doesn't reproduce for the flat-color-only triangle demo, which
-     * never runs enough redraws in one session to reach a 5th distinct
-     * image. Sustained dragging/scrolling that cycles through every
-     * swapchain image can still hit this. */
-    VkImageView swapViews[8];
-    VkFramebuffer framebuffers[8];
-    int haveView[8];
-    memset(haveView, 0, sizeof(haveView));
 
     for (;;) {
         uint32_t imageIndex = 0;
@@ -1650,38 +1856,6 @@ void *vulkan_thread_main(void *window) {
         if (vr != VK_SUCCESS && vr != VK_SUBOPTIMAL_KHR) {
             __android_log_print(4, "squashbtn", "vkAcquireNextImageKHR failed vr=%d, stopping render loop", (int)vr);
             return 0;
-        }
-
-        if (!haveView[imageIndex]) {
-            VkImageViewCreateInfo ivInfo;
-            memset(&ivInfo, 0, sizeof(ivInfo));
-            ivInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            ivInfo.image = swapImages[imageIndex];
-            ivInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            ivInfo.format = chosenFormat;
-            ivInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-            ivInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-            ivInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-            ivInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-            ivInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            ivInfo.subresourceRange.levelCount = 1;
-            ivInfo.subresourceRange.layerCount = 1;
-            vr = vkCreateImageView(device, &ivInfo, 0, &swapViews[imageIndex]);
-            if (vr != VK_SUCCESS) { __android_log_print(4, "squashbtn", "vkCreateImageView[%u] failed vr=%d", imageIndex, (int)vr); return 0; }
-
-            VkFramebufferCreateInfo fbInfo;
-            memset(&fbInfo, 0, sizeof(fbInfo));
-            fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-            fbInfo.renderPass = renderPass;
-            fbInfo.attachmentCount = 1;
-            fbInfo.pAttachments = &swapViews[imageIndex];
-            fbInfo.width = extent.width;
-            fbInfo.height = extent.height;
-            fbInfo.layers = 1;
-            vr = vkCreateFramebuffer(device, &fbInfo, 0, &framebuffers[imageIndex]);
-            if (vr != VK_SUCCESS) { __android_log_print(4, "squashbtn", "vkCreateFramebuffer[%u] failed vr=%d", imageIndex, (int)vr); return 0; }
-            haveView[imageIndex] = 1;
-            __android_log_print(4, "squashbtn", "created view+framebuffer for imageIndex=%u", imageIndex);
         }
 
         VkCommandBuffer cmd = cmdBufs[imageIndex];
@@ -1703,7 +1877,7 @@ void *vulkan_thread_main(void *window) {
         memset(&rpBegin, 0, sizeof(rpBegin));
         rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rpBegin.renderPass = renderPass;
-        rpBegin.framebuffer = framebuffers[imageIndex];
+        rpBegin.framebuffer = offscreenFramebuffer;
         rpBegin.renderArea.offset.x = 0; rpBegin.renderArea.offset.y = 0;
         rpBegin.renderArea.extent = extent;
         rpBegin.clearValueCount = 1;
@@ -1730,6 +1904,13 @@ void *vulkan_thread_main(void *window) {
         }
 
         vkCmdEndRenderPass(cmd);
+
+        /* Copy the just-rendered offscreen frame into the real, acquired
+         * swapchain image -- see sqw_copy_offscreen_to_swapchain()'s own
+         * comment (near find_memory_type(), above) for why this exists
+         * at all. */
+        sqw_copy_offscreen_to_swapchain(cmd, offscreenImage, swapImages[imageIndex], extent.width, extent.height);
+
         vkEndCommandBuffer(cmd);
 
         VkFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1845,7 +2026,7 @@ void *vulkan_thread_main(void *window) {
                          * fix this pairs with. */
                         if (k == SQW_BOX_TEXT && tappedNode->parent) {
                             tappedNode = tappedNode->parent;
-                            k = kind_for_tag(tappedNode->tag);
+                            k = sqw_kind_for_node(tappedNode);
                         }
                         /* <label for="x">: hit-test the label's own box,
                          * but act as though the tap landed on the real
@@ -1854,7 +2035,7 @@ void *vulkan_thread_main(void *window) {
                         if (k == SQW_BOX_SPAN && strcmp(tappedNode->tag, "label") == 0) {
                             const char *forId = dom_get_attr(tappedNode, "for");
                             DomNode *target = forId ? sqw_find_by_id(forId) : 0;
-                            if (target) { tappedNode = target; k = kind_for_tag(target->tag); }
+                            if (target) { tappedNode = target; k = sqw_kind_for_node(target); }
                         }
                         if (k == SQW_BOX_INPUT_CHECK) {
                             sqw_toggle_check_or_radio(tappedNode);

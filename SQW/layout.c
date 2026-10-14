@@ -276,7 +276,18 @@ static float direct_text_width(const DomNode *node, float scale) {
     int i; float w = 0.0f;
     for (i = 0; i < node->child_count; i++) {
         DomNode *c = node->children[i];
-        if (dom_is_text(c)) w += sqw_text_measure(c->text, (int)strlen(c->text), scale);
+        /* NOT "w += sqw_text_measure(...)" -- the same real, confirmed
+         * squash/ARM64 bug documented in sqw_text_measure()'s own comment
+         * (text_metrics.h) and text_draw_string()'s "cx += call()" fix:
+         * a compound-assignment accumulator fed directly by a function
+         * call's return value, inside a loop, silently drops the
+         * addition. This exact call site was the one instance of the bug
+         * shape left unfixed when the others were found -- newly exposed
+         * by forms_android.c's real label captions ("Subscribe to the
+         * newsletter" etc, every one measuring back as width 0 and
+         * clamping to the atomic-inline minimum of 4px, making every
+         * <label> a near-unhittable 4px-wide tap target). */
+        if (dom_is_text(c)) { float tw = sqw_text_measure(c->text, (int)strlen(c->text), scale); w = w + tw; }
         /* Recurse into a nested ELEMENT child too, not just direct text --
          * real-world markup very commonly wraps a link/button's actual
          * label in an inner <span> (confirmed via real Wikipedia HTML:
@@ -297,7 +308,7 @@ static float direct_text_width(const DomNode *node, float scale) {
          * descend into unconditionally: real HTML rarely puts any other
          * kind of raw-text/genuine-block content inside an atomic-inline
          * tag. */
-        else if (!html_tag_is_raw_text(c->tag)) w += direct_text_width(c, scale);
+        else if (!html_tag_is_raw_text(c->tag)) { float cw = direct_text_width(c, scale); w = w + cw; }
     }
     return w;
 }

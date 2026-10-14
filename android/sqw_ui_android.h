@@ -356,6 +356,30 @@ static int sqw_collect_form_fields(SqwFormField *out, int cap) {
 #define SQW_TAP_NONE 0
 #define SQW_TAP_CHANGED 1
 #define SQW_TAP_SUBMIT 2
+/* kind_for_tag() alone can't distinguish a checkbox/radio <input> from a
+ * plain text <input> -- it only ever sees the tag name "input" (real,
+ * confirmed bug found via forms_android.c's label-forwarding: tapping a
+ * checkbox's own, now-correctly-wide <label> re-derived its kind via
+ * plain kind_for_tag(), which unconditionally returns SQW_BOX_INPUT_TEXT
+ * for any "input" tag regardless of its real type= attribute -- see
+ * kind_for_tag()'s own comment on why: the type-aware distinction only
+ * exists in layout_compute()'s inline-child branch, never surfaced as a
+ * reusable function before this. The checkbox's SQW_BOX_INPUT_CHECK
+ * branch below was silently never reached, so tapping the label visibly
+ * did nothing). This re-derives the real kind by also checking type=,
+ * matching layout_compute()'s own logic, for any node reached via
+ * re-targeting (label for=, button-caption text) rather than directly
+ * from layout_hit_test() (which already got it right the first time). */
+static SqwBoxKind sqw_kind_for_node(DomNode *node) {
+    if (strcmp(node->tag, "input") == 0) {
+        const char *type = dom_get_attr(node, "type");
+        if (type && (strcmp(type, "checkbox") == 0 || strcmp(type, "radio") == 0)) return SQW_BOX_INPUT_CHECK;
+        return SQW_BOX_INPUT_TEXT;
+    }
+    if (strcmp(node->tag, "textarea") == 0) return SQW_BOX_TEXTAREA;
+    return kind_for_tag(node->tag);
+}
+
 static int sqw_ui_dispatch_tap(int upHit) {
     if (upHit < 0) return SQW_TAP_NONE;
     SqwBoxKind k = g_layout.boxes[upHit].kind;
@@ -372,12 +396,12 @@ static int sqw_ui_dispatch_tap(int upHit) {
      * counts as tapping the button. */
     if (k == SQW_BOX_TEXT && tappedNode->parent) {
         tappedNode = tappedNode->parent;
-        k = kind_for_tag(tappedNode->tag);
+        k = sqw_kind_for_node(tappedNode);
     }
     if (k == SQW_BOX_SPAN && strcmp(tappedNode->tag, "label") == 0) {
         const char *forId = dom_get_attr(tappedNode, "for");
         DomNode *target = forId ? sqw_find_by_id(forId) : 0;
-        if (target) { tappedNode = target; k = kind_for_tag(target->tag); }
+        if (target) { tappedNode = target; k = sqw_kind_for_node(target); }
     }
     if (k == SQW_BOX_INPUT_CHECK) {
         sqw_toggle_check_or_radio(tappedNode);

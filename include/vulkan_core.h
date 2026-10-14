@@ -870,6 +870,31 @@ void WINAPI vkCmdPipelineBarrier(VkCommandBuffer commandBuffer, VkFlags srcStage
 void WINAPI vkCmdCopyImageToBuffer(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
     VkBuffer dstBuffer, uint32_t regionCount, const VkBufferImageCopy *pRegions);
 
+/* image-to-image copy (VkImage -> VkImage, no VkImageView needed on
+ * either side) -- added for forms_android.c's offscreen-render-then-copy
+ * workaround for a real Mali driver bug (vkCreateImageView crashing on
+ * this device's swapchain's 5th image); never needed before since this
+ * project's only prior copies were buffer->image (the font atlas
+ * upload). Missing from this file's own hand-trimmed subset of the real
+ * Vulkan header purely by omission, not a deliberate exclusion -- real,
+ * confirmed root cause of an extremely confusing-looking squash parser
+ * error ("expected ';' but got 'IDENT'" pointing at the variable name
+ * right after a `VkImageCopy` declaration) that looked exactly like one
+ * of this project's own deep ARM64 codegen/parser-limit bugs until
+ * isolated down to a 4-line standalone repro: squash's parser has no
+ * special "unknown type name" diagnostic, so referencing an undefined
+ * type name here produces a generic, misleading syntax error instead of
+ * a clear "unknown identifier" one. */
+typedef struct VkImageCopy {
+    VkImageSubresourceLayers srcSubresource;
+    VkOffset3D srcOffset;
+    VkImageSubresourceLayers dstSubresource;
+    VkOffset3D dstOffset;
+    VkExtent3D extent;
+} VkImageCopy;
+void WINAPI vkCmdCopyImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
+    VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount, const VkImageCopy *pRegions);
+
 /* --- Sampled-texture support (VkImage/VkSampler + upload), added for
  * SQW's Vulkan bitmap-font glyph-atlas text renderer (text_renderer_vk.c)
  * -- the first thing in this project to actually sample a texture rather

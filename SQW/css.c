@@ -346,7 +346,18 @@ static void css_parse_selector(const char **p, CssSelector *out) {
         pending_child = 0;
         pending_sibling = 0;
         pending_unsupported = 0;
-        if (comp != &dummy) out->specificity += css_compound_specificity(comp);
+        /* NOT "out->specificity += css_compound_specificity(comp);" -- the
+         * same real, confirmed squash/ARM64 bug as layout.c's own
+         * direct_text_width() fix (see its comment): a compound-assignment
+         * accumulator fed directly by a function call's return value,
+         * inside a loop, silently drops the addition -- doubly risky here
+         * since it's also a struct-field write through a pointer, not a
+         * plain local. A wrong specificity here would make the CSS
+         * cascade pick the wrong rule on any selector chain with 2+
+         * compounds (e.g. "div.row label"), a hard-to-diagnose "why did
+         * the wrong style win" bug. Hoisted through a local, then a plain
+         * assignment through the pointer. */
+        if (comp != &dummy) { int sp = out->specificity + css_compound_specificity(comp); out->specificity = sp; }
     }
 }
 
