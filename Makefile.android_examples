@@ -32,13 +32,19 @@ BUTTONS_SRC  := android/examples/buttons_android.c
 BUTTONS_PKG  := com.squash.buttonsdemo
 BUTTONS_APK  := android/examples/buttons_android.apk
 
-.PHONY: all triangle buttons clean install install-triangle install-buttons run run-triangle run-buttons
+FORMS_SRC    := android/examples/forms_android.c
+FORMS_PKG    := com.squash.formsdemo
+FORMS_APK    := android/examples/forms_android.apk
 
-all: triangle buttons
+.PHONY: all triangle buttons forms clean install install-triangle install-buttons install-forms run run-triangle run-buttons run-forms
+
+all: triangle buttons forms
 
 triangle: $(TRIANGLE_APK)
 
 buttons: $(BUTTONS_APK)
+
+forms: $(FORMS_APK)
 
 $(TRIANGLE_APK): $(TRIANGLE_SRC) $(SQUASH)
 	$(SQUASH) $(COMMON_FLAGS) -android-package $(TRIANGLE_PKG) $(TRIANGLE_SRC) -o $@
@@ -46,8 +52,11 @@ $(TRIANGLE_APK): $(TRIANGLE_SRC) $(SQUASH)
 $(BUTTONS_APK): $(BUTTONS_SRC) $(SQUASH)
 	$(SQUASH) $(COMMON_FLAGS) -android-package $(BUTTONS_PKG) $(BUTTONS_SRC) -o $@
 
+$(FORMS_APK): $(FORMS_SRC) $(SQUASH)
+	$(SQUASH) $(COMMON_FLAGS) -android-package $(FORMS_PKG) $(FORMS_SRC) -o $@
+
 clean:
-	rm -f $(TRIANGLE_APK) $(BUTTONS_APK)
+	rm -f $(TRIANGLE_APK) $(BUTTONS_APK) $(FORMS_APK)
 
 install-triangle: $(TRIANGLE_APK)
 	$(ADB) install -r $(TRIANGLE_APK)
@@ -55,7 +64,10 @@ install-triangle: $(TRIANGLE_APK)
 install-buttons: $(BUTTONS_APK)
 	$(ADB) install -r $(BUTTONS_APK)
 
-install: install-triangle install-buttons
+install-forms: $(FORMS_APK)
+	$(ADB) install -r $(FORMS_APK)
+
+install: install-triangle install-buttons install-forms
 
 run-triangle: install-triangle
 	$(ADB) shell am force-stop $(TRIANGLE_PKG)
@@ -71,4 +83,11 @@ run-buttons: install-buttons
 	sleep 2
 	$(ADB) logcat -d | grep -i squashbtn | tail -40
 
-run: run-triangle run-buttons
+run-forms: install-forms
+	$(ADB) shell am force-stop $(FORMS_PKG)
+	$(ADB) logcat -c
+	$(ADB) shell am start -n $(FORMS_PKG)/com.squash.runtime.SquashActivity
+	sleep 2
+	$(ADB) logcat -d | grep -i sqwforms | tail -40
+
+run: run-triangle run-buttons run-forms

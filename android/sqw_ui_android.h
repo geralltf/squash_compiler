@@ -56,6 +56,54 @@ static CssStylesheet g_css_sheet;
 static float g_viewport_w = 0, g_viewport_h = 0;
 static float g_scroll_x = 0, g_scroll_y = 0;
 
+/* ---- two-finger pinch-zoom/pan state. Composed with g_scroll_x/y as a
+ * second, independent transform layer: finalScreenPixel = (contentPixel -
+ * scroll) * zoomScale + zoomPan. g_zoom_scale is zero-initialized like
+ * every other global here (never a non-zero static initializer) and
+ * treated as "1.0, never pinched yet" via sqw_zoom_scale() below rather
+ * than needing an explicit runtime init anywhere -- it only ever becomes
+ * nonzero once a real pinch gesture has actually happened, and a real
+ * pinch always clamps it into [SQW_ZOOM_MIN, SQW_ZOOM_MAX], so it never
+ * needs resetting back to the sentinel. */
+static float g_zoom_scale = 0;
+static float g_zoom_pan_x = 0, g_zoom_pan_y = 0;
+static int g_pinch_active = 0;
+static float g_pinch_prev_dist = 0;
+static float g_pinch_prev_mid_x = 0, g_pinch_prev_mid_y = 0;
+#define SQW_ZOOM_MIN 0.5f
+#define SQW_ZOOM_MAX 4.0f
+
+static float sqw_zoom_scale(void) { return g_zoom_scale <= 0.0f ? 1.0f : g_zoom_scale; }
+
+/* Self-contained Newton's-method sqrt -- deliberately NOT a call to the
+ * real libm sqrtf, which project memory (SQW/sqo_host_syms.c) documents
+ * as a real, confirmed-broken call shape on this toolchain in another
+ * context (an indirect call combined with a float<->double ABI boundary
+ * silently returns the input unchanged). This exact reimplementation is
+ * already proven correct under both direct AND indirect calls there, so
+ * it's reused verbatim here rather than risk the same failure mode again
+ * on a code path (Android/bionic/ARM64) that has never called any libm
+ * trig/sqrt function before. */
+static float sqw_sqrtf(float x) {
+    float guess; int i;
+    if (x <= 0.0f) return 0.0f;
+    guess = x;
+    for (i = 0; i < 12; i++) guess = 0.5f * (guess + x / guess);
+    return guess;
+}
+
+/* Inverse of the render-time content->screen transform -- every touch
+ * hit-test must go through this (not raw "x + g_scroll_x") once zoom/pan
+ * can be nonzero, or taps land on the wrong element exactly like the
+ * vertical-surface-offset bug this project already found and fixed once
+ * (see project_android_backend.md bug #24) -- same class of bug, new
+ * transform layer. */
+static void sqw_screen_to_content(float sx, float sy, float *outX, float *outY) {
+    float zs = sqw_zoom_scale();
+    *outX = (sx - g_zoom_pan_x) / zs + g_scroll_x;
+    *outY = (sy - g_zoom_pan_y) / zs + g_scroll_y;
+}
+
 /* ---- touch handoff: nativeTouchEvent (Android main thread) -> render
  * thread. Simple polled-flag convention -- proven safe at this project's
  * scale (a human dragging a finger can't race a ~5ms poll loop in any way
@@ -113,6 +161,10 @@ static void sqw_ensure_surface_offset(void *env) {
  * elsewhere (nativeTextChanged, real keystroke delivery), redraw, skip
  * all the hit-test/hover/drag logic that assumes real screen coordinates." */
 #define ACTION_TEXT_CHANGED 3
+/* Same synthetic-action convention as ACTION_TEXT_CHANGED above, this time
+ * for "a pinch/two-finger-pan gesture changed g_zoom_scale/g_zoom_pan_x/y,
+ * redraw" -- raised by nativeMultiTouchEvent below. */
+#define ACTION_ZOOM_CHANGED 4
 
 /* ---- real soft-keyboard text entry state: a real, persistent, off-
  * screen android.widget.EditText drives the REAL Android IME; the app's
@@ -150,8 +202,8 @@ static int g_has_focus = 0;
 static void sqw_dispatch_text_focus(void *env, float x, float y, int action) {
     if (action != ACTION_DOWN) return;
     if (!g_edit_text || g_layout.count == 0) return;
-    float contentX = x + g_scroll_x;
-    float contentY = y + g_scroll_y;
+    float contentX, contentY;
+    sqw_screen_to_content(x, y, &contentX, &contentY);
     int hit = layout_hit_test(&g_layout, contentX, contentY);
     if (hit < 0) return;
     LayoutBox *lb = &g_layout.boxes[hit];
@@ -201,6 +253,87 @@ void nativeTouchEvent(void *env, void *clazz, int x_bits, int y_bits, int action
     y = y - (float)g_surface_offset_y;
     sqw_dispatch_text_focus(env, x, y, action);
     g_touch_x = x; g_touch_y = y; g_touch_action = action; g_touch_pending = 1;
+}
+
+/* Two-finger pinch-zoom/pan. Called from onTouchEvent ALONGSIDE (not
+ * instead of) nativeTouchEvent above -- see android_dex.c's onTouchEvent
+ * bytecode comment -- so single-finger tap/drag/text-focus behavior is
+ * completely unaffected; this only ever acts when pointerCount>=2.
+ *
+ * `packed` is pointerCount<<4 | actionMasked (see that proto's own DEX
+ * comment for why they're packed into one int rather than passed
+ * separately -- format-35c invoke-static hard-caps at 5 register args).
+ * x0/y0 are pointer 0's already-offset-corrected coordinates (same raw
+ * bits nativeTouchEvent just computed, just reinterpreted again here --
+ * cheap, avoids a 6th call parameter); x1/y1 are a SECOND pointer's
+ * coordinates, always safe to read regardless of how many fingers are
+ * actually down (see onTouchEvent's own Math.min(1,pointerCount-1)
+ * comment) -- when there's only one finger, x1/y1 just redundantly equal
+ * x0/y0, which this function ignores entirely via the pointerCount<2
+ * early-return below. */
+void nativeMultiTouchEvent(void *env, void *clazz, int packed, int x0_bits, int y0_bits, int x1_bits, int y1_bits) {
+    (void)clazz;
+    sqw_ensure_surface_offset(env);
+    int pointerCount = packed >> 4;
+    float x0 = *(float *)&x0_bits;
+    float y0 = *(float *)&y0_bits;
+    float x1 = *(float *)&x1_bits;
+    float y1 = *(float *)&y1_bits;
+    y0 = y0 - (float)g_surface_offset_y;
+    y1 = y1 - (float)g_surface_offset_y;
+
+    if (pointerCount < 2) {
+        /* Second finger lifted (or never was down) -- end the gesture so
+         * the NEXT two-finger touch starts a fresh anchor frame instead
+         * of computing a huge, bogus delta against stale prev_dist/mid. */
+        g_pinch_active = 0;
+        return;
+    }
+
+    float dx = x1 - x0;
+    float dy = y1 - y0;
+    float dist = sqw_sqrtf(dx * dx + dy * dy);
+    float midx = (x0 + x1) * 0.5f;
+    float midy = (y0 + y1) * 0.5f;
+
+    if (!g_pinch_active) {
+        /* First frame of a new two-finger gesture: just record the
+         * anchor, no delta to apply yet (matches the existing one-finger
+         * drag's own g_drag_down_x/y-on-ACTION_DOWN convention). */
+        g_pinch_active = 1;
+        g_pinch_prev_dist = dist;
+        g_pinch_prev_mid_x = midx;
+        g_pinch_prev_mid_y = midy;
+        return;
+    }
+
+    float scale = sqw_zoom_scale();
+    if (g_pinch_prev_dist > 1.0f && dist > 1.0f) {
+        float ratio = dist / g_pinch_prev_dist;
+        float newScale = scale * ratio;
+        if (newScale < SQW_ZOOM_MIN) newScale = SQW_ZOOM_MIN;
+        if (newScale > SQW_ZOOM_MAX) newScale = SQW_ZOOM_MAX;
+        /* Keep the content currently under the pinch midpoint fixed on
+         * screen while the scale changes, exactly like a real multi-touch
+         * zoom (pinch center stays put, everything else grows/shrinks
+         * around it) -- see sqw_screen_to_content's own inverse-transform
+         * comment for the forward transform this is solving for. */
+        float appliedRatio = newScale / scale;
+        g_zoom_pan_x = midx - (midx - g_zoom_pan_x) * appliedRatio;
+        g_zoom_pan_y = midy - (midy - g_zoom_pan_y) * appliedRatio;
+        g_zoom_scale = newScale;
+    }
+    /* Two-finger pan: the midpoint's own frame-to-frame screen movement,
+     * layered on top of (independent of) the scale change above. */
+    g_zoom_pan_x = g_zoom_pan_x + (midx - g_pinch_prev_mid_x);
+    g_zoom_pan_y = g_zoom_pan_y + (midy - g_pinch_prev_mid_y);
+
+    g_pinch_prev_dist = dist;
+    g_pinch_prev_mid_x = midx;
+    g_pinch_prev_mid_y = midy;
+
+    g_touch_action = ACTION_ZOOM_CHANGED;
+    g_touch_pending = 1;
 }
 
 /* The EditText is constructed once in onCreate() (see android_dex.c's

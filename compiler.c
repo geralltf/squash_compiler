@@ -1267,9 +1267,9 @@ int main(int argc, char **argv) {
                  * won't export those). Only supported for a single-TU
                  * compile (not have_merged) -- multi-object Android-activity
                  * links aren't a case this needs to handle yet. */
-                static ElfAndroidExport exports[6];
+                static ElfAndroidExport exports[7];
                 int nexp = 0;
-                static const struct { const char *c_name; const char *jni_name; } jni_methods[6] = {
+                static const struct { const char *c_name; const char *jni_name; } jni_methods[7] = {
                     { "nativeSurfaceCreated",   "Java_com_squash_runtime_SquashActivity_nativeSurfaceCreated" },
                     { "nativeSurfaceChanged",   "Java_com_squash_runtime_SquashActivity_nativeSurfaceChanged" },
                     { "nativeSurfaceDestroyed", "Java_com_squash_runtime_SquashActivity_nativeSurfaceDestroyed" },
@@ -1286,9 +1286,13 @@ int main(int argc, char **argv) {
                      * as a real Java String already converted on the Java
                      * side via toString(). */
                     { "nativeTextChanged",      "Java_com_squash_runtime_SquashActivity_nativeTextChanged" },
+                    /* Two-finger pinch-zoom/pan: called from onTouchEvent
+                     * alongside (not instead of) nativeTouchEvent above --
+                     * see android_dex.c's onTouchEvent bytecode comment. */
+                    { "nativeMultiTouchEvent",  "Java_com_squash_runtime_SquashActivity_nativeMultiTouchEvent" },
                 };
                 int mi;
-                for (mi = 0; mi < 6; mi++) {
+                for (mi = 0; mi < 7; mi++) {
                     int off = have_merged ? -1 : find_func_offset_a64(&a64as, jni_methods[mi].c_name);
                     if (off >= 0) {
                         exports[nexp].symbol = jni_methods[mi].jni_name;

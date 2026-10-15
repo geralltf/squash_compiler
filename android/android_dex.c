@@ -97,6 +97,13 @@ enum {
      * ground-truthed against real javac+d8 output for this exact shape,
      * per this file's own documented verification practice. */
     T_OBJECT, T_EDITABLE, T_TEXTWATCHER, T_CHARSEQUENCE, T_WATCHERIMPL,
+    /* Two-finger pinch-zoom/pan: MotionEvent's indexed getX(I)/getY(I) and
+     * getPointerCount()/getActionMasked() need no new TYPE (MotionEvent is
+     * already declared above) -- only java.lang.Math is new, needed for
+     * Math.min(I,I)I (see nativeMultiTouchEvent's own onTouchEvent bytecode
+     * comment for why this avoids needing any branch instruction at all,
+     * a capability this file has never needed/implemented before). */
+    T_MATH,
     T_COUNT
 };
 static const char *g_raw_types[T_COUNT] = {
@@ -155,15 +162,18 @@ static const char *g_raw_types[T_COUNT] = {
     "Landroid/text/TextWatcher;",
     "Ljava/lang/CharSequence;",
     "Lcom/squash/runtime/SquashTextWatcher;",
+    "Ljava/lang/Math;",
 };
 
-typedef struct { const char *shorty; int ret; int params[4]; int nparams; } raw_proto;
+typedef struct { const char *shorty; int ret; int params[5]; int nparams; } raw_proto;
 enum {
     P_RET_SURFACE, P_RET_HOLDER, P_VOID, P_VII, P_VL_CONTEXT, P_VL_BUNDLE,
     P_VL_SURFACE, P_VL_CALLBACK, P_VL_HOLDER, P_VLIII, P_VL_VIEW, P_VL_STRING,
     P_RET_FLOAT, P_RET_INT, P_VIII, P_RET_BOOL_VL_MOTIONEVENT, P_RET_INT_VL_FLOAT,
     P_VL_EDITTEXT, P_VLL_VIEW_LAYOUTPARAMS,
     P_RET_STRING, P_VL_EDITABLE, P_VL_TEXTWATCHER, P_VLIII_CHARSEQ,
+    /* Two-finger pinch-zoom/pan additions (see T_MATH's own comment). */
+    P_RET_FLOAT_VI, P_RET_INT_VII, P_VIIIII,
     P_COUNT
 };
 static const raw_proto g_raw_protos[P_COUNT] = {
@@ -214,6 +224,20 @@ static const raw_proto g_raw_protos[P_COUNT] = {
      * proto since its first param type differs (CharSequence vs
      * SurfaceHolder). */
     { "VLIII", T_VOID, {T_CHARSEQUENCE, T_INT, T_INT, T_INT}, 4 },
+    /* P_RET_FLOAT_VI: MotionEvent.getX(I)F / getY(I)F -- the indexed
+     * overload, a genuinely distinct proto from P_RET_FLOAT (the existing
+     * no-arg getX()F/getY()F, pointer 0 implicit) since it takes a real
+     * pointer-index parameter. */
+    { "FI", T_FLOAT, {T_INT, 0,0,0,0}, 1 },
+    /* P_RET_INT_VII: java.lang.Math.min(I,I)I. */
+    { "III", T_INT, {T_INT, T_INT, 0,0,0}, 2 },
+    /* P_VIIIII: nativeMultiTouchEvent(I,I,I,I,I)V -- packed(pointerCount
+     * <<4 | actionMasked), x0_bits, y0_bits, x1_bits, y1_bits. 5 params is
+     * the hard limit for a format-35c invoke-static (register args are
+     * nibble-packed, argc max 5) -- see this proto's own call site comment
+     * in onTouchEvent's bytecode for why pointerCount/actionMasked are
+     * packed into one int instead of passed as 2 separate params. */
+    { "VIIIII", T_VOID, {T_INT, T_INT, T_INT, T_INT, T_INT}, 5 },
 };
 
 typedef struct { int cls; const char *name; int proto; } raw_method;
@@ -229,6 +253,9 @@ enum {
     M_LAYOUTPARAMS_INIT, M_VIEWGROUP_ADDVIEW_LP,
     M_OBJECT_INIT, M_OBJECT_TOSTRING, M_WATCHER_INIT, M_WATCHER_BEFORE,
     M_WATCHER_ONCHANGED, M_WATCHER_AFTER, M_EDITTEXT_ADDLISTENER, M_SA_NATIVE_TEXTCHANGED,
+    /* Two-finger pinch-zoom/pan additions (see T_MATH's own comment). */
+    M_MOTIONEVENT_GETPOINTERCOUNT, M_MOTIONEVENT_GETACTIONMASKED,
+    M_MOTIONEVENT_GETX_I, M_MOTIONEVENT_GETY_I, M_MATH_MIN, M_SA_NATIVE_MULTITOUCH,
     M_COUNT
 };
 static const raw_method g_raw_methods[M_COUNT] = {
@@ -268,10 +295,16 @@ static const raw_method g_raw_methods[M_COUNT] = {
     { T_WATCHERIMPL,    "afterTextChanged",       P_VL_EDITABLE },
     { T_EDITTEXT,       "addTextChangedListener", P_VL_TEXTWATCHER },
     { T_SQUASHACTIVITY, "nativeTextChanged",      P_VL_STRING },
+    { T_MOTIONEVENT,    "getPointerCount",        P_RET_INT },
+    { T_MOTIONEVENT,    "getActionMasked",        P_RET_INT },
+    { T_MOTIONEVENT,    "getX",                   P_RET_FLOAT_VI },
+    { T_MOTIONEVENT,    "getY",                   P_RET_FLOAT_VI },
+    { T_MATH,           "min",                    P_RET_INT_VII },
+    { T_SQUASHACTIVITY, "nativeMultiTouchEvent",  P_VIIIII },
 };
 
 /* ---- string pool: dedup + sort ---- */
-#define MAX_STRINGS 64
+#define MAX_STRINGS 96
 static char *g_strtab[MAX_STRINGS];
 static int g_strcount;
 
@@ -298,7 +331,7 @@ static int type_desc_cmp(const void *pa, const void *pb) {
 }
 
 /* ---- final (sorted) proto table ---- */
-typedef struct { int shorty_str; int ret_type_final; int param_types_final[4]; int nparams; } final_proto;
+typedef struct { int shorty_str; int ret_type_final; int param_types_final[5]; int nparams; } final_proto;
 static final_proto g_proto_final[P_COUNT];
 static int g_proto_order[P_COUNT];
 static const final_proto *g_proto_keys;
@@ -354,6 +387,23 @@ static void emit_move_result(dbuf *c, unsigned reg) { dbuf_u8(c, 0x0a); dbuf_u8(
 static void emit_const4(dbuf *c, unsigned reg, int val) { dbuf_u8(c, 0x12); dbuf_u8(c, (unsigned)(((val & 0xf) << 4) | reg)); }
 static void emit_new_instance(dbuf *c, unsigned reg, unsigned type_idx) { dbuf_u8(c, 0x22); dbuf_u8(c, reg); dbuf_u16(c, type_idx); }
 static void emit_const_string(dbuf *c, unsigned reg, unsigned str_idx) { dbuf_u8(c, 0x1a); dbuf_u8(c, reg); dbuf_u16(c, str_idx); }
+/* format 22b: op vAA, vBB, #+CC -- a register-dest, register-src, signed-
+ * 8-bit-literal binop (add-int/lit8=0xd8, mul-int/lit8=0xda, etc). Byte
+ * layout ground-truthed against real d8 output (see onTouchEvent's own
+ * comment for the full cross-check): byte0=op, byte1=dst(AA), byte2=
+ * src(BB), byte3=literal(CC, signed). */
+static void emit_binop_lit8(dbuf *c, unsigned op, unsigned dst, unsigned src, int lit8) {
+    dbuf_u8(c, op); dbuf_u8(c, dst); dbuf_u8(c, src); dbuf_u8(c, (unsigned)(lit8 & 0xff));
+}
+static void emit_add_int_lit8(dbuf *c, unsigned dst, unsigned src, int lit8) { emit_binop_lit8(c, 0xd8, dst, src, lit8); }
+static void emit_mul_int_lit8(dbuf *c, unsigned dst, unsigned src, int lit8) { emit_binop_lit8(c, 0xda, dst, src, lit8); }
+/* format 12x: op vA, vB -- 2addr binop (vA = vA OP vB), both registers
+ * packed as 4-bit nibbles into one byte (so both must be 0-15, same limit
+ * as emit_invoke's format 35c registers). add-int/2addr = 0xb0, confirmed
+ * against real d8 output. */
+static void emit_add_int_2addr(dbuf *c, unsigned dst, unsigned src) {
+    dbuf_u8(c, 0xb0); dbuf_u8(c, (unsigned)((src << 4) | dst));
+}
 
 int android_dex_build_squash_activity_shim(const char *lib_name,
                                             unsigned char **out_data, size_t *out_len) {
@@ -473,6 +523,12 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
         int m_watcher_after         = g_method_order[M_WATCHER_AFTER];
         int m_edittext_addlistener  = g_method_order[M_EDITTEXT_ADDLISTENER];
         int m_native_textchanged    = g_method_order[M_SA_NATIVE_TEXTCHANGED];
+        int m_motionevent_getpointercount = g_method_order[M_MOTIONEVENT_GETPOINTERCOUNT];
+        int m_motionevent_getactionmasked = g_method_order[M_MOTIONEVENT_GETACTIONMASKED];
+        int m_motionevent_getx_i          = g_method_order[M_MOTIONEVENT_GETX_I];
+        int m_motionevent_gety_i          = g_method_order[M_MOTIONEVENT_GETY_I];
+        int m_math_min                    = g_method_order[M_MATH_MIN];
+        int m_native_multitouch           = g_method_order[M_SA_NATIVE_MULTITOUCH];
 
         /* <init>()V : regs=1 ins=1 outs=1 ; v0=this */
         dbuf_init(&code);
@@ -580,33 +636,74 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
         dbuf_bytes(&data, code.data, code.len);
         dbuf_free(&code);
 
-        /* onTouchEvent(MotionEvent)Z : regs=5 ins=2 outs=3 ;
-         * v3=this v4=event, locals v0=x(float) v1=y(float) v2=action(int).
-         * x and y are immediately converted to their raw 32-bit bit
-         * pattern via Float.floatToIntBits(F)I before ever crossing into
-         * nativeTouchEvent -- see T_FLOAT_CLASS's own comment for the full
-         * story on why a plain float argument doesn't survive that call on
-         * this real device, confirmed as a platform/runtime issue and not
-         * a bug in this bytecode. nativeTouchEvent's own C-side signature
-         * changed to (int,int,int) accordingly, reinterpreting v0/v1's
-         * bits back into real floats via a union. */
+        /* onTouchEvent(MotionEvent)Z : regs=11 ins=2 outs=5 ;
+         * v9=this v10=event, locals v0-v8.
+         *
+         * Two independent native calls happen here now:
+         *  (1) nativeTouchEvent(III) -- UNCHANGED semantics/registers-worth
+         *      of logic from before (pointer-0 x/y via the no-arg getX()/
+         *      getY() overload, raw getAction()), preserving every already-
+         *      proven single-touch behavior (tap/drag-scroll/text-focus)
+         *      byte-for-byte. x/y still cross via Float.floatToIntBits(F)I
+         *      -- see T_FLOAT_CLASS's own comment for why a plain float
+         *      argument doesn't survive this call on this real device.
+         *  (2) nativeMultiTouchEvent(IIIII), new: pointer count + masked
+         *      action (packed into one int: count<<4|actionMasked, since
+         *      format-35c invoke-static hard-caps at 5 register args and 6
+         *      separate ints wouldn't fit) plus pointer-0's ALREADY-
+         *      COMPUTED x/y bits (v0/v1 reused, no redundant re-fetch) and
+         *      a second pointer's x/y bits, safely read via the INDEXED
+         *      getX(I)/getY(I) overload at index min(1,pointerCount-1) --
+         *      always a valid pointer index (0 when there's only one
+         *      finger down, harmlessly re-reading pointer 0's own
+         *      coordinates; 1 once a second finger is down), computed via
+         *      java.lang.Math.min(I,I)I specifically so this never needs
+         *      an if/branch instruction to guard an otherwise-out-of-range
+         *      getX(1)/getY(1) call when only one finger is touching --
+         *      this file has never emitted a branch/goto before and this
+         *      avoids being the first. Every instruction shape and byte
+         *      layout below (lit8 binops 0xd8/0xda, add-int/2addr 0xb0)
+         *      was cross-checked against real javac+d8 output for this
+         *      exact register-reuse pattern before being hand-emitted
+         *      here, same verification practice as the rest of this file. */
         dbuf_init(&code);
-        emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 4,0,0,0,0, (unsigned)m_motionevent_getx);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 10,0,0,0,0, (unsigned)m_motionevent_getx);
         emit_move_result(&code, 0);
         emit_invoke(&code, OP_INVOKE_STATIC, 1, 0,0,0,0,0, (unsigned)m_float_to_int_bits);
         emit_move_result(&code, 0);
-        emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 4,0,0,0,0, (unsigned)m_motionevent_gety);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 10,0,0,0,0, (unsigned)m_motionevent_gety);
         emit_move_result(&code, 1);
         emit_invoke(&code, OP_INVOKE_STATIC, 1, 1,0,0,0,0, (unsigned)m_float_to_int_bits);
         emit_move_result(&code, 1);
-        emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 4,0,0,0,0, (unsigned)m_motionevent_getaction);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 10,0,0,0,0, (unsigned)m_motionevent_getaction);
         emit_move_result(&code, 2);
         emit_invoke(&code, OP_INVOKE_STATIC, 3, 0,1,2,0,0, (unsigned)m_native_touch);
-        emit_const4(&code, 0, 1);
-        emit_return(&code, 0);
+
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 10,0,0,0,0, (unsigned)m_motionevent_getpointercount);
+        emit_move_result(&code, 3);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 1, 10,0,0,0,0, (unsigned)m_motionevent_getactionmasked);
+        emit_move_result(&code, 4);
+        emit_add_int_lit8(&code, 5, 3, -1);
+        emit_const4(&code, 6, 1);
+        emit_invoke(&code, OP_INVOKE_STATIC, 2, 6,5,0,0,0, (unsigned)m_math_min);
+        emit_move_result(&code, 5);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 2, 10,5,0,0,0, (unsigned)m_motionevent_getx_i);
+        emit_move_result(&code, 6);
+        emit_invoke(&code, OP_INVOKE_VIRTUAL, 2, 10,5,0,0,0, (unsigned)m_motionevent_gety_i);
+        emit_move_result(&code, 7);
+        emit_mul_int_lit8(&code, 3, 3, 16);
+        emit_add_int_2addr(&code, 3, 4);
+        emit_invoke(&code, OP_INVOKE_STATIC, 1, 6,0,0,0,0, (unsigned)m_float_to_int_bits);
+        emit_move_result(&code, 6);
+        emit_invoke(&code, OP_INVOKE_STATIC, 1, 7,0,0,0,0, (unsigned)m_float_to_int_bits);
+        emit_move_result(&code, 7);
+        emit_invoke(&code, OP_INVOKE_STATIC, 5, 3,0,1,6,7, (unsigned)m_native_multitouch);
+
+        emit_const4(&code, 8, 1);
+        emit_return(&code, 8);
         dbuf_align4(&data);
         off_code[5] = off_data_start + (uint32_t)data.len;
-        dbuf_u16(&data, 5); dbuf_u16(&data, 2); dbuf_u16(&data, 3); dbuf_u16(&data, 0);
+        dbuf_u16(&data, 11); dbuf_u16(&data, 2); dbuf_u16(&data, 5); dbuf_u16(&data, 0);
         dbuf_u32(&data, 0);
         dbuf_u32(&data, (uint32_t)(code.len / 2));
         dbuf_bytes(&data, code.data, code.len);
@@ -687,31 +784,32 @@ int android_dex_build_squash_activity_shim(const char *lib_name,
      * sublist's method_idx_diff restarts from 0 and must be emitted in
      * ascending final-method_idx order within that sublist. */
     {
-        int direct_raw[7]  = { M_SA_INIT, M_SA_NATIVE_CHANGED, M_SA_NATIVE_CREATED, M_SA_NATIVE_DESTROYED, M_SA_NATIVE_TOUCH, M_SA_NATIVE_EDITTEXT_READY, M_SA_NATIVE_TEXTCHANGED };
+        int direct_raw[8]  = { M_SA_INIT, M_SA_NATIVE_CHANGED, M_SA_NATIVE_CREATED, M_SA_NATIVE_DESTROYED, M_SA_NATIVE_TOUCH, M_SA_NATIVE_EDITTEXT_READY, M_SA_NATIVE_TEXTCHANGED, M_SA_NATIVE_MULTITOUCH };
         int virtual_raw[5] = { M_SA_ONCREATE, M_SA_SURFACECHANGED, M_SA_SURFACECREATED, M_SA_SURFACEDESTROYED, M_SA_ONTOUCHEVENT };
-        int direct_idx[7], virtual_idx[5];
+        int direct_idx[8], virtual_idx[5];
         int prev, v;
 
-        for (i = 0; i < 7; i++) direct_idx[i] = g_method_order[direct_raw[i]];
+        for (i = 0; i < 8; i++) direct_idx[i] = g_method_order[direct_raw[i]];
         for (i = 0; i < 5; i++) virtual_idx[i] = g_method_order[virtual_raw[i]];
-        for (i = 1; i < 7; i++) { v = direct_idx[i]; j = i - 1; while (j >= 0 && direct_idx[j] > v) { direct_idx[j+1] = direct_idx[j]; j--; } direct_idx[j+1] = v; }
+        for (i = 1; i < 8; i++) { v = direct_idx[i]; j = i - 1; while (j >= 0 && direct_idx[j] > v) { direct_idx[j+1] = direct_idx[j]; j--; } direct_idx[j+1] = v; }
         for (i = 1; i < 5; i++) { v = virtual_idx[i]; j = i - 1; while (j >= 0 && virtual_idx[j] > v) { virtual_idx[j+1] = virtual_idx[j]; j--; } virtual_idx[j+1] = v; }
 
         dbuf_align4(&data);
         off_class_data = off_data_start + (uint32_t)data.len;
         dbuf_uleb128(&data, 0);
         dbuf_uleb128(&data, 0);
-        dbuf_uleb128(&data, 7);
+        dbuf_uleb128(&data, 8);
         dbuf_uleb128(&data, 5);
 
         prev = 0;
-        for (i = 0; i < 7; i++) {
+        for (i = 0; i < 8; i++) {
             int is_native = (direct_idx[i] == g_method_order[M_SA_NATIVE_CHANGED] ||
                               direct_idx[i] == g_method_order[M_SA_NATIVE_CREATED] ||
                               direct_idx[i] == g_method_order[M_SA_NATIVE_DESTROYED] ||
                               direct_idx[i] == g_method_order[M_SA_NATIVE_TOUCH] ||
                               direct_idx[i] == g_method_order[M_SA_NATIVE_EDITTEXT_READY] ||
-                              direct_idx[i] == g_method_order[M_SA_NATIVE_TEXTCHANGED]);
+                              direct_idx[i] == g_method_order[M_SA_NATIVE_TEXTCHANGED] ||
+                              direct_idx[i] == g_method_order[M_SA_NATIVE_MULTITOUCH]);
             int is_init = (direct_idx[i] == g_method_order[M_SA_INIT]);
             uint32_t access = is_native ? 0x0108u : (is_init ? 0x10001u : 0x0002u);
             uint32_t code_off = is_init ? off_code[0] : 0;

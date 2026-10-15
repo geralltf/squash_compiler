@@ -259,9 +259,25 @@ static int g_dragging = 0;
  * real swapchain extent -- shared by buttons, the <pre> background, and
  * both scrollbar tracks/thumbs (which are already screen-space, not
  * content-space, so callers pass sx=0 for those). */
+/* apply_zoom: 1 for real page content (subject to pinch-zoom/pan), 0 for
+ * screen-fixed UI chrome (the scrollbar tracks/thumbs, already passed
+ * sx=0/sy=0 since they're screen-space not content-space) that should
+ * stay put regardless of zoom, exactly like a real browser's own
+ * scrollbars never zoom with the page. When set, the content->screen
+ * transform (content - scroll) * zoomScale + zoomPan is applied here,
+ * BEFORE sx/sy -- which are then zeroed since they've already been
+ * folded in -- reach the existing NDC math below unchanged. */
 static void write_rect_quad(Vertex *out, float px, float py, float pw, float ph,
                              float r, float g, float b, float sx, float sy,
-                             uint32_t ew, uint32_t eh) {
+                             uint32_t ew, uint32_t eh, int apply_zoom) {
+    if (apply_zoom) {
+        float zs = sqw_zoom_scale();
+        px = (px - sx) * zs + g_zoom_pan_x;
+        py = (py - sy) * zs + g_zoom_pan_y;
+        pw = pw * zs;
+        ph = ph * zs;
+        sx = 0.0f; sy = 0.0f;
+    }
     float x0 = ((px - sx) / (float)ew) * 2.0f - 1.0f;
     float y0 = ((py - sy) / (float)eh) * 2.0f - 1.0f;
     float x1 = ((px + pw - sx) / (float)ew) * 2.0f - 1.0f;
@@ -273,6 +289,60 @@ static void write_rect_quad(Vertex *out, float px, float py, float pw, float ph,
     out[3].x = x1; out[3].y = y0; out[3].r = r; out[3].g = g; out[3].b = b;
     out[4].x = x1; out[4].y = y1; out[4].r = r; out[4].g = g; out[4].b = b;
     out[5].x = x0; out[5].y = y1; out[5].r = r; out[5].g = g; out[5].b = b;
+}
+
+#define SQW_TRIANGLE_HALF_SIZE 120.0f
+#define SQW_TRIANGLE_MARGIN 80.0f
+#define SQW_TRIANGLE_RESERVED_H (SQW_TRIANGLE_HALF_SIZE * 2.0f + SQW_TRIANGLE_MARGIN * 2.0f)
+
+/* The classic per-vertex-color-interpolated triangle (same red/green/blue
+ * corner assignment as triangle_android.c's own reference demo), embedded
+ * at the bottom of this page's content. Fills the SAME 6-vertex "rect
+ * slot" shape write_rect_quad does (so it slots into g_rectStaging/
+ * rectCount/the existing vkCmdDraw(cmd, rectCount*6, ...) call completely
+ * unchanged, no new pipeline/topology/draw call needed -- this file
+ * already reuses triangle_vulkan.c's own flat-color SPIR-V shader pair
+ * for every rect, and a per-vertex-color interpolated TRIANGLE is exactly
+ * what that shader was originally written for) -- only vertices 0-2 are
+ * the real, visible triangle; 3-5 duplicate them (a zero-area second
+ * "triangle" coincident with the first, harmless, just keeps the 6-per-
+ * slot stride every other rectCount consumer already assumes). cx/cy are
+ * the CONTENT-space center (same transform write_rect_quad applies: this
+ * is what makes it scale/translate with pinch-zoom/pan exactly like every
+ * other box on the page, not a separate hardcoded screen-space overlay). */
+static void write_triangle_quad(Vertex *out, float cx, float cy, float halfSize,
+                                 float sx, float sy, uint32_t ew, uint32_t eh, int apply_zoom) {
+    float px0 = cx,            py0 = cy - halfSize;
+    float px1 = cx + halfSize, py1 = cy + halfSize;
+    float px2 = cx - halfSize, py2 = cy + halfSize;
+
+    if (apply_zoom) {
+        float zs = sqw_zoom_scale();
+        px0 = (px0 - sx) * zs + g_zoom_pan_x; py0 = (py0 - sy) * zs + g_zoom_pan_y;
+        px1 = (px1 - sx) * zs + g_zoom_pan_x; py1 = (py1 - sy) * zs + g_zoom_pan_y;
+        px2 = (px2 - sx) * zs + g_zoom_pan_x; py2 = (py2 - sy) * zs + g_zoom_pan_y;
+        sx = 0.0f; sy = 0.0f;
+    }
+    float x0 = ((px0 - sx) / (float)ew) * 2.0f - 1.0f;
+    float y0 = ((py0 - sy) / (float)eh) * 2.0f - 1.0f;
+    float x1 = ((px1 - sx) / (float)ew) * 2.0f - 1.0f;
+    float y1 = ((py1 - sy) / (float)eh) * 2.0f - 1.0f;
+    float x2 = ((px2 - sx) / (float)ew) * 2.0f - 1.0f;
+    float y2 = ((py2 - sy) / (float)eh) * 2.0f - 1.0f;
+
+    out[0].x = x0; out[0].y = y0; out[0].r = 1.0f; out[0].g = 0.0f; out[0].b = 0.0f;
+    out[1].x = x1; out[1].y = y1; out[1].r = 0.0f; out[1].g = 1.0f; out[1].b = 0.0f;
+    out[2].x = x2; out[2].y = y2; out[2].r = 0.0f; out[2].g = 0.0f; out[2].b = 1.0f;
+    /* Field-by-field, not a whole-struct "out[3] = out[0];" assignment --
+     * this codebase has never exercised struct-copy-by-value assignment
+     * anywhere else, and this project's own history (see
+     * project_android_backend.md) is full of real squash codegen bugs
+     * surfacing on exactly this kind of previously-untested shape; writing
+     * the fields out explicitly is free here and avoids being the first
+     * call site to find out. */
+    out[3].x = x0; out[3].y = y0; out[3].r = 1.0f; out[3].g = 0.0f; out[3].b = 0.0f;
+    out[4].x = x1; out[4].y = y1; out[4].r = 0.0f; out[4].g = 1.0f; out[4].b = 0.0f;
+    out[5].x = x2; out[5].y = y2; out[5].r = 0.0f; out[5].g = 0.0f; out[5].b = 1.0f;
 }
 
 /* ---- real HTML + CSS content: 3 hoverable buttons, one wrapping
@@ -371,6 +441,12 @@ static void build_page_dom_layout(uint32_t ew, uint32_t eh) {
 
     layout_compute(root, (float)ew, (float)eh, &g_layout);
 
+    /* Reserve real scroll space below the actual page content for the
+     * Vulkan interpolated-triangle test (see write_triangle_quad's own
+     * comment) -- this makes it reachable by ordinary one-finger scroll,
+     * not just by zooming out/panning with two fingers. */
+    g_layout.content_h = g_layout.content_h + SQW_TRIANGLE_RESERVED_H;
+
     g_button_count = 0;
     for (i = 0; i < (uint32_t)g_layout.count && g_button_count < MAX_BUTTONS; i++) {
         LayoutBox *lb = &g_layout.boxes[i];
@@ -450,12 +526,29 @@ static VkDeviceMemory g_textVertexMemory = 0;
 static VkDeviceMemory g_rectVertexMemory = 0;
 static uint32_t g_glyphVCount = 0;
 
+/* apply_zoom: same convention as write_rect_quad's own -- see its
+ * comment. Zooming x/y and scale together is the correct way to zoom
+ * text: it moves each character's origin AND grows/shrinks the glyph
+ * itself by the same factor, matching a real browser's text zoom. Safe
+ * to apply per-character in text_draw_string's own loop below even
+ * though cx there still advances using the UNZOOMED scale/advance --
+ * this is a linear (affine) transform, so zooming each successive
+ * unzoomed cx position produces identical relative spacing to zooming
+ * the final advance amounts directly: (cx+advance)*zs+pan == cx*zs+pan +
+ * advance*zs. */
 static void text_draw_char(float x, float y, char ch, float scale,
                             float r, float g, float b, float a,
-                            uint32_t ew, uint32_t eh) {
+                            uint32_t ew, uint32_t eh, int apply_zoom) {
     if (g_glyphVCount + 6 > TEXT_MAX_GLYPHS * 6) return;
     const SqwGlyphMetrics *gm = sqw_glyph_lookup(ch);
     if (!gm || gm->glyph_w <= 0 || gm->glyph_h <= 0) return;
+
+    if (apply_zoom) {
+        float zs = sqw_zoom_scale();
+        x = x * zs + g_zoom_pan_x;
+        y = y * zs + g_zoom_pan_y;
+        scale = scale * zs;
+    }
 
     float px0 = x + (float)gm->bearing_x * scale;
     float py0 = y + (float)gm->bearing_y * scale;
@@ -486,11 +579,11 @@ static void text_draw_char(float x, float y, char ch, float scale,
 }
 
 static void text_draw_string(float x, float y, const char *s, int len, float scale,
-                              float r, float g, float b, float a, uint32_t ew, uint32_t eh) {
+                              float r, float g, float b, float a, uint32_t ew, uint32_t eh, int apply_zoom) {
     float cx = x;
     int i;
     for (i = 0; i < len; i++) {
-        text_draw_char(cx, y, s[i], scale, r, g, b, a, ew, eh);
+        text_draw_char(cx, y, s[i], scale, r, g, b, a, ew, eh, apply_zoom);
         /* See sqw_text_measure()'s own comment (text_metrics.h) -- "cx +=
          * call()" is the same confirmed-broken accumulation shape, fixed
          * the same way. */
@@ -525,7 +618,7 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
             r = btn_node->css_bg[0]; gg = btn_node->css_bg[1]; bl = btn_node->css_bg[2];
         }
         write_rect_quad(&g_rectStaging[rectCount * 6], b->x, b->y, b->w, b->h, r, gg, bl,
-                         g_scroll_x, g_scroll_y, ew, eh);
+                         g_scroll_x, g_scroll_y, ew, eh, 1);
         rectCount++;
         /* Only draw the caption manually when this button is a true
          * ATOMIC-INLINE box (css_display==CSS_DISPLAY_INLINE exactly) --
@@ -545,7 +638,7 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
             if (tlen > 0) {
                 float scale = node_text_scale(btn_node);
                 text_draw_string(b->x - g_scroll_x + 8.0f, b->y - g_scroll_y + (b->h - SQW_FONT_CELL_H * scale) * 0.5f,
-                                  txt, tlen, scale, 1.0f, 1.0f, 1.0f, 1.0f, ew, eh);
+                                  txt, tlen, scale, 1.0f, 1.0f, 1.0f, 1.0f, ew, eh, 1);
             }
         }
     }
@@ -560,7 +653,7 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
                 r = pre_node->css_bg[0]; gg = pre_node->css_bg[1]; bl = pre_node->css_bg[2];
             }
             write_rect_quad(&g_rectStaging[rectCount * 6], lb->x, lb->y, lb->w, lb->h, r, gg, bl,
-                             g_scroll_x, g_scroll_y, ew, eh);
+                             g_scroll_x, g_scroll_y, ew, eh, 1);
             rectCount++;
         } else if (lb->kind == SQW_BOX_TEXT) {
             /* "textnode"/"owner": plain local pointers, read through for
@@ -577,7 +670,7 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
                                                       * black-on-white page. */
             if (anc) { tr = anc->css_color[0]; tg = anc->css_color[1]; tb = anc->css_color[2]; }
             text_draw_string(bx, by, textnode->text + lb->text_start, lb->text_len,
-                              lb->text_scale, tr, tg, tb, 1.0f, ew, eh);
+                              lb->text_scale, tr, tg, tb, 1.0f, ew, eh, 1);
         } else if (lb->kind == SQW_BOX_SPAN && strcmp(lb->node->tag, "label") == 0) {
             /* <label>: same "atomic inline, no separate text run" shape as
              * <button> above -- read its own direct text child. */
@@ -587,7 +680,7 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
             if (tlen > 0) {
                 float tr = 1.0f, tg = 1.0f, tb = 1.0f;
                 if (label_node->css_has_color) { tr = label_node->css_color[0]; tg = label_node->css_color[1]; tb = label_node->css_color[2]; }
-                text_draw_string(bx, by, txt, tlen, lb->text_scale, tr, tg, tb, 1.0f, ew, eh);
+                text_draw_string(bx, by, txt, tlen, lb->text_scale, tr, tg, tb, 1.0f, ew, eh, 1);
             }
         } else if (lb->kind == SQW_BOX_INPUT_TEXT || lb->kind == SQW_BOX_TEXTAREA) {
             DomNode *field_node = lb->node;
@@ -598,15 +691,15 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
             int isFocused = g_has_focus && g_focused_box_index == i;
             float br = isFocused ? 0.20f : 0.55f, bg = isFocused ? 0.45f : 0.55f, bb = isFocused ? 0.85f : 0.55f;
             write_rect_quad(&g_rectStaging[rectCount * 6], lb->x - 2, lb->y - 2, lb->w + 4, lb->h + 4, br, bg, bb,
-                             g_scroll_x, g_scroll_y, ew, eh);
+                             g_scroll_x, g_scroll_y, ew, eh, 1);
             rectCount++;
             write_rect_quad(&g_rectStaging[rectCount * 6], lb->x, lb->y, lb->w, lb->h, 1.0f, 1.0f, 1.0f,
-                             g_scroll_x, g_scroll_y, ew, eh);
+                             g_scroll_x, g_scroll_y, ew, eh, 1);
             rectCount++;
             int vlen = (int)strlen(field_node->form_value);
             if (vlen > 0) {
                 float scale = node_text_scale(field_node);
-                text_draw_string(bx + 6.0f, by + 4.0f, field_node->form_value, vlen, scale, 0.05f, 0.05f, 0.05f, 1.0f, ew, eh);
+                text_draw_string(bx + 6.0f, by + 4.0f, field_node->form_value, vlen, scale, 0.05f, 0.05f, 0.05f, 1.0f, ew, eh, 1);
             }
         } else if (lb->kind == SQW_BOX_INPUT_CHECK) {
             DomNode *check_node = lb->node;
@@ -620,12 +713,12 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
                 float trackG = check_node->form_checked ? 0.60f : 0.35f;
                 float trackB = check_node->form_checked ? 0.30f : 0.35f;
                 write_rect_quad(&g_rectStaging[rectCount * 6], lb->x, lb->y, lb->w, lb->h, trackR, trackG, trackB,
-                                 g_scroll_x, g_scroll_y, ew, eh);
+                                 g_scroll_x, g_scroll_y, ew, eh, 1);
                 rectCount++;
                 float thumbSize = lb->h - 6.0f;
                 float thumbX = check_node->form_checked ? (lb->x + lb->w - thumbSize - 3.0f) : (lb->x + 3.0f);
                 write_rect_quad(&g_rectStaging[rectCount * 6], thumbX, lb->y + 3.0f, thumbSize, thumbSize, 0.95f, 0.95f, 0.95f,
-                                 g_scroll_x, g_scroll_y, ew, eh);
+                                 g_scroll_x, g_scroll_y, ew, eh, 1);
                 rectCount++;
             } else {
                 /* Plain checkbox/radio: bordered face, then (matching
@@ -638,20 +731,34 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
                 const char *type = dom_get_attr(check_node, "type");
                 if (type && strcmp(type, "radio") == 0) isRadio = 1;
                 write_rect_quad(&g_rectStaging[rectCount * 6], lb->x, lb->y, lb->w, lb->h, 0.55f, 0.55f, 0.55f,
-                                 g_scroll_x, g_scroll_y, ew, eh);
+                                 g_scroll_x, g_scroll_y, ew, eh, 1);
                 rectCount++;
                 write_rect_quad(&g_rectStaging[rectCount * 6], lb->x + 1, lb->y + 1, lb->w - 2, lb->h - 2, 1.0f, 1.0f, 1.0f,
-                                 g_scroll_x, g_scroll_y, ew, eh);
+                                 g_scroll_x, g_scroll_y, ew, eh, 1);
                 rectCount++;
                 if (check_node->form_checked) {
                     float inset = isRadio ? 4.0f : 3.0f;
                     write_rect_quad(&g_rectStaging[rectCount * 6], lb->x + inset, lb->y + inset, lb->w - inset * 2, lb->h - inset * 2,
-                                     0.15f, 0.45f, 0.85f, g_scroll_x, g_scroll_y, ew, eh);
+                                     0.15f, 0.45f, 0.85f, g_scroll_x, g_scroll_y, ew, eh, 1);
                     rectCount++;
                 }
             }
         }
     }
+
+    /* The Vulkan interpolated-triangle test, positioned below ALL real
+     * page content (see g_layout.content_h's own reservation above) --
+     * apply_zoom=1 so it scales/translates with pinch-zoom/two-finger-pan
+     * exactly like every other box on the page, through the identical
+     * transform write_rect_quad itself uses. */
+    {
+        float triCenterX = g_layout.content_w * 0.5f;
+        float triCenterY = g_layout.content_h - SQW_TRIANGLE_RESERVED_H * 0.5f;
+        write_triangle_quad(&g_rectStaging[rectCount * 6], triCenterX, triCenterY, SQW_TRIANGLE_HALF_SIZE,
+                             g_scroll_x, g_scroll_y, ew, eh, 1);
+        rectCount++;
+    }
+
     if (g_glyphVCount > 0) {
         void *gp = 0;
         vkMapMemory(g_device, g_textVertexMemory, 0, (VkDeviceSize)g_glyphVCount * sizeof(GlyphVertex), 0, &gp);
@@ -670,10 +777,10 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
         float maxscroll = g_layout.content_h - view_h;
         float thumb_y = (maxscroll > 0) ? (g_scroll_y / maxscroll) * track_free : 0;
         write_rect_quad(&g_rectStaging[rectCount * 6], view_w - SQW_SCROLLBAR_THICKNESS, 0,
-                         SQW_SCROLLBAR_THICKNESS, view_h, 0.25f, 0.25f, 0.28f, 0, 0, ew, eh);
+                         SQW_SCROLLBAR_THICKNESS, view_h, 0.25f, 0.25f, 0.28f, 0, 0, ew, eh, 0);
         rectCount++;
         write_rect_quad(&g_rectStaging[rectCount * 6], view_w - SQW_SCROLLBAR_THICKNESS, thumb_y,
-                         SQW_SCROLLBAR_THICKNESS, thumb_h, 0.6f, 0.6f, 0.65f, 0, 0, ew, eh);
+                         SQW_SCROLLBAR_THICKNESS, thumb_h, 0.6f, 0.6f, 0.65f, 0, 0, ew, eh, 0);
         rectCount++;
     }
     if (g_layout.content_w > view_w) {
@@ -683,10 +790,10 @@ static uint32_t build_frame_geometry(uint32_t ew, uint32_t eh) {
         float maxscroll = g_layout.content_w - view_w;
         float thumb_x = (maxscroll > 0) ? (g_scroll_x / maxscroll) * track_free : 0;
         write_rect_quad(&g_rectStaging[rectCount * 6], 0, view_h - SQW_SCROLLBAR_THICKNESS,
-                         view_w, SQW_SCROLLBAR_THICKNESS, 0.25f, 0.25f, 0.28f, 0, 0, ew, eh);
+                         view_w, SQW_SCROLLBAR_THICKNESS, 0.25f, 0.25f, 0.28f, 0, 0, ew, eh, 0);
         rectCount++;
         write_rect_quad(&g_rectStaging[rectCount * 6], thumb_x, view_h - SQW_SCROLLBAR_THICKNESS,
-                         thumb_w, SQW_SCROLLBAR_THICKNESS, 0.6f, 0.6f, 0.65f, 0, 0, ew, eh);
+                         thumb_w, SQW_SCROLLBAR_THICKNESS, 0.6f, 0.6f, 0.65f, 0, 0, ew, eh, 0);
         rectCount++;
     }
 
@@ -1705,14 +1812,15 @@ void *vulkan_thread_main(void *window) {
             int action = g_touch_action;
             int changed = 0;
 
-            if (action == ACTION_TEXT_CHANGED) {
-                /* form_value was already updated directly by
-                 * nativeTextChanged() before this flag was raised -- just
-                 * redraw so the new characters appear via the existing
-                 * glyph pipeline. None of the coordinate-based hit-test/
-                 * hover/drag logic below applies to this synthetic action,
-                 * so skip straight past all of it via this one guard
-                 * (avoids a goto across the block-scoped locals below). */
+            if (action == ACTION_TEXT_CHANGED || action == ACTION_ZOOM_CHANGED) {
+                /* form_value (ACTION_TEXT_CHANGED) or g_zoom_scale/g_zoom_pan_x/y
+                 * (ACTION_ZOOM_CHANGED, raised by nativeMultiTouchEvent) were
+                 * already updated directly before this flag was raised -- just
+                 * redraw so the change actually appears via the existing
+                 * pipeline. None of the coordinate-based hit-test/hover/drag
+                 * logic below applies to either synthetic action, so skip
+                 * straight past all of it via this one guard (avoids a goto
+                 * across the block-scoped locals below). */
                 changed = 1;
             } else if (action == ACTION_DOWN) {
                 g_drag_down_x = tx; g_drag_down_y = ty;
@@ -1720,8 +1828,15 @@ void *vulkan_thread_main(void *window) {
                 g_drag_total_dist = 0;
                 g_dragging = 1;
             } else if (action == ACTION_MOVE && g_dragging) {
-                float dx = tx - g_drag_down_x;
-                float dy = ty - g_drag_down_y;
+                /* Divide the raw screen-space drag delta by the current
+                 * zoom scale before applying it to scroll, so a one-finger
+                 * drag still tracks the user's actual fingertip 1:1 on
+                 * screen regardless of zoom level (content moves LESS per
+                 * screen-pixel of drag when zoomed in, exactly like a real
+                 * zoomed map/document view). */
+                float zs = sqw_zoom_scale();
+                float dx = (tx - g_drag_down_x) / zs;
+                float dy = (ty - g_drag_down_y) / zs;
                 g_drag_total_dist = g_drag_total_dist + (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
                 float newScrollX = clamp_scroll(g_drag_anchor_scroll_x - dx, g_layout.content_w, (float)extent.width);
                 float newScrollY = clamp_scroll(g_drag_anchor_scroll_y - dy, g_layout.content_h, (float)extent.height);
@@ -1731,13 +1846,14 @@ void *vulkan_thread_main(void *window) {
                 }
             }
 
-            /* Hover hit-test: content-space coordinates (screen + current
-             * scroll), same conversion SQW/sqw_main.c's own mouse-move
-             * handler uses. A finger touching/dragging counts as "hovering"
-             * for a touch device -- there is no separate mouse-move signal
-             * to drive this from otherwise. */
-            float contentX = tx + g_scroll_x;
-            float contentY = ty + g_scroll_y;
+            /* Hover hit-test: content-space coordinates, inverse of the
+             * render-time content->screen transform (scroll AND zoom/pan)
+             * -- same conversion sqw_dispatch_text_focus uses. A finger
+             * touching/dragging counts as "hovering" for a touch device --
+             * there is no separate mouse-move signal to drive this from
+             * otherwise. */
+            float contentX, contentY;
+            sqw_screen_to_content(tx, ty, &contentX, &contentY);
             int hit = -1;
             if (action == ACTION_DOWN || action == ACTION_MOVE) {
                 hit = layout_hit_test(&g_layout, contentX, contentY);
