@@ -1,0 +1,94 @@
+#version 450
+// GPU flow-field pathfinding for castles_android.c.
+//
+// One invocation per nav node of a layered 3D grid (W x W cells x L
+// layers, 1 world unit per cell; layer 0 = ground, 1 = castle
+// wall-walks). Each dispatch is one relaxation sweep of
+//     dist[n] = min(dist[n], dist[m] + cost(n, m))
+// over n's neighbours m; repeated dispatches converge to the exact
+// shortest-path distance from every node to the goal set (seeded with 0
+// by the CPU). Units then simply walk downhill on the field, so one GPU
+// field serves a whole selected group regardless of its size.
+//
+// Movement rules -- these MUST match nav_best_step() in
+// castles_android.c and navtest/castles_world_hosttest:
+//   * 8 horizontal neighbours, into ANY layer whose node is walkable and
+//     within MAXSTEP height (ramps join ground and wall-walk this way);
+//   * diagonals need both orthogonal cells passable (no corner cutting);
+//   * a LADDER node also links to the ladder node one cell away in
+//     direction (flags >> 2) & 3 on another layer, at any height (climb).
+// Updates are done in place (Gauss-Seidel style): values only ever
+// decrease, so racing reads just converge faster.
+layout(local_size_x = 64) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer NavH { float h[]; };
+layout(std430, set = 0, binding = 1) readonly buffer NavF { uint f[]; };
+layout(std430, set = 0, binding = 2) buffer Dist { float d[]; };
+layout(std430, set = 0, binding = 3) buffer Changed { uint changed[]; };
+
+layout(push_constant) uniform PC {
+    int base;    // first node of this field in the buffers
+    int field;   // changed[] slot to flag
+    int W;       // grid width/height in cells
+    int L;       // layers
+} pc;
+
+const uint WALK = 1u;
+const uint LADDER = 2u;
+const float MAXSTEP = 1.3;
+
+void main() {
+    int n = int(gl_GlobalInvocationID.x);
+    int WW = pc.W * pc.W;
+    if (n >= WW * pc.L) return;
+    int i = pc.base + n;
+    uint fi = f[i];
+    if ((fi & WALK) == 0u) return;
+    int layer = n / WW;
+    int r = n - layer * WW;
+    int z = r / pc.W;
+    int x = r - z * pc.W;
+    float hi = h[i];
+    float best = d[i];
+
+    for (int dz = -1; dz <= 1; dz++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dz == 0) continue;
+            int nx = x + dx, nz = z + dz;
+            if (nx < 0 || nz < 0 || nx >= pc.W || nz >= pc.W) continue;
+            bool diag = (dx != 0 && dz != 0);
+            float len = diag ? 1.41421356 : 1.0;
+            for (int m = 0; m < pc.L; m++) {
+                int j = pc.base + m * WW + nz * pc.W + nx;
+                if ((f[j] & WALK) == 0u) continue;
+                float dh = abs(h[j] - hi);
+                if (dh > MAXSTEP) continue;
+                if (diag) {
+                    int ja = pc.base + m * WW + z * pc.W + nx;
+                    int jb = pc.base + m * WW + nz * pc.W + x;
+                    if ((f[ja] & WALK) == 0u || (f[jb] & WALK) == 0u) continue;
+                    if (abs(h[ja] - hi) > MAXSTEP || abs(h[jb] - hi) > MAXSTEP) continue;
+                }
+                best = min(best, d[j] + len + dh * 0.8);
+            }
+        }
+    }
+    if ((fi & LADDER) != 0u) {
+        int dir = int((fi >> 2) & 3u);
+        int lx = x + (dir == 1 ? 1 : (dir == 3 ? -1 : 0));
+        int lz = z + (dir == 2 ? 1 : (dir == 0 ? -1 : 0));
+        if (lx >= 0 && lz >= 0 && lx < pc.W && lz < pc.W) {
+            for (int m = 0; m < pc.L; m++) {
+                if (m == layer) continue;
+                int j = pc.base + m * WW + lz * pc.W + lx;
+                uint fj = f[j];
+                if ((fj & WALK) != 0u && (fj & LADDER) != 0u)
+                    best = min(best, d[j] + 3.0 + abs(h[j] - hi) * 0.5);
+            }
+        }
+    }
+    if (best < d[i] - 0.0005) {
+        d[i] = best;
+        changed[pc.field] = 1u;
+    }
+}

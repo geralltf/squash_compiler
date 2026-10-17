@@ -1,4 +1,5 @@
 #include "include/vulkan_android.h"
+#include "android/jni_min.h"
 #include "android/examples/castles_spirv.h"
 #include "android/examples/castles_world.h"
 
@@ -12,13 +13,33 @@
  * across chunk borders). This file streams those chunks in and out
  * around the camera on a worker thread and renders them with Vulkan.
  *
- * Controls:
- *   left half of the screen  -- virtual joystick: fly forward/back,
- *                               strafe left/right
- *   right half of the screen -- drag to look around
- *   no input for a few seconds -- autopilot flies to the nearest
- *                               castle you haven't discovered yet
- * Fly close to a castle's keep to discover it: the screen flashes gold
+ * Units (castles_units.h): a player squad spawns at the home castle and
+ * guards hold every other castle's courtyard and wall-walks. They are
+ * procedurally generated humanoids (random face colour, hair or helmet,
+ * proportions, team tunic, sword + shield) with procedural idle / walk /
+ * sword-swing / ladder-climb / death animation.
+ *
+ * Pathfinding runs on the GPU: an order builds a 160x160x2 layered nav
+ * window (ground + castle wall-walks, joined by ramp-walls and ladders,
+ * see castles_world.h's "Navigation grid"), and castles_nav.comp relaxes
+ * a distance field over it until it converges (~80-150 ms); units then
+ * walk downhill on that field, so a whole group shares one GPU search.
+ * Goals beyond the window are reached in legs (castles_units.h).
+ *
+ * Controls (mode button, bottom right, toggles between them):
+ *   Command mode (default):
+ *     tap a squad member        -- select it
+ *     drag a rectangle          -- select every squad member inside it
+ *     tap ground or a wall-walk -- move the selection there
+ *     tap an enemy              -- attack it
+ *     select-all button         -- select the whole squad
+ *     two fingers               -- pan (drag), zoom (pinch), turn (twist)
+ *   Fly mode:
+ *     left half of the screen   -- virtual joystick: fly / strafe
+ *     right half of the screen  -- drag to look around
+ *     no input for a few seconds -- autopilot flies to the nearest
+ *                                   castle you haven't discovered yet
+ * Flying close to a castle's keep discovers it: the screen flashes gold
  * and a gold marker is added to the counter in the top-left corner. The
  * minimap (top right) shows terrain, roads and castles around you (red
  * = undiscovered, gold = discovered).
@@ -65,6 +86,19 @@ static int g_slot_vn[SLOTS];
 static int g_slot_castle[SLOTS];
 static float g_slot_keep_x[SLOTS], g_slot_keep_z[SLOTS], g_slot_keep_y[SLOTS];
 static unsigned char g_slot_cells[SLOTS * W_NCELLS];
+/* Per-slot navigation grid (castles_world.h "Navigation grid") and the
+ * terrain vertex heights, for units walking the loaded world. */
+static float g_slot_navh[SLOTS * NAV_L * NAV_N];
+static unsigned char g_slot_navf[SLOTS * NAV_L * NAV_N];
+static float g_slot_hgt[SLOTS * W_GRIDV * W_GRIDV];
+
+static int find_slot(int cx, int cz) {
+    int i;
+    for (i = 0; i < SLOTS; i++) {
+        if (g_slot_used[i] && g_slot_cx[i] == cx && g_slot_cz[i] == cz) return i;
+    }
+    return -1;
+}
 
 /* ------------------------------------------------------------------ */
 /* Worker-thread chunk generation handshake (guarded by g_gen_mutex).  */
@@ -124,13 +158,40 @@ static void *gen_thread_main(void *arg) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Touch input (written on the UI thread, read on the render thread).  */
+/* Touch input: the UI thread queues every multi-touch event; the      */
+/* render thread drains the queue each frame (a polled "latest state"  */
+/* alone loses taps whose DOWN and UP both land between two frames).   */
 /* ------------------------------------------------------------------ */
 static float g_view_w, g_view_h;
-static int g_touch_count;                  /* fingers currently down       */
-static float g_touch_x0, g_touch_y0, g_touch_x1, g_touch_y1;
-static int g_touch_seq;                    /* bumps on every event         */
-static int g_touch_reanchor;               /* finger set changed           */
+
+#define EVQ 128
+static long g_ev_mutex[8];                 /* bionic: all-zero = PTHREAD_MUTEX_INITIALIZER */
+static int g_evq_head, g_evq_tail;
+static int g_evq_action[EVQ], g_evq_count[EVQ];
+static float g_evq_x0[EVQ], g_evq_y0[EVQ], g_evq_x1[EVQ], g_evq_y1[EVQ];
+
+/* Touch Y arrives in window space but the SurfaceView starts below the
+ * title bar; corrected with View.getLocationOnScreen() on the shim's
+ * EditText (same FrameLayout origin as the SurfaceView), queried lazily
+ * on the first touch -- see buttons_android.c's sqw_ensure_surface_offset
+ * for why it can't be queried in nativeEditTextReady (pre-layout). */
+static jobject g_edit_text;
+static jmethodID g_m_getlocationonscreen;
+static int g_surface_offset_y;
+static int g_surface_offset_queried;
+
+static void ensure_surface_offset(void *env) {
+    if (g_surface_offset_queried || !g_edit_text || !g_m_getlocationonscreen) return;
+    g_surface_offset_queried = 1;
+    jintArray locArr = sqw_jni_NewIntArray(env, 2);
+    jvalue locArgs[1];
+    locArgs[0].l = locArr;
+    sqw_jni_CallVoidMethodA(env, g_edit_text, g_m_getlocationonscreen, locArgs);
+    jint locOut[2];
+    sqw_jni_GetIntArrayRegion(env, locArr, 0, 2, locOut);
+    g_surface_offset_y = (int)locOut[1];
+    __android_log_print(4, TAG, "surface screen offset x=%d y=%d", (int)locOut[0], g_surface_offset_y);
+}
 
 /* Raw IEEE-754 bits, not floats -- see buttons_android.c's
  * nativeTouchEvent comment (float JNI arguments arrive as 0.0). The
@@ -144,27 +205,24 @@ void nativeTouchEvent(void *env, void *clazz, int x_bits, int y_bits, int action
  * repeat x0/y0. actionMasked: 0 DOWN, 1 UP, 2 MOVE, 3 CANCEL,
  * 5 POINTER_DOWN, 6 POINTER_UP. */
 void nativeMultiTouchEvent(void *env, void *clazz, int packed, int x0_bits, int y0_bits, int x1_bits, int y1_bits) {
-    (void)env; (void)clazz;
-    int count = packed >> 4;
-    int action = packed & 15;
+    (void)clazz;
+    ensure_surface_offset(env);
     float x0 = *(float *)&x0_bits;
     float y0 = *(float *)&y0_bits;
     float x1 = *(float *)&x1_bits;
     float y1 = *(float *)&y1_bits;
-    if (action == 1 || action == 3) count = 0;
-    if (action == 6) {
-        /* Which finger lifted isn't reported; drop to "re-anchor" and let
-         * the next MOVE (count already reduced) re-establish roles. */
-        count = count - 1;
-        g_touch_reanchor = 1;
+    float oy = (float)g_surface_offset_y;
+    pthread_mutex_lock(g_ev_mutex);
+    int next = (g_evq_head + 1) % EVQ;
+    if (next != g_evq_tail) {
+        int k = g_evq_head;
+        g_evq_action[k] = packed & 15;
+        g_evq_count[k] = packed >> 4;
+        g_evq_x0[k] = x0; g_evq_y0[k] = y0 - oy;
+        g_evq_x1[k] = x1; g_evq_y1[k] = y1 - oy;
+        g_evq_head = next;
     }
-    if (action == 5) g_touch_reanchor = 1;
-    if (count > 2) count = 2;
-    if (count < 0) count = 0;
-    g_touch_x0 = x0; g_touch_y0 = y0;
-    g_touch_x1 = x1; g_touch_y1 = y1;
-    g_touch_count = count;
-    g_touch_seq = g_touch_seq + 1;
+    pthread_mutex_unlock(g_ev_mutex);
 }
 
 /* ------------------------------------------------------------------ */
@@ -275,7 +333,10 @@ static float approx_atan2(float y, float x) {
     return r;
 }
 
-/* Spawn near the closest castle to the origin (castle placement is a
+#include "android/examples/castles_units.h"
+
+/* Spawn at the castle closest to the origin -- the player's home castle,
+ * where the squad appears once its chunk loads (castle placement is a
  * pure function of chunk coords, so this needs no generated chunks). */
 static void choose_spawn(void) {
     int r, cx, cz, a, b, c;
@@ -287,12 +348,13 @@ static void choose_spawn(void) {
                     float kx = (float)cx * W_CHUNK_SIZE + ((float)a + 0.5f) * W_CELL_SIZE;
                     float kz = (float)cz * W_CHUNK_SIZE + ((float)b + 0.5f) * W_CELL_SIZE;
                     g_cam[0] = kx;
-                    g_cam[2] = kz + 70.0f;
-                    float gh = world_ground_height(g_cam[0], g_cam[2]);
-                    g_cam[1] = gh + 24.0f;
+                    g_cam[2] = kz + 30.0f;
+                    float gh = world_ground_height(kx, kz);
+                    g_cam[1] = gh + 30.0f;
                     g_yaw = 0.0f;
-                    g_pitch = -0.32f;
-                    __android_log_print(4, TAG, "spawn near castle chunk %d,%d", cx, cz);
+                    g_pitch = -0.80f;
+                    g_home_set = 1; g_home_cx = cx; g_home_cz = cz;
+                    __android_log_print(4, TAG, "home castle chunk %d,%d", cx, cz);
                     return;
                 }
             }
@@ -303,17 +365,202 @@ static void choose_spawn(void) {
     g_pitch = -0.3f;
 }
 
+/* ------------------------------------------------------------------ */
+/* Modes, gestures and HUD buttons                                     */
+/* ------------------------------------------------------------------ */
+#define MODE_COMMAND 0
+#define MODE_FLY     1
+static int g_mode;                          /* zero-init: command mode  */
+
+#define GS_NONE    0
+#define GS_PENDING 1   /* one finger down, not moved yet (maybe a tap) */
+#define GS_DRAG    2   /* one finger dragging (selection rectangle)    */
+#define GS_MULTI   3   /* two fingers (camera gesture)                 */
+#define GS_BUTTON  4   /* pressed on a HUD button                      */
+#define GS_ENDED   5   /* multi-finger gesture ending, ignore leftovers */
+static int g_gs;
+static int g_gs_button;
+static float g_gs_x0, g_gs_y0, g_gs_cx, g_gs_cy;
+static float g_mt_x0, g_mt_y0, g_mt_x1, g_mt_y1;
+/* Latest pointer state, for the fly-mode joystick/look. */
+static int g_cur_count;
+static float g_cur_x0, g_cur_y0, g_cur_x1, g_cur_y1;
+static int g_touch_reanchor;
+
+#define BTN_NONE   0
+#define BTN_MODE   1
+#define BTN_SELALL 2
+
+static float btn_size(void) { return g_view_w * 0.14f; }
+
+/* HUD button rects: x,y,w,h into r. */
+static void btn_rect(int b, float *r) {
+    float sz = btn_size();
+    r[2] = sz; r[3] = sz;
+    r[1] = g_view_h - sz - 40.0f;
+    if (b == BTN_MODE) r[0] = g_view_w - sz - 30.0f;
+    else r[0] = g_view_w - 2.0f * sz - 60.0f;
+}
+
+static int btn_hit(float x, float y) {
+    float r[4];
+    btn_rect(BTN_MODE, r);
+    if (x >= r[0] && y >= r[1] && x <= r[0] + r[2] && y <= r[1] + r[3]) return BTN_MODE;
+    if (g_mode == MODE_COMMAND) {
+        btn_rect(BTN_SELALL, r);
+        if (x >= r[0] && y >= r[1] && x <= r[0] + r[2] && y <= r[1] + r[3]) return BTN_SELALL;
+    }
+    return BTN_NONE;
+}
+
+static void on_button(int b) {
+    if (b == BTN_MODE) {
+        g_mode = (g_mode == MODE_COMMAND) ? MODE_FLY : MODE_COMMAND;
+        if (g_mode == MODE_COMMAND && g_pitch > -0.55f) g_pitch = -0.75f;
+        g_joy_active = 0; g_look_active = 0;
+        __android_log_print(4, TAG, "mode -> %s", g_mode == MODE_COMMAND ? "command" : "fly");
+    } else if (b == BTN_SELALL) {
+        int i, n = 0;
+        for (i = 0; i < g_un; i++) {
+            u_selected[i] = unit_alive(i) && u_team[i] == TEAM_PLAYER && unit_loaded(i);
+            if (u_selected[i]) n++;
+        }
+        __android_log_print(4, TAG, "select all: %d units", n);
+    }
+}
+
+/* Command-mode tap: select a unit, attack an enemy, or move the
+ * selection to the tapped ground / wall-walk. */
+static void on_tap(float x, float y) {
+    int u = pick_unit(x, y);
+    int i;
+    if (u >= 0 && u_team[u] == TEAM_PLAYER) {
+        for (i = 0; i < g_un; i++) u_selected[i] = 0;
+        u_selected[u] = 1;
+        __android_log_print(4, TAG, "tap at %d,%d: selected unit %d", (int)x, (int)y, u);
+        return;
+    }
+    if (units_selected_count() == 0) {
+        __android_log_print(4, TAG, "tap at %d,%d: nothing selected", (int)x, (int)y);
+        return;
+    }
+    if (u >= 0) {
+        order_move(u_x[u], u_y[u], u_z[u], u_layer[u], u);
+        return;
+    }
+    float hx, hy, hz;
+    int hl;
+    if (pick_ground(x, y, &hx, &hy, &hz, &hl)) order_move(hx, hy, hz, hl, -1);
+}
+
+/* Rectangle selection: every player unit whose body projects inside. */
+static void on_drag_end(void) {
+    float x0 = g_gs_x0 < g_gs_cx ? g_gs_x0 : g_gs_cx, x1 = g_gs_x0 < g_gs_cx ? g_gs_cx : g_gs_x0;
+    float y0 = g_gs_y0 < g_gs_cy ? g_gs_y0 : g_gs_cy, y1 = g_gs_y0 < g_gs_cy ? g_gs_cy : g_gs_y0;
+    int i, n = 0;
+    for (i = 0; i < g_un; i++) {
+        u_selected[i] = 0;
+        if (!unit_alive(i) || u_team[i] != TEAM_PLAYER || !unit_loaded(i)) continue;
+        float px, py;
+        if (!project_point(u_x[i], u_y[i] + 0.9f, u_z[i], &px, &py)) continue;
+        if (px >= x0 && px <= x1 && py >= y0 && py <= y1) { u_selected[i] = 1; n++; }
+    }
+    __android_log_print(4, TAG, "rect select (%d,%d)-(%d,%d): %d units", (int)x0, (int)y0, (int)x1, (int)y1, n);
+}
+
+/* Command-mode two-finger camera: pan (drag), zoom (pinch), turn (twist). */
+static void on_multi(float x0, float y0, float x1, float y1) {
+    float pmx = (g_mt_x0 + g_mt_x1) * 0.5f, pmy = (g_mt_y0 + g_mt_y1) * 0.5f;
+    float nmx = (x0 + x1) * 0.5f, nmy = (y0 + y1) * 0.5f;
+    float pdx = g_mt_x1 - g_mt_x0, pdy = g_mt_y1 - g_mt_y0;
+    float ndx = x1 - x0, ndy = y1 - y0;
+    float pd = w_sqrt(pdx * pdx + pdy * pdy), nd = w_sqrt(ndx * ndx + ndy * ndy);
+    g_mt_x0 = x0; g_mt_y0 = y0; g_mt_x1 = x1; g_mt_y1 = y1;
+    if (g_mode != MODE_COMMAND || pd < 20.0f || nd < 20.0f) return;
+    float ground = world_ground_height(g_cam[0], g_cam[2]);
+    float alt = g_cam[1] - (ground < 0.0f ? 0.0f : ground);
+    if (alt < 5.0f) alt = 5.0f;
+    float scale = alt * 0.0021f;
+    float cy = w_cos(g_yaw), sy = w_sin(g_yaw);
+    float mdx = nmx - pmx, mdy = nmy - pmy;
+    /* Pan: the ground follows the fingers. */
+    float nx = g_cam[0] - (cy * mdx - sy * mdy) * scale;
+    float nz = g_cam[2] - (sy * mdx + cy * mdy) * scale;
+    g_cam[0] = nx; g_cam[2] = nz;
+    /* Zoom along the view direction. */
+    float ratio = nd / pd;
+    float cp = w_cos(g_pitch), sp = w_sin(g_pitch);
+    float move = (ratio - 1.0f) * alt * 1.3f;
+    float zx = g_cam[0] + cp * sy * move, zy = g_cam[1] + sp * move, zz = g_cam[2] - cp * cy * move;
+    g_cam[0] = zx; g_cam[1] = zy; g_cam[2] = zz;
+    /* Twist turns the view. */
+    float pa = approx_atan2(pdy, pdx), na = approx_atan2(ndy, ndx);
+    float da = wrap_angle(na - pa);
+    float nyaw = wrap_angle(g_yaw - da);
+    g_yaw = nyaw;
+}
+
+static void process_touch_events(void) {
+    for (;;) {
+        pthread_mutex_lock(g_ev_mutex);
+        if (g_evq_tail == g_evq_head) { pthread_mutex_unlock(g_ev_mutex); break; }
+        int k = g_evq_tail;
+        int action = g_evq_action[k], count = g_evq_count[k];
+        float x0 = g_evq_x0[k], y0 = g_evq_y0[k], x1 = g_evq_x1[k], y1 = g_evq_y1[k];
+        g_evq_tail = (g_evq_tail + 1) % EVQ;
+        pthread_mutex_unlock(g_ev_mutex);
+
+        g_idle = 0.0f;
+        int cur = count;
+        if (action == 1 || action == 3) cur = 0;
+        if (action == 6) { cur = count - 1; g_touch_reanchor = 1; }
+        if (action == 5) g_touch_reanchor = 1;
+        if (cur > 2) cur = 2;
+        g_cur_count = cur;
+        g_cur_x0 = x0; g_cur_y0 = y0; g_cur_x1 = x1; g_cur_y1 = y1;
+
+        if (action == 0) {
+            g_gs_x0 = x0; g_gs_y0 = y0; g_gs_cx = x0; g_gs_cy = y0;
+            g_gs_button = btn_hit(x0, y0);
+            g_gs = g_gs_button != BTN_NONE ? GS_BUTTON : GS_PENDING;
+        } else if (action == 5) {
+            if (g_gs != GS_BUTTON) {
+                g_gs = GS_MULTI;
+                g_mt_x0 = x0; g_mt_y0 = y0; g_mt_x1 = x1; g_mt_y1 = y1;
+            }
+        } else if (action == 2) {
+            if (g_gs == GS_MULTI && count >= 2) on_multi(x0, y0, x1, y1);
+            else if (g_gs == GS_PENDING || g_gs == GS_DRAG) {
+                g_gs_cx = x0; g_gs_cy = y0;
+                float dx = x0 - g_gs_x0, dy = y0 - g_gs_y0;
+                if (g_gs == GS_PENDING && dx * dx + dy * dy > 32.0f * 32.0f) g_gs = GS_DRAG;
+            }
+        } else if (action == 6) {
+            if (g_gs == GS_MULTI) g_gs = GS_ENDED;
+        } else if (action == 1) {
+            if (g_gs == GS_BUTTON && btn_hit(x0, y0) == g_gs_button) on_button(g_gs_button);
+            else if (g_mode == MODE_COMMAND && g_gs == GS_PENDING) on_tap(x0, y0);
+            else if (g_mode == MODE_COMMAND && g_gs == GS_DRAG) on_drag_end();
+            g_gs = GS_NONE;
+        } else if (action == 3) {
+            g_gs = GS_NONE;
+        }
+    }
+}
+
 static void update_input(float dt) {
-    int count = g_touch_count;
-    float tx0 = g_touch_x0, ty0 = g_touch_y0, tx1 = g_touch_x1, ty1 = g_touch_y1;
-    int seq = g_touch_seq;
-    if (seq != g_last_seq) { g_last_seq = seq; g_idle = 0.0f; }
-    else if (count == 0) { float ni = g_idle + dt; g_idle = ni; }
+    float ni = g_idle + dt;
+    g_idle = ni;
+    process_touch_events();
     if (g_touch_reanchor) {
         g_touch_reanchor = 0;
         g_joy_active = 0;
         g_look_active = 0;
     }
+    /* Fly mode: left half joystick, right half look (not while a HUD
+     * button is held). */
+    int count = (g_mode == MODE_FLY && g_gs != GS_BUTTON) ? g_cur_count : 0;
+    float tx0 = g_cur_x0, ty0 = g_cur_y0, tx1 = g_cur_x1, ty1 = g_cur_y1;
     int haveJoy = 0, haveLook = 0;
     float jx = 0.0f, jy = 0.0f, lx = 0.0f, ly = 0.0f;
     float half = g_view_w * 0.5f;
@@ -357,7 +604,9 @@ static void update_camera(float dt) {
     float cp = w_cos(g_pitch), sp = w_sin(g_pitch), cy = w_cos(g_yaw), sy = w_sin(g_yaw);
     float ground = world_ground_height(g_cam[0], g_cam[2]);
 
-    if (g_idle > 5.0f) {
+    if (g_mode == MODE_COMMAND) {
+        /* RTS camera: moved only by two-finger gestures (on_multi). */
+    } else if (g_idle > 5.0f) {
         /* Autopilot: head for the nearest undiscovered castle. */
         int i, best = -1;
         float bestD = 1e30f;
@@ -411,7 +660,7 @@ static void update_camera(float dt) {
         g_cam[0] = nx; g_cam[1] = nyy; g_cam[2] = nz;
     }
     float g2 = world_ground_height(g_cam[0], g_cam[2]);
-    float minY = g2 + 3.0f;
+    float minY = g2 + (g_mode == MODE_COMMAND ? 6.0f : 3.0f);
     if (g_cam[1] < minY) g_cam[1] = minY;
     if (g_cam[1] > 160.0f) g_cam[1] = 160.0f;
 
@@ -434,7 +683,7 @@ static void update_camera(float dt) {
 /* HUD geometry (render thread only; separate from castles_world.h's   */
 /* mesh globals, which belong to the generator thread).                */
 /* ------------------------------------------------------------------ */
-#define HUD_MAX_VERTS 16000
+#define HUD_MAX_VERTS 20000
 static float g_hud[HUD_MAX_VERTS * W_VSTRIDE];
 static int g_hud_n;
 static float g_hr, g_hg, g_hb;
@@ -474,14 +723,6 @@ static void hud_disc(float cx, float cy, float r) {
         hud_vert(cx + w_cos(a0) * r, cy + w_sin(a0) * r);
         hud_vert(cx + w_cos(a1) * r, cy + w_sin(a1) * r);
     }
-}
-
-static int find_slot(int cx, int cz) {
-    int i;
-    for (i = 0; i < SLOTS; i++) {
-        if (g_slot_used[i] && g_slot_cx[i] == cx && g_slot_cz[i] == cz) return i;
-    }
-    return -1;
 }
 
 #define MAP_CELLS 44
@@ -572,18 +813,94 @@ static void build_hud(void) {
         hud_rect(ix, iy + isz * 0.3f, isz, isz * 0.9f);
     }
 
-    /* Virtual joystick. */
+    /* Virtual joystick (fly mode). */
     float jr = W * 0.13f;
-    if (g_joy_active) {
-        hud_color(0.95f, 0.95f, 0.95f);
-        hud_ring(g_joy_ax, g_joy_ay, jr, 6.0f);
-        float dx = g_joy_x - g_joy_ax, dy = g_joy_y - g_joy_ay;
-        float len = w_sqrt(dx * dx + dy * dy);
-        if (len > jr) { float s = jr / len; float ndx = dx * s, ndy = dy * s; dx = ndx; dy = ndy; }
-        hud_disc(g_joy_ax + dx, g_joy_ay + dy, jr * 0.38f);
+    if (g_mode == MODE_FLY) {
+        if (g_joy_active) {
+            hud_color(0.95f, 0.95f, 0.95f);
+            hud_ring(g_joy_ax, g_joy_ay, jr, 6.0f);
+            float dx = g_joy_x - g_joy_ax, dy = g_joy_y - g_joy_ay;
+            float len = w_sqrt(dx * dx + dy * dy);
+            if (len > jr) { float s = jr / len; float ndx = dx * s, ndy = dy * s; dx = ndx; dy = ndy; }
+            hud_disc(g_joy_ax + dx, g_joy_ay + dy, jr * 0.38f);
+        } else {
+            hud_color(0.85f, 0.88f, 0.92f);
+            hud_ring(W * 0.22f, H * 0.80f, jr, 4.0f);
+        }
+    }
+
+    /* Selection rectangle while dragging (command mode). */
+    if (g_mode == MODE_COMMAND && g_gs == GS_DRAG) {
+        float x0 = g_gs_x0 < g_gs_cx ? g_gs_x0 : g_gs_cx, x1 = g_gs_x0 < g_gs_cx ? g_gs_cx : g_gs_x0;
+        float y0 = g_gs_y0 < g_gs_cy ? g_gs_y0 : g_gs_cy, y1 = g_gs_y0 < g_gs_cy ? g_gs_cy : g_gs_y0;
+        float t = 4.0f;
+        hud_color(0.3f, 1.0f, 0.4f);
+        hud_rect(x0, y0, x1 - x0, t);
+        hud_rect(x0, y1 - t, x1 - x0, t);
+        hud_rect(x0, y0, t, y1 - y0);
+        hud_rect(x1 - t, y0, t, y1 - y0);
+    }
+
+    /* Buttons. */
+    float r[4];
+    btn_rect(BTN_MODE, r);
+    float bx = r[0], by = r[1], bs = r[2];
+    hud_color(0.08f, 0.08f, 0.10f);
+    hud_rect(bx - 5.0f, by - 5.0f, bs + 10.0f, bs + 10.0f);
+    if (g_mode == MODE_COMMAND) {
+        /* Command mode: crossed swords on orange. */
+        hud_color(0.85f, 0.50f, 0.15f);
+        hud_rect(bx, by, bs, bs);
+        hud_color(0.95f, 0.95f, 0.97f);
+        int k;
+        for (k = 0; k < 9; k++) {
+            float t = (float)k / 8.0f;
+            hud_rect(bx + bs * (0.2f + 0.6f * t) - 6.0f, by + bs * (0.2f + 0.6f * t) - 6.0f, 12.0f, 12.0f);
+            hud_rect(bx + bs * (0.8f - 0.6f * t) - 6.0f, by + bs * (0.2f + 0.6f * t) - 6.0f, 12.0f, 12.0f);
+        }
     } else {
-        hud_color(0.85f, 0.88f, 0.92f);
-        hud_ring(W * 0.22f, H * 0.80f, jr, 4.0f);
+        /* Fly mode: a bird/plane chevron on blue. */
+        hud_color(0.18f, 0.42f, 0.80f);
+        hud_rect(bx, by, bs, bs);
+        hud_color(0.95f, 0.95f, 0.97f);
+        int k;
+        for (k = 0; k < 9; k++) {
+            float t = (float)k / 8.0f;
+            hud_rect(bx + bs * (0.15f + 0.35f * t) - 6.0f, by + bs * (0.35f + 0.3f * t) - 6.0f, 12.0f, 12.0f);
+            hud_rect(bx + bs * (0.85f - 0.35f * t) - 6.0f, by + bs * (0.35f + 0.3f * t) - 6.0f, 12.0f, 12.0f);
+        }
+    }
+    if (g_mode == MODE_COMMAND) {
+        /* Select-all: three little figures. */
+        btn_rect(BTN_SELALL, r);
+        bx = r[0]; by = r[1];
+        hud_color(0.08f, 0.08f, 0.10f);
+        hud_rect(bx - 5.0f, by - 5.0f, bs + 10.0f, bs + 10.0f);
+        hud_color(0.20f, 0.55f, 0.28f);
+        hud_rect(bx, by, bs, bs);
+        hud_color(0.95f, 0.95f, 0.97f);
+        int k;
+        for (k = 0; k < 3; k++) {
+            float fx = bx + bs * (0.22f + 0.28f * (float)k);
+            hud_disc(fx, by + bs * 0.34f, bs * 0.08f);
+            hud_rect(fx - bs * 0.07f, by + bs * 0.45f, bs * 0.14f, bs * 0.30f);
+        }
+    }
+
+    /* Squad roster (bottom left): one figure per living squad member,
+     * green when selected. */
+    {
+        int i, n = 0;
+        float fs = W * 0.03f;
+        for (i = 0; i < g_un; i++) {
+            if (!unit_alive(i) || u_team[i] != TEAM_PLAYER) continue;
+            float x = 30.0f + (float)(n % 12) * fs * 1.5f;
+            float y = H - 60.0f - fs * 2.2f - (float)(n / 12) * fs * 2.6f;
+            if (u_selected[i]) hud_color(0.3f, 1.0f, 0.4f); else hud_color(0.92f, 0.92f, 0.95f);
+            hud_disc(x + fs * 0.5f, y + fs * 0.4f, fs * 0.35f);
+            hud_rect(x + fs * 0.15f, y + fs * 0.8f, fs * 0.7f, fs * 1.2f);
+            n++;
+        }
     }
 }
 
@@ -662,14 +979,16 @@ static void copy_offscreen_to_swapchain(VkCommandBuffer cmd, VkImage offscreenIm
         0, 0, 0, 0, 0, 1, &swapToPresent);
 }
 
-/* Creates a buffer + host-visible coherent memory of `size` bytes. */
+/* Creates a buffer + host-visible coherent memory of `size` bytes. (Mali
+ * is unified memory, so host-visible storage buffers are fine for the
+ * compute fields too.) */
 static int create_host_buffer(VkDevice device, VkPhysicalDeviceMemoryProperties *memProps, VkDeviceSize size,
-                              VkBuffer *outBuf, VkDeviceMemory *outMem) {
+                              VkFlags usage, VkBuffer *outBuf, VkDeviceMemory *outMem) {
     VkBufferCreateInfo bufInfo;
     memset(&bufInfo, 0, sizeof(bufInfo));
     bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufInfo.size = size;
-    bufInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bufInfo.usage = usage;
     bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     VkBuffer buf = 0;
     VkResult vr = vkCreateBuffer(device, &bufInfo, 0, &buf);
@@ -701,6 +1020,102 @@ static void upload(VkDevice device, VkDeviceMemory mem, VkDeviceSize offset, con
     if (vr != VK_SUCCESS || !mapped) { __android_log_print(4, TAG, "vkMapMemory failed vr=%d", (int)vr); return; }
     memcpy(mapped, src, (unsigned long)bytes);
     vkUnmapMemory(device, mem);
+}
+
+static void download(VkDevice device, VkDeviceMemory mem, VkDeviceSize offset, void *dst, VkDeviceSize bytes) {
+    void *mapped = 0;
+    VkResult vr = vkMapMemory(device, mem, offset, bytes, 0, &mapped);
+    if (vr != VK_SUCCESS || !mapped) { __android_log_print(4, TAG, "vkMapMemory(read) failed vr=%d", (int)vr); return; }
+    memcpy(dst, mapped, (unsigned long)bytes);
+    vkUnmapMemory(device, mem);
+}
+
+/* ------------------------------------------------------------------ */
+/* GPU flow fields: host side of castles_nav.comp                      */
+/* ------------------------------------------------------------------ */
+#define NAV_ITERS_PER_FRAME 48
+#define VK_PIPELINE_STAGE_HOST_BIT_ 0x4000
+#define VK_ACCESS_HOST_READ_BIT_    0x2000
+
+typedef struct { int base; int field; int W; int L; } NavPush;
+
+static int g_field_batches[NFIELD];
+static long g_field_start_us[NFIELD];
+static uint32_t g_changed[NFIELD * 4];
+
+/* Before recording a frame (GPU idle): finish converged fields, upload
+ * newly built ones, and clear the "changed" flags for this frame's
+ * relaxation batch. Returns 1 if any field needs GPU work this frame. */
+static int fields_prepare(VkDevice device, VkDeviceMemory hMem, VkDeviceMemory fMem,
+                          VkDeviceMemory dMem, VkDeviceMemory cMem, long nowUs) {
+    int f, any = 0;
+    VkDeviceSize fieldF = (VkDeviceSize)NAVW_N * 4;
+    download(device, cMem, 0, g_changed, sizeof(g_changed));
+    for (f = 0; f < NFIELD; f++) {
+        if (g_field_state[f] == FS_COMPUTING && g_field_batches[f] > 0 && g_changed[f] == 0u) {
+            download(device, dMem, (VkDeviceSize)f * fieldF, g_fd + f * NAVW_N, fieldF);
+            g_field_state[f] = FS_READY;
+            __android_log_print(4, TAG, "GPU flow field %d converged: %d sweeps, %d ms",
+                                f, g_field_batches[f] * NAV_ITERS_PER_FRAME, (int)((nowUs - g_field_start_us[f]) / 1000));
+        }
+        if (g_field_state[f] == FS_UPLOAD) {
+            upload(device, hMem, (VkDeviceSize)f * fieldF, g_fh + f * NAVW_N, fieldF);
+            upload(device, fMem, (VkDeviceSize)f * fieldF, g_ff + f * NAVW_N, fieldF);
+            upload(device, dMem, (VkDeviceSize)f * fieldF, g_fd + f * NAVW_N, fieldF);
+            g_field_state[f] = FS_COMPUTING;
+            g_field_batches[f] = 0;
+            g_field_start_us[f] = nowUs;
+        }
+        if (g_field_state[f] == FS_COMPUTING) any = 1;
+    }
+    for (f = 0; f < NFIELD * 4; f++) g_changed[f] = 0u;
+    upload(device, cMem, 0, g_changed, sizeof(g_changed));
+    return any;
+}
+
+/* Records this frame's relaxation sweeps for every computing field. */
+static void fields_record(VkCommandBuffer cmd, VkPipeline pipe, VkPipelineLayout layout, VkDescriptorSet set,
+                          VkBuffer dBuf, VkBuffer cBuf) {
+    int f, k;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, 0);
+    VkBufferMemoryBarrier bb;
+    memset(&bb, 0, sizeof(bb));
+    bb.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    bb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    bb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    bb.srcQueueFamilyIndex = 0xFFFFFFFFu;
+    bb.dstQueueFamilyIndex = 0xFFFFFFFFu;
+    bb.buffer = dBuf;
+    bb.offset = 0;
+    bb.size = ~0ull;
+    uint32_t groups = (uint32_t)((NAVW_N + 63) / 64);
+    for (f = 0; f < NFIELD; f++) {
+        if (g_field_state[f] != FS_COMPUTING) continue;
+        NavPush np;
+        np.base = f * NAVW_N; np.field = f; np.W = NAVW; np.L = NAV_L;
+        vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(np), &np);
+        for (k = 0; k < NAV_ITERS_PER_FRAME; k++) {
+            vkCmdDispatch(cmd, groups, 1, 1);
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, 0, 1, &bb, 0, 0);
+        }
+        g_field_batches[f] = g_field_batches[f] + 1;
+    }
+    /* Make the distances + flags visible to the host after the fence. */
+    VkBufferMemoryBarrier hb[2];
+    memset(hb, 0, sizeof(hb));
+    hb[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    hb[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    hb[0].dstAccessMask = VK_ACCESS_HOST_READ_BIT_;
+    hb[0].srcQueueFamilyIndex = 0xFFFFFFFFu;
+    hb[0].dstQueueFamilyIndex = 0xFFFFFFFFu;
+    hb[0].buffer = dBuf;
+    hb[0].size = ~0ull;
+    hb[1] = hb[0];
+    hb[1].buffer = cBuf;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT_,
+        0, 0, 0, 2, hb, 0, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -739,7 +1154,15 @@ static void stream_chunks(VkDevice device, VkDeviceMemory worldMem) {
             g_slot_castle[slot] = g_gen_castle;
             g_slot_keep_x[slot] = g_gen_keep_x; g_slot_keep_z[slot] = g_gen_keep_z; g_slot_keep_y[slot] = g_gen_keep_y;
             memcpy(g_slot_cells + slot * W_NCELLS, g_gen_cells, W_NCELLS);
+            /* Nav grid + terrain heights straight from the generator's own
+             * globals: it only writes them while state == 1, and the
+             * mutex orders its last writes before these reads. */
+            memcpy(g_slot_navh + slot * (NAV_L * NAV_N), g_nav_h, sizeof(float) * NAV_L * NAV_N);
+            memcpy(g_slot_navf + slot * (NAV_L * NAV_N), g_nav_f, NAV_L * NAV_N);
+            memcpy(g_slot_hgt + slot * (W_GRIDV * W_GRIDV), g_hgt, sizeof(float) * W_GRIDV * W_GRIDV);
             pthread_mutex_unlock(g_gen_mutex);
+            g_nav_cache_slot = -1;
+            if (g_slot_castle[slot]) units_on_castle_loaded(slot);
         }
         gen_set_state(0);
         st = 0;
@@ -1273,11 +1696,120 @@ static void *render_session(void *window) {
     /* ---- vertex buffers ---- */
     VkBuffer worldBuffer = 0;
     VkDeviceMemory worldMemory = 0;
-    if (!create_host_buffer(device, &memProps, (VkDeviceSize)SLOTS * (VkDeviceSize)SLOT_BYTES, &worldBuffer, &worldMemory)) return 0;
+    if (!create_host_buffer(device, &memProps, (VkDeviceSize)SLOTS * (VkDeviceSize)SLOT_BYTES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &worldBuffer, &worldMemory)) return 0;
     VkBuffer hudBuffer = 0;
     VkDeviceMemory hudMemory = 0;
-    if (!create_host_buffer(device, &memProps, (VkDeviceSize)HUD_MAX_VERTS * (VkDeviceSize)VERT_BYTES, &hudBuffer, &hudMemory)) return 0;
+    if (!create_host_buffer(device, &memProps, (VkDeviceSize)HUD_MAX_VERTS * (VkDeviceSize)VERT_BYTES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &hudBuffer, &hudMemory)) return 0;
+    VkBuffer unitBuffer = 0;
+    VkDeviceMemory unitMemory = 0;
+    if (!create_host_buffer(device, &memProps, (VkDeviceSize)U_MAX_VERTS * (VkDeviceSize)VERT_BYTES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &unitBuffer, &unitMemory)) return 0;
     __android_log_print(4, TAG, "vertex buffers ready (%d slots x %d verts)", SLOTS, SLOT_VERTS);
+
+    /* ---- GPU pathfinding: storage buffers + compute pipeline ---- */
+    VkDeviceSize navBytes = (VkDeviceSize)NFIELD * (VkDeviceSize)NAVW_N * 4;
+    VkBuffer navHBuf = 0, navFBuf = 0, distBuf = 0, changedBuf = 0;
+    VkDeviceMemory navHMem = 0, navFMem = 0, distMem = 0, changedMem = 0;
+    if (!create_host_buffer(device, &memProps, navBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, &navHBuf, &navHMem)) return 0;
+    if (!create_host_buffer(device, &memProps, navBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, &navFBuf, &navFMem)) return 0;
+    if (!create_host_buffer(device, &memProps, navBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, &distBuf, &distMem)) return 0;
+    if (!create_host_buffer(device, &memProps, (VkDeviceSize)sizeof(g_changed), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, &changedBuf, &changedMem)) return 0;
+
+    VkDescriptorSetLayoutBinding navBindings[4];
+    memset(navBindings, 0, sizeof(navBindings));
+    for (i = 0; i < 4; i++) {
+        navBindings[i].binding = i;
+        navBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        navBindings[i].descriptorCount = 1;
+        navBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo dslInfo;
+    memset(&dslInfo, 0, sizeof(dslInfo));
+    dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dslInfo.bindingCount = 4;
+    dslInfo.pBindings = navBindings;
+    VkDescriptorSetLayout navDsl = 0;
+    vr = vkCreateDescriptorSetLayout(device, &dslInfo, 0, &navDsl);
+    if (vr != VK_SUCCESS) { __android_log_print(4, TAG, "nav dsl failed vr=%d", (int)vr); return 0; }
+
+    VkDescriptorPoolSize poolSize;
+    poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSize.descriptorCount = 4;
+    VkDescriptorPoolCreateInfo dpInfo;
+    memset(&dpInfo, 0, sizeof(dpInfo));
+    dpInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpInfo.maxSets = 1;
+    dpInfo.poolSizeCount = 1;
+    dpInfo.pPoolSizes = &poolSize;
+    VkDescriptorPool navPool = 0;
+    vr = vkCreateDescriptorPool(device, &dpInfo, 0, &navPool);
+    if (vr != VK_SUCCESS) { __android_log_print(4, TAG, "nav pool failed vr=%d", (int)vr); return 0; }
+
+    VkDescriptorSetAllocateInfo dsAlloc;
+    memset(&dsAlloc, 0, sizeof(dsAlloc));
+    dsAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsAlloc.descriptorPool = navPool;
+    dsAlloc.descriptorSetCount = 1;
+    dsAlloc.pSetLayouts = &navDsl;
+    VkDescriptorSet navSet = 0;
+    vr = vkAllocateDescriptorSets(device, &dsAlloc, &navSet);
+    if (vr != VK_SUCCESS) { __android_log_print(4, TAG, "nav set alloc failed vr=%d", (int)vr); return 0; }
+
+    VkDescriptorBufferInfo navBufInfo[4];
+    navBufInfo[0].buffer = navHBuf;    navBufInfo[0].offset = 0; navBufInfo[0].range = navBytes;
+    navBufInfo[1].buffer = navFBuf;    navBufInfo[1].offset = 0; navBufInfo[1].range = navBytes;
+    navBufInfo[2].buffer = distBuf;    navBufInfo[2].offset = 0; navBufInfo[2].range = navBytes;
+    navBufInfo[3].buffer = changedBuf; navBufInfo[3].offset = 0; navBufInfo[3].range = sizeof(g_changed);
+    VkWriteDescriptorSet navWrites[4];
+    memset(navWrites, 0, sizeof(navWrites));
+    for (i = 0; i < 4; i++) {
+        navWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        navWrites[i].dstSet = navSet;
+        navWrites[i].dstBinding = i;
+        navWrites[i].descriptorCount = 1;
+        navWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        navWrites[i].pBufferInfo = &navBufInfo[i];
+    }
+    vkUpdateDescriptorSets(device, 4, navWrites, 0, 0);
+
+    VkPushConstantRange navPcRange;
+    navPcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    navPcRange.offset = 0;
+    navPcRange.size = sizeof(NavPush);
+    VkPipelineLayoutCreateInfo navPlInfo;
+    memset(&navPlInfo, 0, sizeof(navPlInfo));
+    navPlInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    navPlInfo.setLayoutCount = 1;
+    navPlInfo.pSetLayouts = &navDsl;
+    navPlInfo.pushConstantRangeCount = 1;
+    navPlInfo.pPushConstantRanges = &navPcRange;
+    VkPipelineLayout navLayout = 0;
+    vr = vkCreatePipelineLayout(device, &navPlInfo, 0, &navLayout);
+    if (vr != VK_SUCCESS) { __android_log_print(4, TAG, "nav layout failed vr=%d", (int)vr); return 0; }
+
+    VkShaderModuleCreateInfo csInfo;
+    memset(&csInfo, 0, sizeof(csInfo));
+    csInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    csInfo.codeSize = sizeof(g_castles_nav_spv);
+    csInfo.pCode = g_castles_nav_spv;
+    VkShaderModule csModule = 0;
+    vr = vkCreateShaderModule(device, &csInfo, 0, &csModule);
+    if (vr != VK_SUCCESS) { __android_log_print(4, TAG, "nav shader module failed vr=%d", (int)vr); return 0; }
+
+    VkComputePipelineCreateInfo cpInfo2;
+    memset(&cpInfo2, 0, sizeof(cpInfo2));
+    cpInfo2.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpInfo2.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    cpInfo2.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    cpInfo2.stage.module = csModule;
+    cpInfo2.stage.pName = "main";
+    cpInfo2.layout = navLayout;
+    cpInfo2.basePipelineIndex = -1;
+    VkPipeline navPipeline = 0;
+    vr = vkCreateComputePipelines(device, 0, 1, &cpInfo2, 0, &navPipeline);
+    __android_log_print(4, TAG, "nav compute pipeline vr=%d", (int)vr);
+    if (vr != VK_SUCCESS) return 0;
+    /* A new session has fresh GPU buffers: re-run unfinished fields. */
+    for (i = 0; i < NFIELD; i++) if (g_field_state[i] == FS_COMPUTING) g_field_state[i] = FS_UPLOAD;
 
     VkCommandBufferAllocateInfo cbAllocInfo;
     memset(&cbAllocInfo, 0, sizeof(cbAllocInfo));
@@ -1303,6 +1835,7 @@ static void *render_session(void *window) {
         if (ready) break;
         usleep(5000);
     }
+    units_init();
     if (g_cam[0] == 0.0f && g_cam[1] == 0.0f && g_cam[2] == 0.0f) choose_spawn();
 
     long tPrev = now_us();
@@ -1328,6 +1861,10 @@ static void *render_session(void *window) {
         update_input(dt);
         update_camera(dt);
         stream_chunks(device, worldMemory);
+        int navWork = fields_prepare(device, navHMem, navFMem, distMem, changedMem, tNow);
+        units_update(dt);
+        int unitVerts = units_build_mesh();
+        upload(device, unitMemory, 0, g_ustage, (VkDeviceSize)unitVerts * (VkDeviceSize)VERT_BYTES);
         build_hud();
         upload(device, hudMemory, 0, g_hud, (VkDeviceSize)g_hud_n * (VkDeviceSize)VERT_BYTES);
 
@@ -1343,6 +1880,8 @@ static void *render_session(void *window) {
         memset(&beginInfo, 0, sizeof(beginInfo));
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         vkBeginCommandBuffer(cmd, &beginInfo);
+
+        if (navWork) fields_record(cmd, navPipeline, navLayout, navSet, distBuf, changedBuf);
 
         VkClearValue clears[2];
         memset(clears, 0, sizeof(clears));
@@ -1371,6 +1910,8 @@ static void *render_session(void *window) {
         mat_perspective(proj, 1.05f, g_view_w / g_view_h, 0.5f, 420.0f);
         mat_view(view, g_cam, g_yaw, g_pitch);
         mat_mul(pc.mvp, proj, view);
+        int q;
+        for (q = 0; q < 16; q++) g_vp[q] = pc.mvp[q];
         pc.cam[0] = g_cam[0]; pc.cam[1] = g_cam[1]; pc.cam[2] = g_cam[2]; pc.cam[3] = 0.0f;
         pc.params[0] = g_time;
         pc.params[1] = (float)VIEW_R * W_CHUNK_SIZE * 0.45f;
@@ -1392,6 +1933,13 @@ static void *render_session(void *window) {
             if (dist2 > maxD * maxD) continue;
             vkCmdDraw(cmd, (uint32_t)g_slot_vn[s], 1, (uint32_t)(s * SLOT_VERTS), 0);
             drawn = drawn + 1;
+        }
+
+        /* Units (same lit pipeline + world push constants). */
+        if (unitVerts > 0) {
+            VkDeviceSize uoff = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &unitBuffer, &uoff);
+            vkCmdDraw(cmd, (uint32_t)unitVerts, 1, 0, 0);
         }
 
         /* HUD pass (same pipeline, unlit, pixel-space ortho). */
@@ -1437,9 +1985,26 @@ static void *render_session(void *window) {
         if (tNow - tLog > 3000000) {
             int loaded = 0;
             for (s = 0; s < SLOTS; s++) if (g_slot_used[s]) loaded = loaded + 1;
-            __android_log_print(4, TAG, "fps=%d chunks loaded=%d drawn=%d cam=%d,%d,%d castles=%d",
+            int alive = 0, sqL0 = 0, sqL1 = 0, sqMove = 0, sqWait = 0, sqIdle = 0, sqFight = 0;
+            float sqx = 0.0f, sqz = 0.0f;
+            for (s = 0; s < g_un; s++) {
+                if (!unit_alive(s)) continue;
+                alive = alive + 1;
+                if (u_team[s] != TEAM_PLAYER) continue;
+                if (u_layer[s]) sqL1 = sqL1 + 1; else sqL0 = sqL0 + 1;
+                if (u_state[s] == US_MOVE || u_state[s] == US_CLIMB) sqMove = sqMove + 1;
+                else if (u_state[s] == US_WAIT) sqWait = sqWait + 1;
+                else if (u_state[s] == US_IDLE) sqIdle = sqIdle + 1;
+                else sqFight = sqFight + 1;
+                float nsx = sqx + u_x[s], nsz = sqz + u_z[s];
+                sqx = nsx; sqz = nsz;
+            }
+            int sqn = sqL0 + sqL1;
+            if (sqn > 0) __android_log_print(4, TAG, "squad at %d,%d: moving %d waiting %d idle %d fighting %d",
+                                             (int)(sqx / (float)sqn), (int)(sqz / (float)sqn), sqMove, sqWait, sqIdle, sqFight);
+            __android_log_print(4, TAG, "fps=%d chunks=%d drawn=%d cam=%d,%d,%d castles=%d units=%d squad ground/wall=%d/%d verts=%d",
                                 (int)((long)frames * 1000000 / (tNow - tLog)), loaded, drawn,
-                                (int)g_cam[0], (int)g_cam[1], (int)g_cam[2], g_ndisc);
+                                (int)g_cam[0], (int)g_cam[1], (int)g_cam[2], g_ndisc, alive, sqL0, sqL1, unitVerts);
             frames = 0;
             tLog = tNow;
         }
@@ -1447,6 +2012,21 @@ static void *render_session(void *window) {
 
     /* Session teardown (surface going away). */
     vkDeviceWaitIdle(device);
+    vkDestroyPipeline(device, navPipeline, 0);
+    vkDestroyShaderModule(device, csModule, 0);
+    vkDestroyPipelineLayout(device, navLayout, 0);
+    vkDestroyDescriptorPool(device, navPool, 0);
+    vkDestroyDescriptorSetLayout(device, navDsl, 0);
+    vkDestroyBuffer(device, navHBuf, 0);
+    vkFreeMemory(device, navHMem, 0);
+    vkDestroyBuffer(device, navFBuf, 0);
+    vkFreeMemory(device, navFMem, 0);
+    vkDestroyBuffer(device, distBuf, 0);
+    vkFreeMemory(device, distMem, 0);
+    vkDestroyBuffer(device, changedBuf, 0);
+    vkFreeMemory(device, changedMem, 0);
+    vkDestroyBuffer(device, unitBuffer, 0);
+    vkFreeMemory(device, unitMemory, 0);
     vkDestroyBuffer(device, hudBuffer, 0);
     vkFreeMemory(device, hudMemory, 0);
     vkDestroyBuffer(device, worldBuffer, 0);
@@ -1511,9 +2091,14 @@ void nativeSurfaceDestroyed(void *env, void *clazz) {
 /* The DEX shim's onCreate() always hands native an EditText (used for
  * soft-keyboard text entry by the forms/buttons demos) and its
  * TextWatcher forwards edits; JNI aborts the app if these symbols are
- * missing, so they exist here as no-ops -- this game has no text entry. */
+ * missing. This game has no text entry -- the EditText is only used to
+ * find where the surface sits on screen. */
 void nativeEditTextReady(void *env, void *clazz, void *editText) {
-    (void)env; (void)clazz; (void)editText;
+    (void)clazz;
+    /* Kept only to locate the surface on screen (touch Y offset). */
+    g_edit_text = sqw_jni_NewGlobalRef(env, (jobject)editText);
+    jclass cls = sqw_jni_GetObjectClass(env, g_edit_text);
+    g_m_getlocationonscreen = sqw_jni_GetMethodID(env, cls, "getLocationOnScreen", "([I)V");
 }
 
 void nativeTextChanged(void *env, void *clazz, void *text) {

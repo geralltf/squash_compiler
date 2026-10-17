@@ -1123,9 +1123,103 @@ static void w_emit_water(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Navigation grid (for units / GPU pathfinding)                       */
+/* ------------------------------------------------------------------ */
+/* Per chunk: a 48x48 grid of 1-unit cells in NAV_L layers -- layer 0 is
+ * the ground (terrain, courtyards, ramps, bridge decks), layer 1 the
+ * castle wall-walks (running through towers and over gates). Each node
+ * has a height and flags. Obstacles are stamped by the same prop
+ * emitters that build the meshes, so navigation always matches what is
+ * drawn. Movement rules (shared by the GPU flow-field shader and the CPU
+ * unit stepping in castles_android.c): a node can step to any of its 8
+ * neighbors in ANY layer whose height differs by at most NAV_MAXSTEP
+ * (ramps link the layers this way), and a NAV_LADDER node links to the
+ * ladder node one cell away in direction (flags >> 2) & 3 regardless of
+ * height (climbing). */
+#define NAV_C        48
+#define NAV_L        2
+#define NAV_N        (NAV_C * NAV_C)
+#define NAV_WALK     1
+#define NAV_LADDER   2       /* bits 2-3: direction (D_N..D_W) to the other end */
+#define NAV_TERRAIN  16      /* height is the terrain mesh surface */
+#define NAV_MAXSTEP  1.3f
+
+static float g_nav_h[NAV_L * NAV_N];
+static unsigned char g_nav_f[NAV_L * NAV_N];
+
+static void w_nav_init(void) {
+    int i, j;
+    for (j = 0; j < NAV_C; j++) {
+        for (i = 0; i < NAV_C; i++) {
+            float h = w_mesh_height((float)i + 0.5f, (float)j + 0.5f);
+            g_nav_h[j * NAV_C + i] = h;
+            g_nav_f[j * NAV_C + i] = (unsigned char)(h > -0.45f ? (NAV_WALK | NAV_TERRAIN) : 0);
+            g_nav_h[NAV_N + j * NAV_C + i] = 0.0f;
+            g_nav_f[NAV_N + j * NAV_C + i] = 0;
+        }
+    }
+}
+
+/* Cell index range [i0,i1] whose centers lie inside world span [a0,a1]
+ * along one axis (o = chunk origin on that axis). */
+static int w_nav_lo(float a0, float o) {
+    int i = w_ifloor(a0 - o - 0.5f) + 1;
+    return i < 0 ? 0 : i;
+}
+static int w_nav_hi(float a1, float o) {
+    int i = w_ifloor(a1 - o - 0.5f);
+    return i > NAV_C - 1 ? NAV_C - 1 : i;
+}
+
+/* Sets height+flags of every layer-`layer` cell centered in the rect;
+ * flags == 0 makes it an obstacle (height untouched). */
+static void w_nav_rect(int layer, float x0, float z0, float x1, float z1, float h, int flags) {
+    float ox = w_chunk_origin_x(), oz = w_chunk_origin_z();
+    int i0 = w_nav_lo(x0, ox), i1 = w_nav_hi(x1, ox);
+    int j0 = w_nav_lo(z0, oz), j1 = w_nav_hi(z1, oz);
+    int i, j;
+    for (j = j0; j <= j1; j++) {
+        for (i = i0; i <= i1; i++) {
+            int n = layer * NAV_N + j * NAV_C + i;
+            if (flags) g_nav_h[n] = h;
+            g_nav_f[n] = (unsigned char)flags;
+        }
+    }
+}
+
+static void w_nav_block(float x0, float z0, float x1, float z1) {
+    w_nav_rect(0, x0, z0, x1, z1, 0.0f, 0);
+}
+
+static void w_nav_block_circle(float x, float z, float r) {
+    float ox = w_chunk_origin_x(), oz = w_chunk_origin_z();
+    int i0 = w_nav_lo(x - r, ox), i1 = w_nav_hi(x + r, ox);
+    int j0 = w_nav_lo(z - r, oz), j1 = w_nav_hi(z + r, oz);
+    int i, j;
+    for (j = j0; j <= j1; j++) {
+        for (i = i0; i <= i1; i++) {
+            float dx = ox + (float)i + 0.5f - x, dz = oz + (float)j + 0.5f - z;
+            if (dx * dx + dz * dz <= r * r) g_nav_f[j * NAV_C + i] = 0;
+        }
+    }
+}
+
+/* Marks one end of a ladder: cell centered at (x,z) in `layer`, height
+ * h, linking toward direction dir. Returns 1 if the cell is in-chunk. */
+static int w_nav_ladder_end(int layer, float x, float z, float h, int dir) {
+    int i = w_ifloor(x - w_chunk_origin_x()), j = w_ifloor(z - w_chunk_origin_z());
+    if (i < 0 || j < 0 || i >= NAV_C || j >= NAV_C) return 0;
+    int n = layer * NAV_N + j * NAV_C + i;
+    g_nav_h[n] = h;
+    g_nav_f[n] = (unsigned char)(NAV_WALK | NAV_LADDER | (dir << 2));
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
 /* Props                                                               */
 /* ------------------------------------------------------------------ */
 static void w_tree(float x, float z, float y, float size, int pine) {
+    w_nav_block_circle(x, z, 0.5f);
     m_color(0.42f, 0.29f, 0.17f);
     m_boxc(x, z, 0.18f * size, 0.18f * size, y - 0.3f, y + 1.2f * size);
     if (pine) {
@@ -1142,12 +1236,14 @@ static void w_tree(float x, float z, float y, float size, int pine) {
 }
 
 static void w_rock(float x, float z, float y, float size) {
+    w_nav_block_circle(x, z, 0.9f * size);
     m_color(0.47f, 0.46f, 0.44f);
     m_cone(x, z, 1.1f * size, y - 0.4f, y + 1.1f * size, 5);
 }
 
 static void w_house(float x, float z, float y, int alongX, float tone) {
     float hx = alongX ? 1.5f : 1.1f, hz = alongX ? 1.1f : 1.5f;
+    w_nav_block(x - hx - 0.2f, z - hz - 0.2f, x + hx + 0.2f, z + hz + 0.2f);
     m_color(0.86f * tone, 0.80f * tone, 0.66f * tone);
     m_boxc(x, z, hx, hz, y - 0.5f, y + 2.0f);
     m_color(0.66f, 0.24f, 0.18f);
@@ -1155,6 +1251,7 @@ static void w_house(float x, float z, float y, int alongX, float tone) {
 }
 
 static void w_well(float x, float z, float y) {
+    w_nav_block_circle(x, z, 1.0f);
     m_color(0.60f, 0.58f, 0.55f);
     m_prism(x, z, 0.8f, y - 0.3f, y + 0.8f, 8);
     m_color(0.42f, 0.29f, 0.17f);
@@ -1202,6 +1299,9 @@ static void w_road_segment(float lcx, float lcz, int d) {
 static void w_bridge(float wx, float wz, int alongZ) {
     float deck = 1.2f;
     float hx = alongZ ? 1.1f : 2.05f, hz = alongZ ? 2.05f : 1.1f;
+    /* Walkable deck over the water (between the rails). */
+    if (alongZ) w_nav_rect(0, wx - 0.9f, wz - 2.05f, wx + 0.9f, wz + 2.05f, deck, NAV_WALK);
+    else w_nav_rect(0, wx - 2.05f, wz - 0.9f, wx + 2.05f, wz + 0.9f, deck, NAV_WALK);
     m_color(0.55f, 0.38f, 0.22f);
     m_boxc(wx, wz, hx, hz, deck - 0.25f, deck);
     m_color(0.45f, 0.30f, 0.17f);
@@ -1220,19 +1320,71 @@ static void w_bridge(float wx, float wz, int alongZ) {
 #define WALL_H 4.6f
 #define WALL_T 0.65f
 
-static void w_merlons_x(float x0, float x1, float z, float y) {
+/* Parapet merlons along the OUTER edge of the wall top (side `out` is
+ * -1 or +1 along the wall's thickness axis), leaving the wall-walk on the
+ * inner side clear for units. */
+static void w_merlons_x(float x0, float x1, float z, float y, float out) {
     float x;
+    float za = z + out * WALL_T, zb = z + out * (WALL_T - 0.32f);
+    float zlo = za < zb ? za : zb, zhi = za < zb ? zb : za;
     m_color(0.70f, 0.68f, 0.63f);
     for (x = x0 + 0.35f; x < x1 - 0.2f; x = x + 1.0f) {
-        m_box(x, y, z - WALL_T, x + 0.5f, y + 0.6f, z + WALL_T);
+        m_box(x, y, zlo, x + 0.5f, y + 0.8f, zhi);
     }
 }
 
-static void w_merlons_z(float z0, float z1, float x, float y) {
+static void w_merlons_z(float z0, float z1, float x, float y, float out) {
     float z;
+    float xa = x + out * WALL_T, xb = x + out * (WALL_T - 0.32f);
+    float xlo = xa < xb ? xa : xb, xhi = xa < xb ? xb : xa;
     m_color(0.70f, 0.68f, 0.63f);
     for (z = z0 + 0.35f; z < z1 - 0.2f; z = z + 1.0f) {
-        m_box(x - WALL_T, y, z, x + WALL_T, y + 0.6f, z + 0.5f);
+        m_box(xlo, y, z, xhi, y + 0.8f, z + 0.5f);
+    }
+}
+
+/* Wooden ladder leaning against the inner face of a wall: foot one cell
+ * in from the wall's inner face, top at the wall-walk. (fx,fz) = foot,
+ * (tx,tz) = top, both at the ladder's center line; across = unit vector
+ * along the wall (1,0) or (0,1). */
+static void w_ladder(float fx, float fz, float fy, float tx, float tz, float ty, int alongX) {
+    float ax = alongX ? 0.32f : 0.0f, az = alongX ? 0.0f : 0.32f;
+    float a[3], b[3], c[3], d[3];
+    int k;
+    m_color(0.48f, 0.33f, 0.19f);
+    for (k = -1; k <= 1; k = k + 2) {
+        float sx = ax * (float)k, sz = az * (float)k;
+        float wx = alongX ? 0.05f : 0.0f, wz = alongX ? 0.0f : 0.05f;
+        m_ref(fx + sx, (fy + ty) * 0.5f, fz + sz);
+        g_ref_up = 0;
+        m_set3(a, fx + sx - wx, fy, fz + sz - wz); m_set3(b, fx + sx + wx, fy, fz + sz + wz);
+        m_set3(c, tx + sx + wx, ty, tz + sz + wz); m_set3(d, tx + sx - wx, ty, tz + sz - wz);
+        m_quad(a, b, c, d);
+    }
+    m_color(0.55f, 0.39f, 0.23f);
+    for (k = 1; k < 10; k++) {
+        float t = (float)k / 10.0f;
+        float rx = fx + (tx - fx) * t, ry = fy + (ty - fy) * t, rz = fz + (tz - fz) * t;
+        if (alongX) m_box(rx - 0.32f, ry - 0.04f, rz - 0.04f, rx + 0.32f, ry + 0.04f, rz + 0.04f);
+        else m_box(rx - 0.04f, ry - 0.04f, rz - 0.32f, rx + 0.04f, ry + 0.04f, rz + 0.32f);
+    }
+}
+
+/* Ramp surface in the ground layer: rises linearly from y0 at a0 to y1
+ * at a1 along the wall (x when alongX, else z); b0..b1 is its extent
+ * across the wall's thickness axis. */
+static void w_nav_ramp(float a0, float a1, float b0, float b1, float y0, float y1, int alongX) {
+    float ox = w_chunk_origin_x(), oz = w_chunk_origin_z();
+    int i0 = w_nav_lo(alongX ? a0 : b0, ox), i1 = w_nav_hi(alongX ? a1 : b1, ox);
+    int j0 = w_nav_lo(alongX ? b0 : a0, oz), j1 = w_nav_hi(alongX ? b1 : a1, oz);
+    int i, j;
+    for (j = j0; j <= j1; j++) {
+        for (i = i0; i <= i1; i++) {
+            float a = alongX ? ox + (float)i + 0.5f : oz + (float)j + 0.5f;
+            float t = (a - a0) / (a1 - a0);
+            g_nav_h[j * NAV_C + i] = y0 + (y1 - y0) * t;
+            g_nav_f[j * NAV_C + i] = NAV_WALK;
+        }
     }
 }
 
@@ -1241,8 +1393,23 @@ static void w_merlons_z(float z0, float z1, float x, float y) {
 static void w_wall_piece(float cx, float cz, float y, int s, int kind) {
     float hc = W_CELL_SIZE * 0.5f;
     int alongX = (s == D_N || s == D_S);
+    float top = y + WALL_H;
+    /* Outward sign along the wall's thickness axis. */
+    float out = (s == D_N || s == D_W) ? -1.0f : 1.0f;
+    /* Nav: the wall body blocks the ground; its top is the wall-walk.
+     * (A gate's opening is re-opened below.) */
+    if (alongX) {
+        w_nav_block(cx - hc, cz - WALL_T, cx + hc, cz + WALL_T);
+        w_nav_rect(1, cx - hc, cz - WALL_T, cx + hc, cz + WALL_T, top, NAV_WALK);
+    } else {
+        w_nav_block(cx - WALL_T, cz - hc, cx + WALL_T, cz + hc);
+        w_nav_rect(1, cx - WALL_T, cz - hc, cx + WALL_T, cz + hc, top, NAV_WALK);
+    }
     m_color(0.66f, 0.64f, 0.59f);
     if (kind == K_GATE) {
+        /* Ground passes through the 2-unit opening. */
+        if (alongX) w_nav_rect(0, cx - 0.95f, cz - WALL_T - 0.1f, cx + 0.95f, cz + WALL_T + 0.1f, y, NAV_WALK | NAV_TERRAIN);
+        else w_nav_rect(0, cx - WALL_T - 0.1f, cz - 0.95f, cx + WALL_T + 0.1f, cz + 0.95f, y, NAV_WALK | NAV_TERRAIN);
         /* Two pillars + lintel, leaving a 2-unit opening, plus doors. */
         if (alongX) {
             m_box(cx - hc, y - 1.0f, cz - WALL_T, cx - 1.0f, y + WALL_H, cz + WALL_T);
@@ -1267,39 +1434,56 @@ static void w_wall_piece(float cx, float cz, float y, int s, int kind) {
     }
     if (alongX) {
         m_box(cx - hc, y - 1.0f, cz - WALL_T, cx + hc, y + WALL_H, cz + WALL_T);
-        w_merlons_x(cx - hc, cx + hc, cz, y + WALL_H);
+        w_merlons_x(cx - hc, cx + hc, cz, y + WALL_H, out);
     } else {
         m_box(cx - WALL_T, y - 1.0f, cz - hc, cx + WALL_T, y + WALL_H, cz + hc);
-        w_merlons_z(cz - hc, cz + hc, cx, y + WALL_H);
+        w_merlons_z(cz - hc, cz + hc, cx, y + WALL_H, out);
+    }
+    if (kind == K_WALL && ((w_hash2(w_ifloor(cx), w_ifloor(cz), 4711u) % 3u) == 0u)) {
+        /* Ladder up the inner face. Foot one cell inward of the wall-walk's
+         * inner row; the climb link joins foot (ground) and top (wall). */
+        float in = -out;
+        int toTop = s, toFoot = (s + 2) & 3;
+        if (alongX) {
+            float lx = cx + 0.5f, footZ = cz + in * 1.5f, topZ = cz + in * 0.5f;
+            if (w_nav_ladder_end(0, lx, footZ, y, toTop) && w_nav_ladder_end(1, lx, topZ, top, toFoot))
+                w_ladder(lx, cz + in * 1.45f, y - 0.1f, lx, cz + in * (WALL_T + 0.06f), top + 0.7f, 1);
+        } else {
+            float lz = cz + 0.5f, footX = cx + in * 1.5f, topX = cx + in * 0.5f;
+            if (w_nav_ladder_end(0, footX, lz, y, toTop) && w_nav_ladder_end(1, topX, lz, top, toFoot))
+                w_ladder(cx + in * 1.45f, lz, y - 0.1f, cx + in * (WALL_T + 0.06f), lz, top + 0.7f, 0);
+        }
     }
     if (kind == K_RAMP) {
         /* Ramp-wall: a stone ramp on the courtyard side climbing to the
          * wall walk. Inward direction is opposite of s. */
         float a[3], b[3], c[3], d[3], e[3], f[3];
-        float top = y + WALL_H - 0.2f;
+        float rtop = y + WALL_H - 0.2f;
         m_color(0.60f, 0.57f, 0.52f);
         if (alongX) {
             float zi = (s == D_N) ? cz + WALL_T : cz - WALL_T;
             float zo = (s == D_N) ? zi + 1.4f : zi - 1.4f;
             m_ref(cx + 0.6f, y + 1.0f, (zi + zo) * 0.5f);
             m_set3(a, cx - hc + 0.2f, y, zi); m_set3(b, cx + hc - 0.2f, y, zi);
-            m_set3(c, cx + hc - 0.2f, top, zi);
+            m_set3(c, cx + hc - 0.2f, rtop, zi);
             m_set3(d, cx - hc + 0.2f, y, zo); m_set3(e, cx + hc - 0.2f, y, zo);
-            m_set3(f, cx + hc - 0.2f, top, zo);
+            m_set3(f, cx + hc - 0.2f, rtop, zo);
             m_tri(a, b, c); m_tri(d, e, f);
             m_quad(a, c, f, d);          /* sloped walking surface */
             m_quad(b, e, f, c);          /* tall end               */
+            w_nav_ramp(cx - hc + 0.2f, cx + hc - 0.2f, zi < zo ? zi : zo, zi < zo ? zo : zi, y, rtop, 1);
         } else {
             float xi = (s == D_W) ? cx + WALL_T : cx - WALL_T;
             float xo = (s == D_W) ? xi + 1.4f : xi - 1.4f;
             m_ref((xi + xo) * 0.5f, y + 1.0f, cz + 0.6f);
             m_set3(a, xi, y, cz - hc + 0.2f); m_set3(b, xi, y, cz + hc - 0.2f);
-            m_set3(c, xi, top, cz + hc - 0.2f);
+            m_set3(c, xi, rtop, cz + hc - 0.2f);
             m_set3(d, xo, y, cz - hc + 0.2f); m_set3(e, xo, y, cz + hc - 0.2f);
-            m_set3(f, xo, top, cz + hc - 0.2f);
+            m_set3(f, xo, rtop, cz + hc - 0.2f);
             m_tri(a, b, c); m_tri(d, e, f);
             m_quad(a, c, f, d);
             m_quad(b, e, f, c);
+            w_nav_ramp(cz - hc + 0.2f, cz + hc - 0.2f, xi < xo ? xi : xo, xi < xo ? xo : xi, y, rtop, 0);
         }
     }
 }
@@ -1312,8 +1496,23 @@ static void w_tower_piece(float cx, float cz, float y, int corner) {
     if (corner == 1) { m_box(cx - hc, y - 1.0f, cz - WALL_T, cx, y + WALL_H, cz + WALL_T); m_box(cx - WALL_T, y - 1.0f, cz, cx + WALL_T, y + WALL_H, cz + hc); }
     if (corner == 2) { m_box(cx - hc, y - 1.0f, cz - WALL_T, cx, y + WALL_H, cz + WALL_T); m_box(cx - WALL_T, y - 1.0f, cz - hc, cx + WALL_T, y + WALL_H, cz); }
     if (corner == 3) { m_box(cx, y - 1.0f, cz - WALL_T, cx + hc, y + WALL_H, cz + WALL_T); m_box(cx - WALL_T, y - 1.0f, cz - hc, cx + WALL_T, y + WALL_H, cz); }
+    /* Nav: tower + stubs block the ground; the wall-walk runs along the
+     * stubs and through the tower's middle (doorways drawn below). */
+    float top = y + WALL_H;
+    w_nav_block_circle(cx, cz, 2.0f);
+    if (corner == 0 || corner == 3) { w_nav_block(cx, cz - WALL_T, cx + hc, cz + WALL_T); w_nav_rect(1, cx - 1.0f, cz - WALL_T, cx + hc, cz + WALL_T, top, NAV_WALK); }
+    if (corner == 1 || corner == 2) { w_nav_block(cx - hc, cz - WALL_T, cx, cz + WALL_T); w_nav_rect(1, cx - hc, cz - WALL_T, cx + 1.0f, cz + WALL_T, top, NAV_WALK); }
+    if (corner == 0 || corner == 1) { w_nav_block(cx - WALL_T, cz, cx + WALL_T, cz + hc); w_nav_rect(1, cx - WALL_T, cz - 1.0f, cx + WALL_T, cz + hc, top, NAV_WALK); }
+    if (corner == 2 || corner == 3) { w_nav_block(cx - WALL_T, cz - hc, cx + WALL_T, cz); w_nav_rect(1, cx - WALL_T, cz - hc, cx + WALL_T, cz + 1.0f, top, NAV_WALK); }
     m_color(0.69f, 0.67f, 0.62f);
     m_prism(cx, cz, 1.7f, y - 1.0f, y + 7.2f, 8);
+    /* Dark doorways where the wall-walks enter the tower. */
+    m_color(0.16f, 0.13f, 0.11f);
+    if (corner == 0 || corner == 3) m_box(cx + 1.40f, top, cz - 0.45f, cx + 1.75f, top + 1.9f, cz + 0.45f);
+    if (corner == 1 || corner == 2) m_box(cx - 1.75f, top, cz - 0.45f, cx - 1.40f, top + 1.9f, cz + 0.45f);
+    if (corner == 0 || corner == 1) m_box(cx - 0.45f, top, cz + 1.40f, cx + 0.45f, top + 1.9f, cz + 1.75f);
+    if (corner == 2 || corner == 3) m_box(cx - 0.45f, top, cz - 1.75f, cx + 0.45f, top + 1.9f, cz - 1.40f);
+    m_color(0.69f, 0.67f, 0.62f);
     m_color(0.72f, 0.70f, 0.65f);
     m_prism(cx, cz, 2.0f, y + 7.2f, y + 7.9f, 8);
     m_color(0.62f, 0.22f, 0.20f);
@@ -1322,6 +1521,7 @@ static void w_tower_piece(float cx, float cz, float y, int corner) {
 
 static void w_keep_piece(float cx, float cz, float y, uint32_t h) {
     float s = 1.6f;
+    w_nav_block(cx - 1.9f, cz - 1.9f, cx + 1.9f, cz + 1.9f);
     m_color(0.72f, 0.70f, 0.66f);
     m_boxc(cx, cz, s, s, y - 1.0f, y + 9.0f);
     m_color(0.74f, 0.72f, 0.67f);
@@ -1342,6 +1542,7 @@ static void w_keep_piece(float cx, float cz, float y, uint32_t h) {
 static int g_out_has_castle;
 static float g_out_keep_x, g_out_keep_z, g_out_keep_y;
 static unsigned char g_out_cells[W_NCELLS];   /* minimap: 0 water 1 land 2 mountain 3 road 4 castle 5 forest */
+static float g_out_castle_base;               /* ground height inside the castle */
 
 static void world_init(void) {
     world_init_tiles();
@@ -1533,6 +1734,8 @@ static int world_gen_chunk(int cx, int cz, float *out, int cap) {
     w_plan_chunk();
     w_wfc_solve();
     w_flatten_castle();
+    g_out_castle_base = g_castle_base;
+    w_nav_init();
     w_emit_terrain();
     w_emit_water();
     w_emit_props();
@@ -1561,8 +1764,9 @@ static int world_selftest(int *out, float *scratch, int cap) {
     out[n] = g_nt; n++;
     int k;
     for (k = 0; k < 4; k++) {
-        int cx = (k == 0) ? 0 : (k == 1) ? 3 : (k == 2) ? -2 : 5;
-        int cz = (k == 0) ? 0 : (k == 1) ? -1 : (k == 2) ? 4 : 5;
+        /* chunk (1,0) holds a castle: covers walls, ramps and ladders */
+        int cx = (k == 0) ? 0 : (k == 1) ? 3 : (k == 2) ? -2 : 1;
+        int cz = (k == 0) ? 0 : (k == 1) ? -1 : (k == 2) ? 4 : 0;
         int vn = world_gen_chunk(cx, cz, scratch, cap);
         uint32_t th = 0u;
         int c;
@@ -1573,6 +1777,29 @@ static int world_selftest(int *out, float *scratch, int cap) {
         out[n] = (int)(th & 0x7fffffff); n++;
         out[n] = vn; n++;
         out[n] = g_wfc_attempts * 10 + g_out_has_castle; n++;
+        /* Nav grid: walkable count per layer, ladder count, exact flag
+         * hash, and the height total. (Heights are compared as a sum, not
+         * hashed per cell: squash evaluates float locals in double
+         * precision, so a per-cell truncation like (int)(h*4) can land
+         * on the other side of a boundary than a gcc float build --
+         * confirmed by building this file with -Dfloat=double.) */
+        int walk0 = 0, walk1 = 0, ladders = 0, q;
+        uint32_t fh = 0u;
+        float hsum = 0.0f;
+        for (q = 0; q < NAV_L * NAV_N; q++) {
+            int f = g_nav_f[q];
+            if (f & NAV_WALK) {
+                if (q < NAV_N) walk0++; else walk1++;
+                float hs2 = hsum + g_nav_h[q];
+                hsum = hs2;
+            }
+            if (f & NAV_LADDER) ladders++;
+            uint32_t fh2 = ((fh * 131u) & 0xFFFFFFFFu) + (uint32_t)f;
+            fh = fh2 & 0xFFFFFFFFu;
+        }
+        out[n] = walk0 * 10000 + walk1; n++;
+        out[n] = ladders * 1000000 + (int)hsum; n++;
+        out[n] = (int)(fh & 0x7fffffff); n++;
     }
     return n;
 }
