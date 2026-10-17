@@ -918,6 +918,18 @@ static void a64_load_sym_value(CodeGenA64 *cg, Symbol *sym) {
             else if (sz == 4)  a64_emit(a, sym_unsigned ? a64_LDR32(A64_X0, A64_X0, 0) : a64_LDRSW(A64_X0, A64_X0, 0));
             else if (sz == 2)  a64_emit(a, a64_LDRH(A64_X0, A64_X0, 0));
             else               a64_emit(a, a64_LDRB(A64_X0, A64_X0, 0));
+        } else {
+            /* Pointer global (pointer_depth > 0, not an array): its value
+             * is the 8-byte pointer stored in its wdata slot. This branch
+             * used to be missing entirely, so reading ANY global pointer
+             * variable yielded the variable's own address instead of the
+             * pointer it holds -- e.g. "static float *g_mv; g_mv = buf;"
+             * then "g_mv[0] = x" wrote into g_mv's own slot and the
+             * globals after it (found via castles_android.c's mesh
+             * writer; also the real root cause of the long-unexplained
+             * "global DomNode* reads back a different, address-shaped
+             * value" bug worked around in the SQW Android demos). */
+            a64_emit(a, a64_LDR(A64_X0, A64_X0, 0));
         }
     } else if (sym->kind == SYM_ENUM_VAL) {
         a64_load_imm(cg, A64_X0, sym->enum_value);
@@ -1089,8 +1101,16 @@ static int a64_is_float(CodeGenA64 *cg, ASTNode *n) {
              * ...; rgb[0] = ...; }") got misclassified as an integer
              * assignment, truncating every real color/coordinate value
              * written through it to 0 via FCVTZS before it ever reached
-             * memory. */
-            if (s->type->pointer_depth > 0 && s->array_size == 0) {
+             * memory.
+             *
+             * "<= 0", not "== 0": a plain non-array LOCAL is registered
+             * with array_size -1 (only parameters get 0), so "== 0" made
+             * this fix apply to float-pointer PARAMETERS only -- "float *o
+             * = buf; o[0] = 1.5f;" with o a local (or global) still took
+             * the integer path, FCVTZS-truncating 1.5 to 1 and storing the
+             * int bit pattern (confirmed via disassembly: fcvtzs + str w19
+             * instead of fcvt s0 + str s0). */
+            if (s->type->pointer_depth > 0 && s->array_size <= 0) {
                 TypeInfo pointee = *s->type;
                 pointee.pointer_depth -= 1;
                 return a64_is_float_type(cg->sym, &pointee);
@@ -1749,6 +1769,62 @@ static void a64_float_expr(CodeGenA64 *cg, ASTNode *n) {
  * whatever was there before — a subsequent 64-bit LDR (as ++/-- used to
  * do unconditionally) reads that garbage into the high bits, corrupting
  * any address arithmetic done with the result (e.g. "buf[wi++]"). */
+/* Element size for C pointer arithmetic ("p + i", "p - i", "p - q",
+ * "p++", "p += i"), or 0 when no scaling applies (not a pointer/array
+ * expression, or a byte-granular char/void pointer). Mirrors codegen.c's
+ * pointer_pointee_size() for the x86 backend -- this backend never got
+ * that port, so every "ptr + i" on a non-char pointer advanced i BYTES
+ * instead of i elements (found via castles_android.c: "float *o = buf +
+ * n * 9;" landed n*9 bytes in, so every later o[k] store hit a misaligned
+ * address). Deliberately reuses a64_index_elem_size() -- the exact sizing
+ * "p[i]" already uses -- so "p + i" always agrees with "&p[i]". */
+static int a64_pointer_arith_size(CodeGenA64 *cg, ASTNode *n) {
+    if (!n) return 0;
+    TypeInfo *t = NULL;
+    int is_array = 0;
+    if (n->kind == AST_VAR) {
+        Symbol *s = symtable_lookup(cg->sym, n->var.name);
+        if (!s || !s->type) return 0;
+        if (s->kind != SYM_VAR && s->kind != SYM_PARAM && s->kind != SYM_GLOBAL) return 0;
+        t = s->type;
+        is_array = s->array_size > 0;
+    } else if (n->kind == AST_MEMBER) {
+        int off;
+        ASTNode *f = a64_resolve_field(cg, n->member.obj, n->member.field, &off);
+        if (!f || !f->field.type) return 0;
+        t = f->field.type;
+        is_array = f->field.array_size > 0;
+    } else if (n->kind == AST_CAST) {
+        t = n->cast.type;
+    } else if (n->kind == AST_ADDR && n->addr.operand && n->addr.operand->kind == AST_INDEX) {
+        /* "&arr[i] + n": a pointer to arr's element type. */
+        int esz = a64_index_elem_size(cg, n->addr.operand->index.array);
+        return esz > 1 ? esz : 0;
+    } else {
+        return 0;
+    }
+    if (!t) return 0;
+    if (!is_array && t->pointer_depth < 1) return 0;
+    if (!is_array && t->pointer_depth == 1 && t->base &&
+        (strcmp(t->base, "void") == 0 || strcmp(t->base, "char") == 0 ||
+         strcmp(t->base, "signed char") == 0 || strcmp(t->base, "unsigned char") == 0))
+        return 0;
+    int esz = a64_index_elem_size(cg, n);
+    return esz > 1 ? esz : 0;
+}
+
+/* x0 += step (or -= when sub), for ++/-- steps that may exceed ADD/SUB's
+ * 12-bit immediate (pointers to structs larger than 4095 bytes). */
+static void a64_emit_step(CodeGenA64 *cg, int sub, int step) {
+    Arm64Asm *a = cg->asm_;
+    if (step <= 4095) {
+        a64_emit(a, sub ? a64_SUB_imm(A64_X0, A64_X0, step) : a64_ADD_imm(A64_X0, A64_X0, step));
+    } else {
+        a64_load_imm(cg, A64_X10, step);
+        a64_emit(a, sub ? a64_SUB(A64_X0, A64_X0, A64_X10) : a64_ADD(A64_X0, A64_X0, A64_X10));
+    }
+}
+
 static int a64_lvalue_size(CodeGenA64 *cg, ASTNode *n) {
     if (!n) return 8;
     switch (n->kind) {
@@ -2145,35 +2221,43 @@ static void a64_expr(CodeGenA64 *cg, ASTNode *n) {
         } else if (strcmp(op, "++") == 0 && !n->unary.post) {
             /* pre-increment: ++v */
             int sz = a64_lvalue_size(cg, n->unary.operand);
+            int step = a64_pointer_arith_size(cg, n->unary.operand);
+            if (step < 1) step = 1;
             a64_lvalue(cg, n->unary.operand);
             a64_emit(a, a64_MOV(A64_X8, A64_X0));   /* addr in x8 */
             a64_emit_sized_load(a, A64_X0, A64_X8, sz);
-            a64_emit(a, a64_ADD_imm(A64_X0, A64_X0, 1));
+            a64_emit_step(cg, 0, step);
             a64_emit_sized_store(a, A64_X0, A64_X8, sz);
         } else if (strcmp(op, "--") == 0 && !n->unary.post) {
             int sz = a64_lvalue_size(cg, n->unary.operand);
+            int step = a64_pointer_arith_size(cg, n->unary.operand);
+            if (step < 1) step = 1;
             a64_lvalue(cg, n->unary.operand);
             a64_emit(a, a64_MOV(A64_X8, A64_X0));
             a64_emit_sized_load(a, A64_X0, A64_X8, sz);
-            a64_emit(a, a64_SUB_imm(A64_X0, A64_X0, 1));
+            a64_emit_step(cg, 1, step);
             a64_emit_sized_store(a, A64_X0, A64_X8, sz);
         } else if (strcmp(op, "++") == 0 && n->unary.post) {
             /* post-increment: v++ */
             int sz = a64_lvalue_size(cg, n->unary.operand);
+            int step = a64_pointer_arith_size(cg, n->unary.operand);
+            if (step < 1) step = 1;
             a64_lvalue(cg, n->unary.operand);
             a64_emit(a, a64_MOV(A64_X8, A64_X0));
             a64_emit_sized_load(a, A64_X0, A64_X8, sz);
             a64_emit(a, a64_MOV(A64_X9, A64_X0));   /* save old value */
-            a64_emit(a, a64_ADD_imm(A64_X0, A64_X0, 1));
+            a64_emit_step(cg, 0, step);
             a64_emit_sized_store(a, A64_X0, A64_X8, sz);
             a64_emit(a, a64_MOV(A64_X0, A64_X9));   /* return old */
         } else if (strcmp(op, "--") == 0 && n->unary.post) {
             int sz = a64_lvalue_size(cg, n->unary.operand);
+            int step = a64_pointer_arith_size(cg, n->unary.operand);
+            if (step < 1) step = 1;
             a64_lvalue(cg, n->unary.operand);
             a64_emit(a, a64_MOV(A64_X8, A64_X0));
             a64_emit_sized_load(a, A64_X0, A64_X8, sz);
             a64_emit(a, a64_MOV(A64_X9, A64_X0));
-            a64_emit(a, a64_SUB_imm(A64_X0, A64_X0, 1));
+            a64_emit_step(cg, 1, step);
             a64_emit_sized_store(a, A64_X0, A64_X8, sz);
             a64_emit(a, a64_MOV(A64_X0, A64_X9));
         } else if (strcmp(op, "*") == 0) {
@@ -2261,15 +2345,37 @@ static void a64_expr(CodeGenA64 *cg, ASTNode *n) {
         }
 
         /* Integer binary: eval right first, push, eval left, pop */
+        /* Pointer arithmetic scaling -- see a64_pointer_arith_size(). */
+        int lp_sz = (strcmp(op,"+") == 0 || strcmp(op,"-") == 0) ? a64_pointer_arith_size(cg, n->binary.left) : 0;
+        int rp_sz = (strcmp(op,"+") == 0) ? a64_pointer_arith_size(cg, n->binary.right) : 0;
+        int pdiff_sz = 0;
+        if (strcmp(op,"-") == 0 && lp_sz > 0) {
+            pdiff_sz = a64_pointer_arith_size(cg, n->binary.right);
+            if (pdiff_sz > 0) lp_sz = 0;   /* ptr - ptr: divide below instead */
+        }
+
         a64_expr(cg, n->binary.right);
         push_temp(cg);
         a64_expr(cg, n->binary.left);
         pop_temp_into_x1(cg);   /* left=x0, right=x1 */
 
+        if (lp_sz > 0) {
+            a64_load_imm(cg, A64_X8, lp_sz);
+            a64_emit(a, a64_MUL(A64_X1, A64_X1, A64_X8));
+        } else if (rp_sz > 0) {
+            a64_load_imm(cg, A64_X8, rp_sz);
+            a64_emit(a, a64_MUL(A64_X0, A64_X0, A64_X8));
+        }
+
         if (strcmp(op,"+") == 0)
             a64_emit(a, a64_ADD(A64_X0, A64_X0, A64_X1));
-        else if (strcmp(op,"-") == 0)
+        else if (strcmp(op,"-") == 0) {
             a64_emit(a, a64_SUB(A64_X0, A64_X0, A64_X1));
+            if (pdiff_sz > 1) {
+                a64_load_imm(cg, A64_X8, pdiff_sz);
+                a64_emit(a, a64_SDIV(A64_X0, A64_X0, A64_X8));
+            }
+        }
         else if (strcmp(op,"*") == 0)
             a64_emit(a, a64_MUL(A64_X0, A64_X0, A64_X1));
         else if (strcmp(op,"/") == 0)
@@ -2358,6 +2464,14 @@ static void a64_expr(CodeGenA64 *cg, ASTNode *n) {
                 a64_expr(cg, n->assign.rhs);
             }
             pop_temp_into_x1(cg);  /* lhs=x1, rhs=x0 */
+            if (strcmp(op,"+=") == 0 || strcmp(op,"-=") == 0) {
+                /* "p += i" on a pointer advances i elements, not bytes. */
+                int psz = a64_pointer_arith_size(cg, n->assign.lhs);
+                if (psz > 1) {
+                    a64_load_imm(cg, A64_X8, psz);
+                    a64_emit(a, a64_MUL(A64_X0, A64_X0, A64_X8));
+                }
+            }
             if (strcmp(op,"+=") == 0)       a64_emit(a, a64_ADD(A64_X0, A64_X1, A64_X0));
             else if (strcmp(op,"-=") == 0)  a64_emit(a, a64_SUB(A64_X0, A64_X1, A64_X0));
             else if (strcmp(op,"*=") == 0)  a64_emit(a, a64_MUL(A64_X0, A64_X1, A64_X0));
