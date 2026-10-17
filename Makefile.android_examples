@@ -52,7 +52,7 @@ FORMS_APK    := android/examples/forms_android.apk
 CASTLES_SRC  := android/examples/castles_android.c
 CASTLES_DEPS := android/examples/castles_world.h android/examples/castles_units.h android/examples/castles_spirv.h
 CASTLES_PKG  := com.squash.castles
-CASTLES_APK  := android/examples/castles_android.apk
+CASTLES_APK  := android/examples/spark.apk
 
 .PHONY: all triangle buttons forms castles clean install install-triangle install-buttons install-forms install-castles run run-triangle run-buttons run-forms run-castles
 
