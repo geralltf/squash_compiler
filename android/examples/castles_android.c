@@ -40,9 +40,14 @@
  *     tap an enemy              -- attack it
  *     select-all button         -- select the whole squad (double-tap:
  *                                  also move the camera to it)
- *     two fingers               -- pan (drag), zoom (pinch), turn (twist)
+ *     two fingers               -- pan (drag) or zoom (pinch): each
+ *                                  gesture is one or the other
+ *     navigator circle (bottom left) -- drag left/right to rotate the
+ *                                  view, up/down to tilt it; double-tap
+ *                                  to reset (north up, default tilt)
  *   Fly mode:
- *     left half of the screen   -- virtual joystick: fly / strafe
+ *     left half of the screen   -- virtual joystick: pan forward/back
+ *                                  and left/right at the current height
  *     right half of the screen  -- drag to look around
  *     no input for a few seconds -- autopilot flies to the nearest
  *                                   castle you haven't discovered yet
@@ -343,6 +348,22 @@ static float approx_atan2(float y, float x) {
 
 #include "android/examples/castles_units.h"
 
+#define RTS_PITCH     (-0.98f)        /* default: ~56 degrees down     */
+#define RTS_PITCH_MIN (-1.50f)        /* nearly straight down          */
+#define RTS_PITCH_MAX (-0.40f)        /* low, toward the horizon       */
+#define RTS_DIST_MIN 12.0f
+#define RTS_DIST_MAX 110.0f
+static float g_rts_tx, g_rts_ty, g_rts_tz, g_rts_dist;
+static float g_rts_pitch;            /* set only by the navigator circle */
+
+/* Places g_cam for the current target/distance. */
+static void rts_place_camera(void) {
+    float cp = w_cos(g_pitch), sp = w_sin(g_pitch), cy = w_cos(g_yaw), sy = w_sin(g_yaw);
+    g_cam[0] = g_rts_tx - cp * sy * g_rts_dist;
+    g_cam[1] = g_rts_ty - sp * g_rts_dist;
+    g_cam[2] = g_rts_tz + cp * cy * g_rts_dist;
+}
+
 /* Spawn at the castle closest to the origin -- the player's home castle,
  * where the squad appears once its chunk loads (castle placement is a
  * pure function of chunk coords, so this needs no generated chunks). */
@@ -355,12 +376,13 @@ static void choose_spawn(void) {
                 if (w_chunk_castle(cx, cz, &a, &b, &c)) {
                     float kx = (float)cx * W_CHUNK_SIZE + ((float)a + 0.5f) * W_CELL_SIZE;
                     float kz = (float)cz * W_CHUNK_SIZE + ((float)b + 0.5f) * W_CELL_SIZE;
-                    g_cam[0] = kx;
-                    g_cam[2] = kz + 30.0f;
-                    float gh = world_ground_height(kx, kz);
-                    g_cam[1] = gh + 30.0f;
                     g_yaw = 0.0f;
-                    g_pitch = -0.80f;
+                    g_rts_pitch = RTS_PITCH;
+                    g_pitch = RTS_PITCH;
+                    g_rts_tx = kx; g_rts_tz = kz + 4.0f;
+                    g_rts_ty = world_ground_height(kx, kz);
+                    g_rts_dist = 42.0f;
+                    rts_place_camera();
                     g_home_set = 1; g_home_cx = cx; g_home_cz = cz;
                     __android_log_print(4, TAG, "home castle chunk %d,%d", cx, cz);
                     return;
@@ -386,10 +408,17 @@ static int g_mode;                          /* zero-init: command mode  */
 #define GS_MULTI   3   /* two fingers (camera gesture)                 */
 #define GS_BUTTON  4   /* pressed on a HUD button                      */
 #define GS_ENDED   5   /* multi-finger gesture ending, ignore leftovers */
+#define GS_NAV     6   /* dragging on the camera navigator circle      */
 static int g_gs;
 static int g_gs_button;
 static float g_gs_x0, g_gs_y0, g_gs_cx, g_gs_cy;
 static float g_mt_x0, g_mt_y0, g_mt_x1, g_mt_y1;
+/* Two-finger gesture kind, decided once per gesture (see on_multi). */
+#define MT_UNDECIDED 0
+#define MT_PAN       1
+#define MT_ZOOM      2
+static int g_mt_kind;
+static float g_mt_start_mx, g_mt_start_my, g_mt_start_spread;
 /* Latest pointer state, for the fly-mode joystick/look. */
 static int g_cur_count;
 static float g_cur_x0, g_cur_y0, g_cur_x1, g_cur_y1;
@@ -433,12 +462,9 @@ static void focus_on_squad(void) {
     }
     if (n == 0) return;
     cx = cx / (float)n; cy = cy / (float)n; cz = cz / (float)n;
-    if (g_pitch > -0.55f) g_pitch = -0.75f;
-    float cp = w_cos(g_pitch), sp = w_sin(g_pitch), cyw = w_cos(g_yaw), syw = w_sin(g_yaw);
-    float dist = 26.0f;
-    g_cam[0] = cx - cp * syw * dist;
-    g_cam[1] = cy - sp * dist;
-    g_cam[2] = cz + cp * cyw * dist;
+    g_rts_tx = cx; g_rts_tz = cz; g_rts_ty = cy;
+    if (g_rts_dist > 40.0f) g_rts_dist = 40.0f;
+    rts_place_camera();
     __android_log_print(4, TAG, "camera -> squad at %d,%d", (int)cx, (int)cz);
 }
 
@@ -447,7 +473,7 @@ static long g_selall_last_us;
 static void on_button(int b) {
     if (b == BTN_MODE) {
         g_mode = (g_mode == MODE_COMMAND) ? MODE_FLY : MODE_COMMAND;
-        if (g_mode == MODE_COMMAND && g_pitch > -0.55f) g_pitch = -0.75f;
+        if (g_mode == MODE_COMMAND) rts_begin();
         g_joy_active = 0; g_look_active = 0;
         __android_log_print(4, TAG, "mode -> %s", g_mode == MODE_COMMAND ? "command" : "fly");
     } else if (b == BTN_SELALL) {
@@ -503,7 +529,66 @@ static void on_drag_end(void) {
     __android_log_print(4, TAG, "rect select (%d,%d)-(%d,%d): %d units", (int)x0, (int)y0, (int)x1, (int)y1, n);
 }
 
-/* Command-mode two-finger camera: pan (drag), zoom (pinch), turn (twist). */
+/* ------------------------------------------------------------------ */
+/* Command-mode camera: fixed-angle, isometric-style 3D view           */
+/* ------------------------------------------------------------------ */
+/* The camera orbits a target point on the ground at distance g_rts_dist.
+ * Controls are strictly separated:
+ *   - two fingers on the map: pan (drag) and zoom (pinch) only -- never
+ *     any change of angle;
+ *   - the navigator circle (bottom left): rotate around the target
+ *     (left/right) and tilt (up/down) only; double-tap it to reset. */
+static float rts_ground_at(float x, float z) {
+    float h = nav_terrain_height(x, z);
+    return h < 0.0f ? 0.0f : h;
+}
+
+/* Switches to the fixed view, looking at what's under the screen center
+ * (or straight ahead of the camera if that's off the world). */
+static void rts_begin(void) {
+    float hx, hy, hz;
+    int hl;
+    if (pick_ground(g_view_w * 0.5f, g_view_h * 0.5f, &hx, &hy, &hz, &hl)) {
+        g_rts_tx = hx; g_rts_tz = hz;
+    } else {
+        float sy = w_sin(g_yaw), cy = w_cos(g_yaw);
+        g_rts_tx = g_cam[0] + sy * 30.0f; g_rts_tz = g_cam[2] - cy * 30.0f;
+    }
+    g_rts_ty = rts_ground_at(g_rts_tx, g_rts_tz);
+    if (g_rts_dist < RTS_DIST_MIN) g_rts_dist = 40.0f;
+    if (g_rts_pitch > RTS_PITCH_MAX || g_rts_pitch < RTS_PITCH_MIN) g_rts_pitch = RTS_PITCH;
+    g_pitch = g_rts_pitch;
+    rts_place_camera();
+}
+
+/* Per frame: follow the terrain under the target smoothly. */
+static void rts_update(float dt) {
+    float gy = rts_ground_at(g_rts_tx, g_rts_tz);
+    float k = w_clampf(dt * 4.0f, 0.0f, 1.0f);
+    float ny = g_rts_ty + (gy - g_rts_ty) * k;
+    g_rts_ty = ny;
+    g_pitch = g_rts_pitch;
+    rts_place_camera();
+}
+
+/* Starts a two-finger gesture (called on POINTER_DOWN). */
+static void multi_begin(float x0, float y0, float x1, float y1) {
+    g_mt_x0 = x0; g_mt_y0 = y0; g_mt_x1 = x1; g_mt_y1 = y1;
+    g_mt_kind = MT_UNDECIDED;
+    g_mt_start_mx = (x0 + x1) * 0.5f; g_mt_start_my = (y0 + y1) * 0.5f;
+    float dx = x1 - x0, dy = y1 - y0;
+    g_mt_start_spread = w_sqrt(dx * dx + dy * dy);
+}
+
+/* Two fingers: EITHER pan OR zoom, never both. Fingers never keep exactly
+ * the same spread while dragging, so applying spread changes as zoom on
+ * every move made vertical (and any) pans zoom in and out. Instead, once
+ * the fingers have moved ~40 px, the gesture is classified -- fingers
+ * travelling together = pan, spreading/closing = pinch -- and stays that
+ * for the rest of the gesture.
+ * Panning moves the map by the same world distance per pixel everywhere
+ * on screen (scaled for the view's centre), so up/down drags feel like
+ * left/right ones. Pinch zooms toward the centre. */
 static void on_multi(float x0, float y0, float x1, float y1) {
     float pmx = (g_mt_x0 + g_mt_x1) * 0.5f, pmy = (g_mt_y0 + g_mt_y1) * 0.5f;
     float nmx = (x0 + x1) * 0.5f, nmy = (y0 + y1) * 0.5f;
@@ -511,28 +596,92 @@ static void on_multi(float x0, float y0, float x1, float y1) {
     float ndx = x1 - x0, ndy = y1 - y0;
     float pd = w_sqrt(pdx * pdx + pdy * pdy), nd = w_sqrt(ndx * ndx + ndy * ndy);
     g_mt_x0 = x0; g_mt_y0 = y0; g_mt_x1 = x1; g_mt_y1 = y1;
-    if (g_mode != MODE_COMMAND || pd < 20.0f || nd < 20.0f) return;
-    float ground = world_ground_height(g_cam[0], g_cam[2]);
-    float alt = g_cam[1] - (ground < 0.0f ? 0.0f : ground);
-    if (alt < 5.0f) alt = 5.0f;
-    float scale = alt * 0.0021f;
+    if (g_mode != MODE_COMMAND) return;
+    if (g_mt_kind == MT_UNDECIDED) {
+        float tx = nmx - g_mt_start_mx, ty = nmy - g_mt_start_my;
+        float travel = w_sqrt(tx * tx + ty * ty);
+        float spread = w_absf(nd - g_mt_start_spread);
+        if (travel < 40.0f && spread < 40.0f) return;     /* not decided yet */
+        g_mt_kind = spread > travel ? MT_ZOOM : MT_PAN;
+        return;                                            /* start clean next move */
+    }
+    /* World units per pixel at the target's distance. */
+    float half = 1.05f * 0.5f;
+    float upp = 2.0f * g_rts_dist * (w_sin(half) / w_cos(half)) / g_view_h;
     float cy = w_cos(g_yaw), sy = w_sin(g_yaw);
+    float foreshorten = -w_sin(g_rts_pitch);       /* ground depth is squashed on screen */
+    if (foreshorten < 0.3f) foreshorten = 0.3f;
     float mdx = nmx - pmx, mdy = nmy - pmy;
-    /* Pan: the ground follows the fingers. */
-    float nx = g_cam[0] - (cy * mdx - sy * mdy) * scale;
-    float nz = g_cam[2] - (sy * mdx + cy * mdy) * scale;
-    g_cam[0] = nx; g_cam[2] = nz;
-    /* Zoom along the view direction. */
-    float ratio = nd / pd;
-    float cp = w_cos(g_pitch), sp = w_sin(g_pitch);
-    float move = (ratio - 1.0f) * alt * 1.3f;
-    float zx = g_cam[0] + cp * sy * move, zy = g_cam[1] + sp * move, zz = g_cam[2] - cp * cy * move;
-    g_cam[0] = zx; g_cam[1] = zy; g_cam[2] = zz;
-    /* Twist turns the view. */
-    float pa = approx_atan2(pdy, pdx), na = approx_atan2(ndy, ndx);
-    float da = wrap_angle(na - pa);
-    float nyaw = wrap_angle(g_yaw - da);
-    g_yaw = nyaw;
+    if (g_mt_kind == MT_ZOOM) { mdx = 0.0f; mdy = 0.0f; }
+    /* The map follows the fingers: right -> camera moves left, down ->
+     * camera moves forward (further "up" the map comes into view). */
+    float side = -mdx * upp, fwd = mdy * upp / foreshorten;
+    float ntx = g_rts_tx + cy * side + sy * fwd;
+    float ntz = g_rts_tz + sy * side - cy * fwd;
+    g_rts_tx = ntx; g_rts_tz = ntz;
+    if (g_mt_kind == MT_ZOOM && pd > 30.0f && nd > 30.0f) {
+        float nd2 = g_rts_dist * (pd / nd);
+        g_rts_dist = w_clampf(nd2, RTS_DIST_MIN, RTS_DIST_MAX);
+    }
+    rts_place_camera();
+}
+
+/* ---- camera navigator circle (command mode, bottom left) ---- */
+static float g_nav_lx, g_nav_ly;            /* last finger position     */
+static float g_nav_kx, g_nav_ky;            /* knob offset (drawn)      */
+static float g_nav_moved;                   /* total drag, tap detection */
+static long g_nav_last_tap_us;
+
+static void nav_circle(float *cx, float *cy, float *r) {
+    *r = g_view_w * 0.11f;
+    *cx = 40.0f + *r;
+    *cy = g_view_h - 230.0f - *r;
+}
+
+static int nav_hit(float x, float y) {
+    float cx, cy, r;
+    if (g_mode != MODE_COMMAND) return 0;
+    nav_circle(&cx, &cy, &r);
+    float dx = x - cx, dy = y - cy;
+    return dx * dx + dy * dy <= (r * 1.2f) * (r * 1.2f);
+}
+
+/* Left/right rotates around the target, up/down tilts (up = toward the
+ * horizon, down = toward straight down). Direct and proportional, like a
+ * trackball: the angle changes with the finger and stays when released. */
+static void nav_drag(float x, float y) {
+    float dx = x - g_nav_lx, dy = y - g_nav_ly;
+    g_nav_lx = x; g_nav_ly = y;
+    float nm = g_nav_moved + w_absf(dx) + w_absf(dy);
+    g_nav_moved = nm;
+    float ny = wrap_angle(g_yaw - dx * 0.0085f);
+    g_yaw = ny;
+    float np = w_clampf(g_rts_pitch - dy * 0.0045f, RTS_PITCH_MIN, RTS_PITCH_MAX);
+    g_rts_pitch = np;
+    g_pitch = np;
+    float cx, cy, r;
+    nav_circle(&cx, &cy, &r);
+    float kx = x - cx, ky = y - cy;
+    float kd = w_sqrt(kx * kx + ky * ky), lim = r * 0.62f;
+    if (kd > lim) { float sc = lim / kd; float nkx = kx * sc, nky = ky * sc; kx = nkx; ky = nky; }
+    g_nav_kx = kx; g_nav_ky = ky;
+    rts_place_camera();
+}
+
+static void nav_release(void) {
+    g_nav_kx = 0.0f; g_nav_ky = 0.0f;
+    if (g_nav_moved < 20.0f) {
+        long now = now_us();
+        if (now - g_nav_last_tap_us < 450000) {
+            /* Double-tap: default angle, north up. */
+            g_yaw = 0.0f;
+            g_rts_pitch = RTS_PITCH;
+            g_pitch = RTS_PITCH;
+            rts_place_camera();
+            __android_log_print(4, TAG, "camera angle reset");
+        }
+        g_nav_last_tap_us = now;
+    }
 }
 
 static void process_touch_events(void) {
@@ -557,14 +706,19 @@ static void process_touch_events(void) {
         if (action == 0) {
             g_gs_x0 = x0; g_gs_y0 = y0; g_gs_cx = x0; g_gs_cy = y0;
             g_gs_button = btn_hit(x0, y0);
-            g_gs = g_gs_button != BTN_NONE ? GS_BUTTON : GS_PENDING;
+            if (g_gs_button != BTN_NONE) g_gs = GS_BUTTON;
+            else if (nav_hit(x0, y0)) {
+                g_gs = GS_NAV;
+                g_nav_lx = x0; g_nav_ly = y0; g_nav_moved = 0.0f;
+            } else g_gs = GS_PENDING;
         } else if (action == 5) {
-            if (g_gs != GS_BUTTON) {
+            if (g_gs != GS_BUTTON && g_gs != GS_NAV) {
                 g_gs = GS_MULTI;
-                g_mt_x0 = x0; g_mt_y0 = y0; g_mt_x1 = x1; g_mt_y1 = y1;
+                multi_begin(x0, y0, x1, y1);
             }
         } else if (action == 2) {
-            if (g_gs == GS_MULTI && count >= 2) on_multi(x0, y0, x1, y1);
+            if (g_gs == GS_NAV) nav_drag(x0, y0);
+            else if (g_gs == GS_MULTI && count >= 2) on_multi(x0, y0, x1, y1);
             else if (g_gs == GS_PENDING || g_gs == GS_DRAG) {
                 g_gs_cx = x0; g_gs_cy = y0;
                 float dx = x0 - g_gs_x0, dy = y0 - g_gs_y0;
@@ -573,11 +727,13 @@ static void process_touch_events(void) {
         } else if (action == 6) {
             if (g_gs == GS_MULTI) g_gs = GS_ENDED;
         } else if (action == 1) {
-            if (g_gs == GS_BUTTON && btn_hit(x0, y0) == g_gs_button) on_button(g_gs_button);
+            if (g_gs == GS_NAV) nav_release();
+            else if (g_gs == GS_BUTTON && btn_hit(x0, y0) == g_gs_button) on_button(g_gs_button);
             else if (g_mode == MODE_COMMAND && g_gs == GS_PENDING) on_tap(x0, y0);
             else if (g_mode == MODE_COMMAND && g_gs == GS_DRAG) on_drag_end();
             g_gs = GS_NONE;
         } else if (action == 3) {
+            if (g_gs == GS_NAV) nav_release();
             g_gs = GS_NONE;
         }
     }
@@ -640,7 +796,7 @@ static void update_camera(float dt) {
     float ground = world_ground_height(g_cam[0], g_cam[2]);
 
     if (g_mode == MODE_COMMAND) {
-        /* RTS camera: moved only by two-finger gestures (on_multi). */
+        rts_update(dt);
     } else if (g_idle > 5.0f) {
         /* Autopilot: head for the nearest undiscovered castle. */
         int i, best = -1;
@@ -687,17 +843,22 @@ static void update_camera(float dt) {
         float nyy = g_cam[1] + vy * dt;
         g_cam[0] = nx; g_cam[2] = nz; g_cam[1] = nyy;
     } else {
-        float fx = cp * sy, fy = sp, fz = -cp * cy;
+        /* Joystick pans over the ground: forward/back follow the heading
+         * flattened onto the ground plane and the height is kept, so
+         * pushing up never dives toward (or pulling down climbs away
+         * from) the ground -- that read as zooming. */
+        float fx = sy, fz = -cy;
         float rx = cy, rz = sy;
         float nx = g_cam[0] + (fx * fwd + rx * strafe) * speed * dt;
-        float nyy = g_cam[1] + fy * fwd * speed * dt;
         float nz = g_cam[2] + (fz * fwd + rz * strafe) * speed * dt;
-        g_cam[0] = nx; g_cam[1] = nyy; g_cam[2] = nz;
+        g_cam[0] = nx; g_cam[2] = nz;
     }
-    float g2 = world_ground_height(g_cam[0], g_cam[2]);
-    float minY = g2 + (g_mode == MODE_COMMAND ? 6.0f : 3.0f);
-    if (g_cam[1] < minY) g_cam[1] = minY;
-    if (g_cam[1] > 160.0f) g_cam[1] = 160.0f;
+    if (g_mode == MODE_FLY) {
+        float g2 = world_ground_height(g_cam[0], g_cam[2]);
+        float minY = g2 + 3.0f;
+        if (g_cam[1] < minY) g_cam[1] = minY;
+        if (g_cam[1] > 160.0f) g_cam[1] = 160.0f;
+    }
 
     /* Discovery: within reach of a castle keep. */
     int i;
@@ -920,6 +1081,36 @@ static void build_hud(void) {
             hud_disc(fx, by + bs * 0.34f, bs * 0.08f);
             hud_rect(fx - bs * 0.07f, by + bs * 0.45f, bs * 0.14f, bs * 0.30f);
         }
+    }
+
+    /* Camera navigator circle (command mode): ring + knob, tilt arrows
+     * (up/down), rotate arrows (left/right), red north marker. */
+    if (g_mode == MODE_COMMAND) {
+        float ncx, ncy, nr;
+        nav_circle(&ncx, &ncy, &nr);
+        hud_color(0.08f, 0.08f, 0.10f);
+        hud_ring(ncx, ncy, nr + 5.0f, 14.0f);
+        hud_color(0.85f, 0.88f, 0.92f);
+        hud_ring(ncx, ncy, nr, 6.0f);
+        float a = nr * 0.78f, w = nr * 0.12f;
+        hud_color(0.85f, 0.88f, 0.92f);
+        /* up / down (tilt) */
+        hud_vert(ncx, ncy - a - w); hud_vert(ncx - w, ncy - a + w * 0.4f); hud_vert(ncx + w, ncy - a + w * 0.4f);
+        hud_vert(ncx, ncy + a + w); hud_vert(ncx + w, ncy + a - w * 0.4f); hud_vert(ncx - w, ncy + a - w * 0.4f);
+        /* left / right (rotate) */
+        hud_color(0.55f, 0.80f, 1.0f);
+        hud_vert(ncx - a - w, ncy); hud_vert(ncx - a + w * 0.4f, ncy + w); hud_vert(ncx - a + w * 0.4f, ncy - w);
+        hud_vert(ncx + a + w, ncy); hud_vert(ncx + a - w * 0.4f, ncy - w); hud_vert(ncx + a - w * 0.4f, ncy + w);
+        /* north marker on the ring */
+        float nx = w_sin(-g_yaw), ny = -w_cos(-g_yaw);
+        float px = -ny, py = nx;
+        hud_color(0.95f, 0.25f, 0.2f);
+        hud_vert(ncx + nx * (nr + 22.0f), ncy + ny * (nr + 22.0f));
+        hud_vert(ncx + nx * (nr - 4.0f) + px * 14.0f, ncy + ny * (nr - 4.0f) + py * 14.0f);
+        hud_vert(ncx + nx * (nr - 4.0f) - px * 14.0f, ncy + ny * (nr - 4.0f) - py * 14.0f);
+        /* knob */
+        if (g_gs == GS_NAV) hud_color(0.55f, 0.80f, 1.0f); else hud_color(0.92f, 0.92f, 0.95f);
+        hud_disc(ncx + g_nav_kx, ncy + g_nav_ky, nr * 0.30f);
     }
 
     /* Squad roster (bottom left): one figure per living squad member,

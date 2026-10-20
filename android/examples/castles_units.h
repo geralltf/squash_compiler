@@ -1504,11 +1504,13 @@ static int pick_unit(float sx, float sy) {
 
 /* Ray from the camera through a screen point against the nav surfaces
  * (wall-walk tops and the ground). Fills hit position + layer. */
-static int pick_ground(float sx, float sy, float *hx, float *hy, float *hz, int *hl) {
+/* Unit direction (out[0..2]) of the camera ray through screen point
+ * (sx,sy), for the current g_cam / g_yaw / g_pitch (fov 1.05 rad). */
+static void screen_ray(float sx, float sy, float *out) {
     float cp = w_cos(g_pitch), spt = w_sin(g_pitch), cy = w_cos(g_yaw), syw = w_sin(g_yaw);
     float fx = cp * syw, fy = spt, fz = -cp * cy;
     float rx = cy, rz = syw;
-    float ux = -spt * syw * 1.0f, uy = cp, uz = spt * cy;
+    float ux = -spt * syw, uy = cp, uz = spt * cy;
     float half = 1.05f * 0.5f;
     float tanH = w_sin(half) / w_cos(half);
     float aspect = g_view_w / g_view_h;
@@ -1517,7 +1519,26 @@ static int pick_ground(float sx, float sy, float *hx, float *hy, float *hz, int 
     float dy = fy - uy * (ny * tanH);
     float dz = fz + rz * (nx * tanH * aspect) - uz * (ny * tanH);
     float len = w_sqrt(dx * dx + dy * dy + dz * dz);
-    dx = dx / len; dy = dy / len; dz = dz / len;
+    out[0] = dx / len; out[1] = dy / len; out[2] = dz / len;
+}
+
+/* Where the ray through (sx,sy) meets the horizontal plane y = py;
+ * 0 if it points away from it. */
+static int screen_to_plane(float sx, float sy, float py, float *hx, float *hz) {
+    float d[3];
+    screen_ray(sx, sy, d);
+    if (d[1] > -0.02f && g_cam[1] > py) return 0;
+    float t = (py - g_cam[1]) / d[1];
+    if (t < 0.0f) return 0;
+    *hx = g_cam[0] + d[0] * t;
+    *hz = g_cam[2] + d[2] * t;
+    return 1;
+}
+
+static int pick_ground(float sx, float sy, float *hx, float *hy, float *hz, int *hl) {
+    float dir[3];
+    screen_ray(sx, sy, dir);
+    float dx = dir[0], dy = dir[1], dz = dir[2];
     float t;
     for (t = 0.5f; t < 420.0f; t = t + 0.35f) {
         float px = g_cam[0] + dx * t, py = g_cam[1] + dy * t, pz = g_cam[2] + dz * t;
