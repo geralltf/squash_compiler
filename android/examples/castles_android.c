@@ -2,6 +2,7 @@
 #include "android/jni_min.h"
 #include "android/examples/castles_spirv.h"
 #include "android/examples/castles_world.h"
+#include "android/examples/castles_ballistics.h"
 
 /* Castles: an explorable, infinite, procedurally generated 3D world.
  *
@@ -16,8 +17,13 @@
  * Units (castles_units.h): a player squad spawns at the home castle and
  * guards hold every other castle's courtyard and wall-walks. They are
  * procedurally generated humanoids (random face colour, hair or helmet,
- * proportions, team tunic, sword + shield) with procedural idle / walk /
- * sword-swing / ladder-climb / death animation.
+ * proportions, team tunic; sword + shield, or bow + quiver for archers)
+ * with procedural idle / walk / sword-swing / bow-draw-and-release /
+ * ladder-climb / death animation. Arrows are real projectiles
+ * (castles_ballistics.h): forces accumulated through bal_add_force() and
+ * integrated at a fixed 120 Hz step, with each shot's launch force solved
+ * by running that same integration until the arc passes through the
+ * target.
  *
  * Pathfinding runs on the GPU: an order builds a 160x160x2 layered nav
  * window (ground + castle wall-walks, joined by ramp-walls and ladders,
@@ -32,7 +38,8 @@
  *     drag a rectangle          -- select every squad member inside it
  *     tap ground or a wall-walk -- move the selection there
  *     tap an enemy              -- attack it
- *     select-all button         -- select the whole squad
+ *     select-all button         -- select the whole squad (double-tap:
+ *                                  also move the camera to it)
  *     two fingers               -- pan (drag), zoom (pinch), turn (twist)
  *   Fly mode:
  *     left half of the screen   -- virtual joystick: fly / strafe
@@ -67,6 +74,7 @@ extern int clock_gettime(int clk, void *ts);
 
 typedef struct { float mvp[16]; float cam[4]; float params[4]; } PushConstants;
 typedef struct { long tv_sec; long tv_nsec; } TimeSpec;
+static long now_us(void);
 
 #define VK_COMPARE_OP_LESS_OR_EQUAL_ 3
 #define VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT_ 0x200
@@ -413,6 +421,29 @@ static int btn_hit(float x, float y) {
     return BTN_NONE;
 }
 
+/* Puts the camera over the selected units (or the whole squad). */
+static void focus_on_squad(void) {
+    int i, n = 0;
+    float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+    for (i = 0; i < g_un; i++) {
+        if (!unit_alive(i) || u_team[i] != TEAM_PLAYER || !u_selected[i]) continue;
+        float nx = cx + u_x[i], ny = cy + u_y[i], nz = cz + u_z[i];
+        cx = nx; cy = ny; cz = nz;
+        n++;
+    }
+    if (n == 0) return;
+    cx = cx / (float)n; cy = cy / (float)n; cz = cz / (float)n;
+    if (g_pitch > -0.55f) g_pitch = -0.75f;
+    float cp = w_cos(g_pitch), sp = w_sin(g_pitch), cyw = w_cos(g_yaw), syw = w_sin(g_yaw);
+    float dist = 26.0f;
+    g_cam[0] = cx - cp * syw * dist;
+    g_cam[1] = cy - sp * dist;
+    g_cam[2] = cz + cp * cyw * dist;
+    __android_log_print(4, TAG, "camera -> squad at %d,%d", (int)cx, (int)cz);
+}
+
+static long g_selall_last_us;
+
 static void on_button(int b) {
     if (b == BTN_MODE) {
         g_mode = (g_mode == MODE_COMMAND) ? MODE_FLY : MODE_COMMAND;
@@ -426,6 +457,10 @@ static void on_button(int b) {
             if (u_selected[i]) n++;
         }
         __android_log_print(4, TAG, "select all: %d units", n);
+        /* Double-tap: jump the camera to the squad. */
+        long now = now_us();
+        if (now - g_selall_last_us < 450000) focus_on_squad();
+        g_selall_last_us = now;
     }
 }
 
@@ -896,7 +931,9 @@ static void build_hud(void) {
             if (!unit_alive(i) || u_team[i] != TEAM_PLAYER) continue;
             float x = 30.0f + (float)(n % 12) * fs * 1.5f;
             float y = H - 60.0f - fs * 2.2f - (float)(n / 12) * fs * 2.6f;
-            if (u_selected[i]) hud_color(0.3f, 1.0f, 0.4f); else hud_color(0.92f, 0.92f, 0.95f);
+            if (u_selected[i]) hud_color(0.3f, 1.0f, 0.4f);
+            else if (u_archer[i]) hud_color(1.0f, 0.88f, 0.5f);
+            else hud_color(0.92f, 0.92f, 0.95f);
             hud_disc(x + fs * 0.5f, y + fs * 0.4f, fs * 0.35f);
             hud_rect(x + fs * 0.15f, y + fs * 0.8f, fs * 0.7f, fs * 1.2f);
             n++;
@@ -1836,7 +1873,16 @@ static void *render_session(void *window) {
         usleep(5000);
     }
     units_init();
-    if (g_cam[0] == 0.0f && g_cam[1] == 0.0f && g_cam[2] == 0.0f) choose_spawn();
+    if (g_cam[0] == 0.0f && g_cam[1] == 0.0f && g_cam[2] == 0.0f) {
+        /* First session: ballistics self-test (compare with the host
+         * checker's "ballistics:" line). Runs here, on the render thread,
+         * because the solver's scratch body belongs to it. */
+        int bt[16];
+        int bn = bal_selftest(bt);
+        int b;
+        for (b = 0; b < bn; b++) __android_log_print(4, TAG, "ballistics[%d]=%d", b, bt[b]);
+        choose_spawn();
+    }
 
     long tPrev = now_us();
     long tLog = tPrev;
@@ -2000,8 +2046,9 @@ static void *render_session(void *window) {
                 sqx = nsx; sqz = nsz;
             }
             int sqn = sqL0 + sqL1;
-            if (sqn > 0) __android_log_print(4, TAG, "squad at %d,%d: moving %d waiting %d idle %d fighting %d",
-                                             (int)(sqx / (float)sqn), (int)(sqz / (float)sqn), sqMove, sqWait, sqIdle, sqFight);
+            if (sqn > 0) __android_log_print(4, TAG, "squad at %d,%d: moving %d waiting %d idle %d fighting %d; arrows fired %d hit %d",
+                                             (int)(sqx / (float)sqn), (int)(sqz / (float)sqn), sqMove, sqWait, sqIdle, sqFight,
+                                             g_arrows_fired, g_arrows_hit);
             __android_log_print(4, TAG, "fps=%d chunks=%d drawn=%d cam=%d,%d,%d castles=%d units=%d squad ground/wall=%d/%d verts=%d",
                                 (int)((long)frames * 1000000 / (tNow - tLog)), loaded, drawn,
                                 (int)g_cam[0], (int)g_cam[1], (int)g_cam[2], g_ndisc, alive, sqL0, sqL1, unitVerts);

@@ -8,6 +8,8 @@
  *     device at startup ("selftest[i]=..." under logcat tag "castles");
  *     any mismatch means squash's ARM64 build computes something
  *     differently from this gcc build;
+ *   - bal_selftest() from castles_ballistics.h: solved launch force (mN)
+ *     and miss distance (um) for a few bow shots ("ballistics:" line);
  *   - generation stats for a 9x9 block of chunks (castles, WFC retries,
  *     vertex counts vs. the 30000-vertex GPU slot, ms per chunk);
  *   - a seam check: every WFC edge socket on every shared chunk border
@@ -21,6 +23,7 @@
 #include <string.h>
 #include <time.h>
 #include "android/examples/castles_world.h"
+#include "android/examples/castles_ballistics.h"
 
 #define CAP 60000
 #define R 4
@@ -57,6 +60,10 @@ int main(int argc, char **argv) {
     world_init();
     n = world_selftest(st, g_buf, CAP);
     printf("selftest:");
+    for (i = 0; i < n; i++) printf(" %d", st[i]);
+    printf("\n");
+    n = bal_selftest(st);
+    printf("ballistics:");
     for (i = 0; i < n; i++) printf(" %d", st[i]);
     printf("\n");
 

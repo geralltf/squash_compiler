@@ -15,8 +15,11 @@
  *     field and needs no per-unit search at all.
  *   - Units: player squad + castle guards, procedurally generated
  *     appearance (random face colour, hair or helmet, proportions, team
- *     tunic), combat, and procedural animation (idle, walk, sword swing,
- *     ladder climb, death) built as a hierarchy of transformed boxes.
+ *     tunic; ~40% are archers), combat, and procedural animation (idle,
+ *     walk, sword swing, bow draw/release, ladder climb, death) built as a
+ *     hierarchy of transformed boxes.
+ *   - Bows: archers shoot real projectiles (castles_ballistics.h) whose
+ *     launch force is solved by integrating the flight itself.
  *   - Selection (tap / rectangle) and orders (move / attack).
  *
  * Same squash ARM64 conventions as castles_world.h: no non-zero global
@@ -238,6 +241,9 @@ static int field_create(float gx, float gy, float gz, int glayer, float centerX,
 #define US_ATTACK 4
 #define US_CLIMB  5
 #define US_DEAD   6
+#define US_SHOOT  7   /* bow: raise, nock, draw, release, recover     */
+
+#define ARCHER_RANGE 26.0f
 
 #define ORD_NONE   0
 #define ORD_MOVE   1
@@ -255,12 +261,17 @@ static float u_climb_t[MAXU], u_climb_dur[MAXU];
 static float u_cfx[MAXU], u_cfy[MAXU], u_cfz[MAXU], u_ctx[MAXU], u_cty[MAXU], u_ctz[MAXU];
 static int u_climb_layer[MAXU];
 static float u_moved[MAXU];                      /* distance this frame  */
+static float u_vx[MAXU], u_vz[MAXU];             /* smoothed velocity    */
+static float u_px[MAXU], u_pz[MAXU];             /* last frame position  */
 static float u_gx[MAXU], u_gy[MAXU], u_gz[MAXU];   /* order goal           */
 static int u_gl[MAXU];
 static int u_repath[MAXU];                       /* needs a (next) field */
 /* appearance */
 static float u_face[MAXU * 3], u_hair[MAXU * 3], u_tunic[MAXU * 3];
 static int u_helmet[MAXU];
+static int u_archer[MAXU];                       /* bow instead of sword+shield */
+static float u_aim[MAXU];                        /* launch elevation (rad)      */
+static float u_noshot[MAXU];                     /* >0: no clear shot, melee    */
 static float u_scale[MAXU], u_girth[MAXU];
 
 /* Castles already populated with guards (keep positions). */
@@ -318,6 +329,7 @@ static int unit_spawn(int team, float x, float z, int layer, uint32_t seed) {
     u_maxhp[idx] = team == TEAM_PLAYER ? 6 : 4;
     u_hp[idx] = u_maxhp[idx];
     u_x[idx] = x; u_z[idx] = z;
+    u_px[idx] = x; u_pz[idx] = z; u_vx[idx] = 0.0f; u_vz[idx] = 0.0f;
     u_y[idx] = nav_surface(layer, x, z);
     u_yaw[idx] = u_rand01(&st) * 6.2831853f;
     u_field[idx] = -1; u_order[idx] = ORD_NONE; u_target[idx] = -1; u_repath[idx] = 0;
@@ -331,6 +343,9 @@ static int unit_spawn(int team, float x, float z, int layer, uint32_t seed) {
     u_hsv(c, hue, sat, val);
     u_face[idx * 3 + 0] = c[0]; u_face[idx * 3 + 1] = c[1]; u_face[idx * 3 + 2] = c[2];
     u_helmet[idx] = u_rand01(&st) < 0.4f;
+    u_archer[idx] = u_rand01(&st) < 0.4f;
+    u_noshot[idx] = 0.0f;
+    u_aim[idx] = 0.2f;
     float hairHue = u_rand01(&st);
     u_hsv(c, hairHue, 0.35f + 0.5f * u_rand01(&st), 0.15f + 0.6f * u_rand01(&st));
     u_hair[idx * 3 + 0] = c[0]; u_hair[idx * 3 + 1] = c[1]; u_hair[idx * 3 + 2] = c[2];
@@ -544,13 +559,13 @@ static int unit_loaded(int i) {
     return nav_slot_for(ccx, ccz) >= 0;
 }
 
-static int unit_find_enemy(int i, float range) {
+static int unit_find_enemy(int i, float range, float maxDy) {
     int j, best = -1;
     float bd = range * range;
     for (j = 0; j < g_un; j++) {
         if (!unit_alive(j) || u_team[j] == u_team[i]) continue;
         float dx = u_x[j] - u_x[i], dz = u_z[j] - u_z[i], dy = u_y[j] - u_y[i];
-        if (w_absf(dy) > 2.5f) continue;
+        if (w_absf(dy) > maxDy) continue;
         float d = dx * dx + dz * dz;
         if (d < bd) { bd = d; best = j; }
     }
@@ -642,6 +657,11 @@ static void unit_follow_field(int i, float dt) {
     if (u_order[i] == ORD_ATTACK && unit_alive(u_target[i])) {
         int t = u_target[i];
         float ax = u_x[t] - u_x[i], az = u_z[t] - u_z[i];
+        float r = ARCHER_RANGE * 0.8f;
+        if (u_archer[i] && ax * ax + az * az < r * r && w_absf(u_y[t] - u_y[i]) < 14.0f) {
+            unit_release_field(i); u_state[i] = US_SHOOT; u_swing[i] = 0.0f;
+            return;
+        }
         if (ax * ax + az * az < 36.0f && w_absf(u_y[t] - u_y[i]) < 1.5f) { unit_release_field(i); u_state[i] = US_CHASE; }
     }
     /* Arrival: inside the goal radius, or bumping into an arrived squadmate
@@ -672,6 +692,177 @@ static void unit_damage(int t, int amount) {
         u_selected[t] = 0;
         __android_log_print(4, "castles", "unit %d (%s) defeated", t, u_team[t] == TEAM_PLAYER ? "player" : "enemy");
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* Bows and arrows (physics in castles_ballistics.h)                   */
+/* ------------------------------------------------------------------ */
+static int a_team[MAXP], a_flying[MAXP];
+static float a_life[MAXP];                      /* seconds since release   */
+static float a_dx[MAXP], a_dy[MAXP], a_dz[MAXP];/* orientation (unit)      */
+static float g_bal_acc;                          /* fixed-step accumulator  */
+static int g_arrows_fired, g_arrows_hit;         /* stats for the log       */
+
+/* Where an archer's arrow leaves the bow (left hand, bow arm raised). */
+static void archer_release_point(int i, float *out) {
+    float s = u_scale[i];
+    float fx = w_sin(u_yaw[i]), fz = -w_cos(u_yaw[i]);
+    float rx = w_cos(u_yaw[i]), rz = w_sin(u_yaw[i]);
+    out[0] = u_x[i] + fx * 0.35f * s - rx * 0.18f * s;
+    out[1] = u_y[i] + 1.47f * s;
+    out[2] = u_z[i] + fz * 0.35f * s - rz * 0.18f * s;
+}
+
+static void archer_aim_point(int t, float lead, float *out) {
+    out[0] = u_x[t] + u_vx[t] * lead;
+    out[1] = u_y[t] + 1.15f * u_scale[t];
+    out[2] = u_z[t] + u_vz[t] * lead;
+}
+
+/* What an arrow at (px,py,pz) runs into: 0 nothing, 1 sticks (height
+ * written to *stickY), 2 gone (water / outside the loaded world). Wall
+ * tops and faces, ground (incl. ramps and bridge decks), and blocked
+ * cells up to 2.2 above the terrain (trees, houses, towers, rocks). */
+static int arrow_world_hit(float px, float py, float pz, float *stickY) {
+    int ccx = w_ifloor(px / W_CHUNK_SIZE), ccz = w_ifloor(pz / W_CHUNK_SIZE);
+    if (nav_slot_for(ccx, ccz) < 0) return 2;
+    int wx = w_ifloor(px), wz = w_ifloor(pz);
+    float h1, h0;
+    int f1 = nav_node(1, wx, wz, &h1);
+    if ((f1 & NAV_WALK) && py <= h1 && py > h1 - WALL_H - 1.0f) { *stickY = py; return 1; }
+    float hg = nav_terrain_height(px, pz);
+    if (hg < 0.0f && py < 0.0f) return 2;
+    int f0 = nav_node(0, wx, wz, &h0);
+    float ground = ((f0 & NAV_WALK) && !(f0 & NAV_TERRAIN)) ? h0 : hg;
+    if (py <= ground) { *stickY = ground; return 1; }
+    if (!(f0 & NAV_WALK) && hg > -0.4f && py < hg + 2.2f) { *stickY = py; return 1; }
+    return 0;
+}
+
+/* Flies launch force f from `from` on the solver's scratch body, with the
+ * same integrator and the same world test as a live arrow, until it has
+ * covered the target's range: 1 if nothing is in the way. */
+static int arrow_path_clear(const float *from, const float *f, const float *to) {
+    int sb = BAL_SCRATCH, k;
+    float dx = to[0] - from[0], dz = to[2] - from[2];
+    float dist = w_sqrt(dx * dx + dz * dz);
+    bal_reset(sb, from[0], from[1], from[2], ARROW_MASS);
+    bal_add_force(sb, f[0], f[1], f[2]);
+    for (k = 0; k < BAL_MAXSTEPS; k++) {
+        bal_step(sb);
+        float ex = p_x[sb] - from[0], ez = p_z[sb] - from[2];
+        if (ex * ex + ez * ez >= dist * dist) return 1;
+        float sy;
+        if (arrow_world_hit(p_x[sb], p_y[sb], p_z[sb], &sy)) return 0;
+    }
+    return 0;
+}
+
+/* Solves the shot from i at t: launch force into f[3]; 1 if there is a
+ * clear arc. Tries elevations from flat to lofted; for each, leads a
+ * moving target (solve, predict where the target will be after that
+ * shot's flight time, re-solve -- three rounds), then flies the final arc
+ * against the world and keeps the first one that gets there unobstructed
+ * (e.g. lobbing over a wall instead of into it). */
+static int archer_solve(int i, int t, float *from, float *f) {
+    float to[3];
+    int a, k;
+    archer_release_point(i, from);
+    int ok = 0;
+    for (a = 0; a < BAL_ANGLES && !ok; a++) {
+        float lead = 0.0f;
+        int solved = 1;
+        for (k = 0; k < 3 && solved; k++) {
+            archer_aim_point(t, lead, to);
+            solved = bal_solve_at(from, to, a, f);
+            lead = g_bal_flight_time;
+        }
+        if (solved && arrow_path_clear(from, f, to)) ok = 1;
+    }
+    if (!ok) return 0;
+    float fh = w_sqrt(f[0] * f[0] + f[2] * f[2]);
+    u_aim[i] = approx_atan2(f[1], fh);
+    return 1;
+}
+
+/* Releases an arrow: the launch force is the one bal_solve computed by
+ * integrating this exact flight, applied through bal_add_force() for one
+ * physics step. */
+static void arrow_fire(int i, int t) {
+    float from[3], f[3];
+    if (!archer_solve(i, t, from, f)) return;
+    int k, a = -1;
+    for (k = 0; k < MAXP; k++) if (!p_active[k]) { a = k; break; }
+    if (a < 0) {
+        /* Recycle the oldest stuck arrow. */
+        float oldest = -1.0f;
+        for (k = 0; k < MAXP; k++) if (!a_flying[k] && a_life[k] > oldest) { oldest = a_life[k]; a = k; }
+        if (a < 0) return;
+    }
+    bal_reset(a, from[0], from[1], from[2], ARROW_MASS);
+    bal_add_force(a, f[0], f[1], f[2]);
+    g_arrows_fired = g_arrows_fired + 1;
+    p_active[a] = 1;
+    a_flying[a] = 1;
+    a_team[a] = u_team[i];
+    a_life[a] = 0.0f;
+    float fm = w_sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+    a_dx[a] = f[0] / fm; a_dy[a] = f[1] / fm; a_dz[a] = f[2] / fm;
+}
+
+/* Sticks arrow a where it is (it stays visible for a while). */
+static void arrow_stick(int a, float y) {
+    p_y[a] = y;
+    a_flying[a] = 0;
+    a_life[a] = 0.0f;
+}
+
+/* Advances every flying arrow in fixed BAL_DT steps and resolves hits:
+ * enemy units (body cylinder), wall-walk tops and wall faces, ground,
+ * blocked cells (trees, houses, towers), and water. */
+static void arrows_update(float dt) {
+    int k, j;
+    for (k = 0; k < MAXP; k++) {
+        if (!p_active[k] || a_flying[k]) continue;
+        float nl = a_life[k] + dt;
+        a_life[k] = nl;
+        if (nl > 7.0f) p_active[k] = 0;
+    }
+    float acc = g_bal_acc + dt;
+    if (acc > BAL_DT * 12.0f) acc = BAL_DT * 12.0f;   /* don't spiral after a hitch */
+    while (acc >= BAL_DT) {
+        float nacc = acc - BAL_DT;
+        acc = nacc;
+        for (k = 0; k < MAXP; k++) {
+            if (!p_active[k] || !a_flying[k]) continue;
+            bal_step(k);
+            float nl = a_life[k] + BAL_DT;
+            a_life[k] = nl;
+            float vx = p_vx[k], vy = p_vy[k], vz = p_vz[k];
+            float sp = w_sqrt(vx * vx + vy * vy + vz * vz);
+            if (sp > 0.01f) { a_dx[k] = vx / sp; a_dy[k] = vy / sp; a_dz[k] = vz / sp; }
+            float px = p_x[k], py = p_y[k], pz = p_z[k];
+            if (nl > 6.0f) { p_active[k] = 0; continue; }
+            /* Units of the other team. */
+            int hit = 0;
+            for (j = 0; j < g_un && !hit; j++) {
+                if (!unit_alive(j) || u_team[j] == a_team[k]) continue;
+                float dx = px - u_x[j], dz = pz - u_z[j];
+                if (dx * dx + dz * dz > 0.42f * 0.42f) continue;
+                if (py < u_y[j] + 0.1f || py > u_y[j] + 1.9f * u_scale[j]) continue;
+                unit_damage(j, 1);
+                g_arrows_hit = g_arrows_hit + 1;
+                p_active[k] = 0;
+                hit = 1;
+            }
+            if (hit) continue;
+            float sy;
+            int wh = arrow_world_hit(px, py, pz, &sy);
+            if (wh == 1) arrow_stick(k, sy);
+            else if (wh == 2) p_active[k] = 0;
+        }
+    }
+    g_bal_acc = acc;
 }
 
 static void units_update(float dt) {
@@ -712,12 +903,28 @@ static void units_update(float dt) {
         }
         int busy = (u_order[i] == ORD_MOVE) && (u_state[i] == US_MOVE || u_state[i] == US_WAIT);
         if (u_target[i] < 0 && !busy) {
-            float range = u_team[i] == TEAM_ENEMY ? 9.0f : 6.0f;
-            int e = unit_find_enemy(i, range);
+            float range = u_archer[i] ? ARCHER_RANGE - 2.0f : (u_team[i] == TEAM_ENEMY ? 9.0f : 6.0f);
+            int e = unit_find_enemy(i, range, u_archer[i] ? 14.0f : 2.5f);
             if (e >= 0) { u_target[i] = e; u_stuck[i] = 0.0f; if (u_state[i] == US_IDLE) u_state[i] = US_CHASE; }
         }
         int t = u_target[i];
-        if (t >= 0 && !busy && u_state[i] != US_WAIT && u_state[i] != US_MOVE) {
+        int shooting = 0;
+        if (u_noshot[i] > 0.0f) { float nn = u_noshot[i] - dt; u_noshot[i] = nn; }
+        if (t >= 0 && !busy && u_archer[i] && u_noshot[i] <= 0.0f && u_state[i] != US_WAIT && u_state[i] != US_MOVE) {
+            /* Archers: shoot from range (also up/down onto walls); melee
+             * only at point-blank range. A shot already being drawn is
+             * finished even if the target steps out of range. */
+            float ax = u_x[t] - u_x[i], az = u_z[t] - u_z[i], ay = u_y[t] - u_y[i];
+            float ad = w_sqrt(ax * ax + az * az);
+            int pointBlank = ad < 1.6f && w_absf(ay) < 1.2f;
+            if (u_state[i] == US_SHOOT && u_swing[i] > 0.0f && u_swing[i] < 0.62f) shooting = 1;
+            else if (!pointBlank && ad <= ARCHER_RANGE && w_absf(ay) < 14.0f) shooting = 1;
+            if (shooting) {
+                if (u_state[i] != US_SHOOT) { u_state[i] = US_SHOOT; u_swing[i] = 0.0f; }
+                unit_face(i, ax, az, dt);
+            }
+        }
+        if (t >= 0 && !shooting && !busy && u_state[i] != US_WAIT && u_state[i] != US_MOVE) {
             float dx = u_x[t] - u_x[i], dz = u_z[t] - u_z[i];
             float d = w_sqrt(dx * dx + dz * dz);
             int sameLevel = w_absf(u_y[t] - u_y[i]) < 1.2f;
@@ -761,6 +968,26 @@ static void units_update(float dt) {
                 if (!unit_alive(t)) { u_state[i] = US_IDLE; u_target[i] = -1; }
             }
         }
+        if (u_state[i] == US_SHOOT) {
+            float prev = u_swing[i];
+            float ns = prev + dt / 1.5f;
+            u_swing[i] = ns;
+            if (prev == 0.0f && unit_alive(t)) {
+                float fr[3], ff[3];
+                if (!archer_solve(i, t, fr, ff)) {
+                    /* No clear arc from here: fight hand-to-hand for a while. */
+                    u_noshot[i] = 3.0f;
+                    u_state[i] = US_CHASE;
+                    u_swing[i] = 0.0f;
+                }
+            }
+            if (prev < 0.62f && ns >= 0.62f && unit_alive(t)) arrow_fire(i, t);
+            if (ns >= 1.0f) {
+                u_swing[i] = 0.0f;
+                if (!unit_alive(t)) { u_state[i] = US_IDLE; u_target[i] = -1; }
+            }
+            if (!unit_alive(t) && ns < 0.62f) { u_state[i] = US_IDLE; u_target[i] = -1; u_swing[i] = 0.0f; }
+        }
         if (u_state[i] == US_WAIT && u_field[i] >= 0 && g_field_state[u_field[i]] == FS_READY) u_state[i] = US_MOVE;
         if (u_state[i] == US_MOVE) unit_follow_field(i, dt);
     }
@@ -796,6 +1023,19 @@ static void units_update(float dt) {
         float np = u_phase[i] + u_moved[i] * 2.6f;
         u_phase[i] = np;
     }
+    /* Smoothed velocities (archers lead moving targets with them). */
+    if (dt > 0.0001f) {
+        for (i = 0; i < g_un; i++) {
+            if (!u_active[i]) continue;
+            float ivx = (u_x[i] - u_px[i]) / dt, ivz = (u_z[i] - u_pz[i]) / dt;
+            if (ivx * ivx + ivz * ivz > 100.0f) { ivx = 0.0f; ivz = 0.0f; }   /* teleports / spawns */
+            float k = w_clampf(dt * 6.0f, 0.0f, 1.0f);
+            float nvx = u_vx[i] + (ivx - u_vx[i]) * k, nvz = u_vz[i] + (ivz - u_vz[i]) * k;
+            u_vx[i] = nvx; u_vz[i] = nvz;
+            u_px[i] = u_x[i]; u_pz[i] = u_z[i];
+        }
+    }
+    arrows_update(dt);
     if (g_order_marker_on) {
         float nm = g_order_mt + dt;
         g_order_mt = nm;
@@ -806,7 +1046,7 @@ static void units_update(float dt) {
 /* ------------------------------------------------------------------ */
 /* Unit mesh: animated box hierarchy                                   */
 /* ------------------------------------------------------------------ */
-#define U_MAX_VERTS 90000
+#define U_MAX_VERTS 120000
 static float g_ustage[U_MAX_VERTS * W_VSTRIDE];
 static int g_un_verts;
 static float g_ucr, g_ucg, g_ucb;
@@ -899,6 +1139,84 @@ static void u_box(const float *M, float cx, float cy, float cz, float hx, float 
     u_face_quad(p + 0, p + 6, p + 9, p + 3, n);        /* -z */
 }
 
+/* Box of half-width w spanning local points a -> b in M's frame (for
+ * bow limbs, strings and arrows, which aren't axis aligned). */
+static void u_seg(const float *M, const float *a, const float *b, float w) {
+    float d0 = b[0] - a[0], d1 = b[1] - a[1], d2 = b[2] - a[2];
+    float len = w_sqrt(d0 * d0 + d1 * d1 + d2 * d2);
+    if (len < 1e-5f) return;
+    float zx = d0 / len, zy = d1 / len, zz = d2 / len;
+    float ux = 0.0f, uy = 1.0f, uz = 0.0f;
+    if (zy > 0.95f || zy < -0.95f) { ux = 1.0f; uy = 0.0f; }
+    /* x = up x z, y = z x x */
+    float xx = uy * zz - uz * zy, xy = uz * zx - ux * zz, xz = ux * zy - uy * zx;
+    float xl = w_sqrt(xx * xx + xy * xy + xz * xz);
+    xx = xx / xl; xy = xy / xl; xz = xz / xl;
+    float yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+    float L[12], W[12];
+    L[0] = xx; L[1] = xy; L[2] = xz;
+    L[3] = yx; L[4] = yy; L[5] = yz;
+    L[6] = zx; L[7] = zy; L[8] = zz;
+    L[9] = (a[0] + b[0]) * 0.5f; L[10] = (a[1] + b[1]) * 0.5f; L[11] = (a[2] + b[2]) * 0.5f;
+    m34_mul(W, M, L);
+    u_box(W, 0.0f, 0.0f, 0.0f, w, w, len * 0.5f);
+}
+
+static void u_set3(float *p, float x, float y, float z) { p[0] = x; p[1] = y; p[2] = z; }
+
+/* Bow in the left hand's frame (the hand is at local y = -0.30 s). Its
+ * limbs run along local z (vertical while the bow arm is raised), tips
+ * curving back toward the archer (+y); `draw` in [0,1] pulls the
+ * string's nocking point back, and an arrow is shown nocked if asked. */
+static void u_bow(const float *M, float s, float draw, int nocked, int detail) {
+    float h[3], u1[3], u2[3], l1[3], l2[3], nk[3], tip[3];
+    float hy = -0.30f * s;
+    u_set3(h, 0.0f, hy, 0.0f);
+    u_set3(u1, 0.0f, hy + 0.03f, -0.33f);
+    u_set3(u2, 0.0f, hy + 0.13f, -0.62f);
+    u_set3(l1, 0.0f, hy + 0.03f, 0.33f);
+    u_set3(l2, 0.0f, hy + 0.13f, 0.62f);
+    u_color(0.42f, 0.27f, 0.13f);
+    u_seg(M, h, u1, 0.025f); u_seg(M, u1, u2, 0.02f);
+    u_seg(M, h, l1, 0.025f); u_seg(M, l1, l2, 0.02f);
+    if (!detail) return;
+    u_set3(nk, 0.0f, hy + 0.13f + 0.48f * draw, 0.0f);
+    u_color(0.92f, 0.92f, 0.85f);
+    u_seg(M, u2, nk, 0.006f); u_seg(M, nk, l2, 0.006f);
+    if (nocked) {
+        u_set3(tip, 0.0f, nk[1] - 0.80f, 0.0f);
+        u_color(0.60f, 0.45f, 0.25f);
+        u_seg(M, nk, tip, 0.012f);
+        float th[3];
+        u_set3(th, 0.0f, tip[1] + 0.07f, 0.0f);
+        u_color(0.30f, 0.30f, 0.33f);
+        u_seg(M, th, tip, 0.03f);
+    }
+}
+
+/* Flying / stuck arrows in world space. */
+static void arrows_emit(void) {
+    float I[12], tip[3], tail[3], head[3], fl[3];
+    int k;
+    I[0] = 1.0f; I[1] = 0.0f; I[2] = 0.0f; I[3] = 0.0f; I[4] = 1.0f; I[5] = 0.0f;
+    I[6] = 0.0f; I[7] = 0.0f; I[8] = 1.0f; I[9] = 0.0f; I[10] = 0.0f; I[11] = 0.0f;
+    for (k = 0; k < MAXP; k++) {
+        if (!p_active[k]) continue;
+        float dx = p_x[k] - g_cam[0], dz = p_z[k] - g_cam[2];
+        if (dx * dx + dz * dz > 140.0f * 140.0f) continue;
+        u_set3(tip, p_x[k], p_y[k], p_z[k]);
+        u_set3(tail, p_x[k] - a_dx[k] * 0.78f, p_y[k] - a_dy[k] * 0.78f, p_z[k] - a_dz[k] * 0.78f);
+        u_set3(head, p_x[k] - a_dx[k] * 0.09f, p_y[k] - a_dy[k] * 0.09f, p_z[k] - a_dz[k] * 0.09f);
+        u_set3(fl, tail[0] + a_dx[k] * 0.16f, tail[1] + a_dy[k] * 0.16f, tail[2] + a_dz[k] * 0.16f);
+        u_color(0.60f, 0.45f, 0.25f);
+        u_seg(I, tail, tip, 0.014f);
+        u_color(0.30f, 0.30f, 0.33f);
+        u_seg(I, head, tip, 0.035f);
+        if (a_team[k] == TEAM_PLAYER) u_color(0.35f, 0.55f, 1.0f); else u_color(1.0f, 0.35f, 0.3f);
+        u_seg(I, tail, fl, 0.04f);
+    }
+}
+
 /* Flat ring on the ground (selection / target / order markers). */
 static void u_ring(float x, float y, float z, float r, float w) {
     float n[3], a[3], b[3], c[3], d[3];
@@ -961,6 +1279,25 @@ static void unit_emit(int i, int lod) {
         armL = 0.7f; elbL = -0.9f; armRollL = 0.3f;
         legL = 0.35f; legR = -0.25f; kneeR = -0.2f;
         lean = 0.12f;
+    } else if (st == US_SHOOT) {
+        /* Raise the bow (0-0.18), draw (0.2-0.62), release at 0.62,
+         * follow through, lower (0.8-1). The bow arm points along the
+         * solved launch elevation. */
+        float tt = u_swing[i];
+        float raise = w_clampf(tt / 0.18f, 0.0f, 1.0f);
+        float lower = w_clampf((tt - 0.8f) / 0.2f, 0.0f, 1.0f);
+        float up = raise * (1.0f - lower);
+        float drawn = (tt >= 0.2f && tt < 0.62f) ? (tt - 0.2f) / 0.42f : 0.0f;
+        float aim = w_clampf(u_aim[i], -0.6f, 1.0f);
+        armL = 0.1f + (1.47f + aim) * up;
+        elbL = -0.05f; armRollL = 0.05f;
+        armR = 0.1f + (1.35f + aim) * up;
+        armRollR = -0.55f * up;
+        elbR = -(0.35f + 1.85f * drawn) * up;
+        if (tt >= 0.62f && tt < 0.75f) { armRollR = -1.0f * up; elbR = -0.6f * up; }   /* follow-through */
+        legL = 0.28f; legR = -0.22f; kneeR = -0.15f;
+        headPitch = -aim * 0.5f;
+        lean = 0.04f;
     } else if (st == US_CLIMB) {
         float ph = u_phase[i];
         float sp = w_sin(ph);
@@ -1039,7 +1376,17 @@ static void unit_emit(int i, int lod) {
         if (lod) u_box(head, 0.0f, 0.14f * s, 0.12f * s, 0.13f * s, 0.12f * s, 0.025f * s);
     }
 
-    /* Arms (right holds the sword, left the shield) */
+    /* Quiver on an archer's back. */
+    if (u_archer[i] && lod) {
+        u_color(0.40f, 0.26f, 0.14f);
+        u_box(torso, 0.09f * g, 0.33f * s, 0.15f * g, 0.06f, 0.21f * s, 0.06f);
+        u_color(0.95f, 0.95f, 0.92f);
+        u_box(torso, 0.07f * g, 0.58f * s, 0.15f * g, 0.012f, 0.05f, 0.025f);
+        u_box(torso, 0.11f * g, 0.59f * s, 0.15f * g, 0.012f, 0.05f, 0.025f);
+    }
+
+    /* Arms (right holds the sword, left the shield; archers: bow in the
+     * left hand) */
     for (side = -1; side <= 1; side = side + 2) {
         float ap = side < 0 ? armL : armR, ep = side < 0 ? elbL : elbR, ar = side < 0 ? armRollL : armRollR;
         m34_local(a1, torso, 0.27f * (float)side * g, 0.54f * s, 0.0f, ap, ar);
@@ -1048,7 +1395,18 @@ static void unit_emit(int i, int lod) {
         m34_local(a2, a1, 0.0f, -0.30f * s, 0.0f, -ep, 0.0f);
         u_color3(u_face + i * 3);
         u_box(a2, 0.0f, -0.14f * s, 0.0f, 0.058f * g, 0.15f * s, 0.058f * g);
-        if (side > 0) {
+        if (u_archer[i]) {
+            if (side < 0) {
+                float drawn = 0.0f;
+                int nocked = 0;
+                if (st == US_SHOOT) {
+                    float tt = u_swing[i];
+                    drawn = (tt >= 0.2f && tt < 0.62f) ? (tt - 0.2f) / 0.42f : 0.0f;
+                    nocked = tt >= 0.1f && tt < 0.62f;
+                }
+                u_bow(a2, s, drawn, nocked, lod);
+            }
+        } else if (side > 0) {
             /* Sword: grip in the fist, blade pointing forward (-z). */
             u_color(0.35f, 0.24f, 0.12f);
             u_box(a2, 0.0f, -0.31f * s, 0.05f, 0.03f, 0.03f, 0.09f);
@@ -1102,6 +1460,7 @@ static int units_build_mesh(void) {
         int t = u_target[i];
         if (unit_alive(t)) { u_color(1.0f, 0.2f, 0.15f); u_ring(u_x[t], u_y[t] + 0.07f, u_z[t], 0.7f, 0.1f); }
     }
+    arrows_emit();
     if (g_order_marker_on) {
         float k = g_order_mt / 2.5f;
         u_color(1.0f, 0.9f, 0.25f);
