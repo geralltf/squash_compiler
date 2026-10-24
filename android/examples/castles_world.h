@@ -95,6 +95,7 @@
 #define K_GATE    9   /* param = side                            */
 #define K_COURT  10
 #define K_KEEP   11
+#define K_DOCK   12   /* param = side facing the water; road on the opposite side */
 
 #define W_MAXT 48
 static int g_nt;                               /* tile count              */
@@ -104,7 +105,7 @@ static unsigned char g_tparam[W_MAXT];
 static int g_tile_keep;                        /* index of the KEEP tile  */
 static int g_tile_water;
 static int g_tile_road_base;                   /* road tile for mask m is g_tile_road_base + m - 1 */
-static int g_tile_tower0, g_tile_wall0, g_tile_ramp0, g_tile_gate0, g_tile_court;
+static int g_tile_tower0, g_tile_wall0, g_tile_ramp0, g_tile_gate0, g_tile_court, g_tile_dock0;
 
 /* Cell classes */
 #define CC_LAND     0
@@ -413,6 +414,16 @@ static void world_init_tiles(void) {
     for (s = 0; s < 4; s++) w_add_wall_tile(K_GATE, s, SK_R);
     g_tile_court = w_add_tile(K_COURT, 0, SK_C, SK_C, SK_C, SK_C);
     g_tile_keep = w_add_tile(K_KEEP, 0, SK_C, SK_C, SK_C, SK_C);
+    /* Fishing docks: water on side s, a road arriving from the opposite
+     * side -- so WFC can only put one where the road network reaches the
+     * shore (the planner offers them, see w_plan_dock). */
+    g_tile_dock0 = g_nt;
+    for (s = 0; s < 4; s++) {
+        int sk[4];
+        sk[0] = SK_G; sk[1] = SK_G; sk[2] = SK_G; sk[3] = SK_G;
+        sk[(s + 2) & 3] = SK_R;
+        w_add_tile(K_DOCK, s, sk[0], sk[1], sk[2], sk[3]);
+    }
 }
 
 static int w_is_castle_kind(int k) { return k >= K_TOWER && k <= K_KEEP; }
@@ -441,6 +452,7 @@ static int g_hub;                             /* plan hub cell or -1        */
 static unsigned char g_cfixed[W_NCELLS];
 static unsigned char g_cterm[W_NCELLS];       /* dir+1: fixed road end toward anchor */
 static unsigned char g_canchor[W_NCELLS];     /* dir+1: anchor, road toward the castle */
+static unsigned char g_dplan[W_NCELLS];       /* water dir+1: planned fishing dock  */
 
 /* WFC state */
 static unsigned char g_allow[W_NCELLS * W_MAXT];
@@ -545,6 +557,48 @@ static void w_plan_path(int from, int to) {
     }
 }
 
+/* Fishing dock: on about half the chunks with a planned road reaching
+ * the shore, one dry shore cell (water for two cells on one side, the
+ * planned road right behind it) is offered a dock. The road cell gets a
+ * branch toward it in the plan; WFC then decides with the K_DOCK
+ * tiles' sockets. */
+static void w_plan_dock(void) {
+    int c, d, best = -1, bestd = 0, bestSpur = 0;
+    uint32_t bh = 0xFFFFFFFFu;
+    for (c = 0; c < W_NCELLS; c++) g_dplan[c] = 0;
+    if ((w_hash2(g_ch_cx, g_ch_cz, 0xD0C5u) % 4u) == 0u) return;
+    for (c = 0; c < W_NCELLS; c++) {
+        if (g_cclass[c] != CC_LAND || g_cfixed[c] || g_plan[c] || g_canchor[c] || g_cheight[c] < 0.35f) continue;
+        for (d = 0; d < 4; d++) {
+            int n1 = w_nb(c, d), back = w_nb(c, (d + 2) & 3);
+            if (n1 < 0 || back < 0 || g_cclass[n1] != CC_WATER || g_cheight[n1] > -0.8f) continue;
+            if (g_cfixed[back] || g_cclass[back] != CC_LAND) continue;
+            int n2 = w_nb(n1, d);
+            if (n2 >= 0 ? g_cclass[n2] != CC_WATER : 0) continue;
+            /* the road right behind, or one more cell back (a spur) */
+            int spur = 0;
+            if (!g_plan[back]) {
+                int b2 = w_nb(back, (d + 2) & 3);
+                if (b2 < 0 || !g_plan[b2] || g_cfixed[b2] || g_canchor[back]) continue;
+                spur = 1;
+            }
+            uint32_t h = w_hash2(g_ch_cx * W_CELLS + c % W_CELLS, g_ch_cz * W_CELLS + c / W_CELLS, 0xD0C6u + (uint32_t)d);
+            if (spur) h = h | 0x80000000u;               /* direct road access first */
+            if (h < bh) { bh = h; best = c; bestd = d; bestSpur = spur; }
+        }
+    }
+    if (best < 0) return;
+    g_dplan[best] = (unsigned char)(bestd + 1);
+    int od = (bestd + 2) & 3;
+    int back = w_nb(best, od);
+    g_plan[back] = (unsigned char)(g_plan[back] | (1 << bestd));
+    if (bestSpur) {
+        int b2 = w_nb(back, od);
+        g_plan[back] = (unsigned char)(g_plan[back] | (1 << od));
+        g_plan[b2] = (unsigned char)(g_plan[b2] | (1 << bestd));
+    }
+}
+
 static void w_plan_chunk(void) {
     int i, x, z;
     int crossings[16];
@@ -593,6 +647,7 @@ static void w_plan_chunk(void) {
             if (crossings[i] != g_hub) w_plan_path(crossings[i], g_hub);
         }
     }
+    w_plan_dock();
 }
 
 /* ------------------------------------------------------------------ */
@@ -619,7 +674,9 @@ static void w_wfc_init(int allow_castle) {
         for (t = 0; t < g_nt; t++) {
             int k = g_tkind[t];
             float w = 0.0f;
-            if (w_is_castle_kind(k)) {
+            if (k == K_DOCK) {
+                w = (!g_cfixed[c] && g_dplan[c] == g_tparam[t] + 1) ? 50.0f : 0.0f;
+            } else if (w_is_castle_kind(k)) {
                 if (zone) {
                     if (g_cplan[c] == t + 1) w = 30.0f;
                     else if (k == K_KEEP) w = 0.0f;
@@ -1078,6 +1135,7 @@ static void w_emit_water(void) {
 #define NAV_WALK     1
 #define NAV_LADDER   2       /* bits 2-3: direction (D_N..D_W) to the other end */
 #define NAV_TERRAIN  16      /* height is the terrain mesh surface */
+#define NAV_WATER    32      /* deep enough for boats (layer 0 only) */
 #define NAV_MAXSTEP  1.3f
 
 static float g_nav_h[NAV_L * NAV_N];
@@ -1089,7 +1147,7 @@ static void w_nav_init(void) {
         for (i = 0; i < NAV_C; i++) {
             float h = w_mesh_height((float)i + 0.5f, (float)j + 0.5f);
             g_nav_h[j * NAV_C + i] = h;
-            g_nav_f[j * NAV_C + i] = (unsigned char)(h > -0.45f ? (NAV_WALK | NAV_TERRAIN) : 0);
+            g_nav_f[j * NAV_C + i] = (unsigned char)(h > -0.45f ? (NAV_WALK | NAV_TERRAIN) : (h < -0.7f ? NAV_WATER : 0));
             g_nav_h[NAV_N + j * NAV_C + i] = 0.0f;
             g_nav_f[NAV_N + j * NAV_C + i] = 0;
         }
@@ -1161,6 +1219,7 @@ static int w_nav_ladder_end(int layer, float x, float z, float h, int dir) {
  * no mesh, no nav obstacle -- and the game rebuilds the chunk. */
 #define RES_WOOD   0
 #define RES_STONE  1
+#define RES_FOOD   2              /* fish shoals (ids tagged 0x40000000) */
 #define RES_MAX    320            /* listed per chunk (the rest stay scenery) */
 #define DEPL_MAX   4096
 static int g_out_nres;
@@ -1505,6 +1564,7 @@ static void w_keep_piece(float cx, float cz, float y, uint32_t h) {
 }
 
 #include "android/examples/castles_sites_build.h"
+#include "android/examples/castles_structures.h"
 
 /* ------------------------------------------------------------------ */
 /* Chunk generation entry point                                        */
@@ -1685,7 +1745,7 @@ static void w_emit_props(void) {
                 float ty = w_mesh_height(lcx + jx, lcz + jz);
                 if (ty < 0.4f) continue;
                 int pine = (ty > 7.0f) || ((hq >> 24) & 1u);
-                uint32_t rid = w_hash2(gx * 8 + q, gz, 0x7EE5u) & 0x7FFFFFFFu;
+                uint32_t rid = w_hash2(gx * 8 + q, gz, 0x7EE5u) & 0x3FFFFFFFu;
                 if (g_ndepleted > 0 && w_res_depleted(rid)) continue;
                 w_tree(wx + jx, wz + jz, ty, sz, pine);
                 w_res_add(RES_WOOD, rid, wx + jx, wz + jz, ty, 0.5f);
@@ -1699,7 +1759,7 @@ static void w_emit_props(void) {
                 float jz = ((float)((hq >> 8) & 255u) / 255.0f - 0.5f) * 2.6f;
                 float sz = 0.7f + (float)((hq >> 16) & 255u) / 255.0f * 0.9f;
                 float ry = w_mesh_height(lcx + jx, lcz + jz);
-                uint32_t rid = (w_hash2(gx * 8 + q, gz, 0x5701u) & 0x7FFFFFFFu) | 0x80000000u;
+                uint32_t rid = (w_hash2(gx * 8 + q, gz, 0x5701u) & 0x3FFFFFFFu) | 0x80000000u;
                 if (g_ndepleted > 0 && w_res_depleted(rid)) continue;
                 w_rock(wx + jx, wz + jz, ry, sz);
                 w_res_add(RES_STONE, rid, wx + jx, wz + jz, ry, 0.9f * sz);
@@ -1724,6 +1784,31 @@ static void w_emit_props(void) {
             }
         }
         if (k == K_BRIDGE) w_bridge(wx, wz, p == 5);
+        if (k == K_DOCK) {
+            float ddx = (float)g_ddx_w(p), ddz = (float)g_ddz_w(p);
+            float px = wx + ddx * 1.0f, pz = wz + ddz * 1.0f;
+            float py = w_mesh_height(lcx + ddx * 1.0f, lcz + ddz * 1.0f);
+            float dyaw = approx_atan2_w(ddz, ddx);
+            w_dock(px, pz, py, dyaw, 1);
+            if (g_out_ndock < DOCK_OUT_MAX) {
+                int q = g_out_ndock;
+                g_out_dock_x[q] = px; g_out_dock_z[q] = pz; g_out_dock_y[q] = py; g_out_dock_yaw[q] = dyaw;
+                g_out_ndock = q + 1;
+            }
+        }
+        if (k == K_WATER && g_cheight[c] < -0.9f && (h % 7u) == 0u) {
+            /* fish shoal: only in coastal water (land within two cells) */
+            int coastal = 0, ddx2, ddz2;
+            for (ddz2 = -2; ddz2 <= 2 && !coastal; ddz2++)
+                for (ddx2 = -2; ddx2 <= 2; ddx2++)
+                    if (w_cell_class_at(wx + (float)ddx2 * W_CELL_SIZE, wz + (float)ddz2 * W_CELL_SIZE) != CC_WATER) { coastal = 1; break; }
+            if (coastal) {
+                uint32_t hf = w_hash2(gx, gz, 0xF15Bu);
+                uint32_t rid = (hf & 0x3FFFFFFFu) | 0x40000000u;
+                float jx = ((float)(hf & 255u) / 255.0f - 0.5f) * 1.6f, jz = ((float)((hf >> 8) & 255u) / 255.0f - 0.5f) * 1.6f;
+                if (!(g_ndepleted > 0 && w_res_depleted(rid))) w_res_add(RES_FOOD, rid, wx + jx, wz + jz, W_SEA_LEVEL, 2.5f);
+            }
+        }
         if (k == K_WALL || k == K_RAMP || k == K_GATE) w_wall_piece(wx, wz, g_castle_base, p, k);
         if (k == K_TOWER) w_tower_piece(wx, wz, g_castle_base, p);
         if (k == K_KEEP) {
@@ -1741,7 +1826,7 @@ static void w_emit_props(void) {
         if (g_cclass[c] == CC_WATER) mc = 0;
         if (g_cclass[c] == CC_MOUNTAIN) mc = 2;
         if (k == K_FOREST) mc = 5;
-        if (k == K_ROAD || k == K_BRIDGE) mc = 3;
+        if (k == K_ROAD || k == K_BRIDGE || k == K_DOCK) mc = 3;
         if (w_is_castle_kind(k)) mc = 4;
         g_out_cells[c] = (unsigned char)mc;
     }
@@ -1754,6 +1839,7 @@ static int world_gen_chunk(int cx, int cz, float *out, int cap) {
     g_mv = out; g_mn = 0; g_mcap = cap;
     g_out_has_castle = 0;
     g_out_nres = 0;
+    g_out_ndock = 0;
     w_collect_sites();
     w_compute_terrain();
     w_compute_fixed();
@@ -1780,6 +1866,7 @@ static int world_gen_chunk(int cx, int cz, float *out, int cap) {
     w_emit_water();
     w_emit_props();
     for (si = 0; si < g_ncs; si++) w_site_emit(si);
+    w_player_structures();
     for (k = 0; k < g_nlad; k++)
         w_ladder(g_lad_fx[k], g_lad_fz[k], g_lad_fy[k], g_lad_tx[k], g_lad_tz[k], g_lad_ty[k], g_lad_alongx[k]);
     return g_mn;

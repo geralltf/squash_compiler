@@ -41,6 +41,20 @@
  * world (its chunk is regenerated without it). Barracks train soldiers,
  * the town centre trains peasants.
  *
+ * Food: fishing docks stand where the WFC road network meets the shore
+ * (castles_structures.h); a dock trains fishing boats that sail on GPU
+ * flow fields over open water, net fish at the shoals scattered along
+ * the coast and bring each catch back to the nearest dock. Training
+ * costs food (plus wood / stone for soldiers and boats).
+ *
+ * Building: select peasants and a build menu offers houses, barracks,
+ * docks, castle walls (two taps: start, end), towers and gatehouses,
+ * each for wood and / or stone. A placement preview shows green where
+ * it fits; the peasants walk over and build it (scaffolding rises with
+ * their work), then the structure becomes part of the world -- the
+ * chunks under it are regenerated with its mesh and navigation, walls
+ * with a wall-walk and ladder joined to towers and gatehouses.
+ *
  * Pathfinding runs on the GPU: an order builds a 160x160x2 layered nav
  * window (ground + castle wall-walks, joined by ramp-walls and ladders,
  * see castles_world.h's "Navigation grid"), and castles_nav.comp relaxes
@@ -56,10 +70,16 @@
  *     tap ground or a wall-walk -- move the selection there
  *     tap an enemy              -- attack it
  *     tap a tree or rock        -- selected peasants gather it
- *     tap a barracks / town centre / house -- select it; a barracks
- *                                  shows sword / bow / mace buttons, the
- *                                  town centre a peasant button, that
- *                                  queue training (up to 5)
+ *     tap a fish shoal          -- selected fishing boats fish it
+ *     tap water                 -- selected boats sail there
+ *     build menu (peasants selected) -- pick a structure, tap the map to
+ *                                  place it (walls: start + end), OK
+ *     tap a construction site   -- selected peasants (re)join building it
+ *     tap a barracks / town centre / dock / house -- select it; a
+ *                                  barracks shows sword / bow / mace
+ *                                  buttons, the town centre a peasant
+ *                                  button, a dock a boat button, that
+ *                                  queue training (up to 5, paid up front)
  *     select-all button         -- select every soldier (double-tap:
  *                                  also move the camera to it)
  *     two fingers               -- pan (drag) or zoom (pinch): each
@@ -132,6 +152,10 @@ static int g_slot_nres[SLOTS];
 static float g_slot_res_x[SLOTS * RES_MAX], g_slot_res_z[SLOTS * RES_MAX], g_slot_res_y[SLOTS * RES_MAX], g_slot_res_r[SLOTS * RES_MAX];
 static int g_slot_res_t[SLOTS * RES_MAX];
 static uint32_t g_slot_res_id[SLOTS * RES_MAX];
+/* Per-slot world fishing docks (castles_structures.h). */
+static int g_slot_ndock[SLOTS];
+static float g_slot_dock_x[SLOTS * DOCK_OUT_MAX], g_slot_dock_z[SLOTS * DOCK_OUT_MAX];
+static float g_slot_dock_y[SLOTS * DOCK_OUT_MAX], g_slot_dock_yaw[SLOTS * DOCK_OUT_MAX];
 /* Loaded chunks to regenerate in place (a resource in them ran out). */
 #define REBUILD_MAX 16
 static int g_rebuild_n;
@@ -453,7 +477,17 @@ static int g_touch_reanchor;
 #define BTN_NONE   0
 #define BTN_MODE   1
 #define BTN_SELALL 2
-#define BTN_TRAIN0 3     /* + class: swordsman, archer, maceman, peasant */
+#define BTN_TRAIN0 3     /* + class: swordsman, archer, maceman, peasant, boat */
+#define BTN_BUILD0 10    /* + structure kind (ST_HOUSE .. ST_GATE) */
+#define BTN_PLACE_OK     20
+#define BTN_PLACE_CANCEL 21
+
+/* Placement (a peasant build button was pressed): taps on the map set
+ * the spot -- walls take two, start and end -- and the ghost shows
+ * whether it can be built there; OK starts construction. */
+static int g_place_kind;              /* ST_* being placed, 0 = not placing */
+static int g_place_pts;               /* points tapped so far */
+static float g_place_ax, g_place_az, g_place_bx, g_place_bz;
 
 static float btn_size(void) { return g_view_w * 0.14f; }
 
@@ -466,15 +500,28 @@ static void btn_rect(int b, float *r) {
     else r[0] = g_view_w - 2.0f * sz - 60.0f;
 }
 
-/* A building that trains units is selected: a barracks (soldiers) or
- * the town centre (peasants). */
+/* A finished building that trains units is selected: a barracks
+ * (soldiers), the town centre (peasants) or a dock (fishing boats). */
 static int barracks_selected(void) {
-    return g_mode == MODE_COMMAND && g_sel_building >= 0 && g_sel_building < g_hb_n &&
-           (g_hb_t[g_sel_building] == BT_BARRACKS || g_hb_t[g_sel_building] == BT_TOWNCENTER);
+    if (g_mode != MODE_COMMAND || g_place_kind || g_sel_building < 0 || g_sel_building >= g_hb_n || !g_hb_done[g_sel_building]) return 0;
+    int t = g_hb_t[g_sel_building];
+    return t == BT_BARRACKS || t == BT_TOWNCENTER || t == BT_DOCK;
 }
 
-static int train_btn_count(void) { return g_hb_t[g_sel_building] == BT_TOWNCENTER ? 1 : 3; }
-static int train_btn_cls(int k) { return g_hb_t[g_sel_building] == BT_TOWNCENTER ? UC_PEASANT : k; }
+static int train_btn_count(void) { return g_hb_t[g_sel_building] == BT_BARRACKS ? 3 : 1; }
+static int train_btn_cls(int k) {
+    int t = g_hb_t[g_sel_building];
+    return t == BT_TOWNCENTER ? UC_PEASANT : (t == BT_DOCK ? UC_BOAT : k);
+}
+
+/* Peasants are selected (and nothing else is going on): show the build
+ * menu. */
+static int build_menu_on(void) {
+    int i;
+    if (g_mode != MODE_COMMAND || g_place_kind || g_sel_building >= 0) return 0;
+    for (i = 0; i < g_un; i++) if (u_selected[i] && unit_alive(i) && u_class[i] == UC_PEASANT) return 1;
+    return 0;
+}
 
 /* Training buttons: a row in the lower middle (button k of the row). */
 static void train_btn_rect(int k, float *r) {
@@ -485,8 +532,29 @@ static void train_btn_rect(int k, float *r) {
     r[2] = sz; r[3] = sz;
 }
 
+/* Build menu: two rows of three (house, barracks, dock / wall, tower,
+ * gatehouse) with room for the cost under each. */
+static void build_btn_rect(int k, float *r) {
+    float sz = btn_size() * 0.85f;
+    train_btn_rect(k % 3, r);
+    if (k < 3) r[1] = r[1] - sz - 80.0f;
+}
+
 static int btn_hit(float x, float y) {
     float r[4];
+    if (g_place_kind && g_mode == MODE_COMMAND) {
+        train_btn_rect(0, r);
+        if (x >= r[0] && y >= r[1] && x <= r[0] + r[2] && y <= r[1] + r[3]) return BTN_PLACE_CANCEL;
+        train_btn_rect(2, r);
+        if (x >= r[0] && y >= r[1] && x <= r[0] + r[2] && y <= r[1] + r[3]) return BTN_PLACE_OK;
+    }
+    if (build_menu_on()) {
+        int k;
+        for (k = 0; k < ST_KINDS; k++) {
+            build_btn_rect(k, r);
+            if (x >= r[0] && y >= r[1] && x <= r[0] + r[2] && y <= r[1] + r[3]) return BTN_BUILD0 + k + 1;
+        }
+    }
     if (barracks_selected()) {
         int c;
         for (c = 0; c < train_btn_count(); c++) {
@@ -529,12 +597,29 @@ static void on_button(int b) {
         if (g_mode == MODE_COMMAND) rts_begin();
         g_joy_active = 0; g_look_active = 0;
         __android_log_print(4, TAG, "mode -> %s", g_mode == MODE_COMMAND ? "command" : "fly");
-    } else if (b >= BTN_TRAIN0 && b <= BTN_TRAIN0 + UC_PEASANT) {
+    } else if (b >= BTN_TRAIN0 && b <= BTN_TRAIN0 + UC_BOAT) {
         int cls = b - BTN_TRAIN0;
         int ok = barracks_train(g_sel_building, cls);
-        __android_log_print(4, TAG, "train %s at building %d: %s (queue %d, pop %d+%d/%d)",
-                            cls == UC_SWORD ? "swordsman" : (cls == UC_BOW ? "archer" : (cls == UC_MACE ? "maceman" : "peasant")), g_sel_building,
-                            ok ? "queued" : "refused", g_bq_n[g_sel_building], pop_count(), pop_queued(), pop_limit());
+        __android_log_print(4, TAG, "train %s at building %d: %s (queue %d, pop %d+%d/%d, wood %d stone %d food %d)",
+                            cls == UC_SWORD ? "swordsman" : (cls == UC_BOW ? "archer" : (cls == UC_MACE ? "maceman" : (cls == UC_BOAT ? "fishing boat" : "peasant"))),
+                            g_sel_building, ok > 0 ? "queued" : (ok < 0 ? "refused: not enough resources" : "refused: queue or population full"),
+                            g_bq_n[g_sel_building], pop_count(), pop_queued(), pop_limit(), g_wood, g_stone, g_food);
+    } else if (b > BTN_BUILD0 && b <= BTN_BUILD0 + ST_KINDS) {
+        g_place_kind = b - BTN_BUILD0;
+        g_place_pts = 0;
+        g_ghost_on = 0; g_ghost_kind = g_place_kind;
+        __android_log_print(4, TAG, "placing structure kind %d: tap the map%s", g_place_kind, g_place_kind == ST_WALL ? " (start, then end)" : "");
+    } else if (b == BTN_PLACE_CANCEL) {
+        g_place_kind = 0; g_ghost_on = 0;
+        __android_log_print(4, TAG, "placement cancelled");
+    } else if (b == BTN_PLACE_OK) {
+        if (g_place_pts == 0 || (g_place_kind == ST_WALL && g_place_pts < 2)) {
+            __android_log_print(4, TAG, "placement: tap the map first");
+        } else {
+            int ok = build_start(g_place_kind);
+            if (ok > 0) { g_place_kind = 0; g_ghost_on = 0; }
+            else __android_log_print(4, TAG, "can't build here: %s", ok < 0 ? "not enough resources" : (g_pl_valid ? "no peasants selected" : g_pl_why));
+        }
     } else if (b == BTN_SELALL) {
         int i, n = 0;
         g_sel_building = -1;
@@ -553,8 +638,21 @@ static void on_button(int b) {
 /* Command-mode tap: select a unit, attack an enemy, or move the
  * selection to the tapped ground / wall-walk. */
 static void on_tap(float x, float y) {
-    int u = pick_unit(x, y);
     int i;
+    g_order_boat_ok = 0;
+    if (g_place_kind) {
+        /* placing a structure: taps set its position (walls: start, end) */
+        float hx, hy, hz;
+        int hl;
+        if (!pick_ground(x, y, &hx, &hy, &hz, &hl)) return;
+        if (g_place_kind == ST_WALL && g_place_pts >= 1) { g_place_bx = hx; g_place_bz = hz; g_place_pts = 2; }
+        else { g_place_ax = hx; g_place_az = hz; g_place_bx = hx; g_place_bz = hz; g_place_pts = 1; }
+        place_check(g_place_kind, g_place_ax, g_place_az, g_place_bx, g_place_bz);
+        g_ghost_on = 1; g_ghost_kind = g_place_kind;
+        __android_log_print(4, TAG, "placement at %d,%d: %s %s", (int)g_pl_x, (int)g_pl_z, g_pl_valid ? "ok" : "invalid", g_pl_why);
+        return;
+    }
+    int u = pick_unit(x, y);
     if (u >= 0 && u_team[u] == TEAM_PLAYER) {
         for (i = 0; i < g_un; i++) u_selected[i] = 0;
         u_selected[u] = 1;
@@ -571,7 +669,7 @@ static void on_tap(float x, float y) {
             for (i = 0; i < g_un; i++) u_selected[i] = 0;
             g_sel_building = b;
             __android_log_print(4, TAG, "tap at %d,%d: selected %s %d", (int)x, (int)y,
-                                g_hb_t[b] == BT_TOWNCENTER ? "town centre" : (g_hb_t[b] == BT_BARRACKS ? "barracks" : "house"), b);
+                                g_hb_t[b] == BT_TOWNCENTER ? "town centre" : (g_hb_t[b] == BT_BARRACKS ? "barracks" : (g_hb_t[b] == BT_DOCK ? "dock" : "house")), b);
             return;
         }
     }
@@ -584,12 +682,44 @@ static void on_tap(float x, float y) {
         order_move(u_x[u], u_y[u], u_z[u], u_layer[u], u);
         return;
     }
-    /* a tree or rock with peasants selected: they gather it (soldiers
-     * in the selection just walk there) */
-    int anyPeasant = 0;
-    for (i = 0; i < g_un; i++) if (u_selected[i] && unit_alive(i) && u_class[i] == UC_PEASANT) anyPeasant = 1;
+    /* a tree or rock with peasants selected: they gather it; a fish
+     * shoal with boats selected: they fish it (soldiers in the
+     * selection just go there) */
+    int anyPeasant = 0, anyBoat = 0;
+    for (i = 0; i < g_un; i++) {
+        if (!u_selected[i] || !unit_alive(i)) continue;
+        if (u_class[i] == UC_PEASANT) anyPeasant = 1;
+        if (u_class[i] == UC_BOAT) anyBoat = 1;
+    }
+    /* a construction site with peasants selected: they (re)join building it */
     if (anyPeasant) {
-        int q = pick_resource(x, y);
+        float sx2, sy2, sz2;
+        int sl2;
+        if (pick_ground(x, y, &sx2, &sy2, &sz2, &sl2)) {
+            int k, best = -1;
+            float bd = 1.5f;
+            for (k = 0; k < g_bs_n; k++) {
+                if (g_bs_done[k]) continue;
+                float d = site_dist(k, sx2, sz2);
+                if (d < bd) { bd = d; best = k; }
+            }
+            if (best >= 0) {
+                int nb = 0;
+                for (i = 0; i < g_un; i++) {
+                    if (!u_selected[i] || !unit_alive(i) || u_class[i] != UC_PEASANT) continue;
+                    builder_assign(i, best);
+                    nb++;
+                }
+                dispatch_repaths();
+                __android_log_print(4, TAG, "%d peasants sent to build site %d", nb, best);
+                return;
+            }
+        }
+    }
+    /* boats sail to where the tap meets the water surface */
+    g_order_boat_ok = anyBoat && screen_to_plane(x, y, W_SEA_LEVEL, &g_order_bx, &g_order_bz);
+    if (anyPeasant || anyBoat) {
+        int q = pick_resource(x, y, (anyPeasant ? (1 << RES_WOOD) | (1 << RES_STONE) : 0) | (anyBoat ? (1 << RES_FOOD) : 0));
         if (q >= 0 && order_gather(q) > 0) {
             float gx = g_slot_res_x[q], gz = g_slot_res_z[q], gy = g_slot_res_y[q];
             g_order_soldiers_only = 1;
@@ -601,6 +731,7 @@ static void on_tap(float x, float y) {
     float hx, hy, hz;
     int hl;
     if (pick_ground(x, y, &hx, &hy, &hz, &hl)) order_move(hx, hy, hz, hl, -1);
+    else if (g_order_boat_ok) order_move(g_order_bx, W_SEA_LEVEL, g_order_bz, 0, -1);
 }
 
 /* Rectangle selection: every player unit whose body projects inside. */
@@ -812,7 +943,9 @@ static void process_touch_events(void) {
             else if (g_gs == GS_PENDING || g_gs == GS_DRAG) {
                 g_gs_cx = x0; g_gs_cy = y0;
                 float dx = x0 - g_gs_x0, dy = y0 - g_gs_y0;
-                if (g_gs == GS_PENDING && dx * dx + dy * dy > 32.0f * 32.0f) g_gs = GS_DRAG;
+                /* ~5 mm of slop: a finger tap on a high-dpi screen easily
+                 * moves 30-40 px and must stay a tap */
+                if (g_gs == GS_PENDING && dx * dx + dy * dy > 56.0f * 56.0f) g_gs = GS_DRAG;
             }
         } else if (action == 6) {
             if (g_gs == GS_MULTI) g_gs = GS_ENDED;
@@ -820,7 +953,13 @@ static void process_touch_events(void) {
             if (g_gs == GS_NAV) nav_release();
             else if (g_gs == GS_BUTTON && btn_hit(x0, y0) == g_gs_button) on_button(g_gs_button);
             else if (g_mode == MODE_COMMAND && g_gs == GS_PENDING) on_tap(x0, y0);
-            else if (g_mode == MODE_COMMAND && g_gs == GS_DRAG) on_drag_end();
+            else if (g_mode == MODE_COMMAND && g_gs == GS_DRAG) {
+                float rw = g_gs_cx - g_gs_x0, rh = g_gs_cy - g_gs_y0;
+                if (rw < 0.0f) rw = -rw;
+                if (rh < 0.0f) rh = -rh;
+                if (rw < 70.0f && rh < 70.0f) on_tap((g_gs_x0 + g_gs_cx) * 0.5f, (g_gs_y0 + g_gs_cy) * 0.5f);   /* a sloppy tap */
+                else on_drag_end();
+            }
             g_gs = GS_NONE;
         } else if (action == 3) {
             if (g_gs == GS_NAV) nav_release();
@@ -1046,6 +1185,92 @@ static void hud_number(float x, float y, float h, int v) {
     }
 }
 
+/* Resource icon (logs / stone block / fish), ~56 x 40 at scale 1. */
+static void hud_res_icon(int type, float x, float y, float s) {
+    if (type == RES_WOOD) {
+        hud_color(0.50f, 0.33f, 0.17f);
+        hud_rect(x + 4.0f * s, y + 4.0f * s, 46.0f * s, 13.0f * s);
+        hud_rect(x + 8.0f * s, y + 22.0f * s, 46.0f * s, 13.0f * s);
+        hud_color(0.85f, 0.70f, 0.45f);
+        hud_rect(x + 50.0f * s, y + 4.0f * s, 6.0f * s, 13.0f * s);
+        hud_rect(x + 54.0f * s, y + 22.0f * s, 6.0f * s, 13.0f * s);
+    } else if (type == RES_STONE) {
+        hud_color(0.62f, 0.62f, 0.66f);
+        hud_rect(x, y + 6.0f * s, 48.0f * s, 30.0f * s);
+        hud_color(0.45f, 0.45f, 0.50f);
+        hud_rect(x, y + 19.0f * s, 48.0f * s, 4.0f * s);
+        hud_rect(x + 22.0f * s, y + 6.0f * s, 4.0f * s, 13.0f * s);
+    } else {
+        hud_color(0.70f, 0.80f, 0.88f);
+        hud_disc(x + 22.0f * s, y + 20.0f * s, 15.0f * s);
+        hud_rect(x + 10.0f * s, y + 13.0f * s, 26.0f * s, 14.0f * s);
+        hud_vert(x + 34.0f * s, y + 20.0f * s); hud_vert(x + 50.0f * s, y + 8.0f * s); hud_vert(x + 50.0f * s, y + 32.0f * s);
+        hud_color(0.10f, 0.12f, 0.16f);
+        hud_disc(x + 14.0f * s, y + 17.0f * s, 3.0f * s);
+    }
+}
+
+/* Cost label under a button: icon + amount for each non-zero part. */
+static void hud_cost(float x, float y, const int *c) {
+    int k;
+    float cx = x;
+    for (k = 0; k < 3; k++) {
+        if (c[k] <= 0) continue;
+        hud_res_icon(k, cx, y, 0.5f);
+        int ok = (k == 0 ? g_wood : (k == 1 ? g_stone : g_food)) >= c[k];
+        if (ok) hud_color(0.95f, 0.90f, 0.80f); else hud_color(1.0f, 0.35f, 0.3f);
+        hud_number(cx + 32.0f, y, 22.0f, c[k]);
+        cx = cx + 32.0f + (c[k] >= 10 ? 44.0f : 26.0f) + 8.0f;
+    }
+}
+
+/* Build-menu / placement icon for structure kind k centred in r. */
+static void hud_struct_icon(int k, const float *r) {
+    float cx = r[0] + r[2] * 0.5f, cy = r[1] + r[3] * 0.5f, sz = r[2];
+    if (k == ST_HOUSE) {
+        hud_color(0.90f, 0.84f, 0.70f);
+        hud_rect(cx - sz * 0.26f, cy - sz * 0.05f, sz * 0.52f, sz * 0.36f);
+        hud_color(0.70f, 0.28f, 0.20f);
+        hud_vert(cx - sz * 0.34f, cy - sz * 0.05f); hud_vert(cx + sz * 0.34f, cy - sz * 0.05f); hud_vert(cx, cy - sz * 0.36f);
+        hud_color(0.30f, 0.20f, 0.12f);
+        hud_rect(cx - sz * 0.06f, cy + sz * 0.10f, sz * 0.12f, sz * 0.21f);
+    } else if (k == ST_BARRACKS) {
+        hud_color(0.62f, 0.60f, 0.56f);
+        hud_rect(cx - sz * 0.36f, cy - sz * 0.12f, sz * 0.72f, sz * 0.40f);
+        int m;
+        for (m = 0; m < 4; m++) hud_rect(cx - sz * 0.36f + (float)m * sz * 0.2f, cy - sz * 0.22f, sz * 0.12f, sz * 0.11f);
+        hud_color(0.16f, 0.36f, 0.86f);
+        hud_rect(cx - sz * 0.05f, cy - sz * 0.40f, sz * 0.03f, sz * 0.2f);
+        hud_rect(cx - sz * 0.02f, cy - sz * 0.40f, sz * 0.16f, sz * 0.09f);
+    } else if (k == ST_DOCK) {
+        hud_color(0.25f, 0.50f, 0.75f);
+        hud_rect(cx - sz * 0.40f, cy + sz * 0.08f, sz * 0.80f, sz * 0.30f);
+        hud_color(0.62f, 0.45f, 0.26f);
+        hud_rect(cx - sz * 0.40f, cy - sz * 0.02f, sz * 0.62f, sz * 0.09f);
+        int m;
+        for (m = 0; m < 4; m++) hud_rect(cx - sz * 0.36f + (float)m * sz * 0.16f, cy + sz * 0.07f, sz * 0.04f, sz * 0.22f);
+        hud_color(0.52f, 0.38f, 0.22f);
+        hud_rect(cx + sz * 0.08f, cy - sz * 0.32f, sz * 0.26f, sz * 0.26f);
+    } else if (k == ST_WALL) {
+        hud_color(0.66f, 0.64f, 0.59f);
+        hud_rect(cx - sz * 0.40f, cy - sz * 0.08f, sz * 0.80f, sz * 0.34f);
+        int m;
+        for (m = 0; m < 5; m++) hud_rect(cx - sz * 0.40f + (float)m * sz * 0.17f, cy - sz * 0.20f, sz * 0.10f, sz * 0.12f);
+    } else if (k == ST_TOWER) {
+        hud_color(0.66f, 0.64f, 0.59f);
+        hud_rect(cx - sz * 0.16f, cy - sz * 0.15f, sz * 0.32f, sz * 0.48f);
+        hud_color(0.62f, 0.24f, 0.20f);
+        hud_vert(cx - sz * 0.22f, cy - sz * 0.15f); hud_vert(cx + sz * 0.22f, cy - sz * 0.15f); hud_vert(cx, cy - sz * 0.42f);
+    } else {
+        hud_color(0.66f, 0.64f, 0.59f);
+        hud_rect(cx - sz * 0.40f, cy - sz * 0.25f, sz * 0.24f, sz * 0.58f);
+        hud_rect(cx + sz * 0.16f, cy - sz * 0.25f, sz * 0.24f, sz * 0.58f);
+        hud_rect(cx - sz * 0.16f, cy - sz * 0.18f, sz * 0.32f, sz * 0.14f);
+        hud_color(0.30f, 0.20f, 0.12f);
+        hud_rect(cx - sz * 0.16f, cy - sz * 0.04f, sz * 0.32f, sz * 0.37f);
+    }
+}
+
 #define MAP_CELLS 44
 
 static void build_hud(void) {
@@ -1254,26 +1479,21 @@ static void build_hud(void) {
             else hud_color(0.25f, 0.25f, 0.28f);
             hud_rect(bx + (float)i * cw + 1.0f, by, cw - 2.0f > 1.0f ? cw - 2.0f : 1.0f, bh);
         }
-        /* stockpile: wood (logs) and stone (block) counters */
+        /* stockpile: wood (logs), stone (block) and food (fish) */
         float ry = by + bh + 22.0f, rh = 40.0f;
         hud_color(0.08f, 0.08f, 0.10f);
         hud_rect(bx - 4.0f, ry - 8.0f, bw + 8.0f, rh + 16.0f);
-        hud_color(0.50f, 0.33f, 0.17f);
-        hud_rect(bx + 4.0f, ry + 4.0f, 46.0f, 13.0f);
-        hud_rect(bx + 8.0f, ry + 22.0f, 46.0f, 13.0f);
-        hud_color(0.85f, 0.70f, 0.45f);
-        hud_rect(bx + 50.0f, ry + 4.0f, 6.0f, 13.0f);
-        hud_rect(bx + 54.0f, ry + 22.0f, 6.0f, 13.0f);
+        hud_res_icon(RES_WOOD, bx, ry, 1.0f);
         hud_color(0.95f, 0.90f, 0.80f);
-        hud_number(bx + 76.0f, ry, rh, g_wood);
-        float sx = bx + bw * 0.52f;
-        hud_color(0.62f, 0.62f, 0.66f);
-        hud_rect(sx, ry + 6.0f, 48.0f, 30.0f);
-        hud_color(0.45f, 0.45f, 0.50f);
-        hud_rect(sx, ry + 19.0f, 48.0f, 4.0f);
-        hud_rect(sx + 22.0f, ry + 6.0f, 4.0f, 13.0f);
+        hud_number(bx + 70.0f, ry, rh, g_wood);
+        float sx = bx + bw * 0.34f;
+        hud_res_icon(RES_STONE, sx, ry, 1.0f);
         hud_color(0.95f, 0.90f, 0.80f);
-        hud_number(sx + 70.0f, ry, rh, g_stone);
+        hud_number(sx + 62.0f, ry, rh, g_stone);
+        float fx = bx + bw * 0.68f;
+        hud_res_icon(RES_FOOD, fx, ry, 1.0f);
+        hud_color(0.95f, 0.90f, 0.80f);
+        hud_number(fx + 62.0f, ry, rh, g_food);
     }
 
     /* Barracks training panel: three class buttons, the queue, progress. */
@@ -1288,7 +1508,15 @@ static void build_hud(void) {
             hud_color(0.30f, 0.32f, 0.38f);
             hud_rect(r[0], r[1], r[2], r[3]);
             float cx = r[0] + r[2] * 0.5f, cy = r[1] + r[3] * 0.5f, sz = r[2];
-            if (cc == UC_PEASANT) {       /* straw hat over a brown smock */
+            if (cc == UC_BOAT) {          /* hull + sail */
+                hud_color(0.55f, 0.38f, 0.22f);
+                hud_rect(cx - sz * 0.34f, cy + sz * 0.12f, sz * 0.68f, sz * 0.14f);
+                hud_vert(cx - sz * 0.34f, cy + sz * 0.12f); hud_vert(cx - sz * 0.34f, cy + sz * 0.26f); hud_vert(cx - sz * 0.44f, cy + sz * 0.10f);
+                hud_color(0.92f, 0.92f, 0.95f);
+                hud_vert(cx - sz * 0.02f, cy - sz * 0.36f); hud_vert(cx - sz * 0.02f, cy + sz * 0.06f); hud_vert(cx + sz * 0.30f, cy + sz * 0.06f);
+                hud_color(0.16f, 0.36f, 0.86f);
+                hud_rect(cx - sz * 0.05f, cy - sz * 0.38f, sz * 0.04f, sz * 0.5f);
+            } else if (cc == UC_PEASANT) {       /* straw hat over a brown smock */
                 hud_color(0.62f, 0.45f, 0.25f);
                 hud_rect(cx - sz * 0.18f, cy - sz * 0.02f, sz * 0.36f, sz * 0.38f);
                 hud_color(0.95f, 0.80f, 0.62f);
@@ -1319,13 +1547,20 @@ static void build_hud(void) {
                 hud_rect(cx - sz * 0.03f, cy - sz * 0.43f, sz * 0.06f, sz * 0.52f);
             }
         }
+        for (c = 0; c < train_btn_count(); c++) {
+            int uc[3];
+            unit_cost(train_btn_cls(c), uc);
+            train_btn_rect(c, r);
+            hud_cost(r[0], r[1] + r[3] + 12.0f, uc);
+        }
         /* queue: one small icon per queued unit + the current progress */
         train_btn_rect(0, r);
         float qx = r[0], qy = r[1] - 70.0f, qs = 44.0f;
         for (k = 0; k < g_bq_n[b]; k++) {
             int cls = g_bq_cls[b * BQ_MAX + k];
             if (cls == UC_BOW) hud_color(1.0f, 0.85f, 0.45f); else if (cls == UC_MACE) hud_color(1.0f, 0.62f, 0.35f);
-            else if (cls == UC_PEASANT) hud_color(0.78f, 0.60f, 0.36f); else hud_color(0.92f, 0.92f, 0.96f);
+            else if (cls == UC_PEASANT) hud_color(0.78f, 0.60f, 0.36f);
+            else if (cls == UC_BOAT) hud_color(0.55f, 0.75f, 0.95f); else hud_color(0.92f, 0.92f, 0.96f);
             hud_disc(qx + (float)k * (qs + 14.0f) + qs * 0.5f, qy + qs * 0.3f, qs * 0.25f);
             hud_rect(qx + (float)k * (qs + 14.0f) + qs * 0.2f, qy + qs * 0.55f, qs * 0.6f, qs * 0.5f);
         }
@@ -1336,6 +1571,68 @@ static void build_hud(void) {
             hud_rect(qx, qy - 26.0f, pw, 14.0f);
             hud_color(1.0f, 0.82f, 0.25f);
             hud_rect(qx, qy - 26.0f, pw * frac, 14.0f);
+        }
+    }
+
+    /* Build menu (peasants selected): structure buttons with costs. */
+    if (build_menu_on()) {
+        int k;
+        float r[4];
+        for (k = 0; k < ST_KINDS; k++) {
+            int c[3];
+            build_btn_rect(k, r);
+            struct_cost(k + 1, 10.0f, c);
+            if (k + 1 == ST_WALL) c[1] = 2;            /* walls: stone per unit of length */
+            hud_color(0.08f, 0.08f, 0.10f);
+            hud_rect(r[0] - 5.0f, r[1] - 5.0f, r[2] + 10.0f, r[3] + 10.0f);
+            if (can_afford(c)) hud_color(0.30f, 0.32f, 0.38f); else hud_color(0.22f, 0.18f, 0.18f);
+            hud_rect(r[0], r[1], r[2], r[3]);
+            hud_struct_icon(k + 1, r);
+            hud_cost(r[0], r[1] + r[3] + 12.0f, c);
+        }
+    }
+    /* Placement: cancel / the structure / OK (green when it fits). */
+    if (g_place_kind && g_mode == MODE_COMMAND) {
+        float r[4];
+        train_btn_rect(0, r);
+        hud_color(0.08f, 0.08f, 0.10f);
+        hud_rect(r[0] - 5.0f, r[1] - 5.0f, r[2] + 10.0f, r[3] + 10.0f);
+        hud_color(0.75f, 0.22f, 0.18f);
+        hud_rect(r[0], r[1], r[2], r[3]);
+        {
+            float cx = r[0] + r[2] * 0.5f, cy = r[1] + r[3] * 0.5f, a = r[2] * 0.28f, w = r[2] * 0.06f;
+            hud_color(1.0f, 0.95f, 0.92f);
+            hud_vert(cx - a - w, cy - a + w); hud_vert(cx - a + w, cy - a - w); hud_vert(cx + a + w, cy + a - w);
+            hud_vert(cx - a - w, cy - a + w); hud_vert(cx + a + w, cy + a - w); hud_vert(cx + a - w, cy + a + w);
+            hud_vert(cx + a - w, cy - a - w); hud_vert(cx + a + w, cy - a + w); hud_vert(cx - a + w, cy + a + w);
+            hud_vert(cx + a - w, cy - a - w); hud_vert(cx - a + w, cy + a + w); hud_vert(cx - a - w, cy + a - w);
+        }
+        train_btn_rect(1, r);
+        hud_color(0.08f, 0.08f, 0.10f);
+        hud_rect(r[0] - 5.0f, r[1] - 5.0f, r[2] + 10.0f, r[3] + 10.0f);
+        hud_color(0.30f, 0.32f, 0.38f);
+        hud_rect(r[0], r[1], r[2], r[3]);
+        hud_struct_icon(g_place_kind, r);
+        {
+            int c[3];
+            float len = 0.0f;
+            if (g_place_kind == ST_WALL) { float ex = g_pl_x2 - g_pl_x, ez = g_pl_z2 - g_pl_z; len = w_sqrt(ex * ex + ez * ez); }
+            struct_cost(g_place_kind, len, c);
+            hud_cost(r[0], r[1] + r[3] + 12.0f, c);
+        }
+        train_btn_rect(2, r);
+        int ready = g_ghost_on && g_pl_valid;
+        hud_color(0.08f, 0.08f, 0.10f);
+        hud_rect(r[0] - 5.0f, r[1] - 5.0f, r[2] + 10.0f, r[3] + 10.0f);
+        if (ready) hud_color(0.20f, 0.70f, 0.30f); else hud_color(0.32f, 0.36f, 0.33f);
+        hud_rect(r[0], r[1], r[2], r[3]);
+        {
+            float cx = r[0] + r[2] * 0.5f, cy = r[1] + r[3] * 0.5f, a = r[2] * 0.28f, w = r[2] * 0.07f;
+            hud_color(0.95f, 1.0f, 0.95f);
+            hud_vert(cx - a, cy); hud_vert(cx - a * 0.3f, cy + a * 0.7f); hud_vert(cx - a * 0.3f, cy + a * 0.7f - w * 2.0f);
+            hud_vert(cx - a, cy); hud_vert(cx - a * 0.3f, cy + a * 0.7f - w * 2.0f); hud_vert(cx - a + w, cy - w);
+            hud_vert(cx - a * 0.3f, cy + a * 0.7f); hud_vert(cx + a, cy - a * 0.6f); hud_vert(cx + a - w, cy - a * 0.6f - w);
+            hud_vert(cx - a * 0.3f, cy + a * 0.7f); hud_vert(cx + a - w, cy - a * 0.6f - w); hud_vert(cx - a * 0.3f, cy + a * 0.7f - w * 2.0f);
         }
     }
 
@@ -1352,6 +1649,7 @@ static void build_hud(void) {
             else if (u_class[i] == UC_BOW) hud_color(1.0f, 0.88f, 0.5f);
             else if (u_class[i] == UC_MACE) hud_color(1.0f, 0.62f, 0.35f);
             else if (u_class[i] == UC_PEASANT) hud_color(0.70f, 0.52f, 0.30f);
+            else if (u_class[i] == UC_BOAT) hud_color(0.55f, 0.75f, 0.95f);
             else hud_color(0.92f, 0.92f, 0.95f);
             hud_disc(x + fs * 0.5f, y + fs * 0.4f, fs * 0.35f);
             hud_rect(x + fs * 0.15f, y + fs * 0.8f, fs * 0.7f, fs * 1.2f);
@@ -1627,10 +1925,17 @@ static void stream_chunks(VkDevice device, VkDeviceMemory worldMem) {
                 memcpy(g_slot_res_r + r0, g_out_res_r, sizeof(float) * nr);
                 memcpy(g_slot_res_t + r0, g_out_res_t, sizeof(int) * nr);
                 memcpy(g_slot_res_id + r0, g_out_res_id, sizeof(uint32_t) * nr);
+                int nd = g_out_ndock, d0 = slot * DOCK_OUT_MAX;
+                g_slot_ndock[slot] = nd;
+                memcpy(g_slot_dock_x + d0, g_out_dock_x, sizeof(float) * nd);
+                memcpy(g_slot_dock_z + d0, g_out_dock_z, sizeof(float) * nd);
+                memcpy(g_slot_dock_y + d0, g_out_dock_y, sizeof(float) * nd);
+                memcpy(g_slot_dock_yaw + d0, g_out_dock_yaw, sizeof(float) * nd);
             }
             pthread_mutex_unlock(g_gen_mutex);
             g_nav_cache_slot = -1;
             if (g_slot_castle[slot]) units_on_castle_loaded(slot);
+            if (g_slot_ndock[slot]) units_register_docks(slot);
         }
         g_gen_rebuild = 0;
         gen_set_state(0);

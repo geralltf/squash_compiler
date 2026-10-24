@@ -244,9 +244,10 @@ static int g_lad_alongx[MAX_LADDERS];
 
 /* Building lists for the sites of the current chunk (generator thread). */
 static int g_cb_n[CS_MAX];
-static int g_cb_t[CS_MAX * SITE_MAXB];
-static float g_cb_x[CS_MAX * SITE_MAXB], g_cb_z[CS_MAX * SITE_MAXB], g_cb_yaw[CS_MAX * SITE_MAXB];
-static float g_cb_hx[CS_MAX * SITE_MAXB], g_cb_hz[CS_MAX * SITE_MAXB];
+/* (+1: a spare entry the player-structure code draws its buildings through) */
+static int g_cb_t[CS_MAX * SITE_MAXB + 1];
+static float g_cb_x[CS_MAX * SITE_MAXB + 1], g_cb_z[CS_MAX * SITE_MAXB + 1], g_cb_yaw[CS_MAX * SITE_MAXB + 1];
+static float g_cb_hx[CS_MAX * SITE_MAXB + 1], g_cb_hz[CS_MAX * SITE_MAXB + 1];
 
 static void w_nav_wall(int n, float h, int walkTop) {
     g_nav_f[n] = (unsigned char)(g_nav_f[n] & ~NAV_WALK);         /* ground blocked */

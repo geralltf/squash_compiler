@@ -57,6 +57,7 @@
 #define BT_BARRACKS   2
 #define BT_TOWNCENTER 3
 #define BT_STALL      4
+#define BT_DOCK       5           /* fishing dock (world or player-built; game layer only) */
 #define SITE_MAXB     160
 
 typedef struct {
