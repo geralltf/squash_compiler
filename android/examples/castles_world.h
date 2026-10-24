@@ -159,6 +159,21 @@ static float w_sin(float x) {
 
 static float w_cos(float x) { return w_sin(x + 0.5f * W_PI); }
 
+/* atan2(y, x) approximation (~0.01 rad). */
+static float approx_atan2_w(float y, float x) {
+    float ax = x < 0.0f ? -x : x, ay = y < 0.0f ? -y : y;
+    float mx = ax > ay ? ax : ay;
+    float mn = ax > ay ? ay : ax;
+    if (mx < 1e-9f) return 0.0f;
+    float a = mn / mx;
+    float s = a * a;
+    float r = ((-0.0464964749f * s + 0.15931422f) * s - 0.327622764f) * s * a + a;
+    if (ay > ax) { float t = 1.5707963f - r; r = t; }
+    if (x < 0.0f) { float t = W_PI - r; r = t; }
+    if (y < 0.0f) { float t = -r; r = t; }
+    return r;
+}
+
 static float w_smooth(float e0, float e1, float x) {
     float t = w_clampf((x - e0) / (e1 - e0), 0.0f, 1.0f);
     return t * t * (3.0f - 2.0f * t);
@@ -266,7 +281,9 @@ static float w_continent(float x, float z) {
     return 0.5f + 0.75f * e;
 }
 
-static float w_height(float x, float z) {
+/* Natural terrain height (no castle plateaus) -- see w_height in
+ * castles_sites.h for the height everything actually uses. */
+static float w_height_raw(float x, float z) {
     float c = w_continent(x, z);
     /* Gentle lowlands: land rises slowly away from the coast. */
     float base = (c - 0.37f) * 26.0f;
@@ -294,51 +311,7 @@ static float w_forest(float x, float z) {
     return w_clampf(0.45f + 0.9f * f, 0.0f, 1.0f);
 }
 
-/* Castle placement for a chunk, a pure function of the chunk coords.
- * Returns 1 and fills cell-space center + half-size if this chunk wants a
- * castle. Castles stay inside cells [2,9] so terrain flattening never
- * touches a chunk-border vertex (keeps terrain seamless). */
-/* Checks a castle footprint centered on cell (x,z) with half-size hs:
- * dry, not too high, not too steep (it gets flattened). */
-static int w_castle_site_ok(int cx, int cz, int x, int z, int hs) {
-    float wx = (float)cx * W_CHUNK_SIZE + ((float)x + 0.5f) * W_CELL_SIZE;
-    float wz = (float)cz * W_CHUNK_SIZE + ((float)z + 0.5f) * W_CELL_SIZE;
-    float span = (float)hs * W_CELL_SIZE + 2.0f;
-    float lo = 1000.0f, hi = -1000.0f;
-    int a, b;
-    for (a = -1; a <= 1; a++) {
-        for (b = -1; b <= 1; b++) {
-            float hh = w_height(wx + (float)a * span, wz + (float)b * span);
-            if (hh < lo) lo = hh;
-            if (hh > hi) hi = hh;
-        }
-    }
-    if (lo < 0.4f || hi > 18.0f || hi - lo > 9.0f) return 0;
-    return 1;
-}
-
-static int w_chunk_castle(int cx, int cz, int *ccx, int *ccz, int *half) {
-    float k = w_kingdom(cx, cz);
-    float p = w_smooth(0.25f, 0.70f, k) * 0.9f;
-    float roll = w_hash01(cx, cz, W_SEED_C);
-    if (roll >= p) return 0;
-    uint32_t h = w_hash2(cx, cz, W_SEED_C + 77u);
-    /* Candidate sites: big castles near the middle first, then smaller
-     * ones further out. Footprints always stay inside cells [2,9]. */
-    int i;
-    for (i = 0; i < 12; i++) {
-        uint32_t hi = w_hash(h + (uint32_t)i * 7919u);
-        int hs, x, z;
-        if (i < 4) { hs = 3; x = 5 + (int)(hi & 1u); z = 5 + (int)((hi >> 1) & 1u); }
-        else { hs = 2; x = 4 + (int)(hi & 3u); z = 4 + (int)((hi >> 2) & 3u); }
-        if (i == 0 && ((h >> 9) & 1u)) continue;  /* some chunks prefer small castles */
-        if (w_castle_site_ok(cx, cz, x, z, hs)) {
-            *ccx = x; *ccz = z; *half = hs;
-            return 1;
-        }
-    }
-    return 0;
-}
+#include "android/examples/castles_sites.h"
 
 static int w_cell_class_at(float wx, float wz) {
     float h = w_height(wx, wz);
@@ -353,14 +326,12 @@ static int w_edge_road_east(int cx, int cz) {
     uint32_t h = w_hash2(cx * 2 + 1, cz * 2, W_SEED_E);
     int k = 2 + (int)(h % 8u);
     float p = 0.18f + 0.55f * 0.5f * (w_kingdom(cx, cz) + w_kingdom(cx + 1, cz));
-    int dx, dz, hs;
-    int c1 = w_chunk_castle(cx, cz, &dx, &dz, &hs);
-    int c2 = w_chunk_castle(cx + 1, cz, &dx, &dz, &hs);
-    if (c1 || c2) { float p2 = p + 0.35f; p = p2; }
     float roll = (float)((h >> 8) & 0xFFFFu) * (1.0f / 65536.0f);
     if (roll >= p) return -1;
     float ex = (float)(cx + 1) * W_CHUNK_SIZE;
     float ez = (float)cz * W_CHUNK_SIZE + ((float)k + 0.5f) * W_CELL_SIZE;
+    /* never into a castle clearing (castles get their own gate roads) */
+    if (w_in_clearing(ex - 2.0f, ez) || w_in_clearing(ex + 2.0f, ez)) return -1;
     if (w_cell_class_at(ex - 2.0f, ez) != CC_LAND) return -1;
     if (w_cell_class_at(ex + 2.0f, ez) != CC_LAND) return -1;
     if (w_cell_class_at(ex - 6.0f, ez) != CC_LAND) return -1;
@@ -373,14 +344,11 @@ static int w_edge_road_south(int cx, int cz) {
     uint32_t h = w_hash2(cx * 2, cz * 2 + 1, W_SEED_E);
     int k = 2 + (int)(h % 8u);
     float p = 0.18f + 0.55f * 0.5f * (w_kingdom(cx, cz) + w_kingdom(cx, cz + 1));
-    int dx, dz, hs;
-    int c1 = w_chunk_castle(cx, cz, &dx, &dz, &hs);
-    int c2 = w_chunk_castle(cx, cz + 1, &dx, &dz, &hs);
-    if (c1 || c2) { float p2 = p + 0.35f; p = p2; }
     float roll = (float)((h >> 8) & 0xFFFFu) * (1.0f / 65536.0f);
     if (roll >= p) return -1;
     float ex = (float)cx * W_CHUNK_SIZE + ((float)k + 0.5f) * W_CELL_SIZE;
     float ez = (float)(cz + 1) * W_CHUNK_SIZE;
+    if (w_in_clearing(ex, ez - 2.0f) || w_in_clearing(ex, ez + 2.0f)) return -1;
     if (w_cell_class_at(ex, ez - 2.0f) != CC_LAND) return -1;
     if (w_cell_class_at(ex, ez + 2.0f) != CC_LAND) return -1;
     if (w_cell_class_at(ex, ez - 6.0f) != CC_LAND) return -1;
@@ -466,6 +434,13 @@ static int g_border[4 * W_CELLS];             /* border socket per edge cell, si
 static int g_has_castle, g_castle_cx, g_castle_cz, g_castle_half, g_castle_gate_side;
 static float g_castle_base;                   /* flattened ground height    */
 static int g_hub;                             /* plan hub cell or -1        */
+/* Castle clearings (castles_sites.h): fixed cells are pre-collapsed to
+ * grass (or, for a gate road's last cell, a road end pointing out of the
+ * clearing); anchors are the first cells outside, where WFC must pick
+ * the gate road up. */
+static unsigned char g_cfixed[W_NCELLS];
+static unsigned char g_cterm[W_NCELLS];       /* dir+1: fixed road end toward anchor */
+static unsigned char g_canchor[W_NCELLS];     /* dir+1: anchor, road toward the castle */
 
 /* WFC state */
 static unsigned char g_allow[W_NCELLS * W_MAXT];
@@ -490,6 +465,9 @@ static float w_randf(void) {
     uint32_t r = w_rand();
     return (float)(r >> 8) * (1.0f / 16777216.0f);
 }
+
+static int g_ddx_w(int d) { return d == D_E ? 1 : (d == D_W ? -1 : 0); }
+static int g_ddz_w(int d) { return d == D_S ? 1 : (d == D_N ? -1 : 0); }
 
 static int w_nb(int c, int d) {
     int x = c % W_CELLS, z = c / W_CELLS;
@@ -571,7 +549,7 @@ static void w_plan_chunk(void) {
     int i, x, z;
     int crossings[16];
     int ncross = 0;
-    for (i = 0; i < W_NCELLS; i++) { g_plan[i] = 0; g_cplan[i] = 0; g_czone[i] = 0; }
+    for (i = 0; i < W_NCELLS; i++) { g_plan[i] = 0; g_cplan[i] = 0; g_czone[i] = g_cfixed[i]; }
     g_hub = -1;
     g_castle_gate_side = D_S;
 
@@ -582,71 +560,26 @@ static void w_plan_chunk(void) {
         if (g_border[2 * W_CELLS + i] == SK_R) { int c = (W_CELLS - 1) * W_CELLS + i; g_plan[c] = (unsigned char)(g_plan[c] | 4); crossings[ncross] = c; ncross++; }
         if (g_border[3 * W_CELLS + i] == SK_R) { int c = i * W_CELLS; g_plan[c] = (unsigned char)(g_plan[c] | 8); crossings[ncross] = c; ncross++; }
     }
+    /* Castle gate-road anchors behave like crossings into the network;
+     * fixed cells (castle clearings) are not part of the road plan. */
+    for (i = 0; i < W_NCELLS && ncross < 16; i++) {
+        if (g_canchor[i]) { g_plan[i] = (unsigned char)(g_plan[i] | (1 << (g_canchor[i] - 1))); crossings[ncross] = i; ncross++; }
+    }
+    {
+        int m = 0;
+        for (i = 0; i < ncross; i++) if (!g_cfixed[crossings[i]]) { crossings[m] = crossings[i]; m++; }
+        ncross = m;
+    }
 
-    if (g_has_castle) {
-        int x0 = g_castle_cx - g_castle_half, x1 = g_castle_cx + g_castle_half;
-        int z0 = g_castle_cz - g_castle_half, z1 = g_castle_cz + g_castle_half;
-        /* Gate faces the average direction of the road crossings. */
-        float ax = 0.0f, az = 0.0f;
-        for (i = 0; i < ncross; i++) {
-            float dx = (float)(crossings[i] % W_CELLS - g_castle_cx);
-            float dz = (float)(crossings[i] / W_CELLS - g_castle_cz);
-            float nax = ax + dx, naz = az + dz;
-            ax = nax; az = naz;
-        }
-        if (ncross == 0) {
-            g_castle_gate_side = (int)(w_hash2(g_ch_cx, g_ch_cz, 991u) & 3u);
-        } else if (w_absf(ax) > w_absf(az)) {
-            g_castle_gate_side = ax > 0.0f ? D_E : D_W;
-        } else {
-            g_castle_gate_side = az > 0.0f ? D_S : D_N;
-        }
-        uint32_t rh = w_hash2(g_ch_cx, g_ch_cz, 4242u);
-        for (z = z0; z <= z1; z++) {
-            for (x = x0; x <= x1; x++) {
-                int c = z * W_CELLS + x;
-                int tile;
-                g_czone[c] = 1;
-                if (x == x0 && z == z0) tile = g_tile_tower0 + 0;
-                else if (x == x1 && z == z0) tile = g_tile_tower0 + 1;
-                else if (x == x1 && z == z1) tile = g_tile_tower0 + 2;
-                else if (x == x0 && z == z1) tile = g_tile_tower0 + 3;
-                else {
-                    int side = -1;
-                    if (z == z0) side = D_N;
-                    else if (x == x1) side = D_E;
-                    else if (z == z1) side = D_S;
-                    else if (x == x0) side = D_W;
-                    if (side < 0) {
-                        tile = (x == g_castle_cx && z == g_castle_cz) ? g_tile_keep : g_tile_court;
-                    } else {
-                        int mid = (side == D_N || side == D_S) ? (x == g_castle_cx) : (z == g_castle_cz);
-                        if (mid && side == g_castle_gate_side) tile = g_tile_gate0 + side;
-                        else if (((rh >> ((x * 3 + z * 5) & 15)) & 3u) == 0u) tile = g_tile_ramp0 + side;
-                        else tile = g_tile_wall0 + side;
-                    }
-                }
-                g_cplan[c] = (unsigned char)(tile + 1);
-            }
-        }
-        /* Hub just outside the gate. */
-        int gx = g_castle_cx, gz = g_castle_cz;
-        if (g_castle_gate_side == D_N) gz = z0 - 1;
-        if (g_castle_gate_side == D_S) gz = z1 + 1;
-        if (g_castle_gate_side == D_E) gx = x1 + 1;
-        if (g_castle_gate_side == D_W) gx = x0 - 1;
-        g_hub = gz * W_CELLS + gx;
-        /* Hub connects into the gate. */
-        g_plan[g_hub] = (unsigned char)(g_plan[g_hub] | (1 << ((g_castle_gate_side + 2) & 3)));
-    } else if (ncross > 0) {
+    if (ncross > 0) {
         uint32_t h = w_hash2(g_ch_cx, g_ch_cz, 31337u);
         int hx = 4 + (int)(h % 4u), hz = 4 + (int)((h >> 4) % 4u);
         g_hub = hz * W_CELLS + hx;
-        /* Prefer a dry hub: move to the nearest land cell if needed. */
-        if (g_cclass[g_hub] != CC_LAND) {
+        /* Prefer a dry hub outside castle clearings. */
+        if (g_cclass[g_hub] != CC_LAND || g_cfixed[g_hub]) {
             int bestc = -1, bestd = 1000;
             for (i = 0; i < W_NCELLS; i++) {
-                if (g_cclass[i] != CC_LAND) continue;
+                if (g_cclass[i] != CC_LAND || g_cfixed[i]) continue;
                 int ix = i % W_CELLS, iz = i / W_CELLS;
                 if (ix < 1 || iz < 1 || ix > W_CELLS - 2 || iz > W_CELLS - 2) continue;
                 int dd = (ix > hx ? ix - hx : hx - ix) + (iz > hz ? iz - hz : hz - iz);
@@ -692,6 +625,10 @@ static void w_wfc_init(int allow_castle) {
                     else if (k == K_KEEP) w = 0.0f;
                     else w = 0.25f;
                 }
+            } else if (g_cfixed[c]) {
+                /* castle clearing: grass, or the gate road's last cell */
+                if (g_cterm[c]) w = (k == K_ROAD && g_tparam[t] == (1 << (g_cterm[c] - 1))) ? 1.0f : 0.0f;
+                else w = (k == K_GRASS) ? 1.0f : 0.0f;
             } else if (cls == CC_WATER) {
                 if (k == K_WATER) w = 1.0f;
                 else if (k == K_BRIDGE) w = (plan == g_tparam[t]) ? 40.0f : 0.03f;
@@ -705,7 +642,7 @@ static void w_wfc_init(int allow_castle) {
                 /* No roads up cliffs (they render as vertical stripes),
                  * except where a border crossing forces one in. */
                 if (cls == CC_MOUNTAIN) {
-                    int forced = 0, dd;
+                    int forced = g_canchor[c] != 0, dd;
                     for (dd = 0; dd < 4; dd++) if (w_border_socket(c, dd) == SK_R) forced = 1;
                     if (!forced) w = 0.0f;
                 }
@@ -1053,6 +990,8 @@ static float w_tri_ny(const float *a, const float *b, const float *c) {
     return w_absf(ny) / len;
 }
 
+static int w_site_court(float x, float z);
+
 static void w_emit_terrain(void) {
     float ox = w_chunk_origin_x(), oz = w_chunk_origin_z();
     int i, j;
@@ -1068,11 +1007,8 @@ static void w_emit_terrain(void) {
             m_set3(d, x0, g_hgt[(j + 1) * W_GRIDV + i], z1);
             int cell = (j / W_SUB) * W_CELLS + (i / W_SUB);
             int rt = g_result[cell];
-            int court = 0;
-            if (rt >= 0) {
-                int k = g_tkind[rt];
-                if (k == K_COURT || k == K_KEEP || k == K_GATE || k == K_TOWER || k == K_WALL || k == K_RAMP) court = 1;
-            }
+            int court = w_site_court(ox + ((float)i + 0.5f) * W_STEP, oz + ((float)j + 0.5f) * W_STEP);
+            (void)rt;
             int gi = g_ch_cx * W_GRID + i, gj = g_ch_cz * W_GRID + j;
             /* Triangle 1: a b c */
             float ny1 = w_tri_ny(a, b, c);
@@ -1535,6 +1471,8 @@ static void w_keep_piece(float cx, float cz, float y, uint32_t h) {
     m_box(cx + 0.06f, y + 14.4f, cz - 0.04f, cx + 1.4f, y + 15.3f, cz + 0.04f);
 }
 
+#include "android/examples/castles_sites_build.h"
+
 /* ------------------------------------------------------------------ */
 /* Chunk generation entry point                                        */
 /* ------------------------------------------------------------------ */
@@ -1545,7 +1483,9 @@ static unsigned char g_out_cells[W_NCELLS];   /* minimap: 0 water 1 land 2 mount
 static float g_out_castle_base;               /* ground height inside the castle */
 
 static void world_init(void) {
+    WSite home;
     world_init_tiles();
+    g_home_known = site_find_home(&g_home_tx, &g_home_tz, &home);
 }
 
 static void w_compute_terrain(void) {
@@ -1596,8 +1536,53 @@ static void w_compute_borders(void) {
         g_border[2 * W_CELLS + i] = (i == ks) ? SK_R : SK_G;
         g_border[3 * W_CELLS + i] = (i == kw) ? SK_R : SK_G;
     }
-    /* A crossing cell must be land on this side too (edge checks already
-     * looked +-6 units, i.e. into both border cells). */
+    /* Castle gate roads that leave a clearing across this chunk's edge:
+     * the terminal cell is on one side, the anchor on the other; both
+     * chunks derive the same edge from the site, so they agree. */
+    int si, g;
+    int gx0 = g_ch_cx * W_CELLS, gz0 = g_ch_cz * W_CELLS;
+    for (si = 0; si < g_ncs; si++) {
+        WSite *st = g_cs[si];
+        for (g = 0; g < st->ngates; g++) {
+            int tgx, tgz, dir;
+            if (!site_gate_anchor(st, g, &tgx, &tgz, &dir)) continue;
+            int agx = tgx + g_ddx_w(dir), agz = tgz + g_ddz_w(dir);
+            int tin = tgx >= gx0 && tgz >= gz0 && tgx < gx0 + W_CELLS && tgz < gz0 + W_CELLS;
+            int ain = agx >= gx0 && agz >= gz0 && agx < gx0 + W_CELLS && agz < gz0 + W_CELLS;
+            if (tin == ain) continue;
+            int lx = (tin ? tgx : agx) - gx0, lz = (tin ? tgz : agz) - gz0;
+            int side = tin ? dir : ((dir + 2) & 3);           /* outward side of our cell */
+            if (side == D_N) g_border[0 * W_CELLS + lx] = SK_R;
+            if (side == D_E) g_border[1 * W_CELLS + lz] = SK_R;
+            if (side == D_S) g_border[2 * W_CELLS + lx] = SK_R;
+            if (side == D_W) g_border[3 * W_CELLS + lz] = SK_R;
+        }
+    }
+}
+
+/* Clearing cells, gate-road terminals and anchors for this chunk. */
+static void w_compute_fixed(void) {
+    float ox = w_chunk_origin_x(), oz = w_chunk_origin_z();
+    int c, si, g;
+    for (c = 0; c < W_NCELLS; c++) {
+        float x = ox + ((float)(c % W_CELLS) + 0.5f) * W_CELL_SIZE, z = oz + ((float)(c / W_CELLS) + 0.5f) * W_CELL_SIZE;
+        g_cfixed[c] = (unsigned char)w_in_clearing(x, z);
+        g_cterm[c] = 0;
+        g_canchor[c] = 0;
+    }
+    int gx0 = g_ch_cx * W_CELLS, gz0 = g_ch_cz * W_CELLS;
+    for (si = 0; si < g_ncs; si++) {
+        WSite *st = g_cs[si];
+        for (g = 0; g < st->ngates; g++) {
+            int tgx, tgz, dir;
+            if (!site_gate_anchor(st, g, &tgx, &tgz, &dir)) continue;
+            int agx = tgx + g_ddx_w(dir), agz = tgz + g_ddz_w(dir);
+            if (tgx >= gx0 && tgz >= gz0 && tgx < gx0 + W_CELLS && tgz < gz0 + W_CELLS)
+                g_cterm[(tgz - gz0) * W_CELLS + (tgx - gx0)] = (unsigned char)(dir + 1);
+            if (agx >= gx0 && agz >= gz0 && agx < gx0 + W_CELLS && agz < gz0 + W_CELLS)
+                g_canchor[(agz - gz0) * W_CELLS + (agx - gx0)] = (unsigned char)(((dir + 2) & 3) + 1);
+        }
+    }
 }
 
 /* Flatten the castle footprint (and blend one vertex ring around it). */
@@ -1645,6 +1630,10 @@ static void w_emit_props(void) {
         int x = c % W_CELLS, z = c / W_CELLS;
         int t = g_result[c];
         if (t < 0) continue;
+        if (g_cfixed[c]) {            /* castle clearing: drawn by castles_sites_build.h */
+            g_out_cells[c] = (unsigned char)(w_site_court(ox + ((float)x + 0.5f) * W_CELL_SIZE, oz + ((float)z + 0.5f) * W_CELL_SIZE) ? 4 : 1);
+            continue;
+        }
         int k = g_tkind[t];
         int p = g_tparam[t];
         float lcx = ((float)x + 0.5f) * W_CELL_SIZE, lcz = ((float)z + 0.5f) * W_CELL_SIZE;
@@ -1725,27 +1714,41 @@ static int world_gen_chunk(int cx, int cz, float *out, int cap) {
     g_ch_cx = cx; g_ch_cz = cz;
     g_mv = out; g_mn = 0; g_mcap = cap;
     g_out_has_castle = 0;
+    w_collect_sites();
     w_compute_terrain();
+    w_compute_fixed();
     w_compute_borders();
-    int ccx = 0, ccz = 0, half = 0;
-    g_has_castle = w_chunk_castle(cx, cz, &ccx, &ccz, &half);
-    g_castle_cx = ccx; g_castle_cz = ccz; g_castle_half = half;
+    g_has_castle = 0;               /* castles are sites now (castles_sites.h) */
     g_castle_base = 0.0f;
     w_plan_chunk();
     w_wfc_solve();
-    w_flatten_castle();
-    g_out_castle_base = g_castle_base;
     w_nav_init();
+    int si, k;
+    g_nlad = 0;
+    for (si = 0; si < g_ncs; si++) {
+        WSite *st = g_cs[si];
+        g_cb_n[si] = site_layout(st, g_cb_t + si * SITE_MAXB, g_cb_x + si * SITE_MAXB, g_cb_z + si * SITE_MAXB,
+                                 g_cb_yaw + si * SITE_MAXB, g_cb_hx + si * SITE_MAXB, g_cb_hz + si * SITE_MAXB);
+        w_site_nav(si);
+        if (w_in_chunk(st->cx, st->cz)) {
+            g_out_has_castle = 1;
+            g_out_keep_x = st->cx; g_out_keep_z = st->cz; g_out_keep_y = st->base;
+        }
+    }
+    g_out_castle_base = g_ncs > 0 ? g_cs[0]->base : 0.0f;
     w_emit_terrain();
     w_emit_water();
     w_emit_props();
+    for (si = 0; si < g_ncs; si++) w_site_emit(si);
+    for (k = 0; k < g_nlad; k++)
+        w_ladder(g_lad_fx[k], g_lad_fz[k], g_lad_fy[k], g_lad_tx[k], g_lad_tz[k], g_lad_ty[k], g_lad_alongx[k]);
     return g_mn;
 }
 
-/* Height of the final (possibly castle-flattened) ground at a world
- * point -- uses the raw noise height; good enough for camera clamping. */
+/* Natural ground height without castle plateaus (uncached, so safe on
+ * any thread) -- for camera clamping where no chunk is loaded. */
 static float world_ground_height(float x, float z) {
-    float h = w_height(x, z);
+    float h = w_height_raw(x, z);
     return h < W_SEA_LEVEL ? W_SEA_LEVEL : h;
 }
 
@@ -1764,9 +1767,13 @@ static int world_selftest(int *out, float *scratch, int cap) {
     out[n] = g_nt; n++;
     int k;
     for (k = 0; k < 4; k++) {
-        /* chunk (1,0) holds a castle: covers walls, ramps and ladders */
-        int cx = (k == 0) ? 0 : (k == 1) ? 3 : (k == 2) ? -2 : 1;
+        /* chunk 3: the home castle's centre (walls, gates, ladders, buildings) */
+        int cx = (k == 0) ? 0 : (k == 1) ? 3 : (k == 2) ? -2 : 0;
         int cz = (k == 0) ? 0 : (k == 1) ? -1 : (k == 2) ? 4 : 0;
+        if (k == 3 && g_home_known) {
+            WSite *hs = w_site_cached(g_home_tx, g_home_tz);
+            cx = w_ifloor(hs->cx / W_CHUNK_SIZE); cz = w_ifloor(hs->cz / W_CHUNK_SIZE);
+        }
         int vn = world_gen_chunk(cx, cz, scratch, cap);
         uint32_t th = 0u;
         int c;

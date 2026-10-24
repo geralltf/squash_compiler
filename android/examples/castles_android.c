@@ -7,23 +7,34 @@
 /* Castles: an explorable, infinite, procedurally generated 3D world.
  *
  * World generation lives in castles_world.h (simplex/fBm terrain with
- * water, sand, grass and mountain regions; a "kingdom" noise field that
- * controls how often castles appear; Wave Function Collapse laying out
- * castles -- corner towers, walls, ramp-walls, gates, courtyards, keeps
- * -- plus roads, bridges, forests and villages; all of it seamless
- * across chunk borders). This file streams those chunks in and out
- * around the camera on a worker thread and renders them with Vulkan.
+ * water, sand, grass and mountain regions; Wave Function Collapse laying
+ * out roads, bridges, forests and villages; all of it seamless across
+ * chunk borders). Castles come from castles_sites.h: one candidate per
+ * 5x5-chunk "kingdom" tile, rolled as a square, triangular or 5-12 sided
+ * polygon, a star or a circle, with 0-3 inner rings inside the curtain
+ * wall, 1-3 wall thicknesses and an optional bastion-fort trace. Its
+ * site is chosen and levelled in advance (the terrain blends into a
+ * plateau, WFC keeps the footprint clear), so a big castle spans many
+ * chunks; each chunk builds only the walls, merlons, towers, gatehouses
+ * and buildings that fall inside it (castles_sites_build.h). Gatehouses
+ * face the neighbouring castles and the roads lead to them. Inside: a
+ * town centre on the plaza, rows of houses and one or more barracks.
+ * This file streams chunks in and out around the camera on a worker
+ * thread and renders them with Vulkan.
  *
- * Units (castles_units.h): a player squad spawns at the home castle and
- * guards hold every other castle's courtyard and wall-walks. They are
- * procedurally generated humanoids (random face colour, hair or helmet,
- * proportions, team tunic; sword + shield, or bow + quiver for archers)
- * with procedural idle / walk / sword-swing / bow-draw-and-release /
- * ladder-climb / death animation. Arrows are real projectiles
- * (castles_ballistics.h): forces accumulated through bal_add_force() and
- * integrated at a fixed 120 Hz step, with each shot's launch force solved
- * by running that same integration until the arc passes through the
- * target.
+ * Units (castles_units.h): a player squad spawns at the home castle's
+ * town centre and guards hold every other castle's courtyard and
+ * wall-walks. They are procedurally generated humanoids (random face
+ * colour, hair or helmet, proportions, team tunic) in three classes:
+ * swordsmen (sword + shield), archers (bow + quiver) and macemen (fast,
+ * nimble, quick light blows), with procedural idle / walk / sword-swing
+ * / mace-smash / bow-draw-and-release / ladder-climb / death animation.
+ * Arrows are real projectiles (castles_ballistics.h): forces accumulated
+ * through bal_add_force() and integrated at a fixed 120 Hz step, with
+ * each shot's launch force solved by running that same integration
+ * until the arc passes through the target. Each house raises the
+ * population limit by 4 and houses a peasant who walks to the town
+ * centre and back; tapping a barracks opens its training panel.
  *
  * Pathfinding runs on the GPU: an order builds a 160x160x2 layered nav
  * window (ground + castle wall-walks, joined by ramp-walls and ladders,
@@ -38,6 +49,9 @@
  *     drag a rectangle          -- select every squad member inside it
  *     tap ground or a wall-walk -- move the selection there
  *     tap an enemy              -- attack it
+ *     tap a barracks / town centre / house -- select it; a barracks
+ *                                  shows sword / bow / mace buttons that
+ *                                  queue training (up to 5)
  *     select-all button         -- select the whole squad (double-tap:
  *                                  also move the camera to it)
  *     two fingers               -- pan (drag) or zoom (pinch): each
@@ -51,7 +65,7 @@
  *     right half of the screen  -- drag to look around
  *     no input for a few seconds -- autopilot flies to the nearest
  *                                   castle you haven't discovered yet
- * Flying close to a castle's keep discovers it: the screen flashes gold
+ * Flying close to a castle's centre discovers it: the screen flashes gold
  * and a gold marker is added to the counter in the top-left corner. The
  * minimap (top right) shows terrain, roads and castles around you (red
  * = undiscovered, gold = discovered).
@@ -368,31 +382,24 @@ static void rts_place_camera(void) {
  * where the squad appears once its chunk loads (castle placement is a
  * pure function of chunk coords, so this needs no generated chunks). */
 static void choose_spawn(void) {
-    int r, cx, cz, a, b, c;
-    for (r = 0; r < 30; r++) {
-        for (cz = -r; cz <= r; cz++) {
-            for (cx = -r; cx <= r; cx++) {
-                if (cx != -r && cx != r && cz != -r && cz != r) continue;
-                if (w_chunk_castle(cx, cz, &a, &b, &c)) {
-                    float kx = (float)cx * W_CHUNK_SIZE + ((float)a + 0.5f) * W_CELL_SIZE;
-                    float kz = (float)cz * W_CHUNK_SIZE + ((float)b + 0.5f) * W_CELL_SIZE;
-                    g_yaw = 0.0f;
-                    g_rts_pitch = RTS_PITCH;
-                    g_pitch = RTS_PITCH;
-                    g_rts_tx = kx; g_rts_tz = kz + 4.0f;
-                    g_rts_ty = world_ground_height(kx, kz);
-                    g_rts_dist = 42.0f;
-                    rts_place_camera();
-                    g_home_set = 1; g_home_cx = cx; g_home_cz = cz;
-                    __android_log_print(4, TAG, "home castle chunk %d,%d", cx, cz);
-                    return;
-                }
-            }
-        }
+    g_yaw = 0.0f;
+    g_rts_pitch = RTS_PITCH;
+    g_pitch = RTS_PITCH;
+    g_rts_dist = 46.0f;
+    if (g_home_set) {
+        /* look at the town centre, from the main gate's side */
+        float dx, dz;
+        building_door(0, 8.0f, &dx, &dz);
+        g_rts_tx = dx; g_rts_tz = dz;
+        g_rts_ty = g_hsite.base;
+        g_yaw = wrap_angle(g_hsite.gate_a[0] - 0.5f * W_PI + W_PI);
+        __android_log_print(4, TAG, "home castle: tile %d,%d radius %d shape %d sides %d rings %d bastion %d, %d buildings, %d houses",
+                            g_hsite.tx, g_hsite.tz, (int)g_hsite.R, g_hsite.shape, g_hsite.sides, g_hsite.rings, g_hsite.bastion, g_hb_n, g_houses);
+    } else {
+        g_rts_tx = 0.0f; g_rts_tz = 0.0f;
+        g_rts_ty = world_ground_height(0.0f, 0.0f);
     }
-    g_cam[0] = 0.0f; g_cam[2] = 0.0f;
-    g_cam[1] = world_ground_height(0.0f, 0.0f) + 24.0f;
-    g_pitch = -0.3f;
+    rts_place_camera();
 }
 
 /* ------------------------------------------------------------------ */
@@ -427,6 +434,7 @@ static int g_touch_reanchor;
 #define BTN_NONE   0
 #define BTN_MODE   1
 #define BTN_SELALL 2
+#define BTN_TRAIN0 3     /* + class: swordsman, archer, maceman */
 
 static float btn_size(void) { return g_view_w * 0.14f; }
 
@@ -439,8 +447,28 @@ static void btn_rect(int b, float *r) {
     else r[0] = g_view_w - 2.0f * sz - 60.0f;
 }
 
+static int barracks_selected(void) {
+    return g_mode == MODE_COMMAND && g_sel_building >= 0 && g_sel_building < g_hb_n && g_hb_t[g_sel_building] == BT_BARRACKS;
+}
+
+/* Training buttons (barracks selected): a row in the lower middle. */
+static void train_btn_rect(int cls, float *r) {
+    float sz = btn_size() * 0.85f;
+    float x0 = g_view_w * 0.5f - sz * 1.5f - 20.0f;
+    r[0] = x0 + (float)cls * (sz + 20.0f);
+    r[1] = g_view_h - btn_size() * 2.0f - 120.0f;
+    r[2] = sz; r[3] = sz;
+}
+
 static int btn_hit(float x, float y) {
     float r[4];
+    if (barracks_selected()) {
+        int c;
+        for (c = 0; c < 3; c++) {
+            train_btn_rect(c, r);
+            if (x >= r[0] && y >= r[1] && x <= r[0] + r[2] && y <= r[1] + r[3]) return BTN_TRAIN0 + c;
+        }
+    }
     btn_rect(BTN_MODE, r);
     if (x >= r[0] && y >= r[1] && x <= r[0] + r[2] && y <= r[1] + r[3]) return BTN_MODE;
     if (g_mode == MODE_COMMAND) {
@@ -476,10 +504,17 @@ static void on_button(int b) {
         if (g_mode == MODE_COMMAND) rts_begin();
         g_joy_active = 0; g_look_active = 0;
         __android_log_print(4, TAG, "mode -> %s", g_mode == MODE_COMMAND ? "command" : "fly");
+    } else if (b >= BTN_TRAIN0 && b < BTN_TRAIN0 + 3) {
+        int cls = b - BTN_TRAIN0;
+        int ok = barracks_train(g_sel_building, cls);
+        __android_log_print(4, TAG, "train %s at barracks %d: %s (queue %d, pop %d+%d/%d)",
+                            cls == UC_SWORD ? "swordsman" : (cls == UC_BOW ? "archer" : "maceman"), g_sel_building,
+                            ok ? "queued" : "refused", g_bq_n[g_sel_building], pop_count(), pop_queued(), pop_limit());
     } else if (b == BTN_SELALL) {
         int i, n = 0;
+        g_sel_building = -1;
         for (i = 0; i < g_un; i++) {
-            u_selected[i] = unit_alive(i) && u_team[i] == TEAM_PLAYER && unit_loaded(i);
+            u_selected[i] = unit_alive(i) && u_team[i] == TEAM_PLAYER && unit_loaded(i) && u_class[i] != UC_PEASANT;
             if (u_selected[i]) n++;
         }
         __android_log_print(4, TAG, "select all: %d units", n);
@@ -498,9 +533,24 @@ static void on_tap(float x, float y) {
     if (u >= 0 && u_team[u] == TEAM_PLAYER) {
         for (i = 0; i < g_un; i++) u_selected[i] = 0;
         u_selected[u] = 1;
+        g_sel_building = -1;
         __android_log_print(4, TAG, "tap at %d,%d: selected unit %d", (int)x, (int)y, u);
         return;
     }
+    if (u < 0) {
+        /* own buildings: easy to pick with nothing selected, only a
+         * direct hit when units are selected (so move orders near
+         * buildings still work) */
+        int b = pick_building(x, y, units_selected_count() > 0);
+        if (b >= 0) {
+            for (i = 0; i < g_un; i++) u_selected[i] = 0;
+            g_sel_building = b;
+            __android_log_print(4, TAG, "tap at %d,%d: selected %s %d", (int)x, (int)y,
+                                g_hb_t[b] == BT_TOWNCENTER ? "town centre" : (g_hb_t[b] == BT_BARRACKS ? "barracks" : "house"), b);
+            return;
+        }
+    }
+    g_sel_building = -1;
     if (units_selected_count() == 0) {
         __android_log_print(4, TAG, "tap at %d,%d: nothing selected", (int)x, (int)y);
         return;
@@ -521,7 +571,7 @@ static void on_drag_end(void) {
     int i, n = 0;
     for (i = 0; i < g_un; i++) {
         u_selected[i] = 0;
-        if (!unit_alive(i) || u_team[i] != TEAM_PLAYER || !unit_loaded(i)) continue;
+        if (!unit_alive(i) || u_team[i] != TEAM_PLAYER || !unit_loaded(i) || u_class[i] == UC_PEASANT) continue;
         float px, py;
         if (!project_point(u_x[i], u_y[i] + 0.9f, u_z[i], &px, &py)) continue;
         if (px >= x0 && px <= x1 && py >= y0 && py <= y1) { u_selected[i] = 1; n++; }
@@ -793,7 +843,7 @@ static void update_camera(float dt) {
     }
     float speed = 26.0f;
     float cp = w_cos(g_pitch), sp = w_sin(g_pitch), cy = w_cos(g_yaw), sy = w_sin(g_yaw);
-    float ground = world_ground_height(g_cam[0], g_cam[2]);
+    float ground = nav_terrain_height(g_cam[0], g_cam[2]);
 
     if (g_mode == MODE_COMMAND) {
         rts_update(dt);
@@ -854,7 +904,7 @@ static void update_camera(float dt) {
         g_cam[0] = nx; g_cam[2] = nz;
     }
     if (g_mode == MODE_FLY) {
-        float g2 = world_ground_height(g_cam[0], g_cam[2]);
+        float g2 = nav_terrain_height(g_cam[0], g_cam[2]);
         float minY = g2 + 3.0f;
         if (g_cam[1] < minY) g_cam[1] = minY;
         if (g_cam[1] > 160.0f) g_cam[1] = 160.0f;
@@ -1113,17 +1163,89 @@ static void build_hud(void) {
         hud_disc(ncx + g_nav_kx, ncy + g_nav_ky, nr * 0.30f);
     }
 
+    /* Population bar (command mode): one cell per pop slot, filled for
+     * every living unit (soldiers blue, peasants brown) and queued unit. */
+    if (g_mode == MODE_COMMAND && g_home_set) {
+        int lim = pop_limit(), cur = pop_count(), q = pop_queued(), i, peas = 0;
+        for (i = 0; i < g_un; i++) if (unit_alive(i) && u_team[i] == TEAM_PLAYER && u_class[i] == UC_PEASANT) peas++;
+        float bw = W * 0.42f, bh = 22.0f, bx = 30.0f, by = 30.0f + W * 0.03f * 1.6f + 20.0f;
+        hud_color(0.08f, 0.08f, 0.10f);
+        hud_rect(bx - 4.0f, by - 4.0f, bw + 8.0f, bh + 8.0f);
+        float cw = bw / (float)(lim > 0 ? lim : 1);
+        for (i = 0; i < lim; i++) {
+            if (i < peas) hud_color(0.62f, 0.45f, 0.25f);
+            else if (i < cur) hud_color(0.30f, 0.55f, 1.0f);
+            else if (i < cur + q) hud_color(1.0f, 0.82f, 0.25f);
+            else hud_color(0.25f, 0.25f, 0.28f);
+            hud_rect(bx + (float)i * cw + 1.0f, by, cw - 2.0f > 1.0f ? cw - 2.0f : 1.0f, bh);
+        }
+    }
+
+    /* Barracks training panel: three class buttons, the queue, progress. */
+    if (barracks_selected()) {
+        int b = g_sel_building, c, k;
+        float r[4];
+        for (c = 0; c < 3; c++) {
+            train_btn_rect(c, r);
+            hud_color(0.08f, 0.08f, 0.10f);
+            hud_rect(r[0] - 5.0f, r[1] - 5.0f, r[2] + 10.0f, r[3] + 10.0f);
+            hud_color(0.30f, 0.32f, 0.38f);
+            hud_rect(r[0], r[1], r[2], r[3]);
+            float cx = r[0] + r[2] * 0.5f, cy = r[1] + r[3] * 0.5f, sz = r[2];
+            if (c == UC_SWORD) {          /* blade + guard */
+                hud_color(0.92f, 0.92f, 0.96f);
+                hud_rect(cx - sz * 0.05f, cy - sz * 0.38f, sz * 0.10f, sz * 0.55f);
+                hud_color(0.85f, 0.70f, 0.25f);
+                hud_rect(cx - sz * 0.22f, cy + sz * 0.17f, sz * 0.44f, sz * 0.07f);
+                hud_rect(cx - sz * 0.04f, cy + sz * 0.24f, sz * 0.08f, sz * 0.16f);
+            } else if (c == UC_BOW) {     /* bow arc + string */
+                hud_color(1.0f, 0.85f, 0.45f);
+                for (k = 0; k < 9; k++) {
+                    float a = -1.1f + 2.2f * (float)k / 8.0f;
+                    hud_rect(cx - sz * 0.10f + w_cos(a) * sz * 0.30f - 5.0f, cy + w_sin(a) * sz * 0.36f - 5.0f, 10.0f, 10.0f);
+                }
+                hud_color(0.95f, 0.95f, 0.90f);
+                hud_rect(cx - sz * 0.10f + sz * 0.135f, cy - sz * 0.32f, 4.0f, sz * 0.64f);
+            } else {                      /* mace: haft + spiked head */
+                hud_color(0.75f, 0.55f, 0.30f);
+                hud_rect(cx - sz * 0.04f, cy - sz * 0.05f, sz * 0.08f, sz * 0.42f);
+                hud_color(1.0f, 0.62f, 0.35f);
+                hud_disc(cx, cy - sz * 0.17f, sz * 0.16f);
+                hud_rect(cx - sz * 0.27f, cy - sz * 0.20f, sz * 0.54f, sz * 0.06f);
+                hud_rect(cx - sz * 0.03f, cy - sz * 0.43f, sz * 0.06f, sz * 0.52f);
+            }
+        }
+        /* queue: one small icon per queued unit + the current progress */
+        train_btn_rect(0, r);
+        float qx = r[0], qy = r[1] - 70.0f, qs = 44.0f;
+        for (k = 0; k < g_bq_n[b]; k++) {
+            int cls = g_bq_cls[b * BQ_MAX + k];
+            if (cls == UC_BOW) hud_color(1.0f, 0.85f, 0.45f); else if (cls == UC_MACE) hud_color(1.0f, 0.62f, 0.35f); else hud_color(0.92f, 0.92f, 0.96f);
+            hud_disc(qx + (float)k * (qs + 14.0f) + qs * 0.5f, qy + qs * 0.3f, qs * 0.25f);
+            hud_rect(qx + (float)k * (qs + 14.0f) + qs * 0.2f, qy + qs * 0.55f, qs * 0.6f, qs * 0.5f);
+        }
+        if (g_bq_n[b] > 0) {
+            float frac = w_clampf(g_bq_t[b] / train_time(g_bq_cls[b * BQ_MAX]), 0.0f, 1.0f);
+            float pw = 3.0f * r[2] + 40.0f;
+            hud_color(0.08f, 0.08f, 0.10f);
+            hud_rect(qx, qy - 26.0f, pw, 14.0f);
+            hud_color(1.0f, 0.82f, 0.25f);
+            hud_rect(qx, qy - 26.0f, pw * frac, 14.0f);
+        }
+    }
+
     /* Squad roster (bottom left): one figure per living squad member,
      * green when selected. */
     {
         int i, n = 0;
         float fs = W * 0.03f;
         for (i = 0; i < g_un; i++) {
-            if (!unit_alive(i) || u_team[i] != TEAM_PLAYER) continue;
+            if (!unit_alive(i) || u_team[i] != TEAM_PLAYER || u_class[i] == UC_PEASANT) continue;
             float x = 30.0f + (float)(n % 12) * fs * 1.5f;
             float y = H - 60.0f - fs * 2.2f - (float)(n / 12) * fs * 2.6f;
             if (u_selected[i]) hud_color(0.3f, 1.0f, 0.4f);
-            else if (u_archer[i]) hud_color(1.0f, 0.88f, 0.5f);
+            else if (u_class[i] == UC_BOW) hud_color(1.0f, 0.88f, 0.5f);
+            else if (u_class[i] == UC_MACE) hud_color(1.0f, 0.62f, 0.35f);
             else hud_color(0.92f, 0.92f, 0.95f);
             hud_disc(x + fs * 0.5f, y + fs * 0.4f, fs * 0.35f);
             hud_rect(x + fs * 0.15f, y + fs * 0.8f, fs * 0.7f, fs * 1.2f);
@@ -2064,6 +2186,7 @@ static void *render_session(void *window) {
         usleep(5000);
     }
     units_init();
+    if (g_hb_n == 0) units_home_init();
     if (g_cam[0] == 0.0f && g_cam[1] == 0.0f && g_cam[2] == 0.0f) {
         /* First session: ballistics self-test (compare with the host
          * checker's "ballistics:" line). Runs here, on the render thread,
