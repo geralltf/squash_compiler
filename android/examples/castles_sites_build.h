@@ -388,7 +388,12 @@ static void w_site_nav(int si) {
                     float bxx = px - g_cb_x[qb], bzz = pz - g_cb_z[qb];
                     float lim = g_cb_hx[qb] + g_cb_hz[qb] + 1.0f;
                     if (bxx > lim || bxx < -lim || bzz > lim || bzz < -lim) continue;
-                    float c = w_cos(g_cb_yaw[qb]), sn = w_sin(g_cb_yaw[qb]);
+                    /* same frame as the meshes: houses, barracks and the
+                     * town centre are drawn rotated by yaw - pi/2 (local
+                     * +z, the hz half-depth, faces the street), stalls by
+                     * yaw itself */
+                    float fyaw = g_cb_t[qb] == BT_STALL ? g_cb_yaw[qb] : g_cb_yaw[qb] - 0.5f * W_PI;
+                    float c = w_cos(fyaw), sn = w_sin(fyaw);
                     float lx = bxx * c + bzz * sn, lz = -bxx * sn + bzz * c;
                     /* 0.43, not a round number: lot geometry can put a
                      * footprint edge exactly on a cell centre, and the

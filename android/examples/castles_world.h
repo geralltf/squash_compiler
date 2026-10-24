@@ -1152,6 +1152,39 @@ static int w_nav_ladder_end(int layer, float x, float z, float h, int dir) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Harvestable resources                                               */
+/* ------------------------------------------------------------------ */
+/* Every tree (wood) and rock (stone) a chunk emits is listed in g_out_res_*
+ * with a stable id hashed from its cell and index, so the game layer can
+ * send peasants to it. Fully harvested ids go into g_depleted (written by
+ * the render thread, read here): the generator then leaves them out --
+ * no mesh, no nav obstacle -- and the game rebuilds the chunk. */
+#define RES_WOOD   0
+#define RES_STONE  1
+#define RES_MAX    320            /* listed per chunk (the rest stay scenery) */
+#define DEPL_MAX   4096
+static int g_out_nres;
+static float g_out_res_x[RES_MAX], g_out_res_z[RES_MAX], g_out_res_y[RES_MAX], g_out_res_r[RES_MAX];
+static int g_out_res_t[RES_MAX];
+static uint32_t g_out_res_id[RES_MAX];
+static uint32_t g_depleted[DEPL_MAX];
+static int g_ndepleted;
+
+static int w_res_depleted(uint32_t id) {
+    int i, n = g_ndepleted;
+    for (i = 0; i < n; i++) if (g_depleted[i] == id) return 1;
+    return 0;
+}
+
+static void w_res_add(int type, uint32_t id, float x, float z, float y, float r) {
+    int k = g_out_nres;
+    if (k >= RES_MAX) return;
+    g_out_res_t[k] = type; g_out_res_id[k] = id;
+    g_out_res_x[k] = x; g_out_res_z[k] = z; g_out_res_y[k] = y; g_out_res_r[k] = r;
+    g_out_nres = k + 1;
+}
+
+/* ------------------------------------------------------------------ */
 /* Props                                                               */
 /* ------------------------------------------------------------------ */
 static void w_tree(float x, float z, float y, float size, int pine) {
@@ -1652,7 +1685,10 @@ static void w_emit_props(void) {
                 float ty = w_mesh_height(lcx + jx, lcz + jz);
                 if (ty < 0.4f) continue;
                 int pine = (ty > 7.0f) || ((hq >> 24) & 1u);
+                uint32_t rid = w_hash2(gx * 8 + q, gz, 0x7EE5u) & 0x7FFFFFFFu;
+                if (g_ndepleted > 0 && w_res_depleted(rid)) continue;
                 w_tree(wx + jx, wz + jz, ty, sz, pine);
+                w_res_add(RES_WOOD, rid, wx + jx, wz + jz, ty, 0.5f);
             }
         }
         if (k == K_ROCKS) {
@@ -1663,7 +1699,10 @@ static void w_emit_props(void) {
                 float jz = ((float)((hq >> 8) & 255u) / 255.0f - 0.5f) * 2.6f;
                 float sz = 0.7f + (float)((hq >> 16) & 255u) / 255.0f * 0.9f;
                 float ry = w_mesh_height(lcx + jx, lcz + jz);
+                uint32_t rid = (w_hash2(gx * 8 + q, gz, 0x5701u) & 0x7FFFFFFFu) | 0x80000000u;
+                if (g_ndepleted > 0 && w_res_depleted(rid)) continue;
                 w_rock(wx + jx, wz + jz, ry, sz);
+                w_res_add(RES_STONE, rid, wx + jx, wz + jz, ry, 0.9f * sz);
             }
         }
         if (k == K_ROAD) {
@@ -1714,6 +1753,7 @@ static int world_gen_chunk(int cx, int cz, float *out, int cap) {
     g_ch_cx = cx; g_ch_cz = cz;
     g_mv = out; g_mn = 0; g_mcap = cap;
     g_out_has_castle = 0;
+    g_out_nres = 0;
     w_collect_sites();
     w_compute_terrain();
     w_compute_fixed();

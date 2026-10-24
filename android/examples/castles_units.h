@@ -91,7 +91,7 @@ static float nav_surface(int layer, float x, float z) {
 /* ------------------------------------------------------------------ */
 #define NAVW        160
 #define NAVW_N      (NAVW * NAVW * NAV_L)
-#define NFIELD      4
+#define NFIELD      8      /* orders + the peasants' town-centre and gathering fields */
 #define FIELD_INF   1.0e9f
 
 #define FS_FREE      0
@@ -286,11 +286,19 @@ static float u_atk[MAXU];                        /* melee cycle (s)             
 #define PS_TO_TC   1
 #define PS_AT_TC   2
 #define PS_RETURN  3
+#define PS_MANUAL  4   /* under the player's orders (moves like a soldier, never fights) */
+#define PS_G_GO    5   /* gathering: walking to the job's resource site   */
+#define PS_G_NEAR  6   /*            last steps straight to its tree/rock */
+#define PS_G_WORK  7   /*            chopping / quarrying                 */
+#define PS_G_DROP  8   /*            carrying the load to the town centre */
 #define TRAIL_MAX  96
 static int u_pstate[MAXU], u_trail_n[MAXU];
 static float u_ptimer[MAXU], u_home_x[MAXU], u_home_z[MAXU];
 static float u_trail_x[MAXU * TRAIL_MAX], u_trail_z[MAXU * TRAIL_MAX];
 static float u_trail_d[MAXU];
+static int u_job[MAXU], u_carry[MAXU], u_carry_t[MAXU];   /* gather job, load, load type */
+static uint32_t u_res_id[MAXU];
+static float u_res_x[MAXU], u_res_z[MAXU], u_res_r[MAXU], u_work_t[MAXU];
 static float u_aim[MAXU];                        /* launch elevation (rad)      */
 static float u_noshot[MAXU];                     /* >0: no clear shot, melee    */
 static float u_scale[MAXU], u_girth[MAXU];
@@ -365,6 +373,7 @@ static int unit_spawn(int team, float x, float z, int layer, uint32_t seed, int 
     u_hp[idx] = u_maxhp[idx];
     u_pstate[idx] = PS_HOME; u_ptimer[idx] = 0.0f; u_trail_n[idx] = 0; u_trail_d[idx] = 0.0f;
     u_home_x[idx] = x; u_home_z[idx] = z;
+    u_job[idx] = -1; u_carry[idx] = 0; u_carry_t[idx] = 0; u_work_t[idx] = 0.0f;
     u_x[idx] = x; u_z[idx] = z;
     u_px[idx] = x; u_pz[idx] = z; u_vx[idx] = 0.0f; u_vz[idx] = 0.0f;
     u_y[idx] = nav_surface(layer, x, z);
@@ -518,14 +527,24 @@ static void dispatch_repaths(void) {
     }
 }
 
+static int g_order_soldiers_only;   /* order_move leaves peasants alone (they were just sent to gather) */
+static void peasant_to_manual(int i);
+
 /* Move (targetUnit < 0) or attack order for every selected player unit. */
 static void order_move(float gx, float gy, float gz, int glayer, int targetUnit) {
     int i, n = 0;
     for (i = 0; i < g_un; i++) {
         if (!u_selected[i] || !unit_alive(i) || u_team[i] != TEAM_PLAYER) continue;
+        if (u_class[i] == UC_PEASANT) {
+            /* peasants just go there (no fighting); a move order takes
+             * them off any gathering job */
+            if (g_order_soldiers_only) continue;
+            peasant_to_manual(i);
+        }
+        int attack = targetUnit >= 0 && u_class[i] != UC_PEASANT;
         u_gx[i] = gx; u_gy[i] = gy; u_gz[i] = gz; u_gl[i] = glayer;
-        u_order[i] = targetUnit >= 0 ? ORD_ATTACK : ORD_MOVE;
-        u_target[i] = targetUnit;
+        u_order[i] = attack ? ORD_ATTACK : ORD_MOVE;
+        u_target[i] = attack ? targetUnit : -1;
         u_repath[i] = 1;
         n++;
     }
@@ -578,7 +597,7 @@ static int g_bq_n[SITE_MAXB];
 static int g_bq_cls[SITE_MAXB * BQ_MAX];
 static float g_bq_t[SITE_MAXB];
 
-static float train_time(int cls) { return cls == UC_MACE ? 6.0f : (cls == UC_BOW ? 9.0f : 8.0f); }
+static float train_time(int cls) { return cls == UC_PEASANT ? 5.0f : (cls == UC_MACE ? 6.0f : (cls == UC_BOW ? 9.0f : 8.0f)); }
 
 /* Door point of building b (in front of its street-facing side). */
 static void building_door(int b, float extra, float *x, float *z) {
@@ -619,9 +638,11 @@ static int pop_queued(void) {
     return n;
 }
 
-/* Queues a unit at barracks b; 0 if the queue or population is full. */
+/* Queues a unit at building b (soldiers at a barracks, peasants at the
+ * town centre); 0 if the queue or population is full. */
 static int barracks_train(int b, int cls) {
-    if (b < 0 || b >= g_hb_n || g_hb_t[b] != BT_BARRACKS) return 0;
+    if (b < 0 || b >= g_hb_n) return 0;
+    if (g_hb_t[b] == BT_BARRACKS ? cls == UC_PEASANT : (g_hb_t[b] != BT_TOWNCENTER || cls != UC_PEASANT)) return 0;
     if (g_bq_n[b] >= BQ_MAX) return 0;
     if (pop_count() + pop_queued() >= pop_limit()) return 0;
     g_bq_cls[b * BQ_MAX + g_bq_n[b]] = cls;
@@ -720,6 +741,7 @@ static void peasants_spawn(float dt) {
         float h;
         int ccx = w_ifloor(x / W_CHUNK_SIZE), ccz = w_ifloor(z / W_CHUNK_SIZE);
         if (nav_slot_for(ccx, ccz) < 0) continue;
+        snap_walkable(&x, &z, g_hsite.base);
         if (!(nav_node(0, w_ifloor(x), w_ifloor(z), &h) & NAV_WALK)) continue;
         int u = unit_spawn(TEAM_PLAYER, x, z, 0, w_hash2(b, 99, 5u), UC_PEASANT);
         if (u < 0) return;
@@ -746,10 +768,368 @@ static void peasant_trail_push(int i) {
     u_trail_n[i] = n + 1;
 }
 
+/* ---- resources + gathering ---- */
+#define WOOD_PER_TREE   30
+#define STONE_PER_ROCK  45
+#define CARRY_MAX        8
+#define HARVEST_MAX    256
+static int g_wood, g_stone;                      /* the player's stockpile */
+static int g_hv_n;                               /* partly harvested resources */
+static uint32_t g_hv_id[HARVEST_MAX];
+static int g_hv_taken[HARVEST_MAX];
+
+static int res_capacity(uint32_t id) { return (id & 0x80000000u) ? STONE_PER_ROCK : WOOD_PER_TREE; }
+
+static int res_remaining(uint32_t id) {
+    int k;
+    if (w_res_depleted(id)) return 0;
+    for (k = 0; k < g_hv_n; k++) if (g_hv_id[k] == id) return res_capacity(id) - g_hv_taken[k];
+    return res_capacity(id);
+}
+
+/* Queues the loaded chunk holding (x,z) for regeneration. */
+static void request_rebuild_at(float x, float z) {
+    int cx = w_ifloor(x / W_CHUNK_SIZE), cz = w_ifloor(z / W_CHUNK_SIZE), k;
+    for (k = 0; k < g_rebuild_n; k++) if (g_rebuild_cx[k] == cx && g_rebuild_cz[k] == cz) return;
+    if (g_rebuild_n >= REBUILD_MAX) return;
+    g_rebuild_cx[g_rebuild_n] = cx; g_rebuild_cz[g_rebuild_n] = cz;
+    g_rebuild_n = g_rebuild_n + 1;
+}
+
+/* Takes up to `want` from resource id (at x,z); returns the amount taken.
+ * The last unit removes it from the world: its id goes on the depleted
+ * list and its chunk is regenerated without it. */
+static int res_take(uint32_t id, float x, float z, int want) {
+    int k, slot = -1;
+    if (w_res_depleted(id)) return 0;
+    for (k = 0; k < g_hv_n; k++) if (g_hv_id[k] == id) { slot = k; break; }
+    if (slot < 0) {
+        if (g_hv_n >= HARVEST_MAX) return 0;
+        slot = g_hv_n;
+        g_hv_id[slot] = id; g_hv_taken[slot] = 0;
+        g_hv_n = slot + 1;
+    }
+    int left = res_capacity(id) - g_hv_taken[slot];
+    int got = want < left ? want : left;
+    g_hv_taken[slot] = g_hv_taken[slot] + got;
+    if (g_hv_taken[slot] >= res_capacity(id) && g_ndepleted < DEPL_MAX) {
+        g_depleted[g_ndepleted] = id;
+        g_ndepleted = g_ndepleted + 1;
+        g_hv_n = g_hv_n - 1;
+        g_hv_id[slot] = g_hv_id[g_hv_n]; g_hv_taken[slot] = g_hv_taken[g_hv_n];
+        request_rebuild_at(x, z);
+        __android_log_print(4, "castles", "%s at %d,%d used up (%d removed so far)", (id & 0x80000000u) ? "rock" : "tree",
+                            (int)x, (int)z, g_ndepleted);
+    }
+    return got;
+}
+
+/* Nearest loaded resource of `type` (-1 any) with something left,
+ * within r of (x,z); returns slot*RES_MAX+k or -1. */
+static int res_find_near(float x, float z, float r, int type) {
+    int sl, k, best = -1;
+    float bd = r * r;
+    for (sl = 0; sl < SLOTS; sl++) {
+        if (!g_slot_used[sl] || g_slot_nres[sl] == 0) continue;
+        float ox = (float)g_slot_cx[sl] * W_CHUNK_SIZE, oz = (float)g_slot_cz[sl] * W_CHUNK_SIZE;
+        if (x < ox - r || x > ox + W_CHUNK_SIZE + r || z < oz - r || z > oz + W_CHUNK_SIZE + r) continue;
+        int n = g_slot_nres[sl];
+        for (k = 0; k < n; k++) {
+            int q = sl * RES_MAX + k;
+            if (type >= 0 && g_slot_res_t[q] != type) continue;
+            float dx = g_slot_res_x[q] - x, dz = g_slot_res_z[q] - z;
+            float d = dx * dx + dz * dz;
+            if (d >= bd) continue;
+            if (res_remaining(g_slot_res_id[q]) <= 0) continue;
+            bd = d; best = q;
+        }
+    }
+    return best;
+}
+
+/* Gives peasant i resource q as its target. */
+static void peasant_set_res(int i, int q) {
+    u_res_id[i] = g_slot_res_id[q];
+    u_res_x[i] = g_slot_res_x[q]; u_res_z[i] = g_slot_res_z[q]; u_res_r[i] = g_slot_res_r[q];
+}
+
+/* Nearest walkable ground cell centre to (x,z) within 4 units (x,z
+ * unchanged if it is walkable itself or nothing is found). */
+static void snap_walkable(float *x, float *z, float y) {
+    float h, px[96], pz[96];
+    if (nav_node(0, w_ifloor(*x), w_ifloor(*z), &h) & NAV_WALK) return;
+    int n = nav_collect(0, *x, *z, y, 4.0f, px, pz, 96), k, best = -1;
+    float bd = 1e30f;
+    for (k = 0; k < n; k++) {
+        float dx = px[k] - *x, dz = pz[k] - *z;
+        if (dx * dx + dz * dz < bd) { bd = dx * dx + dz * dz; best = k; }
+    }
+    if (best >= 0) { *x = px[best]; *z = pz[best]; }
+}
+
+/* Gather jobs: one per resource site the player sent peasants to. Each
+ * pins a GPU field to the site; loads go back on the town-centre field
+ * (or a job's own drop-off field when the site lies outside that one's
+ * window). Fields are pinned with refs and re-validated by age, since
+ * field_create may still recycle a pinned field when every one is busy. */
+#define GJ_MAX 3
+static int g_gj_on[GJ_MAX], g_gj_type[GJ_MAX];
+static float g_gj_x[GJ_MAX], g_gj_z[GJ_MAX], g_gj_y[GJ_MAX], g_gj_age[GJ_MAX];
+static int g_gj_f[GJ_MAX], g_gj_fage[GJ_MAX], g_gj_drop[GJ_MAX], g_gj_dage[GJ_MAX];
+
+static int field_valid(int f, int age) { return f >= 0 && g_field_age[f] == age; }
+
+static void field_unpin(int f, int age) { if (field_valid(f, age)) g_field_refs[f] = 0; }
+
+/* Builds (or rebuilds) job j's fields. */
+static void gather_job_fields(int j) {
+    float dx, dz;
+    building_door(0, 1.8f, &dx, &dz);
+    float mx = (g_gj_x[j] + dx) * 0.5f, mz = (g_gj_z[j] + dz) * 0.5f;
+    field_unpin(g_gj_f[j], g_gj_fage[j]);
+    int f = field_create(g_gj_x[j], g_gj_y[j], g_gj_z[j], 0, mx, mz, 12);
+    g_field_refs[f] = 1000;
+    g_gj_f[j] = f; g_gj_fage[j] = g_field_age[f];
+    field_unpin(g_gj_drop[j], g_gj_dage[j]);
+    g_gj_drop[j] = -1;
+    /* the shared town-centre field covers sites inside its window */
+    float tox = g_hsite.cx - (float)(NAVW / 2) + 6.0f, toz = g_hsite.cz - (float)(NAVW / 2) + 6.0f;
+    float span = (float)NAVW - 12.0f;
+    int inTc = g_gj_x[j] > tox && g_gj_x[j] < tox + span && g_gj_z[j] > toz && g_gj_z[j] < toz + span;
+    if (!inTc) {
+        int d = field_create(dx, g_hsite.base, dz, 0, mx, mz, 6);
+        g_field_refs[d] = 1000;
+        g_gj_drop[j] = d; g_gj_dage[j] = g_field_age[d];
+    }
+    g_gj_age[j] = 0.0f;
+}
+
+static void gather_job_end(int j) {
+    if (!g_gj_on[j]) return;
+    g_gj_on[j] = 0;
+    field_unpin(g_gj_f[j], g_gj_fage[j]);
+    field_unpin(g_gj_drop[j], g_gj_dage[j]);
+}
+
+/* Drop-off field for job j (-1 while none is usable). */
+static int gather_drop_field(int j) {
+    if (j >= 0 && j < GJ_MAX && g_gj_on[j] && g_gj_drop[j] >= 0) return field_valid(g_gj_drop[j], g_gj_dage[j]) ? g_gj_drop[j] : -1;
+    return g_tc_field;
+}
+
+/* Upkeep: end empty jobs, rebuild lost or stale fields. */
+static void gather_jobs_update(float dt) {
+    int j, i;
+    for (j = 0; j < GJ_MAX; j++) {
+        if (!g_gj_on[j]) continue;
+        int members = 0;
+        for (i = 0; i < g_un; i++) if (unit_alive(i) && u_class[i] == UC_PEASANT && u_pstate[i] >= PS_G_GO && u_job[i] == j) members++;
+        if (members == 0) { gather_job_end(j); continue; }
+        float na = g_gj_age[j] + dt;
+        g_gj_age[j] = na;
+        int lost = !field_valid(g_gj_f[j], g_gj_fage[j]) || (g_gj_drop[j] >= 0 && !field_valid(g_gj_drop[j], g_gj_dage[j]));
+        if (lost || na > 45.0f) gather_job_fields(j);
+    }
+}
+
+/* Moves job j's site to the nearest resource of its type within 40 of
+ * the old one; 0 if there is none (the job then ends). */
+static int gather_job_relocate(int j) {
+    int q = res_find_near(g_gj_x[j], g_gj_z[j], 40.0f, g_gj_type[j]);
+    if (q < 0) return 0;
+    g_gj_x[j] = g_slot_res_x[q]; g_gj_z[j] = g_slot_res_z[q]; g_gj_y[j] = g_slot_res_y[q];
+    gather_job_fields(j);
+    return 1;
+}
+
+static void peasant_to_manual(int i) {
+    u_pstate[i] = PS_MANUAL;
+    u_job[i] = -1;
+    u_state[i] = US_IDLE;
+    u_stuck[i] = 0.0f;
+}
+
+/* Sends every selected player peasant to gather resource q; returns how
+ * many went. Soldiers in the selection are left to order_move. */
+static int order_gather(int q) {
+    int i, j, n = 0, job = -1;
+    for (i = 0; i < g_un; i++) if (u_selected[i] && unit_alive(i) && u_team[i] == TEAM_PLAYER && u_class[i] == UC_PEASANT) n++;
+    if (n == 0 || g_hb_n == 0) return 0;
+    int type = g_slot_res_t[q];
+    float x = g_slot_res_x[q], z = g_slot_res_z[q];
+    /* reuse a job on the same patch, else a free one, else the oldest */
+    for (j = 0; j < GJ_MAX && job < 0; j++) {
+        if (!g_gj_on[j] || g_gj_type[j] != type) continue;
+        float dx = g_gj_x[j] - x, dz = g_gj_z[j] - z;
+        if (dx * dx + dz * dz < 12.0f * 12.0f) job = j;
+    }
+    for (j = 0; j < GJ_MAX && job < 0; j++) if (!g_gj_on[j]) job = j;
+    if (job < 0) {
+        job = 0;
+        for (i = 0; i < g_un; i++) if (u_class[i] == UC_PEASANT && u_job[i] == job && u_pstate[i] >= PS_G_GO) peasant_to_manual(i);
+        gather_job_end(job);
+    }
+    if (!g_gj_on[job]) {
+        g_gj_on[job] = 1; g_gj_type[job] = type;
+        g_gj_x[job] = x; g_gj_z[job] = z; g_gj_y[job] = g_slot_res_y[q];
+        g_gj_f[job] = -1; g_gj_drop[job] = -1;
+        gather_job_fields(job);
+    }
+    for (i = 0; i < g_un; i++) {
+        if (!u_selected[i] || !unit_alive(i) || u_team[i] != TEAM_PLAYER || u_class[i] != UC_PEASANT) continue;
+        unit_release_field(i);
+        u_order[i] = ORD_NONE; u_repath[i] = 0;
+        if (u_carry[i] > 0 && u_carry_t[i] != type) u_carry[i] = 0;    /* drops the other load */
+        u_job[i] = job;
+        peasant_set_res(i, q);
+        u_pstate[i] = u_carry[i] >= CARRY_MAX ? PS_G_DROP : PS_G_GO;
+        u_state[i] = US_IDLE;
+        u_stuck[i] = 0.0f;
+    }
+    g_order_marker_on = 1;
+    g_order_mx = x; g_order_my = g_slot_res_y[q]; g_order_mz = z; g_order_mt = 0.0f;
+    __android_log_print(4, "castles", "gather %s at %d,%d: %d peasants (job %d)", type == RES_WOOD ? "wood" : "stone",
+                        (int)x, (int)z, n, job);
+    return n;
+}
+
+static void unit_start_climb(int i, int wx, int wz, int layer);
+
+/* Walks unit i one frame down field f (climbing ladders on the way).
+ * Returns 1 once within `arrive` of the goal, 0 while walking, -1 while
+ * the field isn't ready. Off the field's window (or where it has no
+ * route) it heads straight for the goal. u_stuck accumulates while the
+ * unit makes no progress. */
+static int unit_walk_field(int i, int f, float arrive, float dt) {
+    if (f < 0 || g_field_state[f] != FS_READY) return -1;
+    float tx = g_field_gx[f] - u_x[i], tz = g_field_gz[f] - u_z[i];
+    int pl = -1;
+    int lx = w_ifloor(u_x[i]) - g_field_ox[f], lz = w_ifloor(u_z[i]) - g_field_oz[f];
+    if (lx >= 0 && lz >= 0 && lx < NAVW && lz < NAVW) {
+        float here = g_fd[f * NAVW_N + u_layer[i] * NAVW * NAVW + lz * NAVW + lx];
+        if (here <= arrive) return 1;
+        int bx = 0, bz = 0, bl = 0;
+        if (here < FIELD_INF * 0.5f && field_best_step(f, lx, lz, u_layer[i], &bx, &bz, &bl)) {
+            int wx = bx + g_field_ox[f], wz = bz + g_field_oz[f];
+            float th;
+            nav_node(bl, wx, wz, &th);
+            if (bl != u_layer[i] && w_absf(th - u_y[i]) > NAV_MAXSTEP + 0.2f) { unit_start_climb(i, wx, wz, bl); return 0; }
+            tx = (float)wx + 0.5f - u_x[i]; tz = (float)wz + 0.5f - u_z[i];
+            pl = bl;
+        }
+    }
+    float d = w_sqrt(tx * tx + tz * tz);
+    if (pl < 0 && d < arrive) return 1;
+    if (d < 0.01f) return 0;
+    u_state[i] = US_MOVE;
+    unit_face(i, tx, tz, dt);
+    float step = u_speed[i] * dt;
+    if (step > d) step = d;
+    float ox = u_x[i], oz = u_z[i];
+    unit_walk(i, tx / d * step, tz / d * step, pl);
+    float mx = u_x[i] - ox, mz = u_z[i] - oz;
+    if (mx * mx + mz * mz < 1e-6f) { float ns = u_stuck[i] + dt; u_stuck[i] = ns; } else u_stuck[i] = 0.0f;
+    return 0;
+}
+
+/* Gathering: walk to the site, pick a tree/rock, work it a load at a
+ * time, carry each load to the town centre, repeat; move on to the next
+ * tree/rock of the patch as they run out. */
+static void peasant_gather_update(int i, float dt) {
+    int j = u_job[i], ps = u_pstate[i];
+    int jobOk = j >= 0 && j < GJ_MAX && g_gj_on[j];
+    if (!jobOk && ps != PS_G_DROP) { peasant_to_manual(i); return; }
+    if (ps == PS_G_GO) {
+        float rx = u_res_x[i] - u_x[i], rz = u_res_z[i] - u_z[i];
+        float rd = w_sqrt(rx * rx + rz * rz);
+        if (rd < u_res_r[i] + 6.0f || u_stuck[i] > 2.0f) { u_pstate[i] = PS_G_NEAR; u_stuck[i] = 0.0f; return; }
+        int f = field_valid(g_gj_f[j], g_gj_fage[j]) ? g_gj_f[j] : -1;
+        int r = unit_walk_field(i, f, 1.5f, dt);
+        if (r < 0) u_state[i] = US_IDLE;
+        if (r == 1) { u_pstate[i] = PS_G_NEAR; u_stuck[i] = 0.0f; }
+        return;
+    }
+    if (ps == PS_G_NEAR) {
+        if (res_remaining(u_res_id[i]) <= 0) {
+            int q = res_find_near(u_x[i], u_z[i], 14.0f, g_gj_type[j]);
+            if (q < 0) {
+                if (gather_job_relocate(j)) { q = res_find_near(g_gj_x[j], g_gj_z[j], 4.0f, g_gj_type[j]); }
+                if (q < 0) { if (u_carry[i] > 0) u_pstate[i] = PS_G_DROP; else peasant_to_manual(i); return; }
+                peasant_set_res(i, q);
+                u_pstate[i] = PS_G_GO;
+                return;
+            }
+            peasant_set_res(i, q);
+        }
+        float tx = u_res_x[i] - u_x[i], tz = u_res_z[i] - u_z[i];
+        float d = w_sqrt(tx * tx + tz * tz);
+        if (d < u_res_r[i] + 0.95f || (u_stuck[i] > 1.2f && d < u_res_r[i] + 3.0f)) {
+            u_pstate[i] = PS_G_WORK; u_work_t[i] = 0.0f; u_state[i] = US_IDLE; u_stuck[i] = 0.0f;
+            return;
+        }
+        if (u_stuck[i] > 2.5f) {
+            /* can't get at this one: try another of the patch */
+            int q = res_find_near(u_x[i], u_z[i], 10.0f, g_gj_type[j]);
+            if (q >= 0 && g_slot_res_id[q] != u_res_id[i]) peasant_set_res(i, q);
+            else u_pstate[i] = PS_G_GO;
+            u_stuck[i] = 0.0f;
+            return;
+        }
+        u_state[i] = US_MOVE;
+        unit_face(i, tx, tz, dt);
+        float step = u_speed[i] * dt;
+        float ox = u_x[i], oz = u_z[i];
+        unit_walk(i, tx / d * step, tz / d * step, 0);
+        float mx = u_x[i] - ox, mz = u_z[i] - oz;
+        if (mx * mx + mz * mz < 1e-6f) { float ns = u_stuck[i] + dt; u_stuck[i] = ns; } else u_stuck[i] = 0.0f;
+        return;
+    }
+    if (ps == PS_G_WORK) {
+        u_state[i] = US_IDLE;
+        unit_face(i, u_res_x[i] - u_x[i], u_res_z[i] - u_z[i], dt);
+        float prev = u_work_t[i];
+        float nt = prev + dt;
+        u_work_t[i] = nt;
+        if (w_ifloor(nt / 1.1f) > w_ifloor(prev / 1.1f)) {
+            int got = res_take(u_res_id[i], u_res_x[i], u_res_z[i], 1);
+            if (got > 0) {
+                if (u_carry[i] > 0 && u_carry_t[i] != g_gj_type[j]) u_carry[i] = 0;
+                u_carry[i] = u_carry[i] + got;
+                u_carry_t[i] = g_gj_type[j];
+            }
+            if (u_carry[i] >= CARRY_MAX) { u_pstate[i] = PS_G_DROP; u_stuck[i] = 0.0f; return; }
+            if (got == 0) { u_pstate[i] = PS_G_NEAR; u_stuck[i] = 0.0f; return; }   /* used up: next one */
+        }
+        return;
+    }
+    /* PS_G_DROP */
+    float dx, dz;
+    building_door(0, 1.8f, &dx, &dz);
+    float ex = dx - u_x[i], ez = dz - u_z[i];
+    int r = 0;
+    if (ex * ex + ez * ez < 2.6f * 2.6f) r = 1;
+    else {
+        r = unit_walk_field(i, gather_drop_field(j), 2.2f, dt);
+        if (r < 0) u_state[i] = US_IDLE;
+        if (u_stuck[i] > 3.0f && ex * ex + ez * ez < 6.0f * 6.0f) r = 1;
+    }
+    if (r == 1) {
+        if (u_carry[i] > 0) {
+            if (u_carry_t[i] == RES_WOOD) g_wood = g_wood + u_carry[i]; else g_stone = g_stone + u_carry[i];
+            __android_log_print(4, "castles", "peasant %d delivered %d %s (wood %d, stone %d)", i, u_carry[i],
+                                u_carry_t[i] == RES_WOOD ? "wood" : "stone", g_wood, g_stone);
+        }
+        u_carry[i] = 0;
+        u_stuck[i] = 0.0f;
+        if (jobOk) u_pstate[i] = PS_G_GO; else peasant_to_manual(i);
+    }
+}
+
 /* Peasant routine: idle at home, walk to the town centre on the shared
  * field (recording a breadcrumb trail), idle on the plaza, then walk the
  * trail back home. */
 static void peasant_update(int i, float dt) {
+    if (u_pstate[i] >= PS_G_GO) { peasant_gather_update(i, dt); return; }
     float nt = u_ptimer[i] - dt;
     u_ptimer[i] = nt;
     int ps = u_pstate[i];
@@ -817,11 +1197,12 @@ static void peasant_update(int i, float dt) {
     }
 }
 
-/* Barracks: advance each queue; a finished unit walks out of the door. */
+/* Barracks / town centre: advance each queue; a finished unit appears
+ * at the door, on the nearest walkable cell, ready for orders. */
 static void barracks_update(float dt) {
     int b;
     for (b = 0; b < g_hb_n; b++) {
-        if (g_hb_t[b] != BT_BARRACKS || g_bq_n[b] == 0) continue;
+        if ((g_hb_t[b] != BT_BARRACKS && g_hb_t[b] != BT_TOWNCENTER) || g_bq_n[b] == 0) continue;
         float nt = g_bq_t[b] + dt;
         g_bq_t[b] = nt;
         int cls = g_bq_cls[b * BQ_MAX];
@@ -829,13 +1210,16 @@ static void barracks_update(float dt) {
         if (pop_count() >= pop_limit()) { g_bq_t[b] = train_time(cls); continue; }   /* wait for room */
         float x, z;
         building_door(b, 1.4f, &x, &z);
+        snap_walkable(&x, &z, g_hsite.base);
         int u = unit_spawn(TEAM_PLAYER, x, z, 0, w_hash2(b, (int)(g_time * 10.0f), 9u), cls);
         if (u >= 0) {
             float fx, fz;
             building_door(b, 6.0f, &fx, &fz);
             u_yaw[u] = approx_atan2(fx - x, -(fz - z));
-            __android_log_print(4, "castles", "barracks %d trained a %s (pop %d/%d)", b,
-                                cls == UC_SWORD ? "swordsman" : (cls == UC_BOW ? "archer" : "maceman"), pop_count(), pop_limit());
+            if (cls == UC_PEASANT) peasant_to_manual(u);
+            __android_log_print(4, "castles", "%s %d trained a %s at %d,%d (pop %d/%d)", g_hb_t[b] == BT_TOWNCENTER ? "town centre" : "barracks", b,
+                                cls == UC_SWORD ? "swordsman" : (cls == UC_BOW ? "archer" : (cls == UC_MACE ? "maceman" : "peasant")),
+                                (int)x, (int)z, pop_count(), pop_limit());
         }
         int k;
         for (k = 1; k < g_bq_n[b]; k++) g_bq_cls[b * BQ_MAX + k - 1] = g_bq_cls[b * BQ_MAX + k];
@@ -1164,6 +1548,7 @@ static void units_update(float dt) {
     peasants_field_update(dt);
     peasants_spawn(dt);
     barracks_update(dt);
+    gather_jobs_update(dt);
     for (i = 0; i < g_un; i++) {
         if (!u_active[i]) continue;
         if (!unit_loaded(i)) continue;
@@ -1193,8 +1578,14 @@ static void units_update(float dt) {
             continue;
         }
         if (u_class[i] == UC_PEASANT) {
-            /* townsfolk: their own routine, never fight */
-            peasant_update(i, dt);
+            /* townsfolk never fight: under orders they walk like
+             * soldiers, otherwise they follow their routine / job */
+            if (u_pstate[i] == PS_MANUAL) {
+                if (u_state[i] == US_WAIT && u_field[i] >= 0 && g_field_state[u_field[i]] == FS_READY) u_state[i] = US_MOVE;
+                if (u_state[i] == US_MOVE) unit_follow_field(i, dt);
+            } else {
+                peasant_update(i, dt);
+            }
             continue;
         }
         /* Targets: drop dead ones; acquire nearby enemies when free. */
@@ -1570,6 +1961,16 @@ static void unit_emit(int i, int lod) {
         elbL = -0.35f; elbR = -0.35f;
         bob = w_absf(cp) * 0.05f * s;
         lean = 0.10f;
+    } else if (u_class[i] == UC_PEASANT && u_pstate[i] == PS_G_WORK) {
+        /* chop / quarry: two-handed overhead swing, one per 1.1 s */
+        float cyc = u_work_t[i] / 1.1f;
+        float tt = cyc - (float)w_ifloor(cyc);
+        float sh;
+        if (tt < 0.6f) { float k = tt / 0.6f; sh = 0.3f + 2.4f * k; lean = -0.06f * k; }
+        else if (tt < 0.8f) { float k = (tt - 0.6f) / 0.2f; sh = 2.7f - 2.5f * k; lean = -0.06f + 0.36f * k; }
+        else { float k = (tt - 0.8f) / 0.2f; sh = 0.2f + 0.1f * k; lean = 0.3f - 0.3f * k; }
+        armR = sh; armL = sh * 0.92f; elbR = -0.3f; elbL = -0.45f; armRollL = 0.45f; armRollR = -0.2f;
+        legL = 0.32f; legR = -0.26f; kneeL = -0.15f; kneeR = -0.22f;
     } else if (st == US_ATTACK && u_class[i] == UC_MACE) {
         /* mace: high overhead wind-up, fast smash with a lunge and a hop */
         float tt = u_swing[i];
@@ -1689,6 +2090,18 @@ static void unit_emit(int i, int lod) {
             u_color(0.55f, 0.40f, 0.20f);
             u_box(torso, 0.0f, 0.35f * s, 0.19f * g, 0.15f, 0.14f * s, 0.08f);
         }
+        if (u_carry[i] > 0) {
+            if (u_carry_t[i] == RES_WOOD) {       /* a bundle of logs across the back */
+                u_color(0.45f, 0.30f, 0.16f);
+                u_box(torso, 0.0f, 0.50f * s, 0.18f * g, 0.32f, 0.055f, 0.055f);
+                u_box(torso, 0.02f, 0.40f * s, 0.18f * g, 0.30f, 0.055f, 0.055f);
+                u_color(0.80f, 0.66f, 0.42f);
+                u_box(torso, 0.33f, 0.50f * s, 0.18f * g, 0.012f, 0.045f, 0.045f);
+            } else {                              /* a dressed stone block */
+                u_color(0.60f, 0.60f, 0.62f);
+                u_box(torso, 0.0f, 0.42f * s, 0.21f * g, 0.15f, 0.13f * s, 0.10f);
+            }
+        }
     } else if (u_helmet[i]) {
         u_color(0.62f, 0.64f, 0.68f);
         u_box(head, 0.0f, 0.27f * s, 0.0f, 0.14f * s, 0.06f * s, 0.14f * s);
@@ -1719,7 +2132,15 @@ static void unit_emit(int i, int lod) {
         u_color3(u_face + i * 3);
         u_box(a2, 0.0f, -0.14f * s, 0.0f, 0.058f * g, 0.15f * s, 0.058f * g);
         if (u_class[i] == UC_PEASANT) {
-            /* unarmed */
+            /* axe or pick while on a gathering job, else unarmed */
+            int job = u_job[i];
+            if (side > 0 && u_pstate[i] >= PS_G_GO && u_pstate[i] <= PS_G_WORK && job >= 0 && job < GJ_MAX) {
+                u_color(0.50f, 0.36f, 0.20f);
+                u_box(a2, 0.0f, -0.31f * s, -0.24f, 0.024f, 0.024f, 0.33f);
+                u_color(0.55f, 0.56f, 0.60f);
+                if (g_gj_type[job] == RES_WOOD) u_box(a2, 0.0f, -0.31f * s + 0.07f, -0.52f, 0.018f, 0.10f, 0.08f);
+                else u_box(a2, 0.0f, -0.31f * s, -0.54f, 0.026f, 0.22f, 0.026f);
+            }
         } else if (u_class[i] == UC_MACE) {
             if (side > 0) {
                 /* mace: wooden haft, iron head with spikes */
@@ -1806,9 +2227,9 @@ static int units_build_mesh(void) {
         u_ring(g_hb_x[b], g_hsite.base + 0.12f, g_hb_z[b], r, 0.18f);
     }
     for (i = 0; i < g_hb_n; i++) {
-        if (g_hb_t[i] != BT_BARRACKS || g_bq_n[i] == 0) continue;
+        if ((g_hb_t[i] != BT_BARRACKS && g_hb_t[i] != BT_TOWNCENTER) || g_bq_n[i] == 0) continue;
         float frac = w_clampf(g_bq_t[i] / train_time(g_bq_cls[i * BQ_MAX]), 0.0f, 1.0f);
-        float top = g_hsite.base + 6.0f;
+        float top = g_hsite.base + (g_hb_t[i] == BT_TOWNCENTER ? 10.0f : 6.0f);
         u_color(0.12f, 0.12f, 0.12f);
         u_bar(g_hb_x[i], top, g_hb_z[i], 1.6f, 0.25f);
         u_color(1.0f, 0.82f, 0.25f);
@@ -1846,13 +2267,42 @@ static int pick_unit(float sx, float sy) {
     int i, best = -1;
     float bestScore = 1e30f;
     for (i = 0; i < g_un; i++) {
-        if (!unit_alive(i) || !unit_loaded(i) || u_class[i] == UC_PEASANT) continue;
+        if (!unit_alive(i) || !unit_loaded(i)) continue;
         float px, py;
         if (!project_point(u_x[i], u_y[i] + 1.0f, u_z[i], &px, &py)) continue;
         float dx = px - sx, dy = py - sy;
         float d2 = dx * dx + dy * dy;
         if (d2 > 60.0f * 60.0f) continue;
         if (d2 < bestScore) { bestScore = d2; best = i; }
+    }
+    return best;
+}
+
+/* Loaded tree / rock under screen point (sx,sy) (projected trunk or
+ * boulder centre within 70 px, nearest to the camera), or -1. */
+static int pick_resource(float sx, float sy) {
+    int sl, k, best = -1;
+    float bestScore = 1e30f;
+    for (sl = 0; sl < SLOTS; sl++) {
+        if (!g_slot_used[sl] || g_slot_nres[sl] == 0) continue;
+        float ox = (float)g_slot_cx[sl] * W_CHUNK_SIZE + W_CHUNK_SIZE * 0.5f, oz = (float)g_slot_cz[sl] * W_CHUNK_SIZE + W_CHUNK_SIZE * 0.5f;
+        float cdx = ox - g_cam[0], cdz = oz - g_cam[2];
+        if (cdx * cdx + cdz * cdz > 190.0f * 190.0f) continue;
+        int n = g_slot_nres[sl];
+        for (k = 0; k < n; k++) {
+            int q = sl * RES_MAX + k;
+            float hy = g_slot_res_t[q] == RES_WOOD ? 1.4f : 0.5f;
+            float px, py;
+            if (!project_point(g_slot_res_x[q], g_slot_res_y[q] + hy, g_slot_res_z[q], &px, &py)) continue;
+            float dx = px - sx, dy = py - sy;
+            float d2 = dx * dx + dy * dy;
+            if (d2 > 70.0f * 70.0f) continue;
+            float ex = g_slot_res_x[q] - g_cam[0], ez = g_slot_res_z[q] - g_cam[2];
+            float score = d2 + (ex * ex + ez * ez) * 0.5f;
+            if (score >= bestScore) continue;
+            if (res_remaining(g_slot_res_id[q]) <= 0) continue;
+            bestScore = score; best = q;
+        }
     }
     return best;
 }
@@ -1902,7 +2352,7 @@ static int pick_building(float sx, float sy, int strict) {
     float bestD = 1e30f;
     for (b = 0; b < g_hb_n; b++) {
         if (g_hb_t[b] == BT_STALL) continue;
-        float c = w_cos(g_hb_yaw[b]), sn = w_sin(g_hb_yaw[b]);
+        float c = w_cos(g_hb_yaw[b] - 0.5f * W_PI), sn = w_sin(g_hb_yaw[b] - 0.5f * W_PI);   /* mesh frame */
         int nsl = g_hb_t[b] == BT_TOWNCENTER ? 6 : 4;
         for (k = 0; k < nsl; k++) {
             float y = g_hsite.base + 0.3f + 1.4f * (float)k, hx, hz;
