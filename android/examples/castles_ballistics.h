@@ -41,6 +41,12 @@ static float p_vx[MAXP + 1], p_vy[MAXP + 1], p_vz[MAXP + 1];
 static float p_fx[MAXP + 1], p_fy[MAXP + 1], p_fz[MAXP + 1];
 static float p_mass[MAXP + 1];
 static float g_bal_flight_time;   /* time to the target of the last solved shot */
+/* What the solver throws: an arrow unless a siege engine sets a stone's
+ * mass and the engine's strongest throw (bal_projectile). */
+static float g_bal_mass, g_bal_fmax;
+static void bal_projectile(float mass, float fmax) { g_bal_mass = mass; g_bal_fmax = fmax; }
+static float bal_mass(void) { return g_bal_mass > 0.0f ? g_bal_mass : ARROW_MASS; }
+static float bal_fmax(void) { return g_bal_fmax > 0.0f ? g_bal_fmax : BAL_FMAX; }
 
 static void bal_reset(int i, float x, float y, float z, float mass) {
     p_x[i] = x; p_y[i] = y; p_z[i] = z;
@@ -88,7 +94,7 @@ static void bal_step(int i) {
  * negative number if it comes down short. */
 static float bal_height_error(const float *from, float fx, float fy, float fz, float dist, float ty) {
     int s = BAL_SCRATCH, k;
-    bal_reset(s, from[0], from[1], from[2], ARROW_MASS);
+    bal_reset(s, from[0], from[1], from[2], bal_mass());
     bal_add_force(s, fx, fy, fz);
     float prevD = 0.0f, prevY = from[1];
     for (k = 0; k < BAL_MAXSTEPS; k++) {
@@ -126,7 +132,7 @@ static int bal_solve_at(const float *from, const float *to, int a, float *out) {
         float ang = (5.0f + 10.0f * (float)a) * (W_PI / 180.0f);
         float ca = w_cos(ang), sa = w_sin(ang);
         float ux = hx * ca, uy = sa, uz = hz * ca;
-        float hiF = BAL_FMAX;
+        float hiF = bal_fmax();
         if (bal_height_error(from, ux * hiF, uy * hiF, uz * hiF, dist, to[1]) < 0.0f) return 0;
         float loF = 0.0f, f = hiF;
         int it;

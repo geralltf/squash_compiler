@@ -91,7 +91,7 @@ static float nav_surface(int layer, float x, float z) {
 /* ------------------------------------------------------------------ */
 #define NAVW        160
 #define NAVW_N      (NAVW * NAVW * NAV_L)
-#define NFIELD      12     /* orders + the town-centre, gathering and fishing fields */
+#define NFIELD      20     /* orders + the town-centre, gathering and fishing fields (player + on-screen AI castles) */
 #define FIELD_INF   1.0e9f
 
 #define FS_FREE      0
@@ -99,9 +99,13 @@ static float nav_surface(int layer, float x, float z) {
 #define FS_COMPUTING 2   /* GPU relaxation running                     */
 #define FS_READY     3   /* distances copied back, units can follow    */
 
-static float g_fh[NFIELD * NAVW_N];
-static uint32_t g_ff[NFIELD * NAVW_N];
-static float g_fd[NFIELD * NAVW_N];
+/* CPU copies of every field (heights, flags, distances): 4 MB with 20
+ * fields, so heap-allocated in units_init -- squash puts zero-initialised
+ * static arrays in .data, which would bloat the APK by that much. */
+void *malloc(unsigned long sz);
+static float *g_fh;
+static uint32_t *g_ff;
+static float *g_fd;
 static int g_field_state[NFIELD];
 static int g_field_refs[NFIELD];
 static int g_field_ox[NFIELD], g_field_oz[NFIELD];
@@ -168,6 +172,7 @@ static float field_dist_at(int f, float x, float z, int layer) {
 /* Builds a field for a goal; centerX/Z is where the window is centered
  * (midpoint of the group and the goal). Returns field index or -1. */
 static int g_field_mode_water;   /* field_create builds a water field (set around the call) */
+static int g_field_mode_ground;  /* ... or a ground-only one (siege engines: no wall-walks, no ladders) */
 static int field_create(float gx, float gy, float gz, int glayer, float centerX, float centerZ, int groupSize) {
     int f, best = -1, bestAge = 1 << 30;
     for (f = 0; f < NFIELD; f++) {
@@ -201,6 +206,7 @@ static int field_create(float gx, float gy, float gz, int glayer, float centerX,
                     fl = (l == 0 && (fl & NAV_WATER)) ? NAV_WALK : 0;
                     h = W_SEA_LEVEL;
                 }
+                if (g_field_mode_ground) fl = l == 0 ? (fl & ~(NAV_LADDER | 12)) : 0;
                 int k = base + l * WW + z * NAVW + x;
                 g_fh[k] = h;
                 g_ff[k] = (uint32_t)fl;
@@ -237,9 +243,10 @@ static int field_create(float gx, float gy, float gz, int glayer, float centerX,
 /* ------------------------------------------------------------------ */
 /* Units (parallel arrays)                                             */
 /* ------------------------------------------------------------------ */
-#define MAXU        220
+#define MAXU        420
 #define TEAM_PLAYER 0
 #define TEAM_ENEMY  1
+#define TEAM_WILD   2   /* untamed dragons: everyone's enemy */
 
 #define US_IDLE   0
 #define US_WAIT   1   /* waiting for its flow field                    */
@@ -285,6 +292,10 @@ static int u_archer[MAXU];                       /* bow instead of sword+shield 
 #define UC_MACE    2
 #define UC_PEASANT 3
 #define UC_BOAT    4   /* fishing boat: sails open water, fishes, never fights */
+#define UC_CATAPULT 5  /* siege engines (castles_siege.h) */
+#define UC_RAM      6
+#define UC_TREB     7
+#define UC_DRAGON   8  /* flies; wild or tamed by peasants (castles_dragons.h) */
 #define UC_RANDOM  (-1)
 static int u_class[MAXU];
 static float u_speed[MAXU];                      /* walk speed (units/s)        */
@@ -301,6 +312,8 @@ static float u_atk[MAXU];                        /* melee cycle (s)             
 #define PS_G_DROP  8   /*            carrying the load to the town centre */
 #define PS_B_GO    9   /* building: walking to the construction site      */
 #define PS_B_WORK 10   /*           hammering away at it                  */
+#define PS_T_GO   11   /* taming a dragon: walking to its roost           */
+#define PS_T_WORK 12   /*                  calming it                     */
 #define TRAIL_MAX  96
 static int u_pstate[MAXU], u_trail_n[MAXU];
 static float u_ptimer[MAXU], u_home_x[MAXU], u_home_z[MAXU];
@@ -308,6 +321,29 @@ static float u_trail_x[MAXU * TRAIL_MAX], u_trail_z[MAXU * TRAIL_MAX];
 static float u_trail_d[MAXU];
 static int u_job[MAXU], u_carry[MAXU], u_carry_t[MAXU];   /* gather job, load, load type */
 static int u_bsite[MAXU];                                  /* construction site being built */
+static int u_own[MAXU];      /* faction (0 = the player, 1.. = AI castles, -1 = unowned guards) */
+static int u_role[MAXU];     /* AI work role (R_*), see castles_ai.h */
+static int u_amove[MAXU];    /* attack-move: fight whatever it meets on the way to its goal */
+static float u_dmgb[MAXU];   /* damage bonus from advancements */
+static int u_ld[MAXU];       /* on loaded land this frame (set at the top of units_update) */
+static int u_st[MAXU];       /* siege: structure target (> 0 castle piece + 1, < 0 -(building + 1)) */
+static int u_sstate[MAXU];   /* trebuchet: packed / setting up / set up / packing */
+static float u_st_t[MAXU];   /* trebuchet set-up / pack-up progress */
+static int u_spend[MAXU];    /* trebuchet: a move waits for packing up */
+/* dragons (castles_dragons.h) */
+static int u_dstate[MAXU];
+static float u_dalt[MAXU], u_dhx[MAXU], u_dhz[MAXU], u_dt[MAXU], u_dbreath[MAXU], u_dcool[MAXU];
+static float u_dtame[MAXU], u_dtame_t[MAXU], u_dbank[MAXU], u_dvel[MAXU], u_deat[MAXU], u_dtick[MAXU], u_dhunt[MAXU];
+#define R_NONE      0
+#define R_WOOD      1
+#define R_STONE     2
+#define R_BUILD     3
+#define R_FISH      4
+#define R_ARMY      5   /* trained soldier waiting at home for the next wave */
+#define R_GARRISON  6   /* castle guard: stays home                          */
+#define R_WAVE      7   /* marching on / fighting the player                */
+static int faction_at_site(int tx, int tz);
+static void ai_unit_trained(int f, int u);
 static uint32_t u_res_id[MAXU];
 static float u_res_x[MAXU], u_res_z[MAXU], u_res_r[MAXU], u_work_t[MAXU];
 static float u_aim[MAXU];                        /* launch elevation (rad)      */
@@ -324,17 +360,47 @@ static int g_home_cx, g_home_cz;
 static int g_tc_field;                   /* persistent flow field to the TC door (-1 none; set in units_init: squash drops non-zero global initializers) */
 static int g_sel_building;               /* selected home building, or -1 (set in units_init) */
 
-static int g_wood, g_stone, g_food;      /* the player's stockpile (starting amounts set in units_init) */
+/* ---- factions ---- */
+/* Faction 0 is the player; 1.. are AI-run enemy castles (castles_ai.h).
+ * Each has its own stockpile, advancements, buildings (g_hb_own) and
+ * units (u_own). */
+#define F_MAX 4
+static int f_on[F_MAX];
+static int f_wood[F_MAX], f_stone[F_MAX], f_food[F_MAX];
+static float f_food_acc[F_MAX], f_wood_acc[F_MAX], f_stone_acc[F_MAX];
+static int f_tech[F_MAX];                /* researched advancements (1 << T_*) */
+static int f_tc[F_MAX];                  /* town-centre building index */
+static int f_houses[F_MAX];
+static WSite f_site[F_MAX];              /* AI castles' sites (castles_ai.h) */
 
+/* ---- advancements (T_*, costs, times: castles_planner.h) ---- */
+#include "android/examples/castles_planner.h"
+
+static int has_tech(int own, int t) { return own >= 0 && own < F_MAX && (f_tech[own] & (1 << t)) != 0; }
+
+
+/* Called at the start of every render session (the app may be left and
+ * resumed, the screen rotated): per-session bits every time, the game's
+ * starting state only the first time (g_units_ready; a restart clears it). */
+static int g_units_ready;
 static void units_init(void) {
     g_ddx[D_N] = 0;  g_ddz[D_N] = -1;
     g_ddx[D_E] = 1;  g_ddz[D_E] = 0;
     g_ddx[D_S] = 0;  g_ddz[D_S] = 1;
     g_ddx[D_W] = -1; g_ddz[D_W] = 0;
     g_nav_cache_slot = -1;
+    if (g_units_ready) return;
+    g_units_ready = 1;
     g_tc_field = -1;
+    if (!g_fh) {
+        g_fh = (float *)malloc((unsigned long)NFIELD * (unsigned long)NAVW_N * 4ul);
+        g_ff = (uint32_t *)malloc((unsigned long)NFIELD * (unsigned long)NAVW_N * 4ul);
+        g_fd = (float *)malloc((unsigned long)NFIELD * (unsigned long)NAVW_N * 4ul);
+    }
     g_sel_building = -1;
-    g_wood = 150; g_stone = 100; g_food = 120;
+    int f;
+    for (f = 0; f < F_MAX; f++) { f_on[f] = 0; f_tc[f] = -1; f_wood[f] = 150; f_stone[f] = 100; f_food[f] = 120; }
+    f_on[0] = 1; f_tc[0] = 0;
 }
 
 static float u_rand01(uint32_t *st) {
@@ -364,7 +430,7 @@ static void u_hsv(float *out, float h, float s, float v) {
 /* Spawns a unit; returns its index or -1. Appearance is procedural from
  * `seed`: any face hue (these are fantasy folk), hair or a helmet,
  * proportions, and a team-tinted tunic. */
-static int unit_spawn(int team, float x, float z, int layer, uint32_t seed, int cls) {
+static int unit_spawn(int team, float x, float z, int layer, uint32_t seed, int cls, int own) {
     int i, idx = -1;
     for (i = 0; i < MAXU; i++) if (!u_active[i]) { idx = i; break; }
     if (idx < 0) return -1;
@@ -383,8 +449,19 @@ static int unit_spawn(int team, float x, float z, int layer, uint32_t seed, int 
     else if (cls == UC_BOW)  { u_maxhp[idx] = 5; u_speed[idx] = 3.5f; u_atk[idx] = 0.85f; }
     else if (cls == UC_MACE) { u_maxhp[idx] = 4; u_speed[idx] = 4.8f; u_atk[idx] = 0.50f; }
     else if (cls == UC_BOAT) { u_maxhp[idx] = 6; u_speed[idx] = 5.2f; u_atk[idx] = 1.0f; }
+    else if (cls == UC_CATAPULT) { u_maxhp[idx] = 9; u_speed[idx] = 2.3f; u_atk[idx] = 4.5f; }
+    else if (cls == UC_RAM) { u_maxhp[idx] = 16; u_speed[idx] = 2.5f; u_atk[idx] = 2.2f; }
+    else if (cls == UC_TREB) { u_maxhp[idx] = 10; u_speed[idx] = 1.7f; u_atk[idx] = 9.0f; }
+    else if (cls == UC_DRAGON) { u_maxhp[idx] = 45; u_speed[idx] = 9.0f; u_atk[idx] = 1.0f; }
     else                     { u_maxhp[idx] = 3; u_speed[idx] = 2.6f; u_atk[idx] = 0.9f; }
-    if (team != TEAM_PLAYER && u_maxhp[idx] > 3) u_maxhp[idx] = u_maxhp[idx] - 1;
+    if (team != TEAM_PLAYER && own <= 0 && u_maxhp[idx] > 3) u_maxhp[idx] = u_maxhp[idx] - 1;
+    u_own[idx] = own; u_role[idx] = 0; u_amove[idx] = 0; u_dmgb[idx] = 0.0f;
+    u_st[idx] = 0; u_sstate[idx] = 0; u_st_t[idx] = 0.0f; u_spend[idx] = 0;
+    if (cls == UC_SWORD || cls == UC_BOW || cls == UC_MACE) {
+        if (has_tech(own, T_ARMOR)) u_maxhp[idx] = u_maxhp[idx] + 2;
+        if (has_tech(own, T_DRILL)) { float ns2 = u_speed[idx] * 1.1f; u_speed[idx] = ns2; }
+        if (cls == UC_BOW ? has_tech(own, T_FLETCHING) : has_tech(own, T_FORGING)) u_dmgb[idx] = 1.0f;
+    }
     u_hp[idx] = u_maxhp[idx];
     u_pstate[idx] = PS_HOME; u_ptimer[idx] = 0.0f; u_trail_n[idx] = 0; u_trail_d[idx] = 0.0f;
     u_home_x[idx] = x; u_home_z[idx] = z;
@@ -453,8 +530,10 @@ static int unit_try_move(int i, float nx, float nz, int preferLayer) {
     if (!cf) hCur = u_y[i];
     int tx = w_ifloor(nx), tz = w_ifloor(nz);
     int k;
+    int ground = u_class[i] == UC_CATAPULT || u_class[i] == UC_RAM || u_class[i] == UC_TREB;
     for (k = -1; k < NAV_L; k++) {
         int l = (k < 0) ? (preferLayer >= 0 ? preferLayer : u_layer[i]) : k;
+        if (ground && l != 0) continue;
         float h;
         int f = nav_node(l, tx, tz, &h);
         if (!(f & NAV_WALK)) continue;
@@ -500,6 +579,15 @@ static int units_selected_count(void) {
     return n;
 }
 
+/* Units sharing a field must move alike: 0 on foot, 1 boats, 2 siege
+ * engines (ground only). */
+static int move_group(int i) {
+    int c = u_class[i];
+    if (c == UC_BOAT) return 1;
+    if (c == UC_CATAPULT || c == UC_RAM || c == UC_TREB) return 2;
+    return 0;
+}
+
 /* Creates one field for every unit flagged u_repath that shares unit
  * `lead`'s goal. The window keeps the group >= 24 cells from its edge
  * and reaches as far toward the goal as that allows; a goal beyond it
@@ -510,7 +598,7 @@ static void dispatch_repath_group(int lead) {
     for (i = 0; i < g_un; i++) {
         if (!u_repath[i] || !unit_alive(i)) continue;
         if (w_absf(u_gx[i] - u_gx[lead]) > 0.5f || w_absf(u_gz[i] - u_gz[lead]) > 0.5f) continue;
-        if ((u_class[i] == UC_BOAT) != (u_class[lead] == UC_BOAT)) continue;
+        if (move_group(i) != move_group(lead)) continue;
         float ncx = cx + u_x[i], ncz = cz + u_z[i];
         cx = ncx; cz = ncz;
         n++;
@@ -521,19 +609,20 @@ static void dispatch_repath_group(int lead) {
     float dx = (u_gx[lead] - cx) * 0.5f, dz = (u_gz[lead] - cz) * 0.5f;
     float mx = cx + w_clampf(dx, -reach, reach), mz = cz + w_clampf(dz, -reach, reach);
     int attack = u_order[lead] == ORD_ATTACK;
-    g_field_mode_water = u_class[lead] == UC_BOAT;
+    g_field_mode_water = move_group(lead) == 1;
+    g_field_mode_ground = move_group(lead) == 2;
     int f = field_create(u_gx[lead], u_gy[lead], u_gz[lead], u_gl[lead], mx, mz, attack ? 1 : n);
-    g_field_mode_water = 0;
+    g_field_mode_water = 0; g_field_mode_ground = 0;
     /* Units on a recycled field lose it. */
     for (i = 0; i < g_un; i++) {
         if (u_active[i] && u_field[i] == f) { u_field[i] = -1; if (u_state[i] == US_MOVE || u_state[i] == US_WAIT) u_state[i] = US_IDLE; }
     }
     float gx = u_gx[lead], gz = u_gz[lead];
-    int boats = u_class[lead] == UC_BOAT;
+    int grp = move_group(lead);
     for (i = 0; i < g_un; i++) {
         if (!u_repath[i] || !unit_alive(i)) continue;
         if (w_absf(u_gx[i] - gx) > 0.5f || w_absf(u_gz[i] - gz) > 0.5f) continue;
-        if ((u_class[i] == UC_BOAT) != boats) continue;
+        if (move_group(i) != grp) continue;
         u_repath[i] = 0;
         unit_release_field(i);
         u_field[i] = f;
@@ -554,6 +643,8 @@ static void dispatch_repaths(void) {
 }
 
 static int g_order_soldiers_only;   /* order_move leaves peasants alone (they were just sent to gather) */
+static void dragon_order_attack(int d, int t);
+static void dragon_order_fly(int d, float x, float z);
 static int g_order_boat_ok;         /* boats in the selection sail to g_order_bx/bz (open water) */
 static float g_order_bx, g_order_bz;
 static void peasant_to_manual(int i);
@@ -572,8 +663,23 @@ static void order_move(float gx, float gy, float gz, int glayer, int targetUnit)
             if (u_class[i] == UC_BOAT && !g_order_boat_ok) continue;
             peasant_to_manual(i);
         }
-        int attack = targetUnit >= 0 && u_class[i] != UC_PEASANT && u_class[i] != UC_BOAT;
-        u_gx[i] = gx; u_gy[i] = gy; u_gz[i] = gz; u_gl[i] = glayer;
+        if (u_class[i] == UC_DRAGON) {
+            /* tamed dragons fly: no field */
+            u_amove[i] = 0; u_dhunt[i] = 0.0f;
+            if (targetUnit >= 0) dragon_order_attack(i, targetUnit); else dragon_order_fly(i, gx, gz);
+            n++;
+            continue;
+        }
+        int sg = u_class[i] == UC_CATAPULT || u_class[i] == UC_RAM || u_class[i] == UC_TREB;
+        if (sg) {
+            u_st[i] = 0; u_amove[i] = 0;
+            /* a catapult bombards a unit from range rather than walking up to it */
+            if (targetUnit >= 0 && u_class[i] != UC_RAM) { u_target[i] = targetUnit; u_order[i] = ORD_NONE; unit_release_field(i); u_state[i] = US_IDLE; n++; continue; }
+            u_target[i] = -1;
+            glayer = 0;
+        }
+        int attack = targetUnit >= 0 && u_class[i] != UC_PEASANT && u_class[i] != UC_BOAT && !sg;
+        u_gx[i] = gx; u_gy[i] = gy; u_gz[i] = gz; u_gl[i] = sg ? 0 : glayer;
         if (u_class[i] == UC_BOAT) { u_gx[i] = g_order_bx; u_gy[i] = W_SEA_LEVEL; u_gz[i] = g_order_bz; u_gl[i] = 0; }
         u_order[i] = attack ? ORD_ATTACK : ORD_MOVE;
         u_target[i] = attack ? targetUnit : -1;
@@ -616,28 +722,49 @@ static int nav_collect(int layer, float x, float z, float y, float r, float *px,
  * and on the wall-walks. */
 /* ---- the home castle (render-thread copy of its site and layout) ---- */
 static WSite g_hsite;
+#define HB_MAX 640               /* home castle + AI castles + docks + built */
 static int g_hb_n;
-static int g_hb_t[SITE_MAXB];
-static float g_hb_x[SITE_MAXB], g_hb_z[SITE_MAXB], g_hb_yaw[SITE_MAXB], g_hb_hx[SITE_MAXB], g_hb_hz[SITE_MAXB];
+static int g_hb_t[HB_MAX];
+static float g_hb_x[HB_MAX], g_hb_z[HB_MAX], g_hb_yaw[HB_MAX], g_hb_hx[HB_MAX], g_hb_hz[HB_MAX];
+static int g_hb_own[HB_MAX];     /* faction owning it */
+static int g_hb_hp[HB_MAX], g_hb_maxhp[HB_MAX], g_hb_dead[HB_MAX];
+static uint32_t g_hb_id[HB_MAX]; /* the generator's id for it (castle layout / world dock) */
+static int g_hb_ps[HB_MAX];      /* built ones: their g_ps_* entry once finished, else -1 */
+static int building_maxhp(int type);
+static void el_register_site(int own, WSite *s);
+static int g_rs_tech[HB_MAX];    /* advancement being researched there (+1), 0 = none */
+static float g_rs_t[HB_MAX];
 /* Also in g_hb_*: fishing docks (world docks as their chunks load, and
  * player-built ones) and buildings the peasants build; those stand at
  * their own ground height and work only once finished. */
-static float g_hb_y[SITE_MAXB];
-static int g_hb_done[SITE_MAXB];
-static int g_houses;                     /* houses in the home castle            */
-static int g_house_peasant[SITE_MAXB];   /* peasant living there (+1), 0 = none  */
+static float g_hb_y[HB_MAX];
+static int g_hb_done[HB_MAX];
+static int g_house_peasant[HB_MAX];      /* peasant living there (+1), 0 = none  */
 static float g_peasant_timer;
 static float g_tc_field_age;
 /* barracks training queues (index = building) */
 #define BQ_MAX 5
-static int g_bq_n[SITE_MAXB];
-static int g_bq_cls[SITE_MAXB * BQ_MAX];
-static float g_bq_t[SITE_MAXB];
+static int g_bq_n[HB_MAX];
+static int g_bq_cls[HB_MAX * BQ_MAX];
+static float g_bq_t[HB_MAX];
 
-static float train_time(int cls) {
+static float train_time_base(int cls) {
     if (cls == UC_BOAT) return 10.0f;
+    if (cls == UC_CATAPULT) return 14.0f;
+    if (cls == UC_RAM) return 12.0f;
+    if (cls == UC_TREB) return 20.0f;
     return cls == UC_PEASANT ? 5.0f : (cls == UC_MACE ? 6.0f : (cls == UC_BOW ? 9.0f : 8.0f));
 }
+
+/* Training time for faction own (Drill speeds up soldiers). */
+static float train_time_own(int own, int cls) {
+    float t = train_time_base(cls);
+    if ((cls == UC_SWORD || cls == UC_BOW || cls == UC_MACE) && has_tech(own, T_DRILL)) { float t2 = t * 0.65f; t = t2; }
+    return t;
+}
+
+/* Training time of the unit at the head of building b's queue. */
+static float bq_time(int b) { return train_time_own(g_hb_own[b], g_bq_cls[b * BQ_MAX]); }
 
 /* ---- stockpile + costs ---- */
 
@@ -649,13 +776,85 @@ static void unit_cost(int cls, int *out) {
     else if (cls == UC_BOW) { out[0] = 15; out[2] = 20; }
     else if (cls == UC_MACE) { out[0] = 5; out[1] = 5; out[2] = 25; }
     else if (cls == UC_BOAT) out[0] = 30;
+    else if (cls == UC_CATAPULT) { out[0] = 90; out[1] = 30; }
+    else if (cls == UC_RAM) { out[0] = 70; out[1] = 10; }
+    else if (cls == UC_TREB) { out[0] = 140; out[1] = 60; }
 }
 
-static int can_afford(const int *c) { return g_wood >= c[0] && g_stone >= c[1] && g_food >= c[2]; }
+static int can_afford(int own, const int *c) { return f_wood[own] >= c[0] && f_stone[own] >= c[1] && f_food[own] >= c[2]; }
 
-static void pay(const int *c) {
-    g_wood = g_wood - c[0]; g_stone = g_stone - c[1]; g_food = g_food - c[2];
+static void pay(int own, const int *c) {
+    f_wood[own] = f_wood[own] - c[0]; f_stone[own] = f_stone[own] - c[1]; f_food[own] = f_food[own] - c[2];
 }
+
+/* Advancement: where it is researched, cost (wood, stone, food), time,
+ * prerequisite (-1 none). */
+static int tech_building(int t) {
+    if (t == T_TOOLS) return BT_TOWNCENTER;
+    if (t == T_NETS) return BT_DOCK;
+    if (t == T_DRILL) return BT_BARRACKS;
+    return BT_SMITH;
+}
+
+/* Can faction own start researching t at building b right now (ignoring
+ * cost)? */
+static int tech_available(int b, int t) {
+    int own = g_hb_own[b];
+    if (!g_hb_done[b] || g_hb_t[b] != tech_building(t) || g_rs_tech[b]) return 0;
+    if (has_tech(own, t)) return 0;
+    if (tech_prereq(t) >= 0 && !has_tech(own, tech_prereq(t))) return 0;
+    return 1;
+}
+
+static void tech_apply_existing(int own, int t);
+
+/* Starts research of t at b, paying for it: 1, 0 (not available) or -1
+ * (can't afford). */
+static int research_start(int b, int t) {
+    int c[3], own;
+    if (b < 0 || b >= g_hb_n || !tech_available(b, t)) return 0;
+    own = g_hb_own[b];
+    int k;
+    for (k = 0; k < g_hb_n; k++) if (g_hb_own[k] == own && g_rs_tech[k] == t + 1) return 0;   /* already under way */
+    tech_cost(t, c);
+    if (!can_afford(own, c)) return -1;
+    pay(own, c);
+    g_rs_tech[b] = t + 1; g_rs_t[b] = 0.0f;
+    __android_log_print(4, "castles", "faction %d researching %s at building %d", own, tech_name(t), b);
+    return 1;
+}
+
+static void research_update(float dt) {
+    int b;
+    for (b = 0; b < g_hb_n; b++) {
+        if (!g_rs_tech[b]) continue;
+        float nt = g_rs_t[b] + dt;
+        g_rs_t[b] = nt;
+        int t = g_rs_tech[b] - 1;
+        if (nt < tech_time(t)) continue;
+        int own = g_hb_own[b];
+        g_rs_tech[b] = 0;
+        if (own >= 0 && own < F_MAX) { f_tech[own] = f_tech[own] | (1 << t); tech_apply_existing(own, t); }
+        __android_log_print(4, "castles", "faction %d advanced: %s", own, tech_name(t));
+    }
+}
+
+/* Unit-stat advancements also upgrade the units already in the field. */
+static void tech_apply_existing(int own, int t) {
+    int i;
+    for (i = 0; i < g_un; i++) {
+        if (!unit_alive(i) || u_own[i] != own) continue;
+        int c = u_class[i];
+        if (c != UC_SWORD && c != UC_BOW && c != UC_MACE) continue;
+        if (t == T_ARMOR) { u_maxhp[i] = u_maxhp[i] + 2; u_hp[i] = u_hp[i] + 2; }
+        if (t == T_DRILL) { float ns2 = u_speed[i] * 1.1f; u_speed[i] = ns2; }
+        if (t == T_FORGING && c != UC_BOW) u_dmgb[i] = 1.0f;
+        if (t == T_FLETCHING && c == UC_BOW) u_dmgb[i] = 1.0f;
+    }
+}
+
+/* Bow range of unit i. */
+static float unit_range(int i) { return ARCHER_RANGE + (has_tech(u_own[i], T_FLETCHING) ? 4.0f : 0.0f); }
 
 /* Door point of building b (in front of its street-facing side). */
 static void building_door(int b, float extra, float *x, float *z) {
@@ -671,24 +870,33 @@ static void units_home_init(void) {
     g_hb_n = 0;
     if (!site_find_home(&htx, &htz, &g_hsite)) return;
     g_hb_n = site_layout(&g_hsite, g_hb_t, g_hb_x, g_hb_z, g_hb_yaw, g_hb_hx, g_hb_hz);
-    g_houses = 0;
+    f_houses[0] = 0;
     for (b = 0; b < g_hb_n; b++) {
-        if (g_hb_t[b] == BT_HOUSE) g_houses++;
+        if (g_hb_t[b] == BT_HOUSE) f_houses[0]++;
         g_house_peasant[b] = 0;
         g_bq_n[b] = 0; g_bq_t[b] = 0.0f;
         g_hb_y[b] = g_hsite.base; g_hb_done[b] = 1;
+        g_hb_own[b] = 0; g_rs_tech[b] = 0;
+        g_hb_maxhp[b] = building_maxhp(g_hb_t[b]); g_hb_hp[b] = g_hb_maxhp[b]; g_hb_dead[b] = 0;
+        g_hb_id[b] = el_id_xz(g_hb_x[b], g_hb_z[b]); g_hb_ps[b] = -1;
     }
+    f_tc[0] = 0;
+    el_register_site(0, &g_hsite);
     g_home_set = 1;
     g_home_cx = w_ifloor(g_hsite.cx / W_CHUNK_SIZE); g_home_cz = w_ifloor(g_hsite.cz / W_CHUNK_SIZE);
 }
 
 /* Adds a building to g_hb_* (done = 0 while under construction);
  * returns its index or -1 when full. */
+static int g_add_own;     /* owner for home_add_building (squash: six float parameters at most) */
 static int home_add_building(int type, float x, float z, float y, float yaw, float hx, float hz, int done) {
     int b = g_hb_n;
-    if (b >= SITE_MAXB) return -1;
+    if (b >= HB_MAX) return -1;
     g_hb_t[b] = type; g_hb_x[b] = x; g_hb_z[b] = z; g_hb_y[b] = y; g_hb_yaw[b] = yaw;
     g_hb_hx[b] = hx; g_hb_hz[b] = hz; g_hb_done[b] = done;
+    g_hb_own[b] = g_add_own; g_rs_tech[b] = 0;
+    g_hb_maxhp[b] = building_maxhp(type); g_hb_hp[b] = g_hb_maxhp[b]; g_hb_dead[b] = 0;
+    g_hb_id[b] = el_id_xz(x, z); g_hb_ps[b] = -1;
     g_house_peasant[b] = 0; g_bq_n[b] = 0; g_bq_t[b] = 0.0f;
     g_hb_n = b + 1;
     return b;
@@ -698,7 +906,9 @@ static int home_add_building(int type, float x, float z, float y, float yaw, flo
  * the shed (behind the anchor) and the pier; its "door" is the pier end. */
 static int home_add_dock(float x, float z, float y, float yaw, int done) {
     float dx = w_cos(yaw), dz = w_sin(yaw);
-    return home_add_building(BT_DOCK, x + dx * 1.3f, z + dz * 1.3f, y, yaw, 2.9f, 3.7f, done);
+    int b = home_add_building(BT_DOCK, x + dx * 1.3f, z + dz * 1.3f, y, yaw, 2.9f, 3.7f, done);
+    if (b >= 0) g_hb_id[b] = el_id_xz(x, z);          /* world docks: the generator's anchor */
+    return b;
 }
 
 /* World docks of a freshly loaded slot (once each). */
@@ -712,41 +922,49 @@ static void units_register_docks(int slot) {
         for (b = 0; b < g_hb_n; b++)
             if (g_hb_t[b] == BT_DOCK && w_absf(g_hb_x[b] - cx) < 1.0f && w_absf(g_hb_z[b] - cz) < 1.0f) dup = 1;
         if (dup) continue;
+        g_add_own = 0;
         if (home_add_dock(g_slot_dock_x[q], g_slot_dock_z[q], g_slot_dock_y[q], yaw, 1) >= 0)
             __android_log_print(4, "castles", "fishing dock found at %d,%d", (int)cx, (int)cz);
     }
 }
 
-/* Population: the town centre houses 10, every house 4 more. */
-static int pop_limit(void) { return 10 + 4 * g_houses; }
+/* Population of faction own: the town centre houses 10, every house 4
+ * more. */
+static int pop_limit_of(int own) { return 10 + 4 * f_houses[own]; }
 
-static int pop_count(void) {
+static int pop_count_of(int own) {
     int i, n = 0;
-    for (i = 0; i < g_un; i++) if (unit_alive(i) && u_team[i] == TEAM_PLAYER) n++;
+    for (i = 0; i < g_un; i++) if (unit_alive(i) && u_own[i] == own) n++;
     return n;
 }
 
-static int pop_queued(void) {
+static int pop_queued_of(int own) {
     int b, n = 0;
-    for (b = 0; b < g_hb_n; b++) n = n + g_bq_n[b];
+    for (b = 0; b < g_hb_n; b++) if (g_hb_own[b] == own) n = n + g_bq_n[b];
     return n;
 }
+
+static int pop_limit(void) { return pop_limit_of(0); }
+static int pop_count(void) { return pop_count_of(0); }
+static int pop_queued(void) { return pop_queued_of(0); }
 
 /* Queues a unit at building b (soldiers at a barracks, peasants at the
  * town centre, boats at a dock), paying its cost; 0 if the queue or
  * population is full, -1 if the stockpile can't pay. */
 static int barracks_train(int b, int cls) {
     if (b < 0 || b >= g_hb_n || !g_hb_done[b]) return 0;
-    if (g_hb_t[b] == BT_BARRACKS) { if (cls == UC_PEASANT || cls == UC_BOAT) return 0; }
+    if (g_hb_t[b] == BT_BARRACKS) { if (cls != UC_SWORD && cls != UC_BOW && cls != UC_MACE) return 0; }
+    else if (g_hb_t[b] == BT_WORKSHOP) { if (cls != UC_CATAPULT && cls != UC_RAM && cls != UC_TREB) return 0; }
     else if (g_hb_t[b] == BT_TOWNCENTER) { if (cls != UC_PEASANT) return 0; }
     else if (g_hb_t[b] == BT_DOCK) { if (cls != UC_BOAT) return 0; }
     else return 0;
+    int own = g_hb_own[b];
     if (g_bq_n[b] >= BQ_MAX) return 0;
-    if (pop_count() + pop_queued() >= pop_limit()) return 0;
+    if (pop_count_of(own) + pop_queued_of(own) >= pop_limit_of(own)) return 0;
     int cost[3];
     unit_cost(cls, cost);
-    if (!can_afford(cost)) return -1;
-    pay(cost);
+    if (!can_afford(own, cost)) return -1;
+    pay(own, cost);
     g_bq_cls[b * BQ_MAX + g_bq_n[b]] = cls;
     g_bq_n[b] = g_bq_n[b] + 1;
     return 1;
@@ -777,22 +995,24 @@ static void units_on_castle_loaded(int slot) {
         for (k = 0; k < 10 && n > 0; k++) {
             int pick = (int)(w_hash(seed + (uint32_t)k * 31u) % (uint32_t)n);
             int cls = k < 4 ? UC_SWORD : (k < 7 ? UC_BOW : UC_MACE);
-            if (unit_spawn(TEAM_PLAYER, px[pick], pz[pick], 0, seed + (uint32_t)k, cls) >= 0) made++;
+            if (unit_spawn(TEAM_PLAYER, px[pick], pz[pick], 0, seed + (uint32_t)k, cls, 0) >= 0) made++;
         }
         g_home_spawned = 1;
         __android_log_print(4, "castles", "player squad spawned: %d units at home castle (%d houses, pop limit %d)",
-                            made, g_houses, pop_limit());
+                            made, f_houses[0], pop_limit());
         return;
     }
     WSite site;
     w_site_compute(w_ifloor(kx / SITE_TILE), w_ifloor(kz / SITE_TILE), &site);
     if (!site.valid) return;
+    int gown = faction_at_site(site.tx, site.tz);    /* an AI castle's own garrison, or unowned */
     int guards = 0, k;
     int want = 4 + (int)(site.R / 14.0f);
     int n = nav_collect(0, kx, kz, ky, 14.0f, px, pz, 600);
     for (k = 0; k < want / 2 && n > 0; k++) {
         int pick = (int)(w_hash(seed + (uint32_t)k * 17u) % (uint32_t)n);
-        if (unit_spawn(TEAM_ENEMY, px[pick], pz[pick], 0, seed + 100u + (uint32_t)k, UC_RANDOM) >= 0) guards++;
+        int gu = unit_spawn(TEAM_ENEMY, px[pick], pz[pick], 0, seed + 100u + (uint32_t)k, UC_RANDOM, gown);
+        if (gu >= 0) { guards++; u_role[gu] = gown > 0 ? R_GARRISON : 0; }
     }
     /* wall-walk nodes of every ring (heights differ per ring) */
     int nw = 0, r;
@@ -803,7 +1023,8 @@ static void units_on_castle_loaded(int slot) {
     for (k = 0; k < want - want / 2 && nw > 0; k++) {
         int pick = (int)(w_hash(seed + (uint32_t)k * 53u + 7u) % (uint32_t)nw);
         int cls = (k & 1) ? UC_BOW : UC_RANDOM;          /* archers favour the walls */
-        if (unit_spawn(TEAM_ENEMY, px[pick], pz[pick], 1, seed + 200u + (uint32_t)k, cls) >= 0) guards++;
+        int gu = unit_spawn(TEAM_ENEMY, px[pick], pz[pick], 1, seed + 200u + (uint32_t)k, cls, gown);
+        if (gu >= 0) { guards++; u_role[gu] = gown > 0 ? R_GARRISON : 0; }
     }
     __android_log_print(4, "castles", "castle guards spawned: %d (castle radius %d, rings %d, wall nodes %d)",
                         guards, (int)site.R, site.rings, nw);
@@ -836,7 +1057,7 @@ static void peasants_spawn(float dt) {
     if (pop_count() + pop_queued() >= pop_limit()) return;
     int b;
     for (b = 0; b < g_hb_n; b++) {
-        if (g_hb_t[b] != BT_HOUSE || !g_hb_done[b]) continue;
+        if (g_hb_t[b] != BT_HOUSE || !g_hb_done[b] || g_hb_own[b] != 0) continue;
         if (g_house_peasant[b] && unit_alive(g_house_peasant[b] - 1) && u_class[g_house_peasant[b] - 1] == UC_PEASANT) continue;
         float x, z;
         building_door(b, 0.9f, &x, &z);
@@ -845,7 +1066,7 @@ static void peasants_spawn(float dt) {
         if (nav_slot_for(ccx, ccz) < 0) continue;
         snap_walkable(&x, &z, g_hb_y[b]);
         if (!(nav_node(0, w_ifloor(x), w_ifloor(z), &h) & NAV_WALK)) continue;
-        int u = unit_spawn(TEAM_PLAYER, x, z, 0, w_hash2(b, 99, 5u), UC_PEASANT);
+        int u = unit_spawn(TEAM_PLAYER, x, z, 0, w_hash2(b, 99, 5u), UC_PEASANT, 0);
         if (u < 0) return;
         g_house_peasant[b] = u + 1;
         u_home_x[u] = x; u_home_z[u] = z;
@@ -1001,10 +1222,28 @@ static int snap_water(float *x, float *z) {
  * water field. Fields are pinned with refs and re-validated by age,
  * since field_create may still recycle a pinned field when every one is
  * busy. */
-#define GJ_MAX 4
-static int g_gj_on[GJ_MAX], g_gj_type[GJ_MAX], g_gj_water[GJ_MAX];
+#define GJ_MAX 10
+static int g_gj_on[GJ_MAX], g_gj_type[GJ_MAX], g_gj_water[GJ_MAX], g_gj_own[GJ_MAX];
 static float g_gj_x[GJ_MAX], g_gj_z[GJ_MAX], g_gj_y[GJ_MAX], g_gj_age[GJ_MAX], g_gj_dx[GJ_MAX], g_gj_dz[GJ_MAX];
 static int g_gj_f[GJ_MAX], g_gj_fage[GJ_MAX], g_gj_drop[GJ_MAX], g_gj_dage[GJ_MAX];
+static int g_gj_dropb[GJ_MAX];       /* land jobs: the building loads go to (town centre or a stockpile) */
+
+/* Where faction own's peasants unload wood / stone gathered at (x,z):
+ * the door of the town centre or of a finished stockpile, whichever is
+ * nearest the resource. Returns the building, -1 if there is none. */
+static int nearest_drop_building(int own, float x, float z, float *dx, float *dz) {
+    int b, best = -1;
+    float bd = 1e30f;
+    for (b = 0; b < g_hb_n; b++) {
+        if (g_hb_own[b] != own || !g_hb_done[b] || g_hb_dead[b]) continue;
+        if (g_hb_t[b] != BT_STOCKPILE && b != f_tc[own]) continue;
+        float ex, ez;
+        building_door(b, g_hb_t[b] == BT_STOCKPILE ? 1.2f : 1.8f, &ex, &ez);
+        float d = (ex - x) * (ex - x) + (ez - z) * (ez - z);
+        if (d < bd) { bd = d; best = b; *dx = ex; *dz = ez; }
+    }
+    return best;
+}
 
 static int field_valid(int f, int age) { return f >= 0 && g_field_age[f] == age; }
 
@@ -1024,9 +1263,9 @@ static void gather_job_fields(int j) {
     /* the shared town-centre field covers land sites inside its window */
     float tox = g_hsite.cx - (float)(NAVW / 2) + 6.0f, toz = g_hsite.cz - (float)(NAVW / 2) + 6.0f;
     float span = (float)NAVW - 12.0f;
-    int inTc = !g_gj_water[j] && g_gj_x[j] > tox && g_gj_x[j] < tox + span && g_gj_z[j] > toz && g_gj_z[j] < toz + span;
+    int inTc = g_gj_own[j] == 0 && !g_gj_water[j] && g_gj_dropb[j] == f_tc[0] && g_gj_x[j] > tox && g_gj_x[j] < tox + span && g_gj_z[j] > toz && g_gj_z[j] < toz + span;
     if (!inTc) {
-        int d = field_create(dx, g_gj_water[j] ? W_SEA_LEVEL : g_hsite.base, dz, 0, mx, mz, 6);
+        int d = field_create(dx, g_gj_water[j] ? W_SEA_LEVEL : g_hb_y[g_gj_dropb[j] >= 0 ? g_gj_dropb[j] : f_tc[g_gj_own[j]]], dz, 0, mx, mz, 6);
         g_field_refs[d] = 1000;
         g_gj_drop[j] = d; g_gj_dage[j] = g_field_age[d];
     }
@@ -1044,7 +1283,7 @@ static void gather_job_end(int j) {
 /* Drop-off field for job j (-1 while none is usable). */
 static int gather_drop_field(int j) {
     if (j >= 0 && j < GJ_MAX && g_gj_on[j] && g_gj_drop[j] >= 0) return field_valid(g_gj_drop[j], g_gj_dage[j]) ? g_gj_drop[j] : -1;
-    if (j >= 0 && j < GJ_MAX && g_gj_water[j]) return -1;
+    if (j >= 0 && j < GJ_MAX && (g_gj_water[j] || g_gj_own[j] != 0)) return -1;
     return g_tc_field;
 }
 
@@ -1060,6 +1299,18 @@ static void gather_jobs_update(float dt) {
         if (members == 0) { gather_job_end(j); continue; }
         float na = g_gj_age[j] + dt;
         g_gj_age[j] = na;
+        /* land jobs unload at the nearest drop point: re-pick it when a
+         * stockpile has been finished or the chosen one is gone */
+        if (!g_gj_water[j]) {
+            float ndx, ndz;
+            int nb = nearest_drop_building(g_gj_own[j], g_gj_x[j], g_gj_z[j], &ndx, &ndz);
+            if (nb >= 0 && nb != g_gj_dropb[j]) {
+                g_gj_dropb[j] = nb; g_gj_dx[j] = ndx; g_gj_dz[j] = ndz;
+                gather_job_fields(j);
+                __android_log_print(4, "castles", "gather job %d now unloads at %s %d", j, g_hb_t[nb] == BT_STOCKPILE ? "stockpile" : "town centre", nb);
+                continue;
+            }
+        }
         int lost = !field_valid(g_gj_f[j], g_gj_fage[j]) || (g_gj_drop[j] >= 0 && !field_valid(g_gj_drop[j], g_gj_dage[j]));
         if (lost || na > 45.0f) gather_job_fields(j);
     }
@@ -1082,13 +1333,13 @@ static void peasant_to_manual(int i) {
     u_stuck[i] = 0.0f;
 }
 
-/* Where boats unload: the pier end of the finished dock nearest (x,z),
- * moved onto open water. 0 if there is none. */
-static int nearest_dock_drop(float x, float z, float *dx, float *dz) {
+/* Where faction own's boats unload: the pier end of its finished dock
+ * nearest (x,z), moved onto open water. 0 if there is none. */
+static int nearest_dock_drop(int own, float x, float z, float *dx, float *dz) {
     int b, best = -1;
     float bd = 1e30f;
     for (b = 0; b < g_hb_n; b++) {
-        if (g_hb_t[b] != BT_DOCK || !g_hb_done[b]) continue;
+        if (g_hb_t[b] != BT_DOCK || !g_hb_done[b] || g_hb_own[b] != own) continue;
         float ex = g_hb_x[b] - x, ez = g_hb_z[b] - z;
         if (ex * ex + ez * ez < bd) { bd = ex * ex + ez * ez; best = b; }
     }
@@ -1097,52 +1348,74 @@ static int nearest_dock_drop(float x, float z, float *dx, float *dz) {
     return snap_water(dx, dz);
 }
 
+/* A gather job of faction own for resource q (an existing one on the
+ * same patch, else a free slot; the player may also take over its own
+ * oldest). -1 if there is none, or no drop point (boats need a dock). */
+static int gather_job_for(int own, int q) {
+    int i, j, job = -1;
+    int type = g_slot_res_t[q], water = type == RES_FOOD;
+    float x = g_slot_res_x[q], z = g_slot_res_z[q];
+    for (j = 0; j < GJ_MAX && job < 0; j++) {
+        if (!g_gj_on[j] || g_gj_type[j] != type || g_gj_own[j] != own) continue;
+        float dx = g_gj_x[j] - x, dz = g_gj_z[j] - z;
+        if (dx * dx + dz * dz < 12.0f * 12.0f) job = j;
+    }
+    if (job >= 0) return job;
+    float ddx, ddz;
+    if (water) { if (!nearest_dock_drop(own, x, z, &ddx, &ddz)) return -1; }
+    int dropb = -1;
+    if (!water) { dropb = nearest_drop_building(own, x, z, &ddx, &ddz); if (dropb < 0) return -1; }
+    for (j = 0; j < GJ_MAX && job < 0; j++) if (!g_gj_on[j]) job = j;
+    if (job < 0) {
+        if (own != 0) return -1;
+        for (j = 0; j < GJ_MAX && job < 0; j++) if (g_gj_own[j] == 0) job = j;
+        if (job < 0) return -1;
+        for (i = 0; i < g_un; i++) if (unit_is_gatherer(i) && u_job[i] == job && u_pstate[i] >= PS_G_GO && u_pstate[i] <= PS_G_DROP) peasant_to_manual(i);
+        gather_job_end(job);
+    }
+    g_gj_on[job] = 1; g_gj_type[job] = type; g_gj_water[job] = water; g_gj_own[job] = own;
+    g_gj_x[job] = x; g_gj_z[job] = z; g_gj_y[job] = g_slot_res_y[q];
+    g_gj_dx[job] = ddx; g_gj_dz[job] = ddz; g_gj_dropb[job] = dropb;
+    g_gj_f[job] = -1; g_gj_drop[job] = -1;
+    gather_job_fields(job);
+    return job;
+}
+
+static int carry_max(int i) {
+    if (u_class[i] == UC_BOAT) return has_tech(u_own[i], T_NETS) ? 18 : CARRY_BOAT;
+    return CARRY_MAX;
+}
+
+/* Puts gatherer i on job (working resource q). */
+static void gather_assign_unit(int i, int job, int q) {
+    unit_release_field(i);
+    u_order[i] = ORD_NONE; u_repath[i] = 0;
+    if (u_carry[i] > 0 && u_carry_t[i] != g_gj_type[job]) u_carry[i] = 0;    /* drops the other load */
+    u_job[i] = job;
+    peasant_set_res(i, q);
+    u_pstate[i] = u_carry[i] >= carry_max(i) ? PS_G_DROP : PS_G_GO;
+    u_state[i] = US_IDLE;
+    u_stuck[i] = 0.0f;
+}
+
 /* Sends every selected player gatherer that fits resource q -- peasants
  * to trees and rocks, fishing boats to fish shoals -- to work it;
  * returns how many went. Others in the selection are left to order_move. */
 static int order_gather(int q) {
-    int i, j, n = 0, job = -1;
+    int i, n = 0;
     int type = g_slot_res_t[q], cls = type == RES_FOOD ? UC_BOAT : UC_PEASANT, water = type == RES_FOOD;
-    for (i = 0; i < g_un; i++) if (u_selected[i] && unit_alive(i) && u_team[i] == TEAM_PLAYER && u_class[i] == cls) n++;
+    for (i = 0; i < g_un; i++) if (u_selected[i] && unit_alive(i) && u_own[i] == 0 && u_class[i] == cls) n++;
     if (n == 0 || g_hb_n == 0) return 0;
-    float x = g_slot_res_x[q], z = g_slot_res_z[q];
-    float ddx, ddz;
-    if (water) {
-        if (!nearest_dock_drop(x, z, &ddx, &ddz)) {
-            __android_log_print(4, "castles", "fishing: no finished dock to bring the catch to");
-            return 0;
-        }
-    } else building_door(0, 1.8f, &ddx, &ddz);
-    /* reuse a job on the same patch, else a free one, else the oldest */
-    for (j = 0; j < GJ_MAX && job < 0; j++) {
-        if (!g_gj_on[j] || g_gj_type[j] != type) continue;
-        float dx = g_gj_x[j] - x, dz = g_gj_z[j] - z;
-        if (dx * dx + dz * dz < 12.0f * 12.0f) job = j;
-    }
-    for (j = 0; j < GJ_MAX && job < 0; j++) if (!g_gj_on[j]) job = j;
+    int job = gather_job_for(0, q);
     if (job < 0) {
-        job = 0;
-        for (i = 0; i < g_un; i++) if (unit_is_gatherer(i) && u_job[i] == job && u_pstate[i] >= PS_G_GO && u_pstate[i] <= PS_G_DROP) peasant_to_manual(i);
-        gather_job_end(job);
-    }
-    if (!g_gj_on[job]) {
-        g_gj_on[job] = 1; g_gj_type[job] = type; g_gj_water[job] = water;
-        g_gj_x[job] = x; g_gj_z[job] = z; g_gj_y[job] = g_slot_res_y[q];
-        g_gj_dx[job] = ddx; g_gj_dz[job] = ddz;
-        g_gj_f[job] = -1; g_gj_drop[job] = -1;
-        gather_job_fields(job);
+        __android_log_print(4, "castles", water ? "fishing: no finished dock to bring the catch to" : "gathering: no job slot free");
+        return 0;
     }
     for (i = 0; i < g_un; i++) {
-        if (!u_selected[i] || !unit_alive(i) || u_team[i] != TEAM_PLAYER || u_class[i] != cls) continue;
-        unit_release_field(i);
-        u_order[i] = ORD_NONE; u_repath[i] = 0;
-        if (u_carry[i] > 0 && u_carry_t[i] != type) u_carry[i] = 0;    /* drops the other load */
-        u_job[i] = job;
-        peasant_set_res(i, q);
-        u_pstate[i] = u_carry[i] >= (water ? CARRY_BOAT : CARRY_MAX) ? PS_G_DROP : PS_G_GO;
-        u_state[i] = US_IDLE;
-        u_stuck[i] = 0.0f;
+        if (!u_selected[i] || !unit_alive(i) || u_own[i] != 0 || u_class[i] != cls) continue;
+        gather_assign_unit(i, job, q);
     }
+    float x = g_slot_res_x[q], z = g_slot_res_z[q];
     g_order_marker_on = 1;
     g_order_mx = x; g_order_my = g_slot_res_y[q]; g_order_mz = z; g_order_mt = 0.0f;
     __android_log_print(4, "castles", "%s at %d,%d: %d %s (job %d)", type == RES_WOOD ? "gather wood" : (type == RES_STONE ? "gather stone" : "fish"),
@@ -1249,7 +1522,7 @@ static void peasant_gather_update(int i, float dt) {
         float prev = u_work_t[i];
         float nt = prev + dt;
         u_work_t[i] = nt;
-        float period = boat ? 0.9f : 1.1f;
+        float period = boat ? (has_tech(u_own[i], T_NETS) ? 0.65f : 0.9f) : (has_tech(u_own[i], T_TOOLS) ? 0.85f : 1.1f);
         if (w_ifloor(nt / period) > w_ifloor(prev / period)) {
             int got = res_take(u_res_id[i], u_res_x[i], u_res_z[i], 1);
             if (got > 0) {
@@ -1257,7 +1530,7 @@ static void peasant_gather_update(int i, float dt) {
                 u_carry[i] = u_carry[i] + got;
                 u_carry_t[i] = g_gj_type[j];
             }
-            if (u_carry[i] >= (boat ? CARRY_BOAT : CARRY_MAX)) { u_pstate[i] = PS_G_DROP; u_stuck[i] = 0.0f; return; }
+            if (u_carry[i] >= carry_max(i)) { u_pstate[i] = PS_G_DROP; u_stuck[i] = 0.0f; return; }
             if (got == 0) { u_pstate[i] = PS_G_NEAR; u_stuck[i] = 0.0f; return; }   /* used up: next one */
         }
         return;
@@ -1265,8 +1538,8 @@ static void peasant_gather_update(int i, float dt) {
     /* PS_G_DROP */
     float dx, dz;
     if (jobOk) { dx = g_gj_dx[j]; dz = g_gj_dz[j]; }
-    else if (boat) { if (!nearest_dock_drop(u_x[i], u_z[i], &dx, &dz)) { peasant_to_manual(i); return; } }
-    else building_door(0, 1.8f, &dx, &dz);
+    else if (boat) { if (!nearest_dock_drop(u_own[i], u_x[i], u_z[i], &dx, &dz)) { peasant_to_manual(i); return; } }
+    else if (u_own[i] < 0 || nearest_drop_building(u_own[i], u_x[i], u_z[i], &dx, &dz) < 0) { peasant_to_manual(i); return; }
     float ex = dx - u_x[i], ez = dz - u_z[i];
     float nearR = boat ? 3.5f : 2.6f;
     int r = 0;
@@ -1286,12 +1559,15 @@ static void peasant_gather_update(int i, float dt) {
         if (u_stuck[i] > 3.0f && ex * ex + ez * ez < 6.0f * 6.0f) r = 1;
     }
     if (r == 1) {
-        if (u_carry[i] > 0) {
-            if (u_carry_t[i] == RES_WOOD) g_wood = g_wood + u_carry[i];
-            else if (u_carry_t[i] == RES_STONE) g_stone = g_stone + u_carry[i];
-            else g_food = g_food + u_carry[i];
+        /* the player's loads go into the stockpile; AI castles' income
+         * is counted at a steady rate instead (castles_ai.h), so the
+         * loads their peasants carry when on screen are just for show */
+        if (u_carry[i] > 0 && u_own[i] == 0) {
+            if (u_carry_t[i] == RES_WOOD) f_wood[0] = f_wood[0] + u_carry[i];
+            else if (u_carry_t[i] == RES_STONE) f_stone[0] = f_stone[0] + u_carry[i];
+            else f_food[0] = f_food[0] + u_carry[i];
             __android_log_print(4, "castles", "%s %d delivered %d %s (wood %d, stone %d, food %d)", boat ? "boat" : "peasant", i, u_carry[i],
-                                u_carry_t[i] == RES_WOOD ? "wood" : (u_carry_t[i] == RES_STONE ? "stone" : "fish"), g_wood, g_stone, g_food);
+                                u_carry_t[i] == RES_WOOD ? "wood" : (u_carry_t[i] == RES_STONE ? "stone" : "fish"), f_wood[0], f_stone[0], f_food[0]);
         }
         u_carry[i] = 0;
         u_stuck[i] = 0.0f;
@@ -1309,7 +1585,7 @@ static void peasant_gather_update(int i, float dt) {
  * until then the site is drawn as foundations and scaffolding. */
 #define BS_MAX 48
 static int g_bs_n;
-static int g_bs_kind[BS_MAX], g_bs_done[BS_MAX], g_bs_hb[BS_MAX];
+static int g_bs_kind[BS_MAX], g_bs_done[BS_MAX], g_bs_hb[BS_MAX], g_bs_own[BS_MAX];
 static float g_bs_x[BS_MAX], g_bs_z[BS_MAX], g_bs_x2[BS_MAX], g_bs_z2[BS_MAX], g_bs_y[BS_MAX], g_bs_lo[BS_MAX];
 static float g_bs_yaw[BS_MAX], g_bs_work[BS_MAX], g_bs_need[BS_MAX], g_bs_fade[BS_MAX];
 
@@ -1322,6 +1598,9 @@ static void struct_cost(int kind, float len, int *out) {
     else if (kind == ST_WALL) out[1] = 2 * (int)(len + 0.5f);
     else if (kind == ST_TOWER) { out[0] = 10; out[1] = 40; }
     else if (kind == ST_GATE) { out[0] = 20; out[1] = 50; }
+    else if (kind == ST_SMITH) { out[0] = 50; out[1] = 40; }
+    else if (kind == ST_WORKSHOP) { out[0] = 100; out[1] = 60; }
+    else if (kind == ST_STOCKPILE) out[0] = 30;
 }
 
 /* Builder-seconds of work a structure takes. */
@@ -1331,6 +1610,9 @@ static float struct_work(int kind, float len) {
     if (kind == ST_DOCK) return 30.0f;
     if (kind == ST_WALL) return 4.0f + 1.6f * len;
     if (kind == ST_TOWER) return 30.0f;
+    if (kind == ST_SMITH) return 30.0f;
+    if (kind == ST_WORKSHOP) return 40.0f;
+    if (kind == ST_STOCKPILE) return 12.0f;
     return 40.0f;
 }
 
@@ -1341,6 +1623,9 @@ static int struct_rect(int kind, float yaw, int yard, float *a, float *r) {
     if (kind == ST_HOUSE) { *a = yaw - 0.5f * W_PI; r[0] = -PS_HOUSE_HX; r[1] = -PS_HOUSE_HZ; r[2] = PS_HOUSE_HX; r[3] = PS_HOUSE_HZ; return 1; }
     if (kind == ST_BARRACKS) { *a = yaw - 0.5f * W_PI; r[0] = -PS_BARR_HX; r[1] = -PS_BARR_HZ; r[2] = PS_BARR_HX; r[3] = PS_BARR_HZ + (yard ? 3.8f : 0.0f); return 1; }
     if (kind == ST_DOCK) { *a = yaw - 0.5f * W_PI; r[0] = -0.9f; r[1] = -2.4f; r[2] = 2.9f; r[3] = DOCK_PIER; return 1; }
+    if (kind == ST_SMITH) { *a = yaw - 0.5f * W_PI; r[0] = -PS_SMITH_HX; r[1] = -PS_SMITH_HZ; r[2] = PS_SMITH_HX; r[3] = PS_SMITH_HZ + (yard ? 2.2f : 0.0f); return 1; }
+    if (kind == ST_STOCKPILE) { *a = yaw - 0.5f * W_PI; r[0] = -PS_SP_HX; r[1] = -PS_SP_HZ; r[2] = PS_SP_HX; r[3] = PS_SP_HZ + (yard ? 1.0f : 0.0f); return 1; }
+    if (kind == ST_WORKSHOP) { *a = yaw - 0.5f * W_PI; r[0] = -PS_WS_HX; r[1] = -PS_WS_HZ; r[2] = PS_WS_HX; r[3] = PS_WS_HZ + (yard ? 1.6f : 0.0f); return 1; }
     if (kind == ST_GATE) {
         float hw = PS_GATE_HALF + 2.0f * PS_GATE_TR;
         *a = yaw + 0.5f * W_PI; r[0] = -hw; r[1] = -PS_GATE_TR; r[2] = hw; r[3] = PS_GATE_TR; return 1;
@@ -1408,7 +1693,7 @@ static int build_site_near(float x, float z) {
     int k, best = -1;
     float bd = 40.0f * 40.0f;
     for (k = 0; k < g_bs_n; k++) {
-        if (g_bs_done[k]) continue;
+        if (g_bs_done[k] || g_bs_own[k] != 0) continue;
         float gx, gz;
         struct_goal(k, &gx, &gz);
         float dx = gx - x, dz = gz - z;
@@ -1417,12 +1702,14 @@ static int build_site_near(float x, float z) {
     return best;
 }
 
+static void el_register_ps(int own, int p);
 static void build_complete(int s2) {
     int k = g_bs_kind[s2], i, p = g_nps;
     g_bs_done[s2] = 1;
     g_bs_fade[s2] = 2.5f;          /* scaffold stays up while the chunks rebuild */
     if (p < MAXPS) {
         g_ps_kind[p] = k;
+        g_ps_team[p] = g_bs_own[s2] == 0 ? 0 : 1;
         g_ps_x[p] = g_bs_x[s2]; g_ps_z[p] = g_bs_z[s2]; g_ps_x2[p] = g_bs_x2[s2]; g_ps_z2[p] = g_bs_z2[s2];
         g_ps_y[p] = g_bs_y[s2]; g_ps_lo[p] = g_bs_lo[s2]; g_ps_yaw[p] = g_bs_yaw[s2];
         g_nps = p + 1;                         /* last: the generator reads up to g_nps */
@@ -1434,16 +1721,22 @@ static void build_complete(int s2) {
             for (cx = cx0; cx <= cx1; cx++) request_rebuild_at(((float)cx + 0.5f) * W_CHUNK_SIZE, ((float)cz + 0.5f) * W_CHUNK_SIZE);
     }
     int b = g_bs_hb[s2];
+    if (p < MAXPS && p < g_nps) {
+        if (b >= 0 && b < g_hb_n) g_hb_ps[b] = p;
+        el_register_ps(g_bs_own[s2], p);
+    }
     if (b >= 0 && b < g_hb_n) {
         g_hb_done[b] = 1;
-        if (g_hb_t[b] == BT_HOUSE) g_houses = g_houses + 1;
+        if (g_hb_t[b] == BT_HOUSE && g_hb_own[b] >= 0) f_houses[g_hb_own[b]] = f_houses[g_hb_own[b]] + 1;
     }
-    __android_log_print(4, "castles", "construction finished: %s at %d,%d (pop limit %d)",
-                        k == ST_HOUSE ? "house" : (k == ST_BARRACKS ? "barracks" : (k == ST_DOCK ? "dock" : (k == ST_WALL ? "wall" : (k == ST_TOWER ? "tower" : "gatehouse")))),
-                        (int)g_bs_x[s2], (int)g_bs_z[s2], pop_limit());
-    /* builders move on to the next site nearby, or wait */
+    __android_log_print(4, "castles", "faction %d finished building: %s at %d,%d (pop limit %d)", g_bs_own[s2],
+                        k == ST_HOUSE ? "house" : (k == ST_BARRACKS ? "barracks" : (k == ST_DOCK ? "dock" : (k == ST_WALL ? "wall" : (k == ST_TOWER ? "tower" : (k == ST_SMITH ? "blacksmith" : (k == ST_WORKSHOP ? "siege workshop" : (k == ST_STOCKPILE ? "stockpile" : "gatehouse"))))))),
+                        (int)g_bs_x[s2], (int)g_bs_z[s2], pop_limit_of(g_bs_own[s2]));
+    /* builders move on to the next site nearby, or wait (AI builders
+     * are reassigned by their castle's AI) */
     for (i = 0; i < g_un; i++) {
         if (!unit_alive(i) || u_class[i] != UC_PEASANT || (u_pstate[i] != PS_B_GO && u_pstate[i] != PS_B_WORK) || u_bsite[i] != s2) continue;
+        if (u_own[i] != 0) { unit_release_field(i); u_order[i] = ORD_NONE; peasant_to_manual(i); continue; }
         int nx = build_site_near(u_x[i], u_z[i]);
         if (nx >= 0) builder_assign(i, nx); else { unit_release_field(i); u_order[i] = ORD_NONE; peasant_to_manual(i); }
     }
@@ -1452,6 +1745,7 @@ static void build_complete(int s2) {
 /* PS_B_GO check, every frame: close enough to the footprint to work? */
 static void builder_go(int i, float dt) {
     int s2 = u_bsite[i];
+    if (u_own[i] != 0 && (s2 < 0 || s2 >= g_bs_n || g_bs_done[s2])) { unit_release_field(i); u_order[i] = ORD_NONE; peasant_to_manual(i); return; }
     if (s2 < 0 || s2 >= g_bs_n || g_bs_done[s2]) {
         int nx = build_site_near(u_x[i], u_z[i]);
         if (nx >= 0) builder_assign(i, nx); else { unit_release_field(i); u_order[i] = ORD_NONE; peasant_to_manual(i); }
@@ -1491,6 +1785,7 @@ static void builder_work(int i, float dt) {
     unit_face(i, gx - u_x[i], gz - u_z[i], dt);
     float nt = u_work_t[i] + dt;
     u_work_t[i] = nt;
+    if (g_bs_own[s2] != 0) return;          /* AI sites progress at their castle's build rate */
     float nw = g_bs_work[s2] + dt;
     g_bs_work[s2] = nw;
     if (nw >= g_bs_need[s2]) build_complete(s2);
@@ -1547,7 +1842,7 @@ static void place_check(int kind, float ax, float az, float bx, float bz) {
         float len = w_sqrt(ex * ex + ez * ez);
         if (len > 40.0f) { g_pl_x2 = g_pl_x + ex / len * 40.0f; g_pl_z2 = g_pl_z + ez / len * 40.0f; }
         if (len < 3.0f) { g_pl_why = "wall too short"; return; }
-    } else if (kind == ST_HOUSE || kind == ST_BARRACKS) {
+    } else if (kind == ST_HOUSE || kind == ST_BARRACKS || kind == ST_SMITH || kind == ST_WORKSHOP || kind == ST_STOCKPILE) {
         g_pl_yaw = approx_atan2_w(g_cam[2] - az, g_cam[0] - ax);   /* front toward the viewer */
     } else if (kind == ST_GATE) {
         float dx = hcx - ax, dz = hcz - az;
@@ -1638,27 +1933,30 @@ static void place_check(int kind, float ax, float az, float bx, float bz) {
     g_pl_valid = 1;
 }
 
-/* Starts construction of the checked placement with the selected
- * peasants. Returns 1, 0 (not valid / no peasants / full) or -1 (can't
+/* Creates a construction site for faction own from the g_pl_*
+ * geometry, paying for it. Returns the site, -1 (full) or -2 (can't
  * afford). */
-static int build_start(int kind) {
-    int i, n = 0;
-    if (!g_pl_valid || g_bs_n >= BS_MAX) return 0;
-    for (i = 0; i < g_un; i++) if (u_selected[i] && unit_alive(i) && u_team[i] == TEAM_PLAYER && u_class[i] == UC_PEASANT) n++;
-    if (n == 0) return 0;
+static int build_site_create(int own, int kind) {
+    int i;
+    if (g_bs_n >= BS_MAX) return -1;
     float ex = g_pl_x2 - g_pl_x, ez = g_pl_z2 - g_pl_z;
     float len = w_sqrt(ex * ex + ez * ez);
     int cost[3];
     struct_cost(kind, len, cost);
-    if (!can_afford(cost)) return -1;
+    if (!can_afford(own, cost)) return -2;
     int hb = -1;
+    g_add_own = own;
     if (kind == ST_HOUSE) hb = home_add_building(BT_HOUSE, g_pl_x, g_pl_z, g_pl_y, g_pl_yaw, PS_HOUSE_HX, PS_HOUSE_HZ, 0);
     else if (kind == ST_BARRACKS) hb = home_add_building(BT_BARRACKS, g_pl_x, g_pl_z, g_pl_y, g_pl_yaw, PS_BARR_HX, PS_BARR_HZ, 0);
+    else if (kind == ST_SMITH) hb = home_add_building(BT_SMITH, g_pl_x, g_pl_z, g_pl_y, g_pl_yaw, PS_SMITH_HX, PS_SMITH_HZ, 0);
+    else if (kind == ST_WORKSHOP) hb = home_add_building(BT_WORKSHOP, g_pl_x, g_pl_z, g_pl_y, g_pl_yaw, PS_WS_HX, PS_WS_HZ, 0);
+    else if (kind == ST_STOCKPILE) hb = home_add_building(BT_STOCKPILE, g_pl_x, g_pl_z, g_pl_y, g_pl_yaw, PS_SP_HX, PS_SP_HZ, 0);
     else if (kind == ST_DOCK) hb = home_add_dock(g_pl_x, g_pl_z, g_pl_y, g_pl_yaw, 0);
-    if ((kind == ST_HOUSE || kind == ST_BARRACKS || kind == ST_DOCK) && hb < 0) return 0;
-    pay(cost);
+    g_add_own = 0;
+    if ((kind == ST_HOUSE || kind == ST_BARRACKS || kind == ST_DOCK || kind == ST_SMITH || kind == ST_WORKSHOP || kind == ST_STOCKPILE) && hb < 0) return -1;
+    pay(own, cost);
     int s2 = g_bs_n;
-    g_bs_kind[s2] = kind; g_bs_done[s2] = 0; g_bs_hb[s2] = hb;
+    g_bs_kind[s2] = kind; g_bs_done[s2] = 0; g_bs_hb[s2] = hb; g_bs_own[s2] = own;
     g_bs_x[s2] = g_pl_x; g_bs_z[s2] = g_pl_z; g_bs_x2[s2] = g_pl_x2; g_bs_z2[s2] = g_pl_z2;
     g_bs_y[s2] = g_pl_y; g_bs_lo[s2] = g_pl_lo; g_bs_yaw[s2] = g_pl_yaw;
     g_bs_work[s2] = 0.0f; g_bs_need[s2] = struct_work(kind, len); g_bs_fade[s2] = 0.0f;
@@ -1678,13 +1976,28 @@ static int build_start(int kind) {
             if (touch) g_bs_y[k] = g_pl_y;
         }
     }
+    __android_log_print(4, "castles", "faction %d started building kind %d at %d,%d (cost %d wood %d stone; left %d/%d/%d)",
+                        own, kind, (int)g_pl_x, (int)g_pl_z, cost[0], cost[1], f_wood[own], f_stone[own], f_food[own]);
+    (void)i;
+    return s2;
+}
+
+/* Starts construction of the checked placement with the selected
+ * peasants. Returns 1, 0 (not valid / no peasants / full) or -1 (can't
+ * afford). */
+static int build_start(int kind) {
+    int i, n = 0;
+    if (!g_pl_valid) return 0;
+    for (i = 0; i < g_un; i++) if (u_selected[i] && unit_alive(i) && u_own[i] == 0 && u_class[i] == UC_PEASANT) n++;
+    if (n == 0) return 0;
+    int s2 = build_site_create(0, kind);
+    if (s2 == -2) return -1;
+    if (s2 < 0) return 0;
     for (i = 0; i < g_un; i++) {
-        if (!u_selected[i] || !unit_alive(i) || u_team[i] != TEAM_PLAYER || u_class[i] != UC_PEASANT) continue;
+        if (!u_selected[i] || !unit_alive(i) || u_own[i] != 0 || u_class[i] != UC_PEASANT) continue;
         builder_assign(i, s2);
     }
     dispatch_repaths();
-    __android_log_print(4, "castles", "construction started: kind %d at %d,%d by %d peasants (cost %d wood %d stone; left %d/%d/%d)",
-                        kind, (int)g_pl_x, (int)g_pl_z, n, cost[0], cost[1], g_wood, g_stone, g_food);
     return 1;
 }
 
@@ -1766,26 +2079,33 @@ static void peasant_update(int i, float dt) {
 static void barracks_update(float dt) {
     int b;
     for (b = 0; b < g_hb_n; b++) {
-        if ((g_hb_t[b] != BT_BARRACKS && g_hb_t[b] != BT_TOWNCENTER && g_hb_t[b] != BT_DOCK) || g_bq_n[b] == 0) continue;
+        if ((g_hb_t[b] != BT_BARRACKS && g_hb_t[b] != BT_TOWNCENTER && g_hb_t[b] != BT_DOCK && g_hb_t[b] != BT_WORKSHOP) || g_bq_n[b] == 0) continue;
         float nt = g_bq_t[b] + dt;
         g_bq_t[b] = nt;
-        int cls = g_bq_cls[b * BQ_MAX];
-        if (g_bq_t[b] < train_time(cls)) continue;
-        if (pop_count() >= pop_limit()) { g_bq_t[b] = train_time(cls); continue; }   /* wait for room */
+        int cls = g_bq_cls[b * BQ_MAX], own = g_hb_own[b];
+        float tt = bq_time(b);
+        if (g_bq_t[b] < tt) continue;
+        if (pop_count_of(own) >= pop_limit_of(own)) { g_bq_t[b] = tt; continue; }   /* wait for room */
         float x, z;
         building_door(b, 1.4f, &x, &z);
-        if (cls == UC_BOAT) { if (!snap_water(&x, &z)) { g_bq_t[b] = train_time(cls); continue; } }
-        else snap_walkable(&x, &z, g_hb_y[b]);
-        int u = unit_spawn(TEAM_PLAYER, x, z, 0, w_hash2(b, (int)(g_time * 10.0f), 9u), cls);
+        /* where the land isn't loaded (an AI castle far away) the unit
+         * simply appears at the door; it is placed properly once seen */
+        int here = nav_slot_for(w_ifloor(x / W_CHUNK_SIZE), w_ifloor(z / W_CHUNK_SIZE)) >= 0;
+        if (cls == UC_BOAT) { if (here && !snap_water(&x, &z)) { g_bq_t[b] = tt; continue; } }
+        else if (here) snap_walkable(&x, &z, g_hb_y[b]);
+        int u = unit_spawn(own == 0 ? TEAM_PLAYER : TEAM_ENEMY, x, z, 0, w_hash2(b, (int)(g_time * 10.0f), 9u), cls, own);
         if (u >= 0) {
             float fx, fz;
             building_door(b, 6.0f, &fx, &fz);
             u_yaw[u] = approx_atan2(fx - x, -(fz - z));
             if (cls == UC_PEASANT || cls == UC_BOAT) peasant_to_manual(u);
-            __android_log_print(4, "castles", "%s %d trained a %s at %d,%d (pop %d/%d)",
-                                g_hb_t[b] == BT_TOWNCENTER ? "town centre" : (g_hb_t[b] == BT_DOCK ? "dock" : "barracks"), b,
-                                cls == UC_SWORD ? "swordsman" : (cls == UC_BOW ? "archer" : (cls == UC_MACE ? "maceman" : (cls == UC_BOAT ? "fishing boat" : "peasant"))),
-                                (int)x, (int)z, pop_count(), pop_limit());
+            if (own > 0) ai_unit_trained(own, u);
+            if (own == 0)
+                __android_log_print(4, "castles", "%s %d trained a %s at %d,%d (pop %d/%d)",
+                                    g_hb_t[b] == BT_TOWNCENTER ? "town centre" : (g_hb_t[b] == BT_DOCK ? "dock" : (g_hb_t[b] == BT_WORKSHOP ? "workshop" : "barracks")), b,
+                                    cls == UC_SWORD ? "swordsman" : (cls == UC_BOW ? "archer" : (cls == UC_MACE ? "maceman" : (cls == UC_BOAT ? "fishing boat" :
+                                    (cls == UC_CATAPULT ? "catapult" : (cls == UC_RAM ? "ram" : (cls == UC_TREB ? "trebuchet" : "peasant")))))),
+                                    (int)x, (int)z, pop_count(), pop_limit());
         }
         int k;
         for (k = 1; k < g_bq_n[b]; k++) g_bq_cls[b * BQ_MAX + k - 1] = g_bq_cls[b * BQ_MAX + k];
@@ -1806,7 +2126,7 @@ static int unit_find_enemy(int i, float range, float maxDy) {
     int j, best = -1;
     float bd = range * range;
     for (j = 0; j < g_un; j++) {
-        if (!unit_alive(j) || u_team[j] == u_team[i] || u_class[j] == UC_BOAT) continue;
+        if (!u_ld[j] || !unit_alive(j) || u_team[j] == u_team[i] || u_class[j] == UC_BOAT) continue;
         float dx = u_x[j] - u_x[i], dz = u_z[j] - u_z[i], dy = u_y[j] - u_y[i];
         if (w_absf(dy) > maxDy) continue;
         float d = dx * dx + dz * dz;
@@ -1900,7 +2220,7 @@ static void unit_follow_field(int i, float dt) {
     if (u_order[i] == ORD_ATTACK && unit_alive(u_target[i])) {
         int t = u_target[i];
         float ax = u_x[t] - u_x[i], az = u_z[t] - u_z[i];
-        float r = ARCHER_RANGE * 0.8f;
+        float r = unit_range(i) * 0.8f;
         if (u_archer[i] && ax * ax + az * az < r * r && w_absf(u_y[t] - u_y[i]) < 14.0f) {
             unit_release_field(i); u_state[i] = US_SHOOT; u_swing[i] = 0.0f;
             return;
@@ -1940,7 +2260,9 @@ static void unit_damage(int t, int amount) {
 /* ------------------------------------------------------------------ */
 /* Bows and arrows (physics in castles_ballistics.h)                   */
 /* ------------------------------------------------------------------ */
-static int a_team[MAXP], a_flying[MAXP];
+static int a_team[MAXP], a_flying[MAXP], a_dmg[MAXP];
+static int a_kind[MAXP];     /* 0 arrow, 1 catapult stone, 2 trebuchet stone */
+static int a_sdmg[MAXP];     /* stones: damage to structures */
 static float a_life[MAXP];                      /* seconds since release   */
 static float a_dx[MAXP], a_dy[MAXP], a_dz[MAXP];/* orientation (unit)      */
 static float g_bal_acc;                          /* fixed-step accumulator  */
@@ -1958,7 +2280,7 @@ static void archer_release_point(int i, float *out) {
 
 static void archer_aim_point(int t, float lead, float *out) {
     out[0] = u_x[t] + u_vx[t] * lead;
-    out[1] = u_y[t] + 1.15f * u_scale[t];
+    out[1] = u_class[t] == UC_DRAGON ? u_y[t] : u_y[t] + 1.15f * u_scale[t];
     out[2] = u_z[t] + u_vz[t] * lead;
 }
 
@@ -2048,6 +2370,8 @@ static void arrow_fire(int i, int t) {
     p_active[a] = 1;
     a_flying[a] = 1;
     a_team[a] = u_team[i];
+    a_kind[a] = 0;
+    a_dmg[a] = 1 + (int)u_dmgb[i];
     a_life[a] = 0.0f;
     float fm = w_sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
     a_dx[a] = f[0] / fm; a_dy[a] = f[1] / fm; a_dz[a] = f[2] / fm;
@@ -2063,6 +2387,7 @@ static void arrow_stick(int a, float y) {
 /* Advances every flying arrow in fixed BAL_DT steps and resolves hits:
  * enemy units (body cylinder), wall-walk tops and wall faces, ground,
  * blocked cells (trees, houses, towers), and water. */
+static void siege_impact(int a, float x, float y, float z);
 static void arrows_update(float dt) {
     int k, j;
     for (k = 0; k < MAXP; k++) {
@@ -2085,15 +2410,21 @@ static void arrows_update(float dt) {
             float sp = w_sqrt(vx * vx + vy * vy + vz * vz);
             if (sp > 0.01f) { a_dx[k] = vx / sp; a_dy[k] = vy / sp; a_dz[k] = vz / sp; }
             float px = p_x[k], py = p_y[k], pz = p_z[k];
-            if (nl > 6.0f) { p_active[k] = 0; continue; }
+            if (nl > (a_kind[k] ? 12.0f : 6.0f)) { p_active[k] = 0; continue; }
             /* Units of the other team. */
             int hit = 0;
+            float hr = a_kind[k] ? 0.9f : 0.42f;
             for (j = 0; j < g_un && !hit; j++) {
                 if (!unit_alive(j) || u_team[j] == a_team[k]) continue;
                 float dx = px - u_x[j], dz = pz - u_z[j];
-                if (dx * dx + dz * dz > 0.42f * 0.42f) continue;
+                if (u_class[j] == UC_DRAGON) {           /* a big target, centred on its body */
+                    if (dx * dx + dz * dz > 2.4f * 2.4f || py < u_y[j] - 1.4f || py > u_y[j] + 1.6f) continue;
+                } else {
+                if (dx * dx + dz * dz > hr * hr) continue;
                 if (py < u_y[j] + 0.1f || py > u_y[j] + 1.9f * u_scale[j]) continue;
-                unit_damage(j, 1);
+                }
+                if (a_kind[k]) siege_impact(k, px, py, pz);
+                else unit_damage(j, a_dmg[k]);
                 g_arrows_hit = g_arrows_hit + 1;
                 p_active[k] = 0;
                 hit = 1;
@@ -2101,6 +2432,7 @@ static void arrows_update(float dt) {
             if (hit) continue;
             float sy;
             int wh = arrow_world_hit(px, py, pz, &sy);
+            if (wh && a_kind[k]) siege_impact(k, px, py, pz);          /* a stone smashes where it lands */
             if (wh == 1) arrow_stick(k, sy);
             else if (wh == 2) p_active[k] = 0;
         }
@@ -2108,17 +2440,29 @@ static void arrows_update(float dt) {
     g_bal_acc = acc;
 }
 
+#include "android/examples/castles_siege.h"
+#include "android/examples/castles_dragons.h"
+#include "android/examples/castles_ai.h"
+
 static void units_update(float dt) {
     int i, j;
-    for (i = 0; i < g_un; i++) u_moved[i] = 0.0f;
+    for (i = 0; i < g_un; i++) { u_moved[i] = 0.0f; u_ld[i] = u_active[i] && unit_loaded(i); }
     peasants_field_update(dt);
     peasants_spawn(dt);
     barracks_update(dt);
+    research_update(dt);
     gather_jobs_update(dt);
+    ai_update(dt);
     for (i = 0; i < g_bs_n; i++) if (g_bs_fade[i] > 0.0f) { float nf = g_bs_fade[i] - dt; g_bs_fade[i] = nf; }
+    dragons_respawn(dt);
     for (i = 0; i < g_un; i++) {
         if (!u_active[i]) continue;
-        if (!unit_loaded(i)) continue;
+        if (u_class[i] == UC_DRAGON) { dragon_update(i, dt); continue; }      /* flies on or off screen */
+        if (!u_ld[i]) {
+            /* off screen: frozen, except attack waves on the march */
+            if (u_amove[i] && u_state[i] != US_DEAD && u_state[i] != US_CLIMB) ai_travel(i, dt);
+            continue;
+        }
         if (u_hit[i] > 0.0f) { float nh = u_hit[i] - dt; u_hit[i] = nh; }
         if (u_state[i] == US_DEAD) {
             float nd = u_dead[i] + dt;
@@ -2144,6 +2488,8 @@ static void units_update(float dt) {
             u_phase[i] = np;
             continue;
         }
+        if (is_siege(i)) { siege_update(i, dt); continue; }
+        if (u_class[i] == UC_PEASANT && (u_pstate[i] == PS_T_GO || u_pstate[i] == PS_T_WORK)) { peasant_tame_update(i, dt); continue; }
         if (u_class[i] == UC_PEASANT || u_class[i] == UC_BOAT) {
             /* townsfolk and boats never fight: under orders they move
              * like soldiers, otherwise they follow their routine / job */
@@ -2161,11 +2507,24 @@ static void units_update(float dt) {
             u_target[i] = -1;
             if (u_order[i] == ORD_ATTACK) { u_order[i] = ORD_NONE; unit_release_field(i); u_state[i] = US_IDLE; }
         }
-        int busy = (u_order[i] == ORD_MOVE) && (u_state[i] == US_MOVE || u_state[i] == US_WAIT);
+        if (u_amove[i]) {
+            /* attack-move: a unit that marched in from off screen needs
+             * a field; after a fight (or giving up a chase) it marches on */
+            if (u_state[i] == US_MOVE && u_field[i] < 0 && !u_repath[i]) { u_repath[i] = 1; u_state[i] = US_WAIT; }
+            if (u_target[i] < 0 && u_state[i] == US_IDLE) {
+                float gdx = u_gx[i] - u_x[i], gdz = u_gz[i] - u_z[i];
+                if (gdx * gdx + gdz * gdz > 6.0f * 6.0f) { u_order[i] = ORD_MOVE; u_repath[i] = 1; u_state[i] = US_WAIT; }
+            }
+        }
+        int busy = (u_order[i] == ORD_MOVE) && (u_state[i] == US_MOVE || u_state[i] == US_WAIT) && !u_amove[i];
         if (u_target[i] < 0 && !busy) {
-            float range = u_archer[i] ? ARCHER_RANGE - 2.0f : (u_team[i] == TEAM_ENEMY ? 9.0f : 6.0f);
+            float range = u_archer[i] ? unit_range(i) - 2.0f : (u_team[i] == TEAM_ENEMY ? 9.0f : 6.0f);
             int e = unit_find_enemy(i, range, u_archer[i] ? 14.0f : 2.5f);
-            if (e >= 0) { u_target[i] = e; u_stuck[i] = 0.0f; if (u_state[i] == US_IDLE) u_state[i] = US_CHASE; }
+            if (e >= 0) {
+                u_target[i] = e; u_stuck[i] = 0.0f;
+                if (u_state[i] == US_IDLE) u_state[i] = US_CHASE;
+                else if (u_amove[i] && (u_state[i] == US_MOVE || u_state[i] == US_WAIT)) { unit_release_field(i); u_repath[i] = 0; u_state[i] = US_CHASE; }
+            }
         }
         int t = u_target[i];
         int shooting = 0;
@@ -2178,7 +2537,7 @@ static void units_update(float dt) {
             float ad = w_sqrt(ax * ax + az * az);
             int pointBlank = ad < 1.6f && w_absf(ay) < 1.2f;
             if (u_state[i] == US_SHOOT && u_swing[i] > 0.0f && u_swing[i] < 0.62f) shooting = 1;
-            else if (!pointBlank && ad <= ARCHER_RANGE && w_absf(ay) < 14.0f) shooting = 1;
+            else if (!pointBlank && ad <= unit_range(i) && w_absf(ay) < 14.0f) shooting = 1;
             if (shooting) {
                 if (u_state[i] != US_SHOOT) { u_state[i] = US_SHOOT; u_swing[i] = 0.0f; }
                 unit_face(i, ax, az, dt);
@@ -2221,7 +2580,7 @@ static void units_update(float dt) {
             u_swing[i] = ns;
             if (prev < 0.5f && ns >= 0.5f && unit_alive(t)) {
                 float dx = u_x[t] - u_x[i], dz = u_z[t] - u_z[i];
-                if (dx * dx + dz * dz < 2.0f * 2.0f && w_absf(u_y[t] - u_y[i]) < 1.3f) unit_damage(t, 1);
+                if (dx * dx + dz * dz < 2.0f * 2.0f && w_absf(u_y[t] - u_y[i]) < 1.3f) unit_damage(t, 1 + (int)u_dmgb[i]);
             }
             if (ns >= 1.0f) {
                 u_swing[i] = 0.0f;
@@ -2256,12 +2615,12 @@ static void units_update(float dt) {
 
     /* Separation: keep units from overlapping (same level only). */
     for (i = 0; i < g_un; i++) {
-        if (!unit_alive(i) || u_state[i] == US_CLIMB || !unit_loaded(i)) continue;
+        if (!u_ld[i] || !unit_alive(i) || u_state[i] == US_CLIMB || u_class[i] == UC_DRAGON) continue;
         int bi = u_class[i] == UC_BOAT;
         for (j = i + 1; j < g_un; j++) {
-            if (!unit_alive(j) || u_state[j] == US_CLIMB) continue;
+            if (!u_ld[j] || !unit_alive(j) || u_state[j] == US_CLIMB || u_class[j] == UC_DRAGON) continue;
             if ((u_class[j] == UC_BOAT) != bi) continue;            /* boats only jostle boats */
-            float sep = bi ? 1.7f : 0.8f;
+            float sep = bi ? 1.7f : ((is_siege(i) || is_siege(j)) ? 1.4f : 0.8f);
             float dx = u_x[j] - u_x[i], dz = u_z[j] - u_z[i];
             if (w_absf(dx) > sep || w_absf(dz) > sep || w_absf(u_y[j] - u_y[i]) > 1.0f) continue;
             float d2 = dx * dx + dz * dz;
@@ -2277,7 +2636,7 @@ static void units_update(float dt) {
 
     /* Heights + animation phase. */
     for (i = 0; i < g_un; i++) {
-        if (!u_active[i] || u_state[i] == US_CLIMB || !unit_loaded(i)) continue;
+        if (!u_ld[i] || u_state[i] == US_CLIMB || u_class[i] == UC_DRAGON) continue;
         float ty = nav_surface(u_layer[i], u_x[i], u_z[i]);
         if (u_class[i] == UC_BOAT) ty = W_SEA_LEVEL + 0.05f * w_sin(g_time * 1.7f + u_seed[i]);
         if (u_state[i] == US_DEAD && u_dead[i] > 6.0f) { float sink = (u_dead[i] - 6.0f) * 0.4f; float tsy = ty - sink; ty = tsy; }
@@ -2468,6 +2827,17 @@ static void arrows_emit(void) {
         if (!p_active[k]) continue;
         float dx = p_x[k] - g_cam[0], dz = p_z[k] - g_cam[2];
         if (dx * dx + dz * dz > 140.0f * 140.0f) continue;
+        if (a_kind[k]) {                 /* a stone, tumbling */
+            float sz = a_kind[k] == 2 ? 0.42f : 0.3f, M[12];
+            float sp = a_life[k] * 5.0f;
+            M[0] = w_cos(sp); M[1] = w_sin(sp); M[2] = 0.0f;
+            M[3] = -w_sin(sp); M[4] = w_cos(sp); M[5] = 0.0f;
+            M[6] = 0.0f; M[7] = 0.0f; M[8] = 1.0f;
+            M[9] = p_x[k]; M[10] = p_y[k]; M[11] = p_z[k];
+            u_color(0.52f, 0.51f, 0.49f);
+            u_box(M, 0.0f, 0.0f, 0.0f, sz, sz * 0.85f, sz * 0.9f);
+            continue;
+        }
         u_set3(tip, p_x[k], p_y[k], p_z[k]);
         u_set3(tail, p_x[k] - a_dx[k] * 0.78f, p_y[k] - a_dy[k] * 0.78f, p_z[k] - a_dz[k] * 0.78f);
         u_set3(head, p_x[k] - a_dx[k] * 0.09f, p_y[k] - a_dy[k] * 0.09f, p_z[k] - a_dz[k] * 0.09f);
@@ -2602,8 +2972,13 @@ static void boat_emit(int i, int lod) {
     }
 }
 
-/* One humanoid (or boat), procedurally animated from its state. */
+#include "android/examples/castles_siege_draw.h"
+#include "android/examples/castles_dragons_draw.h"
+
+/* One humanoid (or boat, or siege engine), procedurally animated from its state. */
 static void unit_emit(int i, int lod) {
+    if (u_class[i] == UC_DRAGON) { dragon_emit(i, lod); return; }
+    if (is_siege(i)) { if (u_state[i] != US_DEAD) siege_emit(i, lod); return; }
     if (u_class[i] == UC_BOAT) { if (u_state[i] != US_DEAD) boat_emit(i, lod); return; }
     float s = u_scale[i], g = u_girth[i];
     float t = g_time + u_seed[i];
@@ -2626,7 +3001,7 @@ static void unit_emit(int i, int lod) {
         elbL = -0.35f; elbR = -0.35f;
         bob = w_absf(cp) * 0.05f * s;
         lean = 0.10f;
-    } else if (u_class[i] == UC_PEASANT && (u_pstate[i] == PS_G_WORK || u_pstate[i] == PS_B_WORK)) {
+    } else if (u_class[i] == UC_PEASANT && (u_pstate[i] == PS_G_WORK || u_pstate[i] == PS_B_WORK || u_pstate[i] == PS_T_WORK)) {
         /* chop / quarry / hammer: two-handed overhead swing */
         float cyc = u_work_t[i] / (u_pstate[i] == PS_B_WORK ? 0.7f : 1.1f);
         float tt = cyc - (float)w_ifloor(cyc);
@@ -2926,7 +3301,7 @@ static void site_emit_one(int kind, float p, int ghost, int ok) {
         if (ok) { wood[0] = 0.30f; wood[1] = 0.95f; wood[2] = 0.40f; } else { wood[0] = 1.0f; wood[1] = 0.25f; wood[2] = 0.2f; }
         stone[0] = wood[0]; stone[1] = wood[1]; stone[2] = wood[2];
     }
-    float H = kind == ST_HOUSE ? 3.4f : (kind == ST_BARRACKS ? 3.7f : (kind == ST_DOCK ? 2.0f : PS_WALL_H + 0.8f));
+    float H = kind == ST_HOUSE ? 3.4f : (kind == ST_BARRACKS ? 3.7f : (kind == ST_SMITH ? 3.0f : (kind == ST_WORKSHOP ? 3.6f : (kind == ST_STOCKPILE ? 1.6f : (kind == ST_DOCK ? 2.0f : PS_WALL_H + 0.8f)))));
     float hb = y + 0.05f;
     if (kind == ST_WALL) {
         float ex = x2 - x, ez = z2 - z;
@@ -2978,14 +3353,16 @@ static void site_emit_one(int kind, float p, int ghost, int ok) {
     } else {
         /* foundations, then walls rising with progress */
         u_color(0.50f, 0.48f, 0.44f);
-        float fx0 = r[0], fx1 = r[2], fz0 = r[1], fz1 = kind == ST_BARRACKS ? PS_BARR_HZ : r[3];
+        float fx0 = r[0], fx1 = r[2], fz0 = r[1], fz1 = kind == ST_BARRACKS ? PS_BARR_HZ : (kind == ST_SMITH ? PS_SMITH_HZ : (kind == ST_WORKSHOP ? PS_WS_HZ : (kind == ST_STOCKPILE ? PS_SP_HZ : r[3])));
         if (kind == ST_DOCK) { fx0 = 0.9f; fx1 = 2.9f; fz0 = -2.4f; fz1 = -0.4f; }
         if (kind == ST_GATE) { fx0 = -(PS_GATE_HALF + 2.0f * PS_GATE_TR); fx1 = -PS_GATE_HALF; }
         float fh = (hb - (lo - 0.6f)) * 0.5f;
         u_box(M, (fx0 + fx1) * 0.5f, lo - 0.6f + fh, (fz0 + fz1) * 0.5f, (fx1 - fx0) * 0.5f + 0.15f, fh, (fz1 - fz0) * 0.5f + 0.15f);
         if (kind == ST_GATE) u_box(M, (PS_GATE_HALF + PS_GATE_HALF + 2.0f * PS_GATE_TR) * 0.5f, lo - 0.6f + fh, 0.0f, PS_GATE_TR + 0.15f, fh, (fz1 - fz0) * 0.5f + 0.15f);
         float wh = H * p;
-        if (kind == ST_HOUSE) u_color(0.86f, 0.80f, 0.66f); else if (kind == ST_DOCK) u_color3(wood); else u_color3(stone);
+        if (kind == ST_HOUSE) u_color(0.86f, 0.80f, 0.66f); else if (kind == ST_DOCK) u_color3(wood);
+        else if (kind == ST_SMITH) u_color(0.46f, 0.43f, 0.40f);
+        else if (kind == ST_WORKSHOP) u_color3(wood); else u_color3(stone);
         if (wh > 0.02f) {
             if (kind == ST_GATE) {
                 u_box(M, fx0 + PS_GATE_TR, hb + wh * 0.5f, 0.0f, PS_GATE_TR * 0.9f, wh * 0.5f, PS_GATE_TR * 0.9f);
@@ -3050,7 +3427,7 @@ static int units_build_mesh(void) {
     g_un_verts = 0;
     float fx = w_sin(g_yaw), fz = -w_cos(g_yaw);
     for (i = 0; i < g_un; i++) {
-        if (!u_active[i] || !unit_loaded(i)) continue;
+        if (!u_active[i] || (!unit_loaded(i) && u_class[i] != UC_DRAGON)) continue;
         float dx = u_x[i] - g_cam[0], dz = u_z[i] - g_cam[2];
         float d2 = dx * dx + dz * dz;
         if (d2 > 150.0f * 150.0f) continue;
@@ -3073,7 +3450,7 @@ static int units_build_mesh(void) {
     }
     for (i = 0; i < g_hb_n; i++) {
         if (g_bq_n[i] == 0) continue;
-        float frac = w_clampf(g_bq_t[i] / train_time(g_bq_cls[i * BQ_MAX]), 0.0f, 1.0f);
+        float frac = w_clampf(g_bq_t[i] / bq_time(i), 0.0f, 1.0f);
         float top = g_hb_y[i] + (g_hb_t[i] == BT_TOWNCENTER ? 10.0f : 6.0f);
         u_color(0.12f, 0.12f, 0.12f);
         u_bar(g_hb_x[i], top, g_hb_z[i], 1.6f, 0.25f);
@@ -3082,8 +3459,22 @@ static int units_build_mesh(void) {
         float w2 = 1.55f * frac;
         u_bar(g_hb_x[i] - rx * (1.55f - w2), top + 0.03f, g_hb_z[i] - rz * (1.55f - w2), w2, 0.19f);
     }
+    for (i = 0; i < g_hb_n; i++) {
+        if (!g_rs_tech[i]) continue;
+        float dxr = g_hb_x[i] - g_cam[0], dzr = g_hb_z[i] - g_cam[2];
+        if (dxr * dxr + dzr * dzr > 170.0f * 170.0f) continue;
+        float frac = w_clampf(g_rs_t[i] / tech_time(g_rs_tech[i] - 1), 0.0f, 1.0f);
+        float top = g_hb_y[i] + (g_hb_t[i] == BT_TOWNCENTER ? 11.0f : 7.0f);
+        u_color(0.12f, 0.12f, 0.12f);
+        u_bar(g_hb_x[i], top, g_hb_z[i], 1.6f, 0.25f);
+        u_color(0.75f, 0.45f, 1.0f);
+        float rx = w_cos(g_yaw), rz = w_sin(g_yaw);
+        float w2 = 1.55f * frac;
+        u_bar(g_hb_x[i] - rx * (1.55f - w2), top + 0.03f, g_hb_z[i] - rz * (1.55f - w2), w2, 0.19f);
+    }
     shoals_emit();
     sites_emit();
+    structure_bars_emit();
     if (g_order_marker_on) {
         float k = g_order_mt / 2.5f;
         u_color(1.0f, 0.9f, 0.25f);
@@ -3114,11 +3505,13 @@ static int pick_unit(float sx, float sy) {
     int i, best = -1;
     float bestScore = 1e30f;
     for (i = 0; i < g_un; i++) {
-        if (!unit_alive(i) || !unit_loaded(i)) continue;
+        if (!unit_alive(i) || (!unit_loaded(i) && u_class[i] != UC_DRAGON)) continue;
         float px, py;
-        if (!project_point(u_x[i], u_y[i] + 1.0f, u_z[i], &px, &py)) continue;
+        int dg = u_class[i] == UC_DRAGON;
+        if (!project_point(u_x[i], u_y[i] + (dg ? 0.0f : 1.0f), u_z[i], &px, &py)) continue;
         float dx = px - sx, dy = py - sy;
         float d2 = dx * dx + dy * dy;
+        if (dg) { float nd = d2 * 0.3f; d2 = nd; }             /* big: easier to tap */
         if (d2 > 60.0f * 60.0f) continue;
         if (d2 < bestScore) { bestScore = d2; best = i; }
     }
@@ -3199,7 +3592,7 @@ static int pick_building(float sx, float sy, int strict) {
     int b, k, best = -1;
     float bestD = 1e30f;
     for (b = 0; b < g_hb_n; b++) {
-        if (g_hb_t[b] == BT_STALL || !g_hb_done[b]) continue;
+        if (g_hb_t[b] == BT_STALL || !g_hb_done[b] || g_hb_own[b] != 0) continue;
         float c = w_cos(g_hb_yaw[b] - 0.5f * W_PI), sn = w_sin(g_hb_yaw[b] - 0.5f * W_PI);   /* mesh frame */
         int nsl = g_hb_t[b] == BT_TOWNCENTER ? 6 : 4;
         for (k = 0; k < nsl; k++) {
@@ -3215,7 +3608,7 @@ static int pick_building(float sx, float sy, int strict) {
     }
     if (best >= 0) return best;
     for (b = 0; b < g_hb_n; b++) {
-        if (g_hb_t[b] == BT_STALL || !g_hb_done[b]) continue;
+        if (g_hb_t[b] == BT_STALL || !g_hb_done[b] || g_hb_own[b] != 0) continue;
         float px, py;
         float hgt = g_hb_t[b] == BT_TOWNCENTER ? 5.0f : 2.0f;
         if (!project_point(g_hb_x[b], g_hb_y[b] + hgt, g_hb_z[b], &px, &py)) continue;

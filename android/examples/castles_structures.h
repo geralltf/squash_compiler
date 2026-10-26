@@ -28,7 +28,10 @@
 #define ST_WALL      4
 #define ST_TOWER     5
 #define ST_GATE      6
-#define ST_KINDS     6
+#define ST_SMITH     7        /* blacksmith: where weapon and armour advancements are researched */
+#define ST_WORKSHOP  8        /* siege workshop: catapults, rams, trebuchets */
+#define ST_STOCKPILE 9        /* stockpile: a drop-off for wood and stone near where it's gathered */
+#define ST_KINDS     9
 
 #define PS_WALL_T    1.8f     /* player wall thickness                    */
 #define PS_WALL_H    4.5f     /* wall-walk height above the wall's base   */
@@ -39,6 +42,12 @@
 #define PS_HOUSE_HZ  2.0f
 #define PS_BARR_HX   4.6f
 #define PS_BARR_HZ   2.8f
+#define PS_SMITH_HX  3.0f
+#define PS_SMITH_HZ  2.4f
+#define PS_WS_HX     4.0f
+#define PS_WS_HZ     3.2f
+#define PS_SP_HX     1.9f
+#define PS_SP_HZ     1.4f
 #define DOCK_PIER    5.0f     /* pier length from the shore anchor        */
 
 #define MAXPS 256
@@ -46,6 +55,8 @@ static int g_nps;
 static int g_ps_kind[MAXPS];
 static float g_ps_x[MAXPS], g_ps_z[MAXPS], g_ps_x2[MAXPS], g_ps_z2[MAXPS];
 static float g_ps_y[MAXPS], g_ps_lo[MAXPS], g_ps_yaw[MAXPS];
+static int g_ps_team[MAXPS];          /* 0 the player (blue banners), 1 an AI castle (red) */
+static int g_ps_dead[MAXPS];          /* knocked down by siege: rubble */
 
 /* World docks found in the chunk being generated (for the game layer). */
 #define DOCK_OUT_MAX 8
@@ -56,6 +67,9 @@ static float g_out_dock_x[DOCK_OUT_MAX], g_out_dock_z[DOCK_OUT_MAX], g_out_dock_
 static void st_bounds(int kind, float x, float z, float x2, float z2, float *b) {
     float r = 3.6f;
     if (kind == ST_BARRACKS) r = 8.5f;
+    else if (kind == ST_SMITH) r = 5.6f;
+    else if (kind == ST_WORKSHOP) r = 7.0f;
+    else if (kind == ST_STOCKPILE) r = 3.0f;
     else if (kind == ST_DOCK) r = DOCK_PIER + 3.5f;
     else if (kind == ST_TOWER) r = PS_TOWER_R + 0.6f;
     else if (kind == ST_GATE) r = PS_GATE_HALF + 2.0f * PS_GATE_TR + 0.8f;
@@ -304,30 +318,184 @@ static void w_ps_gate(int p) {
     m_color(0.42f, 0.27f, 0.13f);           /* doors swung open against the towers */
     m_xbox(-PS_GATE_HALF - 0.05f, base - 0.1f, -t * 0.5f, -PS_GATE_HALF + 0.3f, base + 3.1f, t * 0.5f);
     m_xbox(PS_GATE_HALF - 0.3f, base - 0.1f, -t * 0.5f, PS_GATE_HALF + 0.05f, base + 3.1f, t * 0.5f);
-    m_color(0.16f, 0.36f, 0.86f);
+    if (g_ps_team[p]) m_color(0.80f, 0.16f, 0.14f); else m_color(0.16f, 0.36f, 0.86f);
     m_xbox(-0.5f, base + 3.4f, t * 0.5f + 0.02f, 0.5f, top - 0.4f, t * 0.5f + 0.09f);
     m_xbox(-0.5f, base + 3.4f, -t * 0.5f - 0.09f, 0.5f, top - 0.4f, -t * 0.5f - 0.02f);
 }
 
-/* Building (house / barracks) through the castle-site mesh code, using
- * the spare g_cb_* entry; its ground is blocked like a site building's. */
+/* Blacksmith: low stone forge under a slate gable, a tall chimney, the
+ * open hearth glowing at the front under a lean-to, anvil on a stump,
+ * a rack of finished blades. */
+static void w_smith_any(int q, float y) {
+    float hx = g_cb_hx[q], hz = g_cb_hz[q];
+    m_xform(g_cb_x[q], g_cb_z[q], g_cb_yaw[q] - 0.5f * W_PI);
+    m_color(0.46f, 0.43f, 0.40f);
+    m_xbox(-hx, y - 0.4f, -hz, hx, y + 2.6f, hz);
+    m_color(0.36f, 0.34f, 0.32f);
+    m_xbox(-hx - 0.08f, y - 0.4f, -hz - 0.08f, hx + 0.08f, y + 0.5f, hz + 0.08f);
+    m_color(0.27f, 0.28f, 0.32f);
+    m_xgable(hx + 0.25f, hz + 0.25f, y + 2.6f, y + 4.1f);
+    /* chimney */
+    m_color(0.50f, 0.46f, 0.42f);
+    m_xbox(hx - 1.3f, y + 1.5f, -hz + 0.3f, hx - 0.4f, y + 5.4f, -hz + 1.2f);
+    m_color(0.20f, 0.19f, 0.19f);
+    m_xbox(hx - 1.4f, y + 5.4f, -hz + 0.2f, hx - 0.3f, y + 5.6f, -hz + 1.3f);
+    /* hearth glow in the open front */
+    m_color(0.12f, 0.10f, 0.09f);
+    m_xbox(-1.3f, y, hz - 0.05f, 1.3f, y + 1.9f, hz + 0.02f);
+    m_color(1.0f, 0.48f, 0.12f);
+    m_xbox(-0.9f, y + 0.25f, hz, -0.1f, y + 1.0f, hz + 0.06f);
+    m_color(1.0f, 0.78f, 0.30f);
+    m_xbox(-0.75f, y + 0.35f, hz + 0.02f, -0.25f, y + 0.7f, hz + 0.08f);
+    /* lean-to over the work area */
+    m_color(0.36f, 0.25f, 0.15f);
+    m_xbox(-hx + 0.2f, y - 0.1f, hz + 2.0f, -hx + 0.4f, y + 2.0f, hz + 2.2f);
+    m_xbox(hx - 0.4f, y - 0.1f, hz + 2.0f, hx - 0.2f, y + 2.0f, hz + 2.2f);
+    m_color(0.42f, 0.30f, 0.18f);
+    m_xbox(-hx + 0.1f, y + 2.0f, hz, hx - 0.1f, y + 2.15f, hz + 2.3f);
+    /* anvil on a stump, quench barrel, rack of blades */
+    m_color(0.40f, 0.28f, 0.16f);
+    m_xbox(0.5f, y - 0.1f, hz + 0.8f, 1.1f, y + 0.6f, hz + 1.4f);
+    m_color(0.20f, 0.20f, 0.22f);
+    m_xbox(0.35f, y + 0.6f, hz + 0.95f, 1.25f, y + 0.85f, hz + 1.25f);
+    m_color(0.34f, 0.24f, 0.14f);
+    m_xbox(1.6f, y - 0.1f, hz + 0.6f, 2.2f, y + 0.8f, hz + 1.2f);
+    m_color(0.30f, 0.42f, 0.55f);
+    m_xbox(1.65f, y + 0.8f, hz + 0.65f, 2.15f, y + 0.82f, hz + 1.15f);
+    m_color(0.36f, 0.25f, 0.15f);
+    m_xbox(-hx + 0.3f, y + 1.3f, hz + 0.1f, -hx + 1.7f, y + 1.4f, hz + 0.2f);
+    m_color(0.80f, 0.82f, 0.86f);
+    int k;
+    for (k = 0; k < 4; k++) {
+        float bx = -hx + 0.45f + 0.35f * (float)k;
+        m_xbox(bx, y + 0.1f, hz + 0.12f, bx + 0.06f, y + 1.3f, hz + 0.17f);
+    }
+}
+
+/* Siege workshop: an open timber shed on posts (the work happens in
+ * the open), a catapult half built inside, stacked logs, a stone pile
+ * and a sawhorse out front. */
+static void w_workshop_any(int q, float y) {
+    float hx = g_cb_hx[q], hz = g_cb_hz[q];
+    int k;
+    m_xform(g_cb_x[q], g_cb_z[q], g_cb_yaw[q] - 0.5f * W_PI);
+    m_color(0.50f, 0.48f, 0.44f);
+    m_xbox(-hx, y - 0.4f, -hz, hx, y + 0.15f, hz);                    /* stone floor */
+    m_color(0.40f, 0.28f, 0.16f);
+    for (k = 0; k < 4; k++) {
+        float px = (k & 1) ? hx - 0.25f : -hx + 0.05f, pz = (k & 2) ? hz - 0.25f : -hz + 0.05f;
+        m_xbox(px, y, pz, px + 0.2f, y + 3.4f, pz + 0.2f);
+    }
+    m_xbox(-hx, y, -hz, hx, y + 1.2f, -hz + 0.2f);                     /* back wall, low */
+    m_color(0.52f, 0.36f, 0.20f);
+    m_xbox(-hx - 0.2f, y + 3.4f, -hz - 0.2f, hx + 0.2f, y + 3.6f, hz + 0.2f);
+    m_xgable(hx + 0.3f, hz + 0.3f, y + 3.6f, y + 5.0f);
+    /* catapult frame being built */
+    m_color(0.55f, 0.40f, 0.22f);
+    m_xbox(-1.6f, y + 0.4f, -0.9f, 1.6f, y + 0.6f, -0.7f);
+    m_xbox(-1.6f, y + 0.4f, 0.7f, 1.6f, y + 0.6f, 0.9f);
+    m_xbox(-0.2f, y + 0.6f, -0.9f, 0.0f, y + 2.0f, -0.7f);
+    m_xbox(-0.2f, y + 0.6f, 0.7f, 0.0f, y + 2.0f, 0.9f);
+    m_xbox(-0.3f, y + 1.8f, -0.9f, 0.1f, y + 2.1f, 0.9f);
+    m_color(0.25f, 0.20f, 0.15f);
+    m_xbox(-1.5f, y + 0.0f, -1.05f, -0.9f, y + 0.6f, -0.95f);
+    m_xbox(0.9f, y + 0.0f, -1.05f, 1.5f, y + 0.6f, -0.95f);
+    /* logs, stones, sawhorse */
+    m_color(0.46f, 0.32f, 0.18f);
+    for (k = 0; k < 3; k++) m_xbox(-hx + 0.5f, y + 0.15f + 0.3f * (float)k, hz + 0.4f + 0.05f * (float)k, -hx + 3.0f, y + 0.42f + 0.3f * (float)k, hz + 0.68f + 0.05f * (float)k);
+    m_color(0.58f, 0.57f, 0.55f);
+    m_xbox(hx - 1.8f, y, hz + 0.3f, hx - 0.6f, y + 0.6f, hz + 1.3f);
+    m_xbox(hx - 1.5f, y + 0.6f, hz + 0.5f, hx - 0.9f, y + 1.0f, hz + 1.0f);
+    m_color(0.40f, 0.28f, 0.16f);
+    m_xbox(-0.5f, y, hz + 1.2f, 0.5f, y + 0.8f, hz + 1.35f);
+}
+
+/* Stockpile: a plank platform under a lean-to roof, stacked logs on one
+ * side, dressed stone and a couple of crates on the other. */
+static void w_stockpile_any(int q, float y) {
+    float hx = g_cb_hx[q], hz = g_cb_hz[q];
+    int k;
+    m_xform(g_cb_x[q], g_cb_z[q], g_cb_yaw[q] - 0.5f * W_PI);
+    m_color(0.52f, 0.38f, 0.22f);
+    m_xbox(-hx, y - 0.3f, -hz, hx, y + 0.12f, hz);
+    m_color(0.38f, 0.26f, 0.15f);
+    m_xbox(-hx + 0.05f, y, -hz + 0.05f, -hx + 0.2f, y + 2.0f, -hz + 0.2f);
+    m_xbox(hx - 0.2f, y, -hz + 0.05f, hx - 0.05f, y + 2.0f, -hz + 0.2f);
+    m_xbox(-hx + 0.05f, y, -0.35f, -hx + 0.2f, y + 1.6f, -0.2f);
+    m_xbox(hx - 0.2f, y, -0.35f, hx - 0.05f, y + 1.6f, -0.2f);
+    /* lean-to over the back half only, so the stacks show from above */
+    m_color(0.46f, 0.33f, 0.20f);
+    m_xbox(-hx - 0.15f, y + 1.9f, -hz - 0.15f, hx + 0.15f, y + 2.05f, -hz + 0.7f);
+    m_xbox(-hx - 0.15f, y + 1.6f, -hz + 0.6f, hx + 0.15f, y + 1.75f, -0.2f);
+    /* logs */
+    m_color(0.45f, 0.30f, 0.16f);
+    for (k = 0; k < 3; k++) m_xbox(-hx + 0.25f, y + 0.12f + 0.24f * (float)k, -hz + 0.35f + 0.08f * (float)k, -0.15f, y + 0.34f + 0.24f * (float)k, hz - 0.35f - 0.08f * (float)k);
+    m_color(0.80f, 0.66f, 0.42f);
+    m_xbox(-0.17f, y + 0.12f, -hz + 0.4f, -0.12f, y + 0.8f, hz - 0.4f);
+    /* stone blocks + a crate */
+    m_color(0.60f, 0.59f, 0.57f);
+    m_xbox(0.15f, y + 0.12f, -hz + 0.3f, hx - 0.25f, y + 0.55f, 0.1f);
+    m_xbox(0.35f, y + 0.55f, -hz + 0.45f, hx - 0.45f, y + 0.9f, -0.15f);
+    m_color(0.55f, 0.40f, 0.24f);
+    m_xbox(0.3f, y + 0.12f, 0.35f, 1.0f, y + 0.75f, hz - 0.3f);
+}
+
+/* Building (house / barracks / blacksmith) through the castle-site
+ * mesh code, using the spare g_cb_* entry; its ground is blocked like a
+ * site building's. */
 static void w_ps_building(int p) {
     int q = CB_SCRATCH, kind = g_ps_kind[p];
-    float hx = kind == ST_HOUSE ? PS_HOUSE_HX : PS_BARR_HX, hz = kind == ST_HOUSE ? PS_HOUSE_HZ : PS_BARR_HZ;
+    float hx = kind == ST_HOUSE ? PS_HOUSE_HX : (kind == ST_SMITH ? PS_SMITH_HX : (kind == ST_WORKSHOP ? PS_WS_HX : (kind == ST_STOCKPILE ? PS_SP_HX : PS_BARR_HX)));
+    float hz = kind == ST_HOUSE ? PS_HOUSE_HZ : (kind == ST_SMITH ? PS_SMITH_HZ : (kind == ST_WORKSHOP ? PS_WS_HZ : (kind == ST_STOCKPILE ? PS_SP_HZ : PS_BARR_HZ)));
     float rc[4];
     rc[0] = -hx - 0.43f; rc[1] = -hz - 0.43f; rc[2] = hx + 0.43f; rc[3] = hz + 0.43f;
     w_nav_orect(g_ps_x[p], g_ps_z[p], g_ps_yaw[p] - 0.5f * W_PI, rc, 0);
     if (!w_in_chunk(g_ps_x[p], g_ps_z[p])) return;
-    g_cb_t[q] = kind == ST_HOUSE ? BT_HOUSE : BT_BARRACKS;
+    g_cb_t[q] = kind == ST_HOUSE ? BT_HOUSE : (kind == ST_SMITH ? BT_SMITH : (kind == ST_WORKSHOP ? BT_WORKSHOP : (kind == ST_STOCKPILE ? BT_STOCKPILE : BT_BARRACKS)));
     g_cb_x[q] = g_ps_x[p]; g_cb_z[q] = g_ps_z[p]; g_cb_yaw[q] = g_ps_yaw[p];
     g_cb_hx[q] = hx; g_cb_hz[q] = hz;
-    g_team_r = 0.16f; g_team_g = 0.36f; g_team_b = 0.86f;
+    if (g_ps_team[p]) { g_team_r = 0.80f; g_team_g = 0.16f; g_team_b = 0.14f; }
+    else { g_team_r = 0.16f; g_team_g = 0.36f; g_team_b = 0.86f; }
     /* a stone footing so the building sits on sloping ground */
     m_xform(g_ps_x[p], g_ps_z[p], g_ps_yaw[p] - 0.5f * W_PI);
     m_color(0.50f, 0.48f, 0.44f);
     m_xbox(-hx - 0.15f, g_ps_lo[p] - 0.6f, -hz - 0.15f, hx + 0.15f, g_ps_y[p] + 0.05f, hz + 0.15f);
     if (kind == ST_HOUSE) w_house_any(q, g_ps_y[p]);
+    else if (kind == ST_SMITH) w_smith_any(q, g_ps_y[p]);
+    else if (kind == ST_WORKSHOP) w_workshop_any(q, g_ps_y[p]);
+    else if (kind == ST_STOCKPILE) w_stockpile_any(q, g_ps_y[p]);
     else w_barracks_any(q, g_ps_y[p]);
+}
+
+/* Does a finished structure cover world point (x,z) (plus margin)? The
+ * generator leaves trees, rocks and village buildings out there. */
+static int g_ps_near_n;
+static int g_ps_near[64];
+static void w_ps_collect_near(void) {
+    float ox = w_chunk_origin_x(), oz = w_chunk_origin_z();
+    int p, n = g_nps;
+    g_ps_near_n = 0;
+    for (p = 0; p < n && g_ps_near_n < 64; p++) {
+        float bb[4];
+        st_bounds(g_ps_kind[p], g_ps_x[p], g_ps_z[p], g_ps_x2[p], g_ps_z2[p], bb);
+        if (bb[2] < ox - 4.0f || bb[0] > ox + W_CHUNK_SIZE + 4.0f || bb[3] < oz - 4.0f || bb[1] > oz + W_CHUNK_SIZE + 4.0f) continue;
+        g_ps_near[g_ps_near_n] = p;
+        g_ps_near_n = g_ps_near_n + 1;
+    }
+}
+static int w_ps_covers(float x, float z, float margin) {
+    int k;
+    for (k = 0; k < g_ps_near_n; k++) {
+        int p = g_ps_near[k];
+        float bb[4];
+        if (g_ps_kind[p] == ST_WALL) {
+            if (st_seg_dist(x, z, g_ps_x[p], g_ps_z[p], g_ps_x2[p], g_ps_z2[p]) < PS_WALL_T * 0.5f + margin) return 1;
+            continue;
+        }
+        st_bounds(g_ps_kind[p], g_ps_x[p], g_ps_z[p], g_ps_x2[p], g_ps_z2[p], bb);
+        if (x > bb[0] - margin && x < bb[2] + margin && z > bb[1] - margin && z < bb[3] + margin) return 1;
+    }
+    return 0;
 }
 
 /* Emits every finished player structure touching this chunk. */
@@ -339,6 +507,13 @@ static void w_player_structures(void) {
         int kind = g_ps_kind[p];
         st_bounds(kind, g_ps_x[p], g_ps_z[p], g_ps_x2[p], g_ps_z2[p], bb);
         if (bb[2] < ox - 1.0f || bb[0] > ox + W_CHUNK_SIZE + 1.0f || bb[3] < oz - 1.0f || bb[1] > oz + W_CHUNK_SIZE + 1.0f) continue;
+        if (g_ps_dead[p]) {
+            if (kind == ST_WALL) {
+                float mx = (g_ps_x[p] + g_ps_x2[p]) * 0.5f, mz = (g_ps_z[p] + g_ps_z2[p]) * 0.5f;
+                if (w_in_chunk(mx, mz)) w_rubble_seg(g_ps_x[p], g_ps_z[p], g_ps_x2[p], g_ps_z2[p], g_ps_y[p]);
+            } else w_rubble_disc(g_ps_x[p], g_ps_z[p], g_ps_y[p], kind == ST_TOWER ? PS_TOWER_R : 3.0f);
+            continue;
+        }
         if (kind == ST_WALL) w_ps_wall(p);
         else if (kind == ST_TOWER) {
             w_ps_tower_nav(g_ps_x[p], g_ps_z[p], PS_TOWER_R, g_ps_y[p] + PS_WALL_H);
@@ -350,7 +525,7 @@ static void w_player_structures(void) {
     }
     /* wall ladders last: they need every wall's nav in place */
     for (p = 0; p < n; p++) {
-        if (g_ps_kind[p] != ST_WALL) continue;
+        if (g_ps_kind[p] != ST_WALL || g_ps_dead[p]) continue;
         float fx = g_ps_x[p], fz = g_ps_z[p] + 1.0f;
         if (g_home_known) { WSite *hs = w_site_cached(g_home_tx, g_home_tz); fx = hs->cx; fz = hs->cz; }
         w_ps_wall_ladder(g_ps_x[p], g_ps_z[p], g_ps_x2[p], g_ps_z2[p], fx, fz);

@@ -58,6 +58,9 @@
 #define BT_TOWNCENTER 3
 #define BT_STALL      4
 #define BT_DOCK       5           /* fishing dock (world or player-built; game layer only) */
+#define BT_SMITH      6           /* blacksmith (built; game layer only) */
+#define BT_WORKSHOP   7           /* siege workshop (built; game layer only) */
+#define BT_STOCKPILE  8           /* wood / stone stockpile (built; game layer only) */
 #define SITE_MAXB     160
 
 typedef struct {

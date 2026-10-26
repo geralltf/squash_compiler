@@ -1229,6 +1229,40 @@ static uint32_t g_out_res_id[RES_MAX];
 static uint32_t g_depleted[DEPL_MAX];
 static int g_ndepleted;
 
+/* ---- destroyed structures ---- */
+/* Castle wall sections, towers, bastions, gatehouses and buildings that
+ * siege engines have knocked down, by stable id (the render thread adds
+ * them, the generator reads them: it draws rubble instead and leaves the
+ * ground walkable). Walls are cut into sections of about 6 units per
+ * edge so a breach is a gap, not the whole side. */
+#define DESTROY_MAX 2048
+#define EK_WALL     1
+#define EK_TOWER    2
+#define EK_GATE     3
+#define EK_BASTION  4
+#define EK_BUILDING 5
+static uint32_t g_destroyed[DESTROY_MAX];
+static int g_ndestroyed;
+
+static uint32_t el_id(int tx, int tz, int kind, int a, int b, int c) {
+    uint32_t h = w_hash2(tx * 7 + kind * 1013, tz * 13 + a * 389, 0xE1E1u + (uint32_t)(b * 131 + c * 7919));
+    return (h & 0x0FFFFFFFu) | ((uint32_t)kind << 28);
+}
+/* A building's id from its position (as computed by the castle layout /
+ * the dock generator -- the same floats on both threads). */
+static uint32_t el_id_xz(float x, float z) {
+    return el_id(w_ifloor(x * 4.0f), w_ifloor(z * 4.0f), EK_BUILDING, 0, 0, 0);
+}
+static int w_is_destroyed(uint32_t id) {
+    int i, n = g_ndestroyed;
+    for (i = 0; i < n; i++) if (g_destroyed[i] == id) return 1;
+    return 0;
+}
+static int site_wall_pieces(float len) {
+    int n = (int)(len / 6.0f + 0.5f);
+    return n < 1 ? 1 : (n > 60 ? 60 : n);
+}
+
 static int w_res_depleted(uint32_t id) {
     int i, n = g_ndepleted;
     for (i = 0; i < n; i++) if (g_depleted[i] == id) return 1;
@@ -1745,6 +1779,7 @@ static void w_emit_props(void) {
                 float ty = w_mesh_height(lcx + jx, lcz + jz);
                 if (ty < 0.4f) continue;
                 int pine = (ty > 7.0f) || ((hq >> 24) & 1u);
+                if (g_ps_near_n > 0 && w_ps_covers(wx + jx, wz + jz, 1.0f)) continue;
                 uint32_t rid = w_hash2(gx * 8 + q, gz, 0x7EE5u) & 0x3FFFFFFFu;
                 if (g_ndepleted > 0 && w_res_depleted(rid)) continue;
                 w_tree(wx + jx, wz + jz, ty, sz, pine);
@@ -1760,6 +1795,7 @@ static void w_emit_props(void) {
                 float sz = 0.7f + (float)((hq >> 16) & 255u) / 255.0f * 0.9f;
                 float ry = w_mesh_height(lcx + jx, lcz + jz);
                 uint32_t rid = (w_hash2(gx * 8 + q, gz, 0x5701u) & 0x3FFFFFFFu) | 0x80000000u;
+                if (g_ps_near_n > 0 && w_ps_covers(wx + jx, wz + jz, 1.5f)) continue;
                 if (g_ndepleted > 0 && w_res_depleted(rid)) continue;
                 w_rock(wx + jx, wz + jz, ry, sz);
                 w_res_add(RES_STONE, rid, wx + jx, wz + jz, ry, 0.9f * sz);
@@ -1768,7 +1804,7 @@ static void w_emit_props(void) {
         if (k == K_ROAD) {
             int d;
             for (d = 0; d < 4; d++) if (p & (1 << d)) w_road_segment(lcx, lcz, d);
-            if (w_popcount4(p) == 1) w_well(wx, wz, gy);
+            if (w_popcount4(p) == 1 && !(g_ps_near_n > 0 && w_ps_covers(wx, wz, 1.5f))) w_well(wx, wz, gy);
         }
         if (k == K_GRASS && (h & 15u) != 0u) {
             /* Village houses along roads, denser in kingdom regions. */
@@ -1778,7 +1814,7 @@ static void w_emit_props(void) {
                 if (n >= 0 && w_is_road_tile(g_result[n]) && g_tkind[g_result[n]] == K_ROAD) { roadSide = d; break; }
             }
             float roll = (float)((h >> 4) & 255u) / 255.0f;
-            if (roadSide >= 0 && roll < 0.15f + 0.55f * kingdom && g_cclass[c] == CC_LAND) {
+            if (roadSide >= 0 && roll < 0.15f + 0.55f * kingdom && g_cclass[c] == CC_LAND && !(g_ps_near_n > 0 && w_ps_covers(wx, wz, 2.5f))) {
                 float tone = 0.9f + (float)((h >> 12) & 15u) / 15.0f * 0.15f;
                 w_house(wx, wz, gy, (roadSide == D_N || roadSide == D_S), tone);
             }
@@ -1789,7 +1825,8 @@ static void w_emit_props(void) {
             float px = wx + ddx * 1.0f, pz = wz + ddz * 1.0f;
             float py = w_mesh_height(lcx + ddx * 1.0f, lcz + ddz * 1.0f);
             float dyaw = approx_atan2_w(ddz, ddx);
-            w_dock(px, pz, py, dyaw, 1);
+            if (g_ndestroyed > 0 && w_is_destroyed(el_id_xz(px, pz))) { w_rubble_disc(px, pz, py, 1.6f); }
+            else w_dock(px, pz, py, dyaw, 1);
             if (g_out_ndock < DOCK_OUT_MAX) {
                 int q = g_out_ndock;
                 g_out_dock_x[q] = px; g_out_dock_z[q] = pz; g_out_dock_y[q] = py; g_out_dock_yaw[q] = dyaw;
@@ -1840,6 +1877,7 @@ static int world_gen_chunk(int cx, int cz, float *out, int cap) {
     g_out_has_castle = 0;
     g_out_nres = 0;
     g_out_ndock = 0;
+    w_ps_collect_near();
     w_collect_sites();
     w_compute_terrain();
     w_compute_fixed();

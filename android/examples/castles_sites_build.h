@@ -263,6 +263,41 @@ static float g_np_tx[NAVP_MAXE + 32], g_np_tz[NAVP_MAXE + 32], g_np_tr[NAVP_MAXE
 static int g_np_nt;
 static float g_np_bx[SITE_MAXV * 6], g_np_bz[SITE_MAXV * 6];
 static int g_np_nb;
+/* destroyed parts: wall sections per edge (bits), towers, bastions */
+static int g_np_np[NAVP_MAXE];
+static uint32_t g_np_dead[NAVP_MAXE * 2];
+static int g_np_tdead[NAVP_MAXE + 32], g_np_bdead[SITE_MAXV];
+static int g_cb_dead[CS_MAX * SITE_MAXB + 1];
+
+static int np_piece_dead(int q, int p) {
+    if (p < 32) return (g_np_dead[q * 2] >> p) & 1u;
+    return (g_np_dead[q * 2 + 1] >> (p - 32)) & 1u;
+}
+
+/* ---- rubble where something was knocked down ---- */
+static void w_rubble_disc(float x, float z, float y, float r) {
+    if (!w_in_chunk(x, z)) return;
+    uint32_t h = w_hash2(w_ifloor(x * 3.0f), w_ifloor(z * 3.0f), 0x4B1Eu);
+    int k, n = 4 + (int)(r * 2.0f);
+    for (k = 0; k < n; k++) {
+        uint32_t hk = w_hash(h + (uint32_t)k * 2654435761u);
+        float a = (float)(hk & 1023u) / 1023.0f * 6.2832f, d = r * (float)((hk >> 10) & 255u) / 255.0f;
+        float sz = 0.25f + 0.35f * (float)((hk >> 18) & 255u) / 255.0f;
+        float tone = 0.52f + 0.14f * (float)((hk >> 26) & 31u) / 31.0f;
+        m_color(tone, tone * 0.97f, tone * 0.92f);
+        float bx = x + w_cos(a) * d, bz = z + w_sin(a) * d;
+        m_box(bx - sz, y - 0.3f, bz - sz * 0.8f, bx + sz, y + sz * 0.9f, bz + sz * 0.8f);
+    }
+}
+static void w_rubble_seg(float ax, float az, float bx, float bz, float y) {
+    float ex = bx - ax, ez = bz - az;
+    float len = w_sqrt(ex * ex + ez * ez);
+    int k, n = (int)(len / 1.6f) + 1;
+    for (k = 0; k < n; k++) {
+        float u = ((float)k + 0.5f) / (float)n;
+        w_rubble_disc(ax + ex * u, az + ez * u, y, 1.1f);
+    }
+}
 
 static void w_site_nav_prepare(WSite *s) {
     float vx[SITE_MAXV], vz[SITE_MAXV], e[4], gg0[2], gg1[2];
@@ -285,12 +320,24 @@ static void w_site_nav_prepare(WSite *s) {
             for (g = 0; g < ng; g++) { g_np_g0[q * 2 + g] = gg0[g]; g_np_g1[q * 2 + g] = gg1[g]; }
             g_np_ring[q] = k;
             g_np_ne = q + 1;
+            int npc = site_wall_pieces(w_sqrt(g_np_len2[q])), pc;
+            g_np_np[q] = npc;
+            g_np_dead[q * 2] = 0u; g_np_dead[q * 2 + 1] = 0u;
+            if (g_ndestroyed > 0) {
+                for (pc = 0; pc < npc; pc++) {
+                    if (!w_is_destroyed(el_id(s->tx, s->tz, EK_WALL, k, v, pc))) continue;
+                    if (pc < 32) g_np_dead[q * 2] = g_np_dead[q * 2] | (1u << pc);
+                    else g_np_dead[q * 2 + 1] = g_np_dead[q * 2 + 1] | (1u << (pc - 32));
+                }
+            }
             if (site_is_bastion(s, k, v)) {
                 site_bastion_poly(s, vx, vz, nv, v, g_np_bx + g_np_nb * 6, g_np_bz + g_np_nb * 6);
+                g_np_bdead[g_np_nb] = g_ndestroyed > 0 && w_is_destroyed(el_id(s->tx, s->tz, EK_BASTION, 0, v, 0));
                 g_np_nb = g_np_nb + 1;
             } else if (site_corner(s, v, 0)) {
                 int tq = g_np_nt;
                 g_np_tx[tq] = vx[v]; g_np_tz[tq] = vz[v]; g_np_tr[tq] = site_tower_r(t); g_np_ttop[tq] = top;
+                g_np_tdead[tq] = g_ndestroyed > 0 && w_is_destroyed(el_id(s->tx, s->tz, EK_TOWER, k, v, 0));
                 g_np_nt = tq + 1;
             }
         }
@@ -300,12 +347,13 @@ static void w_site_nav_prepare(WSite *s) {
             site_ring_point(s, k, s->gate_a[g], &gx, &gz);
             float ax2 = -w_sin(s->gate_a[g]), az2 = w_cos(s->gate_a[g]);
             float rt = site_tower_r(t) * 0.85f;
-            int sgn;
+            int sgn, gdead = g_ndestroyed > 0 && w_is_destroyed(el_id(s->tx, s->tz, EK_GATE, k, g, 0));
             for (sgn = -1; sgn <= 1; sgn = sgn + 2) {
                 int tq = g_np_nt;
                 g_np_tx[tq] = gx + ax2 * (GATE_HALF + rt) * (float)sgn;
                 g_np_tz[tq] = gz + az2 * (GATE_HALF + rt) * (float)sgn;
                 g_np_tr[tq] = rt; g_np_ttop[tq] = top;
+                g_np_tdead[tq] = gdead;
                 g_np_nt = tq + 1;
             }
         }
@@ -326,6 +374,13 @@ static void w_site_nav(int si) {
         if (dx * dx + dz * dz > reach * reach) return;
     }
     w_site_nav_prepare(s);
+    {
+        int b2, nb2 = g_cb_n[si];
+        for (b2 = 0; b2 < nb2; b2++) {
+            int qb = si * SITE_MAXB + b2;
+            g_cb_dead[qb] = g_ndestroyed > 0 && w_is_destroyed(el_id_xz(g_cb_x[qb], g_cb_z[qb]));
+        }
+    }
     for (j = 0; j < NAV_C; j++) {
         for (i = 0; i < NAV_C; i++) {
             float px = ox + (float)i + 0.5f, pz = oz + (float)j + 0.5f;
@@ -352,6 +407,11 @@ static void w_site_nav(int si) {
                  * face (t + 0.35 wide in all); the outer 0.3 under the
                  * merlons stays unwalkable. */
                 if (sd > t * 0.5f + 0.3f || sd < -t * 0.5f - 0.65f) continue;
+                if (g_ndestroyed > 0) {
+                    int pc = (int)(u * (float)g_np_np[q]);
+                    if (pc >= g_np_np[q]) pc = g_np_np[q] - 1;
+                    if (np_piece_dead(q, pc)) continue;              /* breached: rubble, walkable */
+                }
                 int g, inGap = 0;
                 for (g = 0; g < g_np_ng[q]; g++) if (u >= g_np_g0[q * 2 + g] && u <= g_np_g1[q * 2 + g]) inGap = 1;
                 int walk = sd < t * 0.5f - WALK_PARAPET;
@@ -362,6 +422,7 @@ static void w_site_nav(int si) {
             }
             /* towers (corners + gatehouses) */
             for (q = 0; q < g_np_nt; q++) {
+                if (g_np_tdead[q]) continue;
                 float tx = px - g_np_tx[q], tz = pz - g_np_tz[q], rt = g_np_tr[q];
                 if (tx > rt || tx < -rt || tz > rt || tz < -rt) continue;
                 float td = w_sqrt(tx * tx + tz * tz);
@@ -371,6 +432,7 @@ static void w_site_nav(int si) {
             if (s->bastion && dc > site_ring_inner_r(s, 0) - 2.0f) {
                 float top0 = site_ring_top(s, 0);
                 for (q = 0; q < g_np_nb; q++) {
+                    if (g_np_bdead[q]) continue;
                     float inside = site_poly_inside(g_np_bx + q * 6, g_np_bz + q * 6, 6, 6, px, pz);
                     if (inside < 0.0f) continue;
                     /* parapet only along the four outer faces: the back
@@ -386,6 +448,7 @@ static void w_site_nav(int si) {
                 int b, nb = g_cb_n[si];
                 for (b = 0; b < nb; b++) {
                     int qb = si * SITE_MAXB + b;
+                    if (g_cb_dead[qb]) continue;
                     float bxx = px - g_cb_x[qb], bzz = pz - g_cb_z[qb];
                     float lim = g_cb_hx[qb] + g_cb_hz[qb] + 1.0f;
                     if (bxx > lim || bxx < -lim || bzz > lim || bzz < -lim) continue;
@@ -741,29 +804,49 @@ static void w_site_emit(int si) {
             if (ng == 2 && gg0[1] < gg0[0]) { float tmp = gg0[0]; gg0[0] = gg0[1]; gg0[1] = tmp; tmp = gg1[0]; gg1[0] = gg1[1]; gg1[1] = tmp; }
             for (g = 0; g < ng; g++) { iv0[ni] = cur; iv1[ni] = gg0[g]; ni++; cur = gg1[g]; }
             iv0[ni] = cur; iv1[ni] = 1.0f; ni++;
-            int q;
-            for (q = 0; q < ni; q++) {
-                float span = (iv1[q] - iv0[q]) * len;
-                if (span <= 0.05f) continue;
-                int pieces = (int)(span / 4.0f) + 1, p;
-                for (p = 0; p < pieces; p++) {
-                    float u0 = iv0[q] + (iv1[q] - iv0[q]) * (float)p / (float)pieces;
-                    float u1 = iv0[q] + (iv1[q] - iv0[q]) * (float)(p + 1) / (float)pieces;
-                    float pe[4];
-                    pe[0] = e[0] + ex * u0; pe[1] = e[1] + ez * u0;
-                    pe[2] = e[0] + ex * u1; pe[3] = e[1] + ez * u1;
-                    w_wall_piece_any(s, k, pe, nx, nz);
+            /* solid intervals cut at the destructible sections; a
+             * knocked-down section is rubble */
+            int q, npc = site_wall_pieces(len), pc;
+            for (pc = 0; pc < npc; pc++) {
+                float s0 = (float)pc / (float)npc, s1 = (float)(pc + 1) / (float)npc;
+                int dead = g_ndestroyed > 0 && w_is_destroyed(el_id(s->tx, s->tz, EK_WALL, k, v, pc));
+                for (q = 0; q < ni; q++) {
+                    float a0 = iv0[q] > s0 ? iv0[q] : s0, a1 = iv1[q] < s1 ? iv1[q] : s1;
+                    float span = (a1 - a0) * len;
+                    if (span <= 0.05f) continue;
+                    if (dead) {
+                        float mxr = e[0] + ex * (a0 + a1) * 0.5f, mzr = e[1] + ez * (a0 + a1) * 0.5f;
+                        if (w_in_chunk(mxr, mzr)) w_rubble_seg(e[0] + ex * a0, e[1] + ez * a0, e[0] + ex * a1, e[1] + ez * a1, s->base);
+                        continue;
+                    }
+                    int pieces = (int)(span / 4.0f) + 1, p;
+                    for (p = 0; p < pieces; p++) {
+                        float u0 = a0 + (a1 - a0) * (float)p / (float)pieces;
+                        float u1 = a0 + (a1 - a0) * (float)(p + 1) / (float)pieces;
+                        float pe[4];
+                        pe[0] = e[0] + ex * u0; pe[1] = e[1] + ez * u0;
+                        pe[2] = e[0] + ex * u1; pe[3] = e[1] + ez * u1;
+                        w_wall_piece_any(s, k, pe, nx, nz);
+                    }
                 }
             }
             /* corner: bastion or tower */
             if (site_is_bastion(s, k, v)) {
                 site_bastion_poly(s, vx, vz, nv, v, bxs, bzs);
-                w_bastion_mesh(s, bxs, bzs);
+                if (g_ndestroyed > 0 && w_is_destroyed(el_id(s->tx, s->tz, EK_BASTION, 0, v, 0))) w_rubble_disc(vx[v], vz[v], s->base, 3.5f);
+                else w_bastion_mesh(s, bxs, bzs);
             } else if (site_corner(s, v, 0)) {
-                w_tower_any(vx[v], vz[v], s->base, site_tower_r(t), top);
+                if (g_ndestroyed > 0 && w_is_destroyed(el_id(s->tx, s->tz, EK_TOWER, k, v, 0))) w_rubble_disc(vx[v], vz[v], s->base, site_tower_r(t));
+                else w_tower_any(vx[v], vz[v], s->base, site_tower_r(t), top);
             }
         }
-        for (g = 0; g < s->ngates; g++) w_gatehouse(s, k, g);
+        for (g = 0; g < s->ngates; g++) {
+            if (g_ndestroyed > 0 && w_is_destroyed(el_id(s->tx, s->tz, EK_GATE, k, g, 0))) {
+                float gx, gz;
+                site_ring_point(s, k, s->gate_a[g], &gx, &gz);
+                w_rubble_disc(gx, gz, s->base, GATE_HALF + 2.0f);
+            } else w_gatehouse(s, k, g);
+        }
     }
     /* Streets: each gate road runs from the clearing edge through every
      * ring's gate to the town-centre plaza. */
@@ -793,6 +876,7 @@ static void w_site_emit(int si) {
         int q = si * SITE_MAXB + b;
         if (!w_in_chunk(g_cb_x[q], g_cb_z[q])) continue;
         float y = s->base;
+        if (g_cb_dead[q]) { w_rubble_disc(g_cb_x[q], g_cb_z[q], y, g_cb_hx[q] > g_cb_hz[q] ? g_cb_hx[q] : g_cb_hz[q]); continue; }
         if (g_cb_t[q] == BT_HOUSE) w_house_any(q, y);
         else if (g_cb_t[q] == BT_BARRACKS) w_barracks_any(q, y);
         else if (g_cb_t[q] == BT_TOWNCENTER) w_towncenter_any(q, y, s->home);
