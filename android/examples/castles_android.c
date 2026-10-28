@@ -87,7 +87,9 @@
  * (Debug builds: a wrapper defining CASTLES_DEBUG_SIEGE before including
  * this file starts with resources and a siege train; CASTLES_DEBUG_GAMEOVER
  * shows the game over screen after 30 s; CASTLES_DEBUG_FLY (or the siege
- * flag) turns on the fly camera's autopilot.)
+ * flag) turns on the fly camera's autopilot; CASTLES_DEBUG_WORM aims the
+ * camera at the player-side wormhole mouth and opens it after 8 s; with
+ * CASTLES_DEBUG_WORM_A as well, at the enemy-side mouth instead.)
  *
  * Pathfinding runs on the GPU: an order builds a 160x160x2 layered nav
  * window (ground + castle wall-walks, joined by ramp-walls and ladders,
@@ -133,9 +135,12 @@
  *      to the nearest castle you haven't discovered yet)
  * Flying close to a castle's centre discovers it: the screen flashes gold
  * and a gold marker is added to the counter in the top-left corner. The
- * minimap (top right) shows terrain, roads and castles around you (red
+ * minimap (top right, centred on the point the view looks at) shows
+ * terrain, roads and castles around you (red
  * = undiscovered, gold = discovered), and every enemy unit in its range
- * as a red dot with a dark rim -- soldiers marching on you pulse.
+ * as a red dot with a dark rim -- soldiers marching on you pulse -- and
+ * the wormhole's mouths as violet rings (the enemy end with a red core;
+ * pinned to the map's edge when out of range).
  *
  * Same `-android -android-activity` architecture and the same real-
  * device workarounds as buttons_android.c (see its top comment):
@@ -158,7 +163,7 @@ extern int clock_gettime(int clk, void *ts);
 
 #define TAG "castles"
 
-typedef struct { float mvp[16]; float cam[4]; float params[4]; } PushConstants;
+typedef struct { float mvp[16]; float cam[4]; float params[4]; float worm[8]; } PushConstants;   /* 128 bytes, the guaranteed minimum */
 typedef struct { long tv_sec; long tv_nsec; } TimeSpec;
 static long now_us(void);
 
@@ -453,6 +458,7 @@ static float approx_atan2(float y, float x) {
 #define RTS_DIST_MAX 110.0f
 static float g_rts_tx, g_rts_ty, g_rts_tz, g_rts_dist;
 static float g_rts_pitch;            /* set only by the navigator circle */
+#include "android/examples/castles_wormhole.h"
 
 /* Places g_cam for the current target/distance. */
 static void rts_place_camera(void) {
@@ -516,6 +522,7 @@ static void game_reset(void) {
     units_home_init();
     ai_init();
     dragons_init();
+    wormhole_reset();
     choose_spawn();
     __android_log_print(4, TAG, "game restarted");
 }
@@ -1768,14 +1775,18 @@ static void build_hud(void) {
         hud_rect(W - b, 0.0f, b, H);
     }
 
-    /* Minimap (north up), centered on the camera's cell. */
+    /* Minimap (north up), centered on what the view looks at: the RTS
+     * target in command mode (the camera itself hangs ~25 behind it, off
+     * the bottom of the screen), the camera when flying. */
+    float vwx = g_cam[0], vwz = g_cam[2];
+    if (g_mode == MODE_COMMAND) { vwx = g_rts_tx; vwz = g_rts_tz; }
     float U = W < H ? W : H;
     float mapPx = U * 0.27f;
     float cellPx = mapPx / (float)MAP_CELLS;
     float mx0 = W - mapPx - 30.0f, my0 = 30.0f;
     hud_color(0.08f, 0.08f, 0.10f);
     hud_rect(mx0 - 6.0f, my0 - 6.0f, mapPx + 12.0f, mapPx + 12.0f);
-    int pgx = w_ifloor(g_cam[0] / W_CELL_SIZE), pgz = w_ifloor(g_cam[2] / W_CELL_SIZE);
+    int pgx = w_ifloor(vwx / W_CELL_SIZE), pgz = w_ifloor(vwz / W_CELL_SIZE);
     int i, j;
     int lastSlot = -1, lastCx = 1 << 30, lastCz = 1 << 30;
     for (j = 0; j < MAP_CELLS; j++) {
@@ -1817,7 +1828,9 @@ static void build_hud(void) {
         float pulse = 0.75f + 0.25f * w_sin(g_time * 7.0f);
         for (i = 0; i < g_un; i++) {
             if (!unit_alive(i) || u_team[i] == TEAM_PLAYER) continue;
-            float rx = (u_x[i] / W_CELL_SIZE - ox) * cellPx, rz = (u_z[i] / W_CELL_SIZE - oz) * cellPx;
+            float vp[2];
+            wormhole_view_xz(u_x[i], u_z[i], vp);          /* where it is drawn (bent space near a mouth) */
+            float rx = (vp[0] / W_CELL_SIZE - ox) * cellPx, rz = (vp[1] / W_CELL_SIZE - oz) * cellPx;
             if (rx < 0.0f || rz < 0.0f || rx > mapPx || rz > mapPx) continue;
             if (u_team[i] == TEAM_WILD) {            /* wild dragons: orange, bigger */
                 float rr = cellPx * 1.2f;
@@ -1836,10 +1849,34 @@ static void build_hud(void) {
             hud_rect(px - r, pz - r, 2.0f * r, 2.0f * r);
         }
     }
+    /* Wormhole mouths: violet rings that pulse while open -- B (the
+     * player's end) plain, A (outside the enemy castle) with a red core.
+     * Out of range they sit on the map's edge in their true direction. */
+    if (g_wh_placed) {
+        float ox = (float)(pgx - MAP_CELLS / 2), oz = (float)(pgz - MAP_CELLS / 2);
+        float half = mapPx * 0.5f;
+        int m;
+        for (m = 0; m < 2; m++) {
+            if (m == 0 && !g_wh_a_on) continue;
+            float rx = (g_wh_x[m] / W_CELL_SIZE - ox) * cellPx - half, rz = (g_wh_z[m] / W_CELL_SIZE - oz) * cellPx - half;
+            float ext = w_absf(rx) > w_absf(rz) ? w_absf(rx) : w_absf(rz);
+            float lim = half - cellPx * 1.6f;
+            int edge = ext > lim;
+            if (edge) { float k = lim / ext; float nx = rx * k, nz = rz * k; rx = nx; rz = nz; }
+            float cx = mx0 + half + rx, cy = my0 + half + rz;
+            float open = g_wh_s[m] > 0.5f ? 1.0f : 0.0f;
+            float r1 = cellPx * (edge ? 1.4f : 2.3f) * (1.0f + 0.3f * open * (0.5f + 0.5f * w_sin(g_time * 9.0f)));
+            hud_color(0.06f, 0.02f, 0.10f);
+            hud_disc(cx, cy, r1 + 2.5f);
+            hud_color(0.72f + 0.25f * open, 0.42f, 1.0f);
+            hud_ring(cx, cy, r1, r1 * 0.5f);
+            if (m == 0) { hud_color(0.95f, 0.15f, 0.12f); hud_disc(cx, cy, r1 * 0.38f); }
+        }
+    }
     /* Player arrow. */
     {
-        float pcx = mx0 + (g_cam[0] / W_CELL_SIZE - (float)(pgx - MAP_CELLS / 2)) * cellPx;
-        float pcz = my0 + (g_cam[2] / W_CELL_SIZE - (float)(pgz - MAP_CELLS / 2)) * cellPx;
+        float pcx = mx0 + (vwx / W_CELL_SIZE - (float)(pgx - MAP_CELLS / 2)) * cellPx;
+        float pcz = my0 + (vwz / W_CELL_SIZE - (float)(pgz - MAP_CELLS / 2)) * cellPx;
         float sy = w_sin(g_yaw), cy = w_cos(g_yaw);
         float L = cellPx * 2.6f, Wd = cellPx * 1.3f;
         hud_color(1.0f, 1.0f, 1.0f);
@@ -3266,7 +3303,7 @@ static void *render_session(void *window) {
         usleep(5000);
     }
     units_init();
-    if (g_hb_n == 0) { units_home_init(); ai_init(); dragons_init(); }
+    if (g_hb_n == 0) { units_home_init(); ai_init(); dragons_init(); wormhole_reset(); }
 #ifdef CASTLES_DEBUG_SIEGE
     /* debug build (a wrapper defines this): resources and a siege train
      * at the town centre, to try siege without playing up to it */
@@ -3319,8 +3356,23 @@ static void *render_session(void *window) {
         if (g_time > 30.0f && g_time < 30.2f && g_game == 0) g_game = 1;
 #endif
         if (g_game != 1) units_update(dt);            /* the world stops on the game over screen */
+#ifdef CASTLES_DEBUG_WORM
+        long whT0 = now_us();
+#endif
+        if (g_game != 1) wormhole_update(dt);
+#ifdef CASTLES_DEBUG_WORM
+        long whUpd = now_us() - whT0;
+#endif
         game_check(dt);
-        int unitVerts = units_build_mesh();
+        units_build_mesh();
+#ifdef CASTLES_DEBUG_WORM
+        long whT1 = now_us();
+#endif
+        wormhole_emit();
+#ifdef CASTLES_DEBUG_WORM
+        wormhole_cost(whUpd, now_us() - whT1, tNow);   /* debug: per-frame cost of the N-D wormhole */
+#endif
+        int unitVerts = g_un_verts;
         upload(device, unitMemory, 0, g_ustage, (VkDeviceSize)unitVerts * (VkDeviceSize)VERT_BYTES);
         build_hud();
         upload(device, hudMemory, 0, g_hud, (VkDeviceSize)g_hud_n * (VkDeviceSize)VERT_BYTES);
@@ -3374,6 +3426,7 @@ static void *render_session(void *window) {
         pc.params[1] = (float)VIEW_R * W_CHUNK_SIZE * 0.45f;
         pc.params[2] = (float)VIEW_R * W_CHUNK_SIZE + 6.0f;
         pc.params[3] = 0.0f;
+        wormhole_push(pc.worm);
         vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
         VkDeviceSize offset0 = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &worldBuffer, &offset0);
@@ -3405,6 +3458,7 @@ static void *render_session(void *window) {
             mat_ortho_pixels(hpc.mvp, g_view_w, g_view_h);
             hpc.cam[0] = 0.0f; hpc.cam[1] = 0.0f; hpc.cam[2] = 0.0f; hpc.cam[3] = 0.0f;
             hpc.params[0] = g_time; hpc.params[1] = 1.0f; hpc.params[2] = 2.0f; hpc.params[3] = 1.0f;
+            for (q = 0; q < 8; q++) hpc.worm[q] = 0.0f;
             vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(hpc), &hpc);
             VkDeviceSize hoff = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &hudBuffer, &hoff);

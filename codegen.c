@@ -811,6 +811,21 @@ static int pointer_pointee_size(CodeGen *cg, ASTNode *node) {
         TypeInfo *ft = field_type_of(cg, node->member.obj, node->member.field);
         return pointer_pointee_size_of_type(cg, ft);
     }
+    if (node->kind == AST_BINARY && (strcmp(node->binary.op,"+")==0 || strcmp(node->binary.op,"-")==0)) {
+        /* "ptr + i" / "ptr - i" / "i + ptr" is itself a pointer of the same
+         * type, so a chained "s + 2 + D" (parsed "(s + 2) + D") must scale
+         * the outer "+ D" too. Before this, only the inner "s + 2" was
+         * recognised and "+ D" advanced D BYTES: "v = s + 2 + D" on a
+         * float* landed at element 2 + D/4 instead of 2 + D (found by the
+         * castles wormhole's N-dimensional geodesic state). "ptr - ptr" is
+         * an integer, not a pointer. */
+        int l = pointer_pointee_size(cg, node->binary.left);
+        int r = pointer_pointee_size(cg, node->binary.right);
+        if (l > 0 && r > 0) return 0;
+        if (l > 0) return l;
+        if (r > 0 && node->binary.op[0] == '+') return r;
+        return 0;
+    }
     return 0;
 }
 

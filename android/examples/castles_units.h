@@ -326,6 +326,7 @@ static int u_role[MAXU];     /* AI work role (R_*), see castles_ai.h */
 static int u_amove[MAXU];    /* attack-move: fight whatever it meets on the way to its goal */
 static float u_dmgb[MAXU];   /* damage bonus from advancements */
 static int u_ld[MAXU];       /* on loaded land this frame (set at the top of units_update) */
+static int u_wh[MAXU];       /* wormhole: 1 in transit (castles_wormhole.h moves it), 2 came through */
 static int u_st[MAXU];       /* siege: structure target (> 0 castle piece + 1, < 0 -(building + 1)) */
 static int u_sstate[MAXU];   /* trebuchet: packed / setting up / set up / packing */
 static float u_st_t[MAXU];   /* trebuchet set-up / pack-up progress */
@@ -455,7 +456,7 @@ static int unit_spawn(int team, float x, float z, int layer, uint32_t seed, int 
     else if (cls == UC_DRAGON) { u_maxhp[idx] = 45; u_speed[idx] = 9.0f; u_atk[idx] = 1.0f; }
     else                     { u_maxhp[idx] = 3; u_speed[idx] = 2.6f; u_atk[idx] = 0.9f; }
     if (team != TEAM_PLAYER && own <= 0 && u_maxhp[idx] > 3) u_maxhp[idx] = u_maxhp[idx] - 1;
-    u_own[idx] = own; u_role[idx] = 0; u_amove[idx] = 0; u_dmgb[idx] = 0.0f;
+    u_own[idx] = own; u_role[idx] = 0; u_amove[idx] = 0; u_dmgb[idx] = 0.0f; u_wh[idx] = 0;
     u_st[idx] = 0; u_sstate[idx] = 0; u_st_t[idx] = 0.0f; u_spend[idx] = 0;
     if (cls == UC_SWORD || cls == UC_BOW || cls == UC_MACE) {
         if (has_tech(own, T_ARMOR)) u_maxhp[idx] = u_maxhp[idx] + 2;
@@ -2458,6 +2459,7 @@ static void units_update(float dt) {
     for (i = 0; i < g_un; i++) {
         if (!u_active[i]) continue;
         if (u_class[i] == UC_DRAGON) { dragon_update(i, dt); continue; }      /* flies on or off screen */
+        if (u_wh[i] == 1 && u_state[i] != US_DEAD) continue;                  /* on a geodesic through the wormhole */
         if (!u_ld[i]) {
             /* off screen: frozen, except attack waves on the march */
             if (u_amove[i] && u_state[i] != US_DEAD && u_state[i] != US_CLIMB) ai_travel(i, dt);

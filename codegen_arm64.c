@@ -1800,6 +1800,20 @@ static int a64_pointer_arith_size(CodeGenA64 *cg, ASTNode *n) {
         /* "&arr[i] + n": a pointer to arr's element type. */
         int esz = a64_index_elem_size(cg, n->addr.operand->index.array);
         return esz > 1 ? esz : 0;
+    } else if (n->kind == AST_BINARY && (strcmp(n->binary.op, "+") == 0 || strcmp(n->binary.op, "-") == 0)) {
+        /* "ptr + i" / "ptr - i" / "i + ptr" is itself a pointer of the same
+         * type, so a chained "s + 2 + D" (parsed "(s + 2) + D") must scale
+         * the outer "+ D" too -- before, "+ D" advanced D BYTES, so
+         * "v = s + 2 + D" on a float* landed at element 2 + D/4 instead of
+         * 2 + D (found via castles_wormhole_nd.h's N-dimensional geodesic
+         * state; codegen.c's pointer_pointee_size() has the same fix).
+         * "ptr - ptr" is an integer, not a pointer. */
+        int l = a64_pointer_arith_size(cg, n->binary.left);
+        int r = a64_pointer_arith_size(cg, n->binary.right);
+        if (l > 0 && r > 0) return 0;
+        if (l > 0) return l;
+        if (r > 0 && n->binary.op[0] == '+') return r;
+        return 0;
     } else {
         return 0;
     }
